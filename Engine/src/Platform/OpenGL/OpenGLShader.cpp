@@ -57,26 +57,34 @@ OpenGLShader::~OpenGLShader()
 void OpenGLShader::Bind()   const { glUseProgram(m_RendererID); }
 void OpenGLShader::Unbind() const { glUseProgram(0); }
 
+static int GetLocation(uint32_t program, const std::string& name)
+{
+    int loc = glGetUniformLocation(program, name.c_str());
+    if (loc == -1)
+        spdlog::warn("OpenGLShader: uniform '{}' not found in program {}", name, program);
+    return loc;
+}
+
 void OpenGLShader::SetBool(const std::string& name, bool value) const
-    { glUniform1i(glGetUniformLocation(m_RendererID, name.c_str()), (int)value); }
+    { glUniform1i(GetLocation(m_RendererID, name), (int)value); }
 
 void OpenGLShader::SetInt(const std::string& name, int value) const
-    { glUniform1i(glGetUniformLocation(m_RendererID, name.c_str()), value); }
+    { glUniform1i(GetLocation(m_RendererID, name), value); }
 
 void OpenGLShader::SetFloat(const std::string& name, float value) const
-    { glUniform1f(glGetUniformLocation(m_RendererID, name.c_str()), value); }
+    { glUniform1f(GetLocation(m_RendererID, name), value); }
 
 void OpenGLShader::SetVec2(const std::string& name, const glm::vec2& v) const
-    { glUniform2fv(glGetUniformLocation(m_RendererID, name.c_str()), 1, &v[0]); }
+    { glUniform2fv(GetLocation(m_RendererID, name), 1, &v[0]); }
 
 void OpenGLShader::SetVec3(const std::string& name, const glm::vec3& v) const
-    { glUniform3fv(glGetUniformLocation(m_RendererID, name.c_str()), 1, &v[0]); }
+    { glUniform3fv(GetLocation(m_RendererID, name), 1, &v[0]); }
 
 void OpenGLShader::SetMat3(const std::string& name, const glm::mat3& mat) const
-    { glUniformMatrix3fv(glGetUniformLocation(m_RendererID, name.c_str()), 1, GL_FALSE, &mat[0][0]); }
+    { glUniformMatrix3fv(GetLocation(m_RendererID, name), 1, GL_FALSE, &mat[0][0]); }
 
 void OpenGLShader::SetMat4(const std::string& name, const glm::mat4& mat) const
-    { glUniformMatrix4fv(glGetUniformLocation(m_RendererID, name.c_str()), 1, GL_FALSE, &mat[0][0]); }
+    { glUniformMatrix4fv(GetLocation(m_RendererID, name), 1, GL_FALSE, &mat[0][0]); }
 
 void OpenGLShader::CheckCompileErrors(uint32_t shader, const std::string& type)
 {

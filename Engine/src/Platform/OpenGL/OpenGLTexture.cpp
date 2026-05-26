@@ -36,6 +36,33 @@ OpenGLTexture::OpenGLTexture(const std::string& path, bool flipVertically)
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 
     glBindTexture(GL_TEXTURE_2D, 0);
+    spdlog::info("OpenGLTexture: loaded '{}' ({}x{}, {} ch)", path, img.Width, img.Height, img.Channels);
+}
+
+OpenGLTexture::OpenGLTexture(const std::string& path, bool flipVertically, bool /*isHDR*/)
+{
+    FloatImageData img = ImageLoader::LoadFloat(path, flipVertically);
+    if (img.Pixels.empty()) {
+        spdlog::error("OpenGLTexture: no float pixel data for '{}'", path);
+        return;
+    }
+
+    m_Width  = static_cast<uint32_t>(img.Width);
+    m_Height = static_cast<uint32_t>(img.Height);
+
+    glGenTextures(1, &m_RendererID);
+    glBindTexture(GL_TEXTURE_2D, m_RendererID);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB16F,
+                 img.Width, img.Height, 0,
+                 GL_RGB, GL_FLOAT, img.Pixels.data());
+
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S,     GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T,     GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+    glBindTexture(GL_TEXTURE_2D, 0);
+    spdlog::info("OpenGLTexture: loaded HDR '{}' ({}x{}, {} ch)", path, img.Width, img.Height, img.Channels);
 }
 
 OpenGLTexture::~OpenGLTexture()

@@ -65,14 +65,46 @@ target_include_directories(imgui PUBLIC
 # imgui_impl_glfw.cpp needs GLFW headers
 target_link_libraries(imgui PUBLIC glfw)
 
+set(ASSIMP_BUILD_ALL_IMPORTERS_BY_DEFAULT OFF CACHE BOOL "" FORCE)
+set(ASSIMP_BUILD_OBJ_IMPORTER  ON  CACHE BOOL "" FORCE)
+set(ASSIMP_BUILD_FBX_IMPORTER  ON  CACHE BOOL "" FORCE)
+set(ASSIMP_BUILD_ALL_EXPORTERS_BY_DEFAULT OFF CACHE BOOL "" FORCE)
+set(ASSIMP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(ASSIMP_INSTALL    OFF CACHE BOOL "" FORCE)
+set(ASSIMP_NO_EXPORT  ON  CACHE BOOL "" FORCE)
+
+FetchContent_Declare(
+    assimp
+    GIT_REPOSITORY https://github.com/assimp/assimp.git
+    GIT_TAG v5.4.3
+    GIT_SHALLOW TRUE
+)
+FetchContent_MakeAvailable(assimp)
+
 find_package(OpenGL REQUIRED)
 
 add_library(MyEngine STATIC
     src/Application.cpp
+    src/Assets/ImageLoader.cpp
+    src/Assets/ModelImporter.cpp
+    src/Platform/OpenGL/OpenGLMesh.cpp
+    src/Platform/OpenGL/OpenGLPBR.cpp
+    src/Platform/OpenGL/OpenGLRendererAPI.cpp
+    src/Platform/OpenGL/OpenGLShader.cpp
+    src/Platform/OpenGL/OpenGLTexture.cpp
+    src/Renderer/Material.cpp
+    src/Renderer/MeshData.cpp
+    src/Renderer/RendererAPI.cpp
+    src/Renderer/Shader.cpp
+    src/Renderer/TextureData.cpp
 )
 
-target_include_directories(MyEngine PUBLIC
-    Include
+target_include_directories(MyEngine
+    PUBLIC
+        Include
+        ${CMAKE_SOURCE_DIR}/ThirdParty/stb
+    PRIVATE
+        src
 )
 
 target_link_libraries(MyEngine PUBLIC
@@ -83,4 +115,5 @@ target_link_libraries(MyEngine PUBLIC
     spdlog::spdlog
     imgui
     glad_gl
+    assimp::assimp
 )

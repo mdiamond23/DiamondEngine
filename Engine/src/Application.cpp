@@ -1,5 +1,7 @@
 #include "Application.h"
 
+#include <glad/gl.h>
+#define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
 #include <iostream>
 
@@ -31,6 +33,15 @@ void Application::Run()
     }
 
     glfwMakeContextCurrent(window);
+
+    if (!gladLoadGL(glfwGetProcAddress))
+    {
+        std::cout << "Failed to initialize GLAD\n";
+        glfwDestroyWindow(window);
+        glfwTerminate();
+        return;
+    }
+
     glfwSwapInterval(1);
 
     while (!glfwWindowShouldClose(window))

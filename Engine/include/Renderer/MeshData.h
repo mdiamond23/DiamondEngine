@@ -19,6 +19,10 @@ struct Vertex {
 struct MeshData {
     std::vector<Vertex>   Vertices;
     std::vector<uint32_t> Indices;
+
+    static MeshData UnitCube();
+    static MeshData FullscreenQuad();
+    static MeshData UVSphere();
 };
 
 class Shader;

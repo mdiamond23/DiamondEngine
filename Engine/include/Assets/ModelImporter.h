@@ -2,7 +2,7 @@
 
 #include <string>
 #include <vector>
-#include "Diamond/Renderer/MeshData.h"
+#include "Renderer/MeshData.h"
 
 namespace Diamond {
 

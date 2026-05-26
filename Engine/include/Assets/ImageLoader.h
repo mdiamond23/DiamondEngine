@@ -13,10 +13,17 @@ struct ImageData {
     std::vector<uint8_t> Pixels;
 };
 
-// Loads an image from disk via stb_image. Returns empty Pixels on failure.
+struct FloatImageData {
+    int                Width    = 0;
+    int                Height   = 0;
+    int                Channels = 0;
+    std::vector<float> Pixels;
+};
+
 class ImageLoader {
 public:
-    static ImageData Load(const std::string& path, bool flipVertically = true);
+    static ImageData      Load     (const std::string& path, bool flipVertically = true);
+    static FloatImageData LoadFloat(const std::string& path, bool flipVertically = true);
 };
 
 } // namespace Diamond
