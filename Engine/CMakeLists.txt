@@ -92,6 +92,7 @@ add_library(MyEngine STATIC
     src/Platform/OpenGL/OpenGLShadowPass.cpp
     src/Platform/OpenGL/OpenGLPBRSurfacePass.cpp
     src/Platform/OpenGL/OpenGLTonemapPass.cpp
+    src/Platform/OpenGL/OpenGLBloomPass.CPP
     src/Platform/OpenGL/OpenGLRendererAPI.cpp
     src/Platform/OpenGL/OpenGLShader.cpp
     src/Platform/OpenGL/OpenGLTexture.cpp

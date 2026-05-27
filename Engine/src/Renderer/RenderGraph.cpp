@@ -158,6 +158,31 @@ void RenderGraph::Execute()
             if (entry.glTexture != 0)
                 continue;
 
+            // --- MRT secondary: attach as COLOR_ATTACHMENT1 on the primary's FBO ---
+            if (entry.desc.mrtPrimary.IsValid())
+            {
+                TextureEntry& primary = m_Textures[entry.desc.mrtPrimary.id - 1];
+
+                glGenTextures(1, &entry.glTexture);
+                glBindTexture(GL_TEXTURE_2D, entry.glTexture);
+                glTexImage2D(GL_TEXTURE_2D, 0, entry.desc.internalFormat,
+                             entry.desc.width, entry.desc.height,
+                             0, GL_RGBA, GL_FLOAT, nullptr);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+                glBindFramebuffer(GL_FRAMEBUFFER, primary.glFBO);
+                glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1,
+                                       GL_TEXTURE_2D, entry.glTexture, 0);
+                GLenum attachments[2] = { GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1 };
+                glDrawBuffers(2, attachments);
+                glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+                entry.glFBO          = primary.glFBO; // borrowed — do not delete
+                entry.isMRTSecondary = true;
+                continue;
+            }
+
             bool isDepth = (entry.desc.internalFormat == GL_DEPTH_COMPONENT   ||
                             entry.desc.internalFormat == GL_DEPTH_COMPONENT24 ||
                             entry.desc.internalFormat == GL_DEPTH_COMPONENT32F);
@@ -212,7 +237,8 @@ void RenderGraph::Execute()
             TextureEntry& entry = m_Textures[t];
             if (entry.glDepthRBO) { glDeleteRenderbuffers(1, &entry.glDepthRBO); entry.glDepthRBO = 0; }
             if (entry.glTexture)  { glDeleteTextures(1,      &entry.glTexture);  entry.glTexture  = 0; }
-            if (entry.glFBO)      { glDeleteFramebuffers(1,  &entry.glFBO);      entry.glFBO      = 0; }
+            if (entry.glFBO && !entry.isMRTSecondary) { glDeleteFramebuffers(1, &entry.glFBO); entry.glFBO = 0; }
+            else entry.glFBO = 0;
         }
     }
 }
@@ -224,7 +250,8 @@ void RenderGraph::Clear()
     {
         if (entry.glDepthRBO) { glDeleteRenderbuffers(1, &entry.glDepthRBO); entry.glDepthRBO = 0; }
         if (entry.glTexture)  { glDeleteTextures(1,      &entry.glTexture);  entry.glTexture  = 0; }
-        if (entry.glFBO)      { glDeleteFramebuffers(1,  &entry.glFBO);      entry.glFBO      = 0; }
+        if (entry.glFBO && !entry.isMRTSecondary) { glDeleteFramebuffers(1, &entry.glFBO); entry.glFBO = 0; }
+        else entry.glFBO = 0;
     }
     m_Passes.clear();
     m_Textures.clear();

@@ -13,10 +13,11 @@ struct RGTextureHandle {
 };
 
 struct RGTextureDesc {
-    int    width;
-    int    height;
-    GLenum internalFormat; // e.g. GL_RGBA16F, GL_DEPTH_COMPONENT
-    bool   needsDepth = false; // attach a depth renderbuffer (for passes that depth-test)
+    int             width;
+    int             height;
+    GLenum          internalFormat;           // e.g. GL_RGBA16F, GL_DEPTH_COMPONENT
+    bool            needsDepth  = false;      // attach a depth renderbuffer (for passes that depth-test)
+    RGTextureHandle mrtPrimary  = {};         // if valid, attach as COLOR_ATTACHMENT1 on primary's FBO
 };
 
 struct RGPass {
@@ -53,9 +54,10 @@ private:
     struct TextureEntry {
         std::string   name;
         RGTextureDesc desc;
-        uint32_t      glTexture  = 0;
-        uint32_t      glFBO      = 0;
-        uint32_t      glDepthRBO = 0; // non-zero when desc.needsDepth is true
+        uint32_t      glTexture      = 0;
+        uint32_t      glFBO          = 0;
+        uint32_t      glDepthRBO     = 0;    // non-zero when desc.needsDepth is true
+        bool          isMRTSecondary = false; // FBO is borrowed from primary — do not delete
     };
 
     std::vector<RGPass>       m_Passes;

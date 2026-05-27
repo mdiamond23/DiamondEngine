@@ -15,6 +15,7 @@
 #include "Platform/OpenGL/OpenGLShadowPass.h"
 #include "Platform/OpenGL/OpenGLPBRSurfacePass.h"
 #include "Platform/OpenGL/OpenGLTonemapPass.h"
+#include "Platform/OpenGL/OpenGLBloomPass.h"
 #include "Platform/OpenGL/OpenGLShader.h"
 #include "Platform/OpenGL/OpenGLTexture.h"
 #include "Assets/ModelImporter.h"
@@ -102,9 +103,12 @@ int main()
     OpenGLShader flatShader(
         ENGINE_SHADERS_DIR "/Unlit/flat.vert",
         ENGINE_SHADERS_DIR "/Unlit/flat.frag");
-    OpenGLShader tonemapShader(
-        ENGINE_SHADERS_DIR "/PostProcess/tonemap.vert",
-        ENGINE_SHADERS_DIR "/PostProcess/tonemap.frag");
+    OpenGLShader blurShader(
+        ENGINE_SHADERS_DIR "/Bloom/blur.vert",
+        ENGINE_SHADERS_DIR "/Bloom/blur.frag");
+    OpenGLShader bloomFinalShader(
+        ENGINE_SHADERS_DIR "/Bloom/bloomfinal.vert",
+        ENGINE_SHADERS_DIR "/Bloom/bloomfinal.frag");
     OpenGLShader depthShader(
         ENGINE_SHADERS_DIR "/Shadows/depth.vert",
         ENGINE_SHADERS_DIR "/Shadows/depth.frag");
@@ -117,7 +121,7 @@ int main()
     OpenGLIBLPass        iblPass;
     OpenGLShadowPass     shadowPass;
     OpenGLPBRSurfacePass surfacePass;
-    OpenGLTonemapPass    tonemapPass;
+    OpenGLBloomPass      bloomPass;
 
     // IBL bake — one-time, not part of the per-frame graph
     {
@@ -186,10 +190,10 @@ int main()
         { -8.0f, 4.0f, -6.0f },
     };
     const glm::vec3 lightColors[4] = {
-        { 500.0f, 480.0f, 440.0f },
-        { 300.0f, 260.0f, 220.0f },
-        {  40.0f,  40.0f,  40.0f },
-        {  40.0f,  40.0f,  40.0f },
+        { 600.0f, 200.0f, 100.0f },  // warm orange-red
+        {  80.0f, 200.0f, 600.0f },  // cool blue
+        { 300.0f, 600.0f, 200.0f },  // bright green
+        { 500.0f, 400.0f,  50.0f },  // golden yellow
     };
 
     Diamond::SunLight sun;
@@ -206,8 +210,10 @@ int main()
     int fbW = 0, fbH = 0;
 
     // --- Render graph ---
-    RenderGraph    graph;
+    RenderGraph     graph;
     RGTextureHandle hdrBuffer;
+    RGTextureHandle brightBuffer;
+    RGTextureHandle pingPong[2];
 
     // Rebuilds the graph whenever the framebuffer resolution changes
     auto buildGraph = [&](int w, int h)
@@ -216,7 +222,10 @@ int main()
         fbH = h;
         graph.Clear();
 
-        hdrBuffer = graph.DeclareTexture("hdrBuffer", { w, h, GL_RGBA16F, true });
+        hdrBuffer    = graph.DeclareTexture("hdrBuffer",    { w, h, GL_RGBA16F, true });
+        brightBuffer = graph.DeclareTexture("brightBuffer", { w, h, GL_RGBA16F, false, hdrBuffer });
+        pingPong[0]  = graph.DeclareTexture("bloomPing",    { w, h, GL_RGBA16F, false });
+        pingPong[1]  = graph.DeclareTexture("bloomPong",    { w, h, GL_RGBA16F, false });
 
         // Directional shadow pass — sink (no writes to graph), always alive
         graph.AddPass("DirectionalShadow")
@@ -233,6 +242,7 @@ int main()
         // PBR lighting + skybox into the graph-managed HDR buffer
         graph.AddPass("PBR")
             .Write(hdrBuffer)
+            .Write(brightBuffer)
             .SetExecute([&]{
                 glBindFramebuffer(GL_FRAMEBUFFER, graph.GetFBO(hdrBuffer));
                 glViewport(0, 0, fbW, fbH);
@@ -268,11 +278,32 @@ int main()
                 surfacePass.DrawSkybox(backgroundShader, iblPass, view, proj, fbW, fbH);
             });
 
-        // Tonemap — reads hdrBuffer, sink (writes to backbuffer)
-        graph.AddPass("Tonemap")
-            .Read(hdrBuffer)
+        // Blur ping-pong — 10 iterations, final result in pingPong[1]
+        graph.AddPass("BloomBlur")
+            .Read(brightBuffer)
+            .Write(pingPong[0])
+            .Write(pingPong[1])
             .SetExecute([&]{
-                tonemapPass.RenderTonemapPassFromTex(tonemapShader, graph.GetTexture(hdrBuffer));
+                bool horizontal = true;
+                uint32_t src = graph.GetTexture(brightBuffer);
+                for (int i = 0; i < 10; ++i)
+                {
+                    int dst = i % 2;
+                    bloomPass.RenderBlurPass(blurShader, src, graph.GetFBO(pingPong[dst]), horizontal);
+                    src        = graph.GetTexture(pingPong[dst]);
+                    horizontal = !horizontal;
+                }
+            });
+
+        // Composite — blends HDR scene + blurred bloom, tonemaps to backbuffer
+        graph.AddPass("BloomComposite")
+            .Read(hdrBuffer)
+            .Read(pingPong[1])
+            .SetExecute([&]{
+                bloomPass.RenderCompositePass(bloomFinalShader,
+                    graph.GetTexture(hdrBuffer),
+                    graph.GetTexture(pingPong[1]),
+                    true, 0.1f);
             });
 
         graph.Compile();
