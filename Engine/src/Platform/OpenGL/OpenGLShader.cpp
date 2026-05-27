@@ -49,6 +49,42 @@ OpenGLShader::OpenGLShader(const std::string& vsPath, const std::string& fsPath)
     glDeleteShader(frag);
 }
 
+OpenGLShader::OpenGLShader(const std::string& vsPath, const std::string& gsPath, const std::string& fsPath)
+{
+    std::string vsSource = ReadFile(vsPath);
+    std::string gsSource = ReadFile(gsPath);
+    std::string fsSource = ReadFile(fsPath);
+    const char* vsSrc = vsSource.c_str();
+    const char* gsSrc = gsSource.c_str();
+    const char* fsSrc = fsSource.c_str();
+
+    uint32_t vert = glCreateShader(GL_VERTEX_SHADER);
+    glShaderSource(vert, 1, &vsSrc, nullptr);
+    glCompileShader(vert);
+    CheckCompileErrors(vert, "VERTEX");
+
+    uint32_t geom = glCreateShader(GL_GEOMETRY_SHADER);
+    glShaderSource(geom, 1, &gsSrc, nullptr);
+    glCompileShader(geom);
+    CheckCompileErrors(geom, "GEOMETRY");
+
+    uint32_t frag = glCreateShader(GL_FRAGMENT_SHADER);
+    glShaderSource(frag, 1, &fsSrc, nullptr);
+    glCompileShader(frag);
+    CheckCompileErrors(frag, "FRAGMENT");
+
+    m_RendererID = glCreateProgram();
+    glAttachShader(m_RendererID, vert);
+    glAttachShader(m_RendererID, geom);
+    glAttachShader(m_RendererID, frag);
+    glLinkProgram(m_RendererID);
+    CheckCompileErrors(m_RendererID, "PROGRAM");
+
+    glDeleteShader(vert);
+    glDeleteShader(geom);
+    glDeleteShader(frag);
+}
+
 OpenGLShader::~OpenGLShader()
 {
     glDeleteProgram(m_RendererID);

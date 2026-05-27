@@ -7,21 +7,42 @@ namespace Diamond {
 
 MeshData MeshData::UnitCube()
 {
-    static const glm::vec3 positions[36] = {
-        {-1, 1,-1}, {-1,-1,-1}, { 1,-1,-1}, { 1,-1,-1}, { 1, 1,-1}, {-1, 1,-1},
-        {-1,-1, 1}, {-1,-1,-1}, {-1, 1,-1}, {-1, 1,-1}, {-1, 1, 1}, {-1,-1, 1},
-        { 1,-1,-1}, { 1,-1, 1}, { 1, 1, 1}, { 1, 1, 1}, { 1, 1,-1}, { 1,-1,-1},
-        {-1,-1, 1}, {-1, 1, 1}, { 1, 1, 1}, { 1, 1, 1}, { 1,-1, 1}, {-1,-1, 1},
-        {-1, 1,-1}, { 1, 1,-1}, { 1, 1, 1}, { 1, 1, 1}, {-1, 1, 1}, {-1, 1,-1},
-        {-1,-1,-1}, {-1,-1, 1}, { 1,-1,-1}, { 1,-1,-1}, {-1,-1, 1}, { 1,-1, 1},
+    // 6 faces × 4 vertices = 24 vertices, each with full PBR attributes.
+    // Tangent chosen so cross(N, T) = bitangent = dP/dV direction.
+    struct Face { glm::vec3 p[4]; glm::vec2 uv[4]; glm::vec3 n, t; };
+    const Face faces[6] = {
+        // Front (+Z)
+        { {{-1,-1,1},{1,-1,1},{1,1,1},{-1,1,1}},   {{0,0},{1,0},{1,1},{0,1}}, {0,0,1},  {1,0,0}  },
+        // Back (-Z): U flipped so texture reads correctly from outside
+        { {{1,-1,-1},{-1,-1,-1},{-1,1,-1},{1,1,-1}},{{0,0},{1,0},{1,1},{0,1}}, {0,0,-1}, {-1,0,0} },
+        // Right (+X)
+        { {{1,-1,1},{1,-1,-1},{1,1,-1},{1,1,1}},    {{0,0},{1,0},{1,1},{0,1}}, {1,0,0},  {0,0,-1} },
+        // Left (-X)
+        { {{-1,-1,-1},{-1,-1,1},{-1,1,1},{-1,1,-1}},{{0,0},{1,0},{1,1},{0,1}}, {-1,0,0}, {0,0,1}  },
+        // Top (+Y)
+        { {{-1,1,1},{1,1,1},{1,1,-1},{-1,1,-1}},    {{0,0},{1,0},{1,1},{0,1}}, {0,1,0},  {1,0,0}  },
+        // Bottom (-Y)
+        { {{-1,-1,-1},{1,-1,-1},{1,-1,1},{-1,-1,1}},{{0,0},{1,0},{1,1},{0,1}}, {0,-1,0}, {1,0,0}  },
     };
+
     MeshData data;
-    data.Vertices.resize(36);
-    for (int i = 0; i < 36; ++i)
-        data.Vertices[i].Position = positions[i];
-    data.Indices.resize(36);
-    for (uint32_t i = 0; i < 36; ++i)
-        data.Indices[i] = i;
+    data.Vertices.reserve(24);
+    data.Indices.reserve(36);
+    for (int f = 0; f < 6; ++f) {
+        const auto& fd = faces[f];
+        glm::vec3 B = glm::cross(fd.n, fd.t);
+        uint32_t base = static_cast<uint32_t>(f * 4);
+        for (int v = 0; v < 4; ++v) {
+            Vertex vert{};
+            vert.Position  = fd.p[v];
+            vert.Normal    = fd.n;
+            vert.TexCoords = fd.uv[v];
+            vert.Tangent   = fd.t;
+            vert.Bitangent = B;
+            data.Vertices.push_back(vert);
+        }
+        data.Indices.insert(data.Indices.end(), {base,base+1,base+2, base,base+2,base+3});
+    }
     return data;
 }
 

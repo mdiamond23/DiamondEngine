@@ -8,6 +8,7 @@ namespace Diamond {
 class OpenGLShader : public Shader {
 public:
     OpenGLShader(const std::string& vsPath, const std::string& fsPath);
+    OpenGLShader(const std::string& vsPath, const std::string& gsPath, const std::string& fsPath);
     ~OpenGLShader() override;
 
     void Bind()   const override;

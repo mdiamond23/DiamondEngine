@@ -9,11 +9,13 @@ out vec2 TexCoords;
 out vec3 WorldPos;
 out vec3 Normal;
 out mat3 TBN;
+out vec4 FragPosLightSpace;
 
 uniform mat4 projection;
 uniform mat4 view;
 uniform mat4 model;
 uniform mat3 normalMatrix;
+uniform mat4 lightSpaceMatrix;
 
 void main()
 {
@@ -27,5 +29,6 @@ void main()
     TBN = mat3(T, B, N);
     Normal = N;
 
+    FragPosLightSpace = lightSpaceMatrix * vec4(WorldPos, 1.0);
     gl_Position = projection * view * vec4(WorldPos, 1.0);
 }

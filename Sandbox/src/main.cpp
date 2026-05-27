@@ -98,6 +98,27 @@ int main()
         ENGINE_SHADERS_DIR "/IBL/background.vert",
         ENGINE_SHADERS_DIR "/IBL/background.frag");
 
+    // Flat unlit shader for light markers
+    OpenGLShader flatShader(
+        ENGINE_SHADERS_DIR "/Unlit/flat.vert",
+        ENGINE_SHADERS_DIR "/Unlit/flat.frag");
+
+    // Post-processing: ACES tonemap + gamma correct
+    OpenGLShader tonemapShader(
+        ENGINE_SHADERS_DIR "/PostProcess/tonemap.vert",
+        ENGINE_SHADERS_DIR "/PostProcess/tonemap.frag");
+
+    // Directional shadow depth shader
+    OpenGLShader depthShader(
+        ENGINE_SHADERS_DIR "/Shadows/depth.vert",
+        ENGINE_SHADERS_DIR "/Shadows/depth.frag");
+
+    // Omnidirectional point shadow depth shader (geometry shader fans to 6 faces)
+    OpenGLShader pointDepthShader(
+        ENGINE_SHADERS_DIR "/Shadows/point_depth.vert",
+        ENGINE_SHADERS_DIR "/Shadows/point_depth.geom",
+        ENGINE_SHADERS_DIR "/Shadows/point_depth.frag");
+
     // Bake IBL from environment map
     OpenGLPBRPass pbrPass;
     {
@@ -105,37 +126,54 @@ int main()
         pbrPass.BakeEnvironment(envTex, equirectShader, irradianceShader,
                                 prefilterShader, brdfShader);
     }
+    pbrPass.SetupShadowMap(2048);
+    pbrPass.SetupPointShadowMaps(4, 512, 25.0f);
+    pbrPass.SetupHDRFramebuffer(1280, 720);
 
 
     // Material (DiamondPlate PBR textures)
     static const std::string MAT =
         ASSETS_DIR "/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG";
     PBRMaterial material;
-    material.Albedo    = Texture::Create(MAT + "_Color.png",            true);
+    material.Albedo    = Texture::Create(MAT + "_Color.png",            false);
     material.Normal    = Texture::Create(MAT + "_NormalGL.png",         false);
     material.Metallic  = Texture::Create(MAT + "_Metalness.png",        false);
     material.Roughness = Texture::Create(MAT + "_Roughness.png",        false);
     material.AO        = Texture::Create(MAT + "_AmbientOcclusion.png", false);
 
-    // Sphere mesh
+    // Sphere: left of centre, sitting on the ground (y = -0.3 puts bottom at ground level)
     auto sphere = Mesh::Create(MeshData::UVSphere());
-    std::vector<DrawCall> draws = { { sphere.get(), glm::mat4(1.0f) } };
+    glm::mat4 sphereModel = glm::translate(glm::mat4(1.0f), glm::vec3(-3.0f, -0.3f, 1.0f));
+    std::vector<DrawCall> draws = { { sphere.get(), sphereModel } };
 
-    // Cerberus gun
+    // Ground plane + cubes
+    auto cube = Mesh::Create(MeshData::UnitCube());
+    auto makeMat = [](glm::vec3 t, glm::vec3 s) {
+        return glm::scale(glm::translate(glm::mat4(1.0f), t), s);
+    };
+    std::vector<DrawCall> cubeDraws = {
+        { cube.get(), makeMat({  0.0f, -1.7f,  0.0f}, {20.0f, 0.4f, 20.0f}) }, // ground
+        { cube.get(), makeMat({  0.5f, -0.3f, -3.5f}, { 1.0f, 1.0f,  1.0f}) }, // centre-back, short
+        { cube.get(), makeMat({  3.5f,  0.7f,  1.0f}, { 1.0f, 2.0f,  1.0f}) }, // right-front, medium pillar
+        { cube.get(), makeMat({ -4.5f,  1.7f, -2.0f}, { 1.0f, 3.0f,  1.0f}) }, // left-back, tall pillar
+        { cube.get(), makeMat({ -1.5f, -0.3f,  3.5f}, { 1.2f, 1.2f,  1.2f}) }, // front-left, short
+        { cube.get(), makeMat({  5.5f, -0.3f, -3.0f}, { 1.0f, 1.0f,  1.0f}) }, // far right, short
+    };
+
+    // Cerberus gun: right-back, clear of all cubes
     static const std::string CERB =
         ASSETS_DIR "/Models/Cerberus_by_Andrew_Maximov/Textures/Cerberus";
     PBRMaterial cerberusMaterial;
-    cerberusMaterial.Albedo    = Texture::Create(CERB + "_A.tga", true);
-    cerberusMaterial.Normal    = Texture::Create(CERB + "_N.tga", true);
-    cerberusMaterial.Metallic  = Texture::Create(CERB + "_M.tga", true);
-    cerberusMaterial.Roughness = Texture::Create(CERB + "_R.tga", true);
+    cerberusMaterial.Albedo    = Texture::Create(CERB + "_A.tga", false);
+    cerberusMaterial.Normal    = Texture::Create(CERB + "_N.tga", false);
+    cerberusMaterial.Metallic  = Texture::Create(CERB + "_M.tga", false);
+    cerberusMaterial.Roughness = Texture::Create(CERB + "_R.tga", false);
 
     auto cerberusMeshData = ModelImporter::Load(
         ASSETS_DIR "/Models/Cerberus_by_Andrew_Maximov/Cerberus_LP.FBX");
     std::vector<std::shared_ptr<Mesh>> cerberusGpuMeshes;
     std::vector<DrawCall> cerberusDraws;
-    glm::mat4 cerberusModel = glm::mat4(1.0f);
-    cerberusModel = glm::translate(cerberusModel, glm::vec3(3.0f, 0.0f, 0.0f));
+    glm::mat4 cerberusModel = glm::translate(glm::mat4(1.0f), glm::vec3(4.0f, 0.5f, -3.5f));
     cerberusModel = glm::rotate(cerberusModel, glm::radians(-90.0f), glm::vec3(1.0f, 0.0f, 0.0f));
     cerberusModel = glm::scale(cerberusModel, glm::vec3(0.05f));
     for (auto& md : cerberusMeshData) {
@@ -143,16 +181,34 @@ int main()
         cerberusDraws.push_back({ cerberusGpuMeshes.back().get(), cerberusModel });
     }
 
+    // Small sphere used to mark each light position visually
+    auto lightMarker = Mesh::Create(MeshData::UVSphere());
 
-    // Lights
+    // Point lights: two close (cast visible shadows), two far fill
     const glm::vec3 lightPositions[4] = {
-        { -10.0f,  10.0f, 10.0f }, {  10.0f,  10.0f, 10.0f },
-        { -10.0f, -10.0f, 10.0f }, {  10.0f, -10.0f, 10.0f },
+        {  1.0f, 3.0f,  2.0f },  // overhead-ish, main caster
+        { -5.0f, 2.0f,  4.0f },  // upper left-front
+        {  8.0f, 4.0f, -6.0f },  // far right fill
+        { -8.0f, 4.0f, -6.0f },  // far left fill
     };
     const glm::vec3 lightColors[4] = {
-        { 3000.0f, 3000.0f, 3000.0f }, { 3000.0f, 3000.0f, 3000.0f },
-        { 3000.0f, 3000.0f, 3000.0f }, { 3000.0f, 3000.0f, 3000.0f },
+        { 500.0f, 480.0f, 440.0f },  // bright warm white
+        { 300.0f, 260.0f, 220.0f },  // warm side fill
+        {  40.0f,  40.0f,  40.0f },  // dim far fill
+        {  40.0f,  40.0f,  40.0f },  // dim far fill
     };
+
+    // Directional sun light
+    Diamond::SunLight sun;
+    sun.direction = glm::normalize(glm::vec3(-0.5f, -1.0f, -0.3f));
+    // sun.color     = glm::vec3(8.0f, 7.6f, 7.0f); // warm white, dominant
+    sun.color     = glm::vec3(0.0f); // off — isolating point light shadows
+
+    // Orthographic frustum fitted around the scene (-15..15 world units)
+    glm::mat4 lightProj = glm::ortho(-15.0f, 15.0f, -15.0f, 15.0f, 1.0f, 50.0f);
+    glm::vec3 lightPos  = -sun.direction * 20.0f; // pull back along sun dir
+    glm::mat4 lightView = glm::lookAt(lightPos, glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+    sun.lightSpaceMatrix = lightProj * lightView;
 
     while (!glfwWindowShouldClose(window))
     {
@@ -165,25 +221,58 @@ int main()
         int fbW, fbH;
         glfwGetFramebufferSize(window, &fbW, &fbH);
 
-        glClearColor(0.08f, 0.09f, 0.11f, 1.0f);
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        // --- build combined draw list once per frame ---
+        std::vector<Diamond::DrawCall> allDraws;
+        allDraws.insert(allDraws.end(), draws.begin(), draws.end());
+        allDraws.insert(allDraws.end(), cerberusDraws.begin(), cerberusDraws.end());
+        allDraws.insert(allDraws.end(), cubeDraws.begin(), cubeDraws.end());
+
+        // --- directional shadow pass ---
+        pbrPass.RenderShadowPass(depthShader, allDraws, sun);
+
+        // --- point shadow pass ---
+        pbrPass.RenderPointShadowPass(pointDepthShader, allDraws, lightPositions, 4);
+
+        // --- lighting pass (into HDR FBO) ---
+        pbrPass.BeginHDR(fbW, fbH);
 
         glm::mat4 view = g_camera.GetViewMatrix();
         glm::mat4 proj = glm::perspective(
             glm::radians(g_camera.Zoom), (float)fbW / (float)fbH, 0.1f, 100.0f);
 
-        // render sphere
         pbrPass.Render(pbrShader, draws, material,
                        view, proj, g_camera.Position,
-                       lightPositions, lightColors,
+                       lightPositions, lightColors, sun,
                        fbW, fbH);
+        
+        pbrPass.Render(pbrShader, cubeDraws, material,
+                view, proj, g_camera.Position,
+                lightPositions, lightColors, sun, fbW, fbH);              
 
-        // render gun
         pbrPass.Render(pbrShader, cerberusDraws, cerberusMaterial,
-               view, proj, g_camera.Position,
-               lightPositions, lightColors, fbW, fbH);
+                       view, proj, g_camera.Position,
+                       lightPositions, lightColors, sun, fbW, fbH);
+
+        // Draw a small bright sphere at each point light position
+        flatShader.Bind();
+        flatShader.SetMat4("projection", proj);
+        flatShader.SetMat4("view", view);
+        for (int i = 0; i < 4; ++i)
+        {
+            glm::mat4 m = glm::scale(
+                glm::translate(glm::mat4(1.0f), lightPositions[i]),
+                glm::vec3(0.15f));
+            flatShader.SetMat4("model", m);
+            // clamp HDR light colour to visible [0,1] range for the marker
+            glm::vec3 c = glm::min(lightColors[i] / 500.0f + glm::vec3(0.3f), glm::vec3(1.0f));
+            flatShader.SetVec3("color", c);
+            lightMarker->Draw(flatShader);
+        }
 
         pbrPass.DrawSkybox(backgroundShader, view, proj, fbW, fbH);
+
+        // --- tonemap pass (HDR FBO → default framebuffer) ---
+        pbrPass.RenderTonemapPass(tonemapShader);
 
         glfwSwapBuffers(window);
         glfwPollEvents();

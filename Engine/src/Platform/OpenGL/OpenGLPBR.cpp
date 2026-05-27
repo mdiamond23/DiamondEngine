@@ -32,13 +32,21 @@ OpenGLPBRPass::OpenGLPBRPass()
 {
 }
 
-OpenGLPBRPass::~OpenGLPBRPass() 
+OpenGLPBRPass::~OpenGLPBRPass()
 {
-    // delete the generated textures to free GPU memory
     glDeleteTextures(1, &envCubemap);
     glDeleteTextures(1, &irradianceMap);
     glDeleteTextures(1, &prefilterMap);
     glDeleteTextures(1, &brdfLUTTexture);
+    if (m_ShadowMapFBO) glDeleteFramebuffers(1, &m_ShadowMapFBO);
+    if (m_ShadowMap)    glDeleteTextures(1, &m_ShadowMap);
+    for (int i = 0; i < m_PointShadowCount; ++i) {
+        if (m_PointShadowFBOs[i]) glDeleteFramebuffers(1, &m_PointShadowFBOs[i]);
+        if (m_PointShadowMaps[i]) glDeleteTextures(1, &m_PointShadowMaps[i]);
+    }
+    if (m_HDRFBO)      glDeleteFramebuffers(1,  &m_HDRFBO);
+    if (m_HDRColorTex) glDeleteTextures(1,       &m_HDRColorTex);
+    if (m_HDRDepthRBO) glDeleteRenderbuffers(1,  &m_HDRDepthRBO);
 }
 
 // Requires: all the necessary resources (environment map, shaders) to be provided by the caller. This is because the environment baking process is expensive and should only be done once per environment, so we want to give the caller control over when it happens and what resources are used.
@@ -235,6 +243,172 @@ void OpenGLPBRPass::BindIBL(const OpenGLShader& PBRShader)
 }
 
 
+void OpenGLPBRPass::SetupShadowMap(int resolution)
+{
+    m_ShadowRes = resolution;
+
+    glGenTextures(1, &m_ShadowMap);
+    glBindTexture(GL_TEXTURE_2D, m_ShadowMap);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT,
+                 resolution, resolution, 0, GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
+    float borderColor[] = { 1.0f, 1.0f, 1.0f, 1.0f };
+    glTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, borderColor);
+
+    glGenFramebuffers(1, &m_ShadowMapFBO);
+    glBindFramebuffer(GL_FRAMEBUFFER, m_ShadowMapFBO);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, m_ShadowMap, 0);
+    glDrawBuffer(GL_NONE);
+    glReadBuffer(GL_NONE);
+    CheckFBO("shadow map");
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+}
+
+void OpenGLPBRPass::RenderShadowPass(
+    const OpenGLShader&          depthShader,
+    const std::vector<DrawCall>& draws,
+    const SunLight&              sun)
+{
+    glViewport(0, 0, m_ShadowRes, m_ShadowRes);
+    glBindFramebuffer(GL_FRAMEBUFFER, m_ShadowMapFBO);
+    glClear(GL_DEPTH_BUFFER_BIT);
+
+    depthShader.Bind();
+    depthShader.SetMat4("lightSpaceMatrix", sun.lightSpaceMatrix);
+
+    glEnable(GL_DEPTH_TEST);
+    glCullFace(GL_FRONT); // peter-panning fix
+    for (const auto& draw : draws)
+    {
+        depthShader.SetMat4("model", draw.modelMatrix);
+        draw.mesh->Draw(depthShader);
+    }
+    glCullFace(GL_BACK);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+}
+
+void OpenGLPBRPass::SetupPointShadowMaps(int count, int resolution, float farPlane)
+{
+    m_PointShadowCount    = count;
+    m_PointShadowRes      = resolution;
+    m_PointShadowFarPlane = farPlane;
+
+    for (int i = 0; i < count; ++i) {
+        glGenTextures(1, &m_PointShadowMaps[i]);
+        glBindTexture(GL_TEXTURE_CUBE_MAP, m_PointShadowMaps[i]);
+        for (int face = 0; face < 6; ++face)
+            glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + face, 0, GL_DEPTH_COMPONENT,
+                         resolution, resolution, 0, GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
+        glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+
+        glGenFramebuffers(1, &m_PointShadowFBOs[i]);
+        glBindFramebuffer(GL_FRAMEBUFFER, m_PointShadowFBOs[i]);
+        glFramebufferTexture(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, m_PointShadowMaps[i], 0);
+        glDrawBuffer(GL_NONE);
+        glReadBuffer(GL_NONE);
+        CheckFBO("point shadow cubemap");
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    }
+}
+
+void OpenGLPBRPass::RenderPointShadowPass(
+    const OpenGLShader&          depthShader,
+    const std::vector<DrawCall>& draws,
+    const glm::vec3              lightPositions[],
+    int                          lightCount)
+{
+    glViewport(0, 0, m_PointShadowRes, m_PointShadowRes);
+    depthShader.Bind();
+    depthShader.SetFloat("farPlane", m_PointShadowFarPlane);
+
+    glm::mat4 shadowProj = glm::perspective(
+        glm::radians(90.0f), 1.0f, 0.1f, m_PointShadowFarPlane);
+
+    for (int i = 0; i < lightCount && i < m_PointShadowCount; ++i) {
+        const glm::vec3& lp = lightPositions[i];
+        glm::mat4 views[6] = {
+            shadowProj * glm::lookAt(lp, lp + glm::vec3( 1, 0, 0), glm::vec3(0,-1, 0)),
+            shadowProj * glm::lookAt(lp, lp + glm::vec3(-1, 0, 0), glm::vec3(0,-1, 0)),
+            shadowProj * glm::lookAt(lp, lp + glm::vec3( 0, 1, 0), glm::vec3(0, 0, 1)),
+            shadowProj * glm::lookAt(lp, lp + glm::vec3( 0,-1, 0), glm::vec3(0, 0,-1)),
+            shadowProj * glm::lookAt(lp, lp + glm::vec3( 0, 0, 1), glm::vec3(0,-1, 0)),
+            shadowProj * glm::lookAt(lp, lp + glm::vec3( 0, 0,-1), glm::vec3(0,-1, 0)),
+        };
+        for (int f = 0; f < 6; ++f)
+            depthShader.SetMat4("shadowMatrices[" + std::to_string(f) + "]", views[f]);
+        depthShader.SetVec3("lightPos", lp);
+
+        glBindFramebuffer(GL_FRAMEBUFFER, m_PointShadowFBOs[i]);
+        glClear(GL_DEPTH_BUFFER_BIT);
+        glEnable(GL_DEPTH_TEST);
+        for (const auto& draw : draws) {
+            depthShader.SetMat4("model", draw.modelMatrix);
+            draw.mesh->Draw(depthShader);
+        }
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+}
+
+void OpenGLPBRPass::SetupHDRFramebuffer(int w, int h)
+{
+    m_HDRWidth = w;
+    m_HDRHeight = h;
+
+    glGenFramebuffers(1, &m_HDRFBO);
+    glBindFramebuffer(GL_FRAMEBUFFER, m_HDRFBO);
+
+    glGenTextures(1, &m_HDRColorTex);
+    glBindTexture(GL_TEXTURE_2D, m_HDRColorTex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, w, h, 0, GL_RGBA, GL_FLOAT, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_HDRColorTex, 0);
+
+    glGenRenderbuffers(1, &m_HDRDepthRBO);
+    glBindRenderbuffer(GL_RENDERBUFFER, m_HDRDepthRBO);
+    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, w, h);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, m_HDRDepthRBO);
+
+    CheckFBO("HDR framebuffer");
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+}
+
+void OpenGLPBRPass::BeginHDR(int w, int h)
+{
+    if (w != m_HDRWidth || h != m_HDRHeight) {
+        glDeleteTextures(1, &m_HDRColorTex);
+        glDeleteRenderbuffers(1, &m_HDRDepthRBO);
+        glDeleteFramebuffers(1, &m_HDRFBO);
+        m_HDRFBO = m_HDRColorTex = m_HDRDepthRBO = 0;
+        SetupHDRFramebuffer(w, h);
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, m_HDRFBO);
+    glViewport(0, 0, w, h);
+    glClearColor(0.08f, 0.09f, 0.11f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+}
+
+void OpenGLPBRPass::RenderTonemapPass(const OpenGLShader& tonemapShader)
+{
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+    tonemapShader.Bind();
+    tonemapShader.SetInt("hdrBuffer", 0);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, m_HDRColorTex);
+
+    m_Quad.Draw(tonemapShader);
+}
+
 // Per-frame surface pass: sets all uniforms and draws each mesh.
 void OpenGLPBRPass::Render(
     const OpenGLShader& shader,
@@ -245,17 +419,22 @@ void OpenGLPBRPass::Render(
     const glm::vec3& cameraPos,
     const glm::vec3 lightPositions[4],
     const glm::vec3 lightColors[4],
+    const SunLight& sun,
     int viewportW, int viewportH)
 {
     glViewport(0, 0, viewportW, viewportH);
 
-    // Set up shader
     shader.Bind();
     shader.SetMat4("view", view);
     shader.SetMat4("projection", projection);
     shader.SetVec3("camPos", cameraPos);
+    shader.SetMat4("lightSpaceMatrix", sun.lightSpaceMatrix);
+    shader.SetVec3("sunDirection", sun.direction);
+    shader.SetVec3("sunColor",     sun.color);
+    shader.SetInt("shadowMap", 8);
+    glActiveTexture(GL_TEXTURE8);
+    glBindTexture(GL_TEXTURE_2D, m_ShadowMap);
 
-    // set lights for object
     for (int i = 0; i < 4; ++i)
     {
         shader.SetVec3("lightPositions[" + std::to_string(i) + "]", lightPositions[i]);
@@ -263,6 +442,16 @@ void OpenGLPBRPass::Render(
     }
 
     BindIBL(shader);
+
+    // Bind point shadow cubemaps to slots 9–12
+    shader.SetFloat("shadowFarPlane", m_PointShadowFarPlane);
+    for (int i = 0; i < m_PointShadowCount; ++i) {
+        int slot = 9 + i;
+        shader.SetInt("pointShadowMaps[" + std::to_string(i) + "]", slot);
+        glActiveTexture(GL_TEXTURE0 + slot);
+        glBindTexture(GL_TEXTURE_CUBE_MAP, m_PointShadowMaps[i]);
+    }
+
     material.Bind(shader);
 
     for (const auto& draw : draws)

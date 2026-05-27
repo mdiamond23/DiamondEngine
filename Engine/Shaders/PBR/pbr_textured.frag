@@ -1,10 +1,11 @@
-#version 330 core
+#version 410 core
 out vec4 FragColor;
 
 in vec2 TexCoords;
 in vec3 WorldPos;
 in vec3 Normal;
 in mat3 TBN;
+in vec4 FragPosLightSpace;
 
 // material texture maps
 uniform sampler2D albedoMap;
@@ -18,9 +19,18 @@ uniform samplerCube irradianceMap;
 uniform samplerCube prefilterMap;
 uniform sampler2D brdfLUT;
 
-// lights
+// point lights
 uniform vec3 lightPositions[4];
 uniform vec3 lightColors[4];
+
+// directional sun light + shadow
+uniform vec3 sunDirection;
+uniform vec3 sunColor;
+uniform sampler2D shadowMap;
+
+// point light shadow cubemaps
+uniform samplerCube pointShadowMaps[4];
+uniform float       shadowFarPlane;
 
 uniform vec3 camPos;
 
@@ -71,6 +81,50 @@ vec3 fresnelSchlickRoughness(float cosTheta, vec3 F0, float roughness)
     return F0 + (max(vec3(1.0 - roughness), F0) - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
 }
 // ----------------------------------------------------------------------------
+float ShadowCalculation(vec4 fragPosLightSpace, vec3 N, vec3 L)
+{
+    vec3 projCoords = fragPosLightSpace.xyz / fragPosLightSpace.w;
+    projCoords = projCoords * 0.5 + 0.5;
+    if (projCoords.z > 1.0)
+        return 0.0;
+    float bias = max(0.005 * (1.0 - dot(N, L)), 0.0005);
+    float shadow = 0.0;
+    vec2 texelSize = 1.0 / textureSize(shadowMap, 0);
+    for (int x = -1; x <= 1; ++x)
+        for (int y = -1; y <= 1; ++y)
+        {
+            float pcfDepth = texture(shadowMap, projCoords.xy + vec2(x, y) * texelSize).r;
+            shadow += (projCoords.z - bias) > pcfDepth ? 1.0 : 0.0;
+        }
+    return shadow / 9.0;
+}
+// ----------------------------------------------------------------------------
+const vec3 g_SampleDisk[20] = vec3[](
+    vec3( 1, 1, 1), vec3( 1,-1, 1), vec3(-1,-1, 1), vec3(-1, 1, 1),
+    vec3( 1, 1,-1), vec3( 1,-1,-1), vec3(-1,-1,-1), vec3(-1, 1,-1),
+    vec3( 1, 1, 0), vec3( 1,-1, 0), vec3(-1,-1, 0), vec3(-1, 1, 0),
+    vec3( 1, 0, 1), vec3(-1, 0, 1), vec3( 1, 0,-1), vec3(-1, 0,-1),
+    vec3( 0, 1, 1), vec3( 0,-1, 1), vec3( 0,-1,-1), vec3( 0, 1,-1)
+);
+
+float ShadowCalculationPoint(vec3 fragPos, vec3 lightPos, samplerCube depthMap)
+{
+    vec3  fragToLight  = fragPos - lightPos;
+    float currentDepth = length(fragToLight);
+    float shadow       = 0.0;
+    float bias         = 0.15;
+    float viewDist     = length(camPos - fragPos);
+    float diskRadius   = (1.0 + viewDist / shadowFarPlane) / 25.0;
+    for (int i = 0; i < 20; ++i)
+    {
+        float closestDepth = texture(depthMap, fragToLight + g_SampleDisk[i] * diskRadius).r
+                             * shadowFarPlane;
+        if (currentDepth - bias > closestDepth)
+            shadow += 1.0;
+    }
+    return shadow / 20.0;
+}
+// ----------------------------------------------------------------------------
 void main()
 {
     // sample material textures
@@ -113,7 +167,29 @@ void main()
         kD *= 1.0 - metallic;
 
         float NdotL = max(dot(N, L), 0.0);
-        Lo += (kD * albedo / PI + specular) * radiance * NdotL;
+        float shadow = ShadowCalculationPoint(WorldPos, lightPositions[i], pointShadowMaps[i]);
+        Lo += (kD * albedo / PI + specular) * radiance * NdotL * (1.0 - shadow);
+    }
+
+    // directional sun light with PCF shadow
+    {
+        vec3 L = normalize(-sunDirection);
+        vec3 H = normalize(V + L);
+        float NdotL = max(dot(N, L), 0.0);
+
+        float NDF = DistributionGGX(N, H, roughness);
+        float G   = GeometrySmith(N, V, L, roughness);
+        vec3  F   = fresnelSchlick(max(dot(H, V), 0.0), F0);
+
+        vec3 numerator    = NDF * G * F;
+        float denominator = 4.0 * max(dot(N, V), 0.0) * max(dot(N, L), 0.0) + 0.0001;
+        vec3 specular     = numerator / denominator;
+
+        vec3 kS = F;
+        vec3 kD = (vec3(1.0) - kS) * (1.0 - metallic);
+
+        float shadow = ShadowCalculation(FragPosLightSpace, N, L);
+        Lo += (kD * albedo / PI + specular) * sunColor * NdotL * (1.0 - shadow);
     }
 
     // ambient lighting (IBL)
@@ -135,10 +211,9 @@ void main()
 
     vec3 color = ambient + Lo;
 
-    // HDR tonemapping
-    color = color / (color + vec3(1.0));
-    // gamma correct
-    color = pow(color, vec3(1.0/2.2));
+    // HDR tonemapping + gamma correction moved to PostProcess/tonemap.frag
+    // color = color / (color + vec3(1.0));
+    // color = pow(color, vec3(1.0/2.2));
 
     FragColor = vec4(color, 1.0);
 }
