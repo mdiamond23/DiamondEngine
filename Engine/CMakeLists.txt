@@ -88,10 +88,14 @@ add_library(MyEngine STATIC
     src/Assets/ImageLoader.cpp
     src/Assets/ModelImporter.cpp
     src/Platform/OpenGL/OpenGLMesh.cpp
-    src/Platform/OpenGL/OpenGLPBR.cpp
+    src/Platform/OpenGL/OpenGLIBLPass.cpp
+    src/Platform/OpenGL/OpenGLShadowPass.cpp
+    src/Platform/OpenGL/OpenGLPBRSurfacePass.cpp
+    src/Platform/OpenGL/OpenGLTonemapPass.cpp
     src/Platform/OpenGL/OpenGLRendererAPI.cpp
     src/Platform/OpenGL/OpenGLShader.cpp
     src/Platform/OpenGL/OpenGLTexture.cpp
+    src/Renderer/RenderGraph.cpp
     src/Renderer/Material.cpp
     src/Renderer/MeshData.cpp
     src/Renderer/RendererAPI.cpp
