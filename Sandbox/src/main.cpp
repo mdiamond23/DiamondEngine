@@ -10,14 +10,16 @@
 #include "Renderer/Material.h"
 #include "Renderer/TextureData.h"
 #include "Renderer/RenderGraph.h"
-#include "Platform/OpenGL/OpenGLRenderTypes.h"
-#include "Platform/OpenGL/OpenGLIBLPass.h"
-#include "Platform/OpenGL/OpenGLShadowPass.h"
-#include "Platform/OpenGL/OpenGLPBRSurfacePass.h"
-#include "Platform/OpenGL/OpenGLTonemapPass.h"
-#include "Platform/OpenGL/OpenGLBloomPass.h"
-#include "Platform/OpenGL/OpenGLShader.h"
-#include "Platform/OpenGL/OpenGLTexture.h"
+#include "Platform/OpenGL/Resources/OpenGLRenderTypes.h"
+#include "Platform/OpenGL/Resources/OpenGLShader.h"
+#include "Platform/OpenGL/Resources/OpenGLTexture.h"
+#include "Platform/OpenGL/Passes/IBL/OpenGLIBLPass.h"
+#include "Platform/OpenGL/Passes/Shadows/OpenGLShadowPass.h"
+#include "Platform/OpenGL/Passes/Deferred/OpenGLGBufferPass.h"
+#include "Platform/OpenGL/Passes/Deferred/OpenGLSSAOPass.h"
+#include "Platform/OpenGL/Passes/Deferred/OpenGLDeferredLightingPass.h"
+#include "Platform/OpenGL/Passes/PostProcess/OpenGLTonemapPass.h"
+#include "Platform/OpenGL/Passes/PostProcess/OpenGLBloomPass.h"
 #include "Assets/ModelImporter.h"
 
 using namespace Diamond;
@@ -82,9 +84,18 @@ int main()
     glEnable(GL_TEXTURE_CUBE_MAP_SEAMLESS);
 
     // --- Shaders ---
-    OpenGLShader pbrShader(
-        ENGINE_SHADERS_DIR "/PBR/pbr_textured.vert",
-        ENGINE_SHADERS_DIR "/PBR/pbr_textured.frag");
+    OpenGLShader gbufferShader(
+        ENGINE_SHADERS_DIR "/Deferred/gbuffer.vert",
+        ENGINE_SHADERS_DIR "/Deferred/gbuffer.frag");
+    OpenGLShader ssaoShader(
+        ENGINE_SHADERS_DIR "/Deferred/quad.vert",
+        ENGINE_SHADERS_DIR "/Deferred/ssao.frag");
+    OpenGLShader ssaoBlurShader(
+        ENGINE_SHADERS_DIR "/Deferred/quad.vert",
+        ENGINE_SHADERS_DIR "/Deferred/ssao_blur.frag");
+    OpenGLShader lightingShader(
+        ENGINE_SHADERS_DIR "/Deferred/quad.vert",
+        ENGINE_SHADERS_DIR "/Deferred/lighting.frag");
     OpenGLShader equirectShader(
         ENGINE_SHADERS_DIR "/IBL/cubemap.vert",
         ENGINE_SHADERS_DIR "/IBL/equirect_to_cubemap.frag");
@@ -100,9 +111,6 @@ int main()
     OpenGLShader backgroundShader(
         ENGINE_SHADERS_DIR "/IBL/background.vert",
         ENGINE_SHADERS_DIR "/IBL/background.frag");
-    OpenGLShader flatShader(
-        ENGINE_SHADERS_DIR "/Unlit/flat.vert",
-        ENGINE_SHADERS_DIR "/Unlit/flat.frag");
     OpenGLShader blurShader(
         ENGINE_SHADERS_DIR "/Bloom/blur.vert",
         ENGINE_SHADERS_DIR "/Bloom/blur.frag");
@@ -118,19 +126,21 @@ int main()
         ENGINE_SHADERS_DIR "/Shadows/point_depth.frag");
 
     // --- Pass objects ---
-    OpenGLIBLPass        iblPass;
-    OpenGLShadowPass     shadowPass;
-    OpenGLPBRSurfacePass surfacePass;
-    OpenGLBloomPass      bloomPass;
+    OpenGLIBLPass              iblPass;
+    OpenGLShadowPass           shadowPass;
+    OpenGLGBufferPass          gbufferPass;
+    OpenGLSSAOPass             ssaoPass;
+    OpenGLDeferredLightingPass lightingPass;
+    OpenGLBloomPass            bloomPass;
 
-    // IBL bake — one-time, not part of the per-frame graph
+    // IBL bake — one-time
     {
         OpenGLTexture envTex(ASSETS_DIR "/Textures/debris_basement_corridor_2k.hdr", true, true);
         iblPass.BakeEnvironment(envTex, equirectShader, irradianceShader,
                                 prefilterShader, brdfShader);
     }
 
-    // Shadow maps — pass manages its own FBOs (persistent, not transient)
+    // Shadow maps — persistent, not managed by the graph
     shadowPass.SetupShadowMap(2048);
     shadowPass.SetupPointShadowMaps(4, 512, 25.0f);
 
@@ -173,15 +183,13 @@ int main()
         ASSETS_DIR "/Models/Cerberus_by_Andrew_Maximov/Cerberus_LP.FBX");
     std::vector<std::shared_ptr<Mesh>> cerberusGpuMeshes;
     std::vector<DrawCall> cerberusDraws;
-    glm::mat4 cerberusModel = glm::translate(glm::mat4(1.0f), glm::vec3(4.0f, 0.5f, -3.5f));
+    glm::mat4 cerberusModel = glm::translate(glm::mat4(1.0f), glm::vec3(1.5f, 1.5f, 1.0f));
     cerberusModel = glm::rotate(cerberusModel, glm::radians(-90.0f), glm::vec3(1.0f, 0.0f, 0.0f));
     cerberusModel = glm::scale(cerberusModel, glm::vec3(0.05f));
     for (auto& md : cerberusMeshData) {
         cerberusGpuMeshes.push_back(Mesh::Create(md));
         cerberusDraws.push_back({ cerberusGpuMeshes.back().get(), cerberusModel });
     }
-
-    auto lightMarker = Mesh::Create(MeshData::UVSphere());
 
     const glm::vec3 lightPositions[4] = {
         {  1.0f, 3.0f,  2.0f },
@@ -190,10 +198,10 @@ int main()
         { -8.0f, 4.0f, -6.0f },
     };
     const glm::vec3 lightColors[4] = {
-        { 600.0f, 200.0f, 100.0f },  // warm orange-red
-        {  80.0f, 200.0f, 600.0f },  // cool blue
-        { 300.0f, 600.0f, 200.0f },  // bright green
-        { 500.0f, 400.0f,  50.0f },  // golden yellow
+        { 600.0f, 200.0f, 100.0f },
+        {  80.0f, 200.0f, 600.0f },
+        { 300.0f, 600.0f, 200.0f },
+        { 500.0f, 400.0f,  50.0f },
     };
 
     Diamond::SunLight sun;
@@ -204,90 +212,127 @@ int main()
     glm::mat4 lightView = glm::lookAt(lightPos, glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
     sun.lightSpaceMatrix = lightProj * lightView;
 
-    // --- Per-frame state captured by the render graph lambdas ---
+    // --- Per-frame state captured by render graph lambdas ---
     std::vector<DrawCall> allDraws;
     glm::mat4 view, proj;
     int fbW = 0, fbH = 0;
 
     // --- Render graph ---
     RenderGraph     graph;
-    RGTextureHandle hdrBuffer;
-    RGTextureHandle brightBuffer;
+    RGTextureHandle gViewPos, gViewNormal, gAlbedo, gMaterial;
+    RGTextureHandle hSsaoRaw, hSsaoBlur;
+    RGTextureHandle hdrBuffer, brightBuffer;
     RGTextureHandle pingPong[2];
 
-    // Rebuilds the graph whenever the framebuffer resolution changes
     auto buildGraph = [&](int w, int h)
     {
-        fbW = w;
-        fbH = h;
+        fbW = w; fbH = h;
         graph.Clear();
 
-        hdrBuffer    = graph.DeclareTexture("hdrBuffer",    { w, h, GL_RGBA16F, true });
-        brightBuffer = graph.DeclareTexture("brightBuffer", { w, h, GL_RGBA16F, false, hdrBuffer });
-        pingPong[0]  = graph.DeclareTexture("bloomPing",    { w, h, GL_RGBA16F, false });
-        pingPong[1]  = graph.DeclareTexture("bloomPong",    { w, h, GL_RGBA16F, false });
+        // G-buffer — 4 attachments sharing one FBO (gViewPos owns it)
+        gViewPos    = graph.DeclareTexture("gViewPos",    { w, h, GL_RGBA16F, true  });
+        gViewNormal = graph.DeclareTexture("gViewNormal", { w, h, GL_RGBA16F, false, gViewPos, 1 });
+        gAlbedo     = graph.DeclareTexture("gAlbedo",     { w, h, GL_RGBA8,   false, gViewPos, 2 });
+        gMaterial   = graph.DeclareTexture("gMaterial",   { w, h, GL_RGBA8,   false, gViewPos, 3 });
 
-        // Directional shadow pass — sink (no writes to graph), always alive
+        // SSAO intermediates
+        hSsaoRaw  = graph.DeclareTexture("ssaoRaw",  { w, h, GL_R16F, false });
+        hSsaoBlur = graph.DeclareTexture("ssaoBlur", { w, h, GL_R16F, false });
+
+        // HDR + bloom extract (MRT)
+        hdrBuffer    = graph.DeclareTexture("hdrBuffer",    { w, h, GL_RGBA16F, true  });
+        brightBuffer = graph.DeclareTexture("brightBuffer", { w, h, GL_RGBA16F, false, hdrBuffer, 1 });
+
+        // Bloom ping-pong
+        pingPong[0] = graph.DeclareTexture("bloomPing", { w, h, GL_RGBA16F, false });
+        pingPong[1] = graph.DeclareTexture("bloomPong", { w, h, GL_RGBA16F, false });
+
+        // Shadow passes — sinks (no graph writes), always alive
         graph.AddPass("DirectionalShadow")
             .SetExecute([&]{
                 shadowPass.RenderShadowPass(depthShader, allDraws, sun);
             });
 
-        // Point shadow pass — sink, always alive
         graph.AddPass("PointShadow")
             .SetExecute([&]{
                 shadowPass.RenderPointShadowPass(pointDepthShader, allDraws, lightPositions, 4);
             });
 
-        // PBR lighting + skybox into the graph-managed HDR buffer
-        graph.AddPass("PBR")
-            .Write(hdrBuffer)
-            .Write(brightBuffer)
+        // Geometry pass — fills all 4 G-buffer attachments
+        graph.AddPass("GBuffer")
+            .Write(gViewPos).Write(gViewNormal).Write(gAlbedo).Write(gMaterial)
             .SetExecute([&]{
-                glBindFramebuffer(GL_FRAMEBUFFER, graph.GetFBO(hdrBuffer));
-                glViewport(0, 0, fbW, fbH);
-                glClearColor(0.08f, 0.09f, 0.11f, 1.0f);
+                // Clear once, then render all material batches into the same FBO
+                glBindFramebuffer(GL_FRAMEBUFFER, graph.GetFBO(gViewPos));
+                glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
                 glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-                surfacePass.Render(pbrShader, draws, material,
-                                   view, proj, g_camera.Position,
-                                   lightPositions, lightColors, sun,
-                                   shadowPass, iblPass, fbW, fbH);
-                surfacePass.Render(pbrShader, cubeDraws, material,
-                                   view, proj, g_camera.Position,
-                                   lightPositions, lightColors, sun,
-                                   shadowPass, iblPass, fbW, fbH);
-                surfacePass.Render(pbrShader, cerberusDraws, cerberusMaterial,
-                                   view, proj, g_camera.Position,
-                                   lightPositions, lightColors, sun,
-                                   shadowPass, iblPass, fbW, fbH);
-
-                flatShader.Bind();
-                flatShader.SetMat4("projection", proj);
-                flatShader.SetMat4("view", view);
-                for (int i = 0; i < 4; ++i) {
-                    glm::mat4 m = glm::scale(
-                        glm::translate(glm::mat4(1.0f), lightPositions[i]),
-                        glm::vec3(0.15f));
-                    flatShader.SetMat4("model", m);
-                    glm::vec3 c = glm::min(lightColors[i] / 500.0f + glm::vec3(0.3f), glm::vec3(1.0f));
-                    flatShader.SetVec3("color", c);
-                    lightMarker->Draw(flatShader);
-                }
-
-                surfacePass.DrawSkybox(backgroundShader, iblPass, view, proj, fbW, fbH);
+                gbufferPass.Render(gbufferShader, draws,         material,         view, proj, graph.GetFBO(gViewPos), fbW, fbH);
+                gbufferPass.Render(gbufferShader, cubeDraws,     material,         view, proj, graph.GetFBO(gViewPos), fbW, fbH);
+                gbufferPass.Render(gbufferShader, cerberusDraws, cerberusMaterial, view, proj, graph.GetFBO(gViewPos), fbW, fbH);
             });
 
-        // Blur ping-pong — 10 iterations, final result in pingPong[1]
+        // SSAO — raw occlusion
+        graph.AddPass("SSAO")
+            .Read(gViewPos).Read(gViewNormal)
+            .Write(hSsaoRaw)
+            .SetExecute([&]{
+                ssaoPass.RenderSSAO(ssaoShader,
+                                    graph.GetTexture(gViewPos),
+                                    graph.GetTexture(gViewNormal),
+                                    proj,
+                                    graph.GetFBO(hSsaoRaw),
+                                    fbW, fbH);
+            });
+
+        // SSAO blur
+        graph.AddPass("SSAOBlur")
+            .Read(hSsaoRaw)
+            .Write(hSsaoBlur)
+            .SetExecute([&]{
+                ssaoPass.RenderBlur(ssaoBlurShader,
+                                    graph.GetTexture(hSsaoRaw),
+                                    graph.GetFBO(hSsaoBlur),
+                                    fbW, fbH);
+            });
+
+        // Deferred lighting + skybox
+        graph.AddPass("DeferredLighting")
+            .Read(gViewPos).Read(gViewNormal).Read(gAlbedo).Read(gMaterial)
+            .Read(hSsaoBlur)
+            .Write(hdrBuffer).Write(brightBuffer)
+            .SetExecute([&]{
+                lightingPass.Render(lightingShader,
+                                    graph.GetTexture(gViewPos),
+                                    graph.GetTexture(gViewNormal),
+                                    graph.GetTexture(gAlbedo),
+                                    graph.GetTexture(gMaterial),
+                                    graph.GetTexture(hSsaoBlur),
+                                    view, g_camera.Position,
+                                    lightPositions, lightColors, sun,
+                                    shadowPass, iblPass,
+                                    graph.GetFBO(hdrBuffer),
+                                    fbW, fbH);
+
+                // Blit G-buffer depth → HDR FBO so the skybox can depth-test
+                glBindFramebuffer(GL_READ_FRAMEBUFFER, graph.GetFBO(gViewPos));
+                glBindFramebuffer(GL_DRAW_FRAMEBUFFER, graph.GetFBO(hdrBuffer));
+                glBlitFramebuffer(0, 0, fbW, fbH, 0, 0, fbW, fbH,
+                                  GL_DEPTH_BUFFER_BIT, GL_NEAREST);
+
+                // Skybox renders into the HDR FBO using the blitted depth
+                glBindFramebuffer(GL_FRAMEBUFFER, graph.GetFBO(hdrBuffer));
+                lightingPass.DrawSkybox(backgroundShader, iblPass, view, proj, fbW, fbH);
+            });
+
+        // Bloom blur ping-pong
         graph.AddPass("BloomBlur")
             .Read(brightBuffer)
-            .Write(pingPong[0])
-            .Write(pingPong[1])
+            .Write(pingPong[0]).Write(pingPong[1])
             .SetExecute([&]{
                 bool horizontal = true;
                 uint32_t src = graph.GetTexture(brightBuffer);
-                for (int i = 0; i < 10; ++i)
-                {
+                for (int i = 0; i < 10; ++i) {
                     int dst = i % 2;
                     bloomPass.RenderBlurPass(blurShader, src, graph.GetFBO(pingPong[dst]), horizontal);
                     src        = graph.GetTexture(pingPong[dst]);
@@ -295,10 +340,9 @@ int main()
                 }
             });
 
-        // Composite — blends HDR scene + blurred bloom, tonemaps to backbuffer
+        // Composite + tonemap → backbuffer
         graph.AddPass("BloomComposite")
-            .Read(hdrBuffer)
-            .Read(pingPong[1])
+            .Read(hdrBuffer).Read(pingPong[1])
             .SetExecute([&]{
                 bloomPass.RenderCompositePass(bloomFinalShader,
                     graph.GetTexture(hdrBuffer),
@@ -322,19 +366,16 @@ int main()
 
         glfwGetFramebufferSize(window, &fbW, &fbH);
 
-        // Rebuild graph on first frame or window resize
-        if (fbW != lastFbW || fbH != lastFbH)
-        {
+        if (fbW != lastFbW || fbH != lastFbH) {
             buildGraph(fbW, fbH);
             lastFbW = fbW;
             lastFbH = fbH;
         }
 
-        // Update per-frame state the lambdas read
         allDraws.clear();
-        allDraws.insert(allDraws.end(), draws.begin(), draws.end());
+        allDraws.insert(allDraws.end(), draws.begin(),        draws.end());
         allDraws.insert(allDraws.end(), cerberusDraws.begin(), cerberusDraws.end());
-        allDraws.insert(allDraws.end(), cubeDraws.begin(), cubeDraws.end());
+        allDraws.insert(allDraws.end(), cubeDraws.begin(),    cubeDraws.end());
 
         view = g_camera.GetViewMatrix();
         proj = glm::perspective(

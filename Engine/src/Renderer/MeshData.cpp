@@ -1,6 +1,6 @@
 #include "Renderer/MeshData.h"
 #include "Renderer/RendererAPI.h"
-#include "Platform/OpenGL/OpenGLMesh.h"
+#include "Platform/OpenGL/Resources/OpenGLMesh.h"
 #include <cmath>
 
 namespace Diamond {

@@ -1,7 +1,7 @@
 #pragma once
-#include "OpenGLTexture.h"
-#include "OpenGLShader.h"
-#include "OpenGLMesh.h"
+#include "Platform/OpenGL/Resources/OpenGLTexture.h"
+#include "Platform/OpenGL/Resources/OpenGLShader.h"
+#include "Platform/OpenGL/Resources/OpenGLMesh.h"
 
 namespace Diamond {
 

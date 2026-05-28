@@ -1,6 +1,6 @@
 #pragma once
-#include "OpenGLShader.h"
-#include "OpenGLMesh.h"
+#include "Platform/OpenGL/Resources/OpenGLShader.h"
+#include "Platform/OpenGL/Resources/OpenGLMesh.h"
 
 namespace Diamond {
 

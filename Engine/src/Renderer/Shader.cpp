@@ -1,6 +1,6 @@
 #include "Renderer/Shader.h"
 #include "Renderer/RendererAPI.h"
-#include "Platform/OpenGL/OpenGLShader.h"
+#include "Platform/OpenGL/Resources/OpenGLShader.h"
 
 namespace Diamond {
 

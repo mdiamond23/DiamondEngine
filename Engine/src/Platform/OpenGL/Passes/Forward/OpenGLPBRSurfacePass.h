@@ -1,7 +1,7 @@
 #pragma once
-#include "OpenGLShader.h"
-#include "OpenGLMesh.h"
-#include "OpenGLRenderTypes.h"
+#include "Platform/OpenGL/Resources/OpenGLShader.h"
+#include "Platform/OpenGL/Resources/OpenGLMesh.h"
+#include "Platform/OpenGL/Resources/OpenGLRenderTypes.h"
 #include "Renderer/Material.h"
 #include <glm/glm.hpp>
 #include <vector>

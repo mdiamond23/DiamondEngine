@@ -87,15 +87,18 @@ add_library(MyEngine STATIC
     src/Application.cpp
     src/Assets/ImageLoader.cpp
     src/Assets/ModelImporter.cpp
-    src/Platform/OpenGL/OpenGLMesh.cpp
-    src/Platform/OpenGL/OpenGLIBLPass.cpp
-    src/Platform/OpenGL/OpenGLShadowPass.cpp
-    src/Platform/OpenGL/OpenGLPBRSurfacePass.cpp
-    src/Platform/OpenGL/OpenGLTonemapPass.cpp
-    src/Platform/OpenGL/OpenGLBloomPass.CPP
-    src/Platform/OpenGL/OpenGLRendererAPI.cpp
-    src/Platform/OpenGL/OpenGLShader.cpp
-    src/Platform/OpenGL/OpenGLTexture.cpp
+    src/Platform/OpenGL/Resources/OpenGLMesh.cpp
+    src/Platform/OpenGL/Resources/OpenGLRendererAPI.cpp
+    src/Platform/OpenGL/Resources/OpenGLShader.cpp
+    src/Platform/OpenGL/Resources/OpenGLTexture.cpp
+    src/Platform/OpenGL/Passes/IBL/OpenGLIBLPass.cpp
+    src/Platform/OpenGL/Passes/Shadows/OpenGLShadowPass.cpp
+    src/Platform/OpenGL/Passes/Deferred/OpenGLGBufferPass.cpp
+    src/Platform/OpenGL/Passes/Deferred/OpenGLSSAOPass.cpp
+    src/Platform/OpenGL/Passes/Deferred/OpenGLDeferredLightingPass.cpp
+    src/Platform/OpenGL/Passes/Forward/OpenGLPBRSurfacePass.cpp
+    src/Platform/OpenGL/Passes/PostProcess/OpenGLTonemapPass.cpp
+    src/Platform/OpenGL/Passes/PostProcess/OpenGLBloomPass.cpp
     src/Renderer/RenderGraph.cpp
     src/Renderer/Material.cpp
     src/Renderer/MeshData.cpp

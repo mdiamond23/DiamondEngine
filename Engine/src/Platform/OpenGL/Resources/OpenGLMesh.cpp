@@ -1,4 +1,4 @@
-#include "OpenGLMesh.h"
+#include "Platform/OpenGL/Resources/OpenGLMesh.h"
 
 #include <glad/gl.h>
 

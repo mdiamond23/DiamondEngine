@@ -1,6 +1,6 @@
 #pragma once
-#include "OpenGLShader.h"
-#include "OpenGLRenderTypes.h"
+#include "Platform/OpenGL/Resources/OpenGLShader.h"
+#include "Platform/OpenGL/Resources/OpenGLRenderTypes.h"
 #include <glm/glm.hpp>
 #include <vector>
 

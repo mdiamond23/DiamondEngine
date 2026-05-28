@@ -1,4 +1,4 @@
-#include "OpenGLIBLPass.h"
+#include "Platform/OpenGL/Passes/IBL/OpenGLIBLPass.h"
 #include <glad/gl.h>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>

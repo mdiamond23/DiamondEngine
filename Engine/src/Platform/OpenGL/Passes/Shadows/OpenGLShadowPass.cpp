@@ -1,4 +1,4 @@
-#include "OpenGLShadowPass.h"
+#include "Platform/OpenGL/Passes/Shadows/OpenGLShadowPass.h"
 #include <glad/gl.h>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>

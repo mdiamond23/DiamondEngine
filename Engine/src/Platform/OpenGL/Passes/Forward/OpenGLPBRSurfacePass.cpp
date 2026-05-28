@@ -1,6 +1,6 @@
-#include "OpenGLPBRSurfacePass.h"
-#include "OpenGLShadowPass.h"
-#include "OpenGLIBLPass.h"
+#include "Platform/OpenGL/Passes/Forward/OpenGLPBRSurfacePass.h"
+#include "Platform/OpenGL/Passes/Shadows/OpenGLShadowPass.h"
+#include "Platform/OpenGL/Passes/IBL/OpenGLIBLPass.h"
 #include <glad/gl.h>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>

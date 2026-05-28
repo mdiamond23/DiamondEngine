@@ -1,4 +1,4 @@
-#include "OpenGLShader.h"
+#include "Platform/OpenGL/Resources/OpenGLShader.h"
 
 #include <glad/gl.h>
 #include <fstream>

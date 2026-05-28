@@ -1,6 +1,6 @@
 #include "Renderer/TextureData.h"
 #include "Renderer/RendererAPI.h"
-#include "Platform/OpenGL/OpenGLTexture.h"
+#include "Platform/OpenGL/Resources/OpenGLTexture.h"
 
 namespace Diamond {
 

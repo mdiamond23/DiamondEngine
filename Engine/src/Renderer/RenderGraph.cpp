@@ -5,6 +5,26 @@
 
 namespace Diamond {
 
+static void deriveFormatAndType(GLenum internal, GLenum& baseFormat, GLenum& type)
+{
+    switch (internal) {
+        case GL_R8:          baseFormat = GL_RED;            type = GL_UNSIGNED_BYTE; break;
+        case GL_R16F:        baseFormat = GL_RED;            type = GL_FLOAT;         break;
+        case GL_R32F:        baseFormat = GL_RED;            type = GL_FLOAT;         break;
+        case GL_RG8:         baseFormat = GL_RG;             type = GL_UNSIGNED_BYTE; break;
+        case GL_RG16F:       baseFormat = GL_RG;             type = GL_FLOAT;         break;
+        case GL_RGB16F:      baseFormat = GL_RGB;            type = GL_FLOAT;         break;
+        case GL_RGBA8:       baseFormat = GL_RGBA;           type = GL_UNSIGNED_BYTE; break;
+        case GL_RGBA16F:     baseFormat = GL_RGBA;           type = GL_FLOAT;         break;
+        case GL_RGBA32F:     baseFormat = GL_RGBA;           type = GL_FLOAT;         break;
+        case GL_DEPTH_COMPONENT:
+        case GL_DEPTH_COMPONENT24:
+        case GL_DEPTH_COMPONENT32F:
+                             baseFormat = GL_DEPTH_COMPONENT; type = GL_FLOAT;        break;
+        default:             baseFormat = GL_RGBA;           type = GL_FLOAT;         break;
+    }
+}
+
 RGTextureHandle RenderGraph::DeclareTexture(std::string_view name, const RGTextureDesc& desc)
 {
     m_Textures.push_back(TextureEntry{ std::string(name), desc, 0, 0, 0 });
@@ -158,24 +178,41 @@ void RenderGraph::Execute()
             if (entry.glTexture != 0)
                 continue;
 
-            // --- MRT secondary: attach as COLOR_ATTACHMENT1 on the primary's FBO ---
+            // --- MRT secondary: borrow primary's FBO and attach at mrtSlot ---
             if (entry.desc.mrtPrimary.IsValid())
             {
                 TextureEntry& primary = m_Textures[entry.desc.mrtPrimary.id - 1];
+
+                GLenum baseFormat, dataType;
+                deriveFormatAndType(entry.desc.internalFormat, baseFormat, dataType);
 
                 glGenTextures(1, &entry.glTexture);
                 glBindTexture(GL_TEXTURE_2D, entry.glTexture);
                 glTexImage2D(GL_TEXTURE_2D, 0, entry.desc.internalFormat,
                              entry.desc.width, entry.desc.height,
-                             0, GL_RGBA, GL_FLOAT, nullptr);
+                             0, baseFormat, dataType, nullptr);
                 glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
                 glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
                 glBindFramebuffer(GL_FRAMEBUFFER, primary.glFBO);
-                glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1,
+                glFramebufferTexture2D(GL_FRAMEBUFFER,
+                                       GL_COLOR_ATTACHMENT0 + entry.desc.mrtSlot,
                                        GL_TEXTURE_2D, entry.glTexture, 0);
-                GLenum attachments[2] = { GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1 };
-                glDrawBuffers(2, attachments);
+
+                // Rebuild draw buffers to include all slots attached so far
+                int maxSlot = entry.desc.mrtSlot;
+                for (const TextureEntry& e : m_Textures)
+                    if (e.desc.mrtPrimary.id == entry.desc.mrtPrimary.id && e.glTexture != 0)
+                        maxSlot = std::max(maxSlot, e.desc.mrtSlot);
+
+                std::vector<GLenum> drawBufs;
+                drawBufs.reserve(maxSlot + 1);
+                for (int s = 0; s <= maxSlot; ++s)
+                    drawBufs.push_back(GL_COLOR_ATTACHMENT0 + s);
+                glDrawBuffers(static_cast<GLsizei>(drawBufs.size()), drawBufs.data());
+
                 glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
                 entry.glFBO          = primary.glFBO; // borrowed — do not delete
@@ -183,18 +220,19 @@ void RenderGraph::Execute()
                 continue;
             }
 
-            bool isDepth = (entry.desc.internalFormat == GL_DEPTH_COMPONENT   ||
-                            entry.desc.internalFormat == GL_DEPTH_COMPONENT24 ||
-                            entry.desc.internalFormat == GL_DEPTH_COMPONENT32F);
-            GLenum format = isDepth ? GL_DEPTH_COMPONENT : GL_RGBA;
+            GLenum baseFormat, dataType;
+            deriveFormatAndType(entry.desc.internalFormat, baseFormat, dataType);
+            bool isDepth = (baseFormat == GL_DEPTH_COMPONENT);
 
             glGenTextures(1, &entry.glTexture);
             glBindTexture(GL_TEXTURE_2D, entry.glTexture);
             glTexImage2D(GL_TEXTURE_2D, 0, entry.desc.internalFormat,
                          entry.desc.width, entry.desc.height,
-                         0, format, GL_FLOAT, nullptr);
+                         0, baseFormat, dataType, nullptr);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
             glGenFramebuffers(1, &entry.glFBO);
             glBindFramebuffer(GL_FRAMEBUFFER, entry.glFBO);

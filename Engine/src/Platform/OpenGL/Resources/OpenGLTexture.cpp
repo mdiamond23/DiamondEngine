@@ -1,4 +1,4 @@
-#include "OpenGLTexture.h"
+#include "Platform/OpenGL/Resources/OpenGLTexture.h"
 
 #include <glad/gl.h>
 #include "Assets/ImageLoader.h"

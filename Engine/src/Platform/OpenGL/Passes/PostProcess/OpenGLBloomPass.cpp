@@ -1,4 +1,4 @@
-#include "OpenGLBloomPass.h"
+#include "Platform/OpenGL/Passes/PostProcess/OpenGLBloomPass.h"
 #include <glad/gl.h>
 #include <spdlog/spdlog.h>
 #include "Renderer/MeshData.h"
