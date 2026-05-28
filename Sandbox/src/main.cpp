@@ -20,6 +20,7 @@
 #include "Platform/OpenGL/Passes/Deferred/OpenGLDeferredLightingPass.h"
 #include "Platform/OpenGL/Passes/PostProcess/OpenGLTonemapPass.h"
 #include "Platform/OpenGL/Passes/PostProcess/OpenGLBloomPass.h"
+#include "Platform/OpenGL/Passes/Forward/OpenGLTransparencyPass.h"
 #include "Assets/ModelImporter.h"
 
 using namespace Diamond;
@@ -28,6 +29,12 @@ static Camera g_camera(glm::vec3(0.0f, 0.0f, 5.0f));
 static float  g_lastX = 640.0f, g_lastY = 360.0f;
 static bool   g_firstMouse = true;
 static float  g_deltaTime = 0.0f, g_lastFrame = 0.0f;
+
+// timing
+float deltaTime = 0.0f;
+float lastFrame = 0.0f;
+float fpsTimer = 0.0f;
+int frameCount = 0;
 
 static void framebufferSizeCallback(GLFWwindow*, int w, int h) { glViewport(0, 0, w, h); }
 
@@ -124,6 +131,9 @@ int main()
         ENGINE_SHADERS_DIR "/Shadows/point_depth.vert",
         ENGINE_SHADERS_DIR "/Shadows/point_depth.geom",
         ENGINE_SHADERS_DIR "/Shadows/point_depth.frag");
+    OpenGLShader transparencyShader(
+        ENGINE_SHADERS_DIR "/Forward/transparent.vert",
+        ENGINE_SHADERS_DIR "/Forward/transparent.frag");
 
     // --- Pass objects ---
     OpenGLIBLPass              iblPass;
@@ -132,6 +142,7 @@ int main()
     OpenGLSSAOPass             ssaoPass;
     OpenGLDeferredLightingPass lightingPass;
     OpenGLBloomPass            bloomPass;
+    OpenGLTransparencyPass     transparencyPass;
 
     // IBL bake — one-time
     {
@@ -190,6 +201,24 @@ int main()
         cerberusGpuMeshes.push_back(Mesh::Create(md));
         cerberusDraws.push_back({ cerberusGpuMeshes.back().get(), cerberusModel });
     }
+
+    // Window quads — FullscreenQuad is a -1..1 XY plane, scaled/translated into world space
+    auto windowQuad = Mesh::Create(MeshData::FullscreenQuad());
+    std::vector<DrawCall> windowDraws = {
+        { windowQuad.get(), glm::scale(glm::translate(glm::mat4(1.0f), { 0.0f,  0.0f, 2.5f}), glm::vec3(0.75f)) },
+        { windowQuad.get(), glm::scale(glm::translate(glm::mat4(1.0f), { 2.0f,  0.0f, 0.5f}), glm::vec3(0.75f)) },
+        { windowQuad.get(), glm::scale(glm::translate(glm::mat4(1.0f), {-2.0f,  0.5f, 1.0f}), glm::vec3(0.75f)) },
+    };
+
+    // 1x1 blue-glass RGBA texture — replace with a real window PNG when available
+    uint32_t windowTex;
+    glGenTextures(1, &windowTex);
+    glBindTexture(GL_TEXTURE_2D, windowTex);
+    uint8_t windowPixel[4] = { 100, 180, 230, 160 };
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, windowPixel);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glBindTexture(GL_TEXTURE_2D, 0);
 
     const glm::vec3 lightPositions[4] = {
         {  1.0f, 3.0f,  2.0f },
@@ -325,6 +354,18 @@ int main()
                 lightingPass.DrawSkybox(backgroundShader, iblPass, view, proj, fbW, fbH);
             });
 
+        // Forward transparency — sorts window draws back-to-front, blits depth internally
+        graph.AddPass("Transparency")
+            .Read(gViewPos)
+            .Read(hdrBuffer)
+            .SetExecute([&]{
+                transparencyPass.Render(transparencyShader, windowDraws, windowTex,
+                                        graph.GetFBO(gViewPos),
+                                        graph.GetFBO(hdrBuffer),
+                                        view, proj, g_camera.Position,
+                                        fbW, fbH);
+            });
+
         // Bloom blur ping-pong
         graph.AddPass("BloomBlur")
             .Read(brightBuffer)
@@ -358,6 +399,22 @@ int main()
 
     while (!glfwWindowShouldClose(window))
     {
+                // per-frame time logic
+        // --------------------
+        float currentFrame = static_cast<float>(glfwGetTime());
+        deltaTime = currentFrame - lastFrame;
+        lastFrame = currentFrame;
+
+        // fps counter
+        fpsTimer += deltaTime;
+        frameCount++;
+        if (fpsTimer >= 0.5f) {
+            std::string title = "LearnOpenGL | FPS: " + std::to_string((int)(frameCount / fpsTimer));
+            glfwSetWindowTitle(window, title.c_str());
+            fpsTimer = 0.0f;
+            frameCount = 0;
+        }
+
         float now   = static_cast<float>(glfwGetTime());
         g_deltaTime = now - g_lastFrame;
         g_lastFrame = now;

@@ -97,6 +97,7 @@ add_library(MyEngine STATIC
     src/Platform/OpenGL/Passes/Deferred/OpenGLSSAOPass.cpp
     src/Platform/OpenGL/Passes/Deferred/OpenGLDeferredLightingPass.cpp
     src/Platform/OpenGL/Passes/Forward/OpenGLPBRSurfacePass.cpp
+    src/Platform/OpenGL/Passes/Forward/OpenGLTransparencyPass.cpp
     src/Platform/OpenGL/Passes/PostProcess/OpenGLTonemapPass.cpp
     src/Platform/OpenGL/Passes/PostProcess/OpenGLBloomPass.cpp
     src/Renderer/RenderGraph.cpp
