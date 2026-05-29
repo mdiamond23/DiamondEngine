@@ -22,59 +22,10 @@ namespace Diamond {
 
 OpenGLShadowPass::~OpenGLShadowPass()
 {
-    if (m_ShadowMapFBO) glDeleteFramebuffers(1, &m_ShadowMapFBO);
-    if (m_ShadowMap)    glDeleteTextures(1, &m_ShadowMap);
     for (int i = 0; i < m_PointShadowCount; ++i) {
         if (m_PointShadowFBOs[i]) glDeleteFramebuffers(1, &m_PointShadowFBOs[i]);
         if (m_PointShadowMaps[i]) glDeleteTextures(1, &m_PointShadowMaps[i]);
     }
-}
-
-void OpenGLShadowPass::SetupShadowMap(int resolution)
-{
-    m_ShadowRes = resolution;
-
-    glGenTextures(1, &m_ShadowMap);
-    glBindTexture(GL_TEXTURE_2D, m_ShadowMap);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT,
-                 resolution, resolution, 0, GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
-    float borderColor[] = { 1.0f, 1.0f, 1.0f, 1.0f };
-    glTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, borderColor);
-
-    glGenFramebuffers(1, &m_ShadowMapFBO);
-    glBindFramebuffer(GL_FRAMEBUFFER, m_ShadowMapFBO);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, m_ShadowMap, 0);
-    glDrawBuffer(GL_NONE);
-    glReadBuffer(GL_NONE);
-    CheckFBO("shadow map");
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-}
-
-void OpenGLShadowPass::RenderShadowPass(
-    const OpenGLShader&          depthShader,
-    const std::vector<DrawCall>& draws,
-    const SunLight&              sun)
-{
-    glViewport(0, 0, m_ShadowRes, m_ShadowRes);
-    glBindFramebuffer(GL_FRAMEBUFFER, m_ShadowMapFBO);
-    glClear(GL_DEPTH_BUFFER_BIT);
-
-    depthShader.Bind();
-    depthShader.SetMat4("lightSpaceMatrix", sun.lightSpaceMatrix);
-
-    glEnable(GL_DEPTH_TEST);
-    glCullFace(GL_FRONT);
-    for (const auto& draw : draws) {
-        depthShader.SetMat4("model", draw.modelMatrix);
-        draw.mesh->Draw(depthShader);
-    }
-    glCullFace(GL_BACK);
-
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
 void OpenGLShadowPass::SetupPointShadowMaps(int count, int resolution, float farPlane)

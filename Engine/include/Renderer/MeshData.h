@@ -4,6 +4,7 @@
 #include <vector>
 #include <cstdint>
 #include <memory>
+#include "Renderer/Frustum.h"
 
 namespace Diamond {
 
@@ -23,6 +24,8 @@ struct MeshData {
     static MeshData UnitCube();
     static MeshData FullscreenQuad();
     static MeshData UVSphere();
+
+    AABB ComputeAABB() const;
 };
 
 class Shader;

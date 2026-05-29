@@ -4,6 +4,7 @@
 #include "Platform/OpenGL/Resources/OpenGLRenderTypes.h"
 #include "Platform/OpenGL/Passes/IBL/OpenGLIBLPass.h"
 #include "Platform/OpenGL/Passes/Shadows/OpenGLShadowPass.h"
+#include "Platform/OpenGL/Passes/Shadows/OpenGLCSMPass.h"
 #include <glm/glm.hpp>
 #include <cstdint>
 
@@ -28,6 +29,7 @@ public:
                 const glm::vec3          lightColors[4],
                 const SunLight&          sun,
                 const OpenGLShadowPass&  shadowPass,
+                const OpenGLCSMPass&     csmPass,
                 const OpenGLIBLPass&     iblPass,
                 uint32_t                 fbo,
                 int viewportW, int viewportH);

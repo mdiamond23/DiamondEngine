@@ -93,6 +93,7 @@ add_library(MyEngine STATIC
     src/Platform/OpenGL/Resources/OpenGLTexture.cpp
     src/Platform/OpenGL/Passes/IBL/OpenGLIBLPass.cpp
     src/Platform/OpenGL/Passes/Shadows/OpenGLShadowPass.cpp
+    src/Platform/OpenGL/Passes/Shadows/OpenGLCSMPass.cpp
     src/Platform/OpenGL/Passes/Deferred/OpenGLGBufferPass.cpp
     src/Platform/OpenGL/Passes/Deferred/OpenGLSSAOPass.cpp
     src/Platform/OpenGL/Passes/Deferred/OpenGLDeferredLightingPass.cpp

@@ -10,6 +10,7 @@ namespace Diamond {
 
 class OpenGLIBLPass;
 class OpenGLShadowPass;
+class OpenGLCSMPass;
 
 class OpenGLPBRSurfacePass {
 public:
@@ -25,6 +26,7 @@ public:
                 const glm::vec3              lightColors[4],
                 const SunLight&              sun,
                 const OpenGLShadowPass&      shadowPass,
+                const OpenGLCSMPass&         csmPass,
                 const OpenGLIBLPass&         iblPass,
                 int viewportW, int viewportH);
 

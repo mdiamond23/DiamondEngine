@@ -15,12 +15,14 @@
 #include "Platform/OpenGL/Resources/OpenGLTexture.h"
 #include "Platform/OpenGL/Passes/IBL/OpenGLIBLPass.h"
 #include "Platform/OpenGL/Passes/Shadows/OpenGLShadowPass.h"
+#include "Platform/OpenGL/Passes/Shadows/OpenGLCSMPass.h"
 #include "Platform/OpenGL/Passes/Deferred/OpenGLGBufferPass.h"
 #include "Platform/OpenGL/Passes/Deferred/OpenGLSSAOPass.h"
 #include "Platform/OpenGL/Passes/Deferred/OpenGLDeferredLightingPass.h"
 #include "Platform/OpenGL/Passes/PostProcess/OpenGLTonemapPass.h"
 #include "Platform/OpenGL/Passes/PostProcess/OpenGLBloomPass.h"
 #include "Platform/OpenGL/Passes/PostProcess/OpenGLFXAAPass.h"
+#include "Renderer/Frustum.h"
 #include "Platform/OpenGL/Passes/Forward/OpenGLTransparencyPass.h"
 #include "Assets/ModelImporter.h"
 
@@ -142,6 +144,7 @@ int main()
     // --- Pass objects ---
     OpenGLIBLPass              iblPass;
     OpenGLShadowPass           shadowPass;
+    OpenGLCSMPass              csmPass;
     OpenGLGBufferPass          gbufferPass;
     OpenGLSSAOPass             ssaoPass;
     OpenGLDeferredLightingPass lightingPass;
@@ -158,7 +161,7 @@ int main()
     }
 
     // Shadow maps — persistent, not managed by the graph
-    shadowPass.SetupShadowMap(2048);
+    csmPass.Setup(2048);
     shadowPass.SetupPointShadowMaps(4, 512, 25.0f);
 
     // --- Scene geometry ---
@@ -171,11 +174,15 @@ int main()
     material.Roughness = Texture::Create(MAT + "_Roughness.png",        false);
     material.AO        = Texture::Create(MAT + "_AmbientOcclusion.png", false);
 
-    auto sphere = Mesh::Create(MeshData::UVSphere());
+    auto sphereData  = MeshData::UVSphere();
+    AABB sphereAABB  = sphereData.ComputeAABB();
+    auto sphere      = Mesh::Create(sphereData);
     glm::mat4 sphereModel = glm::translate(glm::mat4(1.0f), glm::vec3(-3.0f, -0.3f, 1.0f));
-    std::vector<DrawCall> draws = { { sphere.get(), sphereModel } };
+    std::vector<DrawCall> draws = { { sphere.get(), sphereModel, sphereAABB } };
 
-    auto cube = Mesh::Create(MeshData::UnitCube());
+    auto cubeData = MeshData::UnitCube();
+    AABB cubeAABB = cubeData.ComputeAABB();
+    auto cube     = Mesh::Create(cubeData);
     auto makeMat = [](glm::vec3 t, glm::vec3 s) {
         return glm::scale(glm::translate(glm::mat4(1.0f), t), s);
     };
@@ -190,14 +197,14 @@ int main()
     lavaMaterial.UVScale          = 5.0f;
 
     std::vector<DrawCall> floorDraws = {
-        { cube.get(), makeMat({  0.0f, -1.7f,  0.0f}, {20.0f, 0.4f, 20.0f}) },
+        { cube.get(), makeMat({  0.0f, -1.7f,  0.0f}, {20.0f, 0.4f, 20.0f}), cubeAABB },
     };
     std::vector<DrawCall> cubeDraws = {
-        { cube.get(), makeMat({  0.5f, -0.3f, -3.5f}, { 1.0f, 1.0f,  1.0f}) },
-        { cube.get(), makeMat({  3.5f,  0.7f,  1.0f}, { 1.0f, 2.0f,  1.0f}) },
-        { cube.get(), makeMat({ -4.5f,  1.7f, -2.0f}, { 1.0f, 3.0f,  1.0f}) },
-        { cube.get(), makeMat({ -1.5f, -0.3f,  3.5f}, { 1.2f, 1.2f,  1.2f}) },
-        { cube.get(), makeMat({  5.5f, -0.3f, -3.0f}, { 1.0f, 1.0f,  1.0f}) },
+        { cube.get(), makeMat({  0.5f, -0.3f, -3.5f}, { 1.0f, 1.0f,  1.0f}), cubeAABB },
+        { cube.get(), makeMat({  3.5f,  0.7f,  1.0f}, { 1.0f, 2.0f,  1.0f}), cubeAABB },
+        { cube.get(), makeMat({ -4.5f,  1.7f, -2.0f}, { 1.0f, 3.0f,  1.0f}), cubeAABB },
+        { cube.get(), makeMat({ -1.5f, -0.3f,  3.5f}, { 1.2f, 1.2f,  1.2f}), cubeAABB },
+        { cube.get(), makeMat({  5.5f, -0.3f, -3.0f}, { 1.0f, 1.0f,  1.0f}), cubeAABB },
     };
 
     static const std::string CERB =
@@ -217,7 +224,7 @@ int main()
     cerberusModel = glm::scale(cerberusModel, glm::vec3(0.05f));
     for (auto& md : cerberusMeshData) {
         cerberusGpuMeshes.push_back(Mesh::Create(md));
-        cerberusDraws.push_back({ cerberusGpuMeshes.back().get(), cerberusModel });
+        cerberusDraws.push_back({ cerberusGpuMeshes.back().get(), cerberusModel, md.ComputeAABB() });
     }
 
     // Window quads — FullscreenQuad is a -1..1 XY plane, scaled/translated into world space
@@ -253,14 +260,11 @@ int main()
 
     Diamond::SunLight sun;
     sun.direction = glm::normalize(glm::vec3(-0.5f, -1.0f, -0.3f));
-    sun.color     = glm::vec3(0.0f);
-    glm::mat4 lightProj = glm::ortho(-15.0f, 15.0f, -15.0f, 15.0f, 1.0f, 50.0f);
-    glm::vec3 lightPos  = -sun.direction * 20.0f;
-    glm::mat4 lightView = glm::lookAt(lightPos, glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
-    sun.lightSpaceMatrix = lightProj * lightView;
+    sun.color     = glm::vec3(3.0f);
 
     // --- Per-frame state captured by render graph lambdas ---
     std::vector<DrawCall> allDraws;
+    std::vector<DrawCall> culledDraws, culledFloorDraws, culledCubeDraws, culledCerberusDraws;
     glm::mat4 view, proj;
     int fbW = 0, fbH = 0;
 
@@ -302,7 +306,7 @@ int main()
         // Shadow passes — sinks (no graph writes), always alive
         graph.AddPass("DirectionalShadow")
             .SetExecute([&]{
-                shadowPass.RenderShadowPass(depthShader, allDraws, sun);
+                csmPass.Render(depthShader, allDraws, sun, view, proj, 0.1f, 100.0f);
             });
 
         graph.AddPass("PointShadow")
@@ -319,10 +323,10 @@ int main()
                 glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
                 glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-                gbufferPass.Render(gbufferShader, draws,         lavaMaterial,         view, proj, graph.GetFBO(gViewPos), fbW, fbH);
-                gbufferPass.Render(gbufferShader, floorDraws,   lavaMaterial,     view, proj, graph.GetFBO(gViewPos), fbW, fbH);
-                gbufferPass.Render(gbufferShader, cubeDraws,     material,         view, proj, graph.GetFBO(gViewPos), fbW, fbH);
-                gbufferPass.Render(gbufferShader, cerberusDraws, cerberusMaterial, view, proj, graph.GetFBO(gViewPos), fbW, fbH);
+                gbufferPass.Render(gbufferShader, culledDraws,         lavaMaterial,     view, proj, graph.GetFBO(gViewPos), fbW, fbH);
+                gbufferPass.Render(gbufferShader, culledFloorDraws,    material,         view, proj, graph.GetFBO(gViewPos), fbW, fbH);
+                gbufferPass.Render(gbufferShader, culledCubeDraws,     material,         view, proj, graph.GetFBO(gViewPos), fbW, fbH);
+                gbufferPass.Render(gbufferShader, culledCerberusDraws, cerberusMaterial, view, proj, graph.GetFBO(gViewPos), fbW, fbH);
             });
 
         // SSAO — raw occlusion
@@ -364,7 +368,7 @@ int main()
                                     graph.GetTexture(gEmissive),
                                     view, g_camera.Position,
                                     lightPositions, lightColors, sun,
-                                    shadowPass, iblPass,
+                                    shadowPass, csmPass, iblPass,
                                     graph.GetFBO(hdrBuffer),
                                     fbW, fbH);
 
@@ -474,6 +478,23 @@ int main()
         view = g_camera.GetViewMatrix();
         proj = glm::perspective(
             glm::radians(g_camera.Zoom), (float)fbW / (float)fbH, 0.1f, 100.0f);
+
+        {
+            Frustum frustum = Frustum::Extract(proj * view);
+            auto cull = [&](const std::vector<DrawCall>& src) {
+                std::vector<DrawCall> out;
+                out.reserve(src.size());
+                for (const auto& dc : src)
+                    if (frustum.TestAABB(dc.localBounds.Transform(dc.modelMatrix)))
+                        out.push_back(dc);
+                return out;
+            };
+            culledDraws         = cull(draws);
+            culledFloorDraws    = cull(floorDraws);
+            culledCubeDraws     = cull(cubeDraws);
+            culledCerberusDraws = cull(cerberusDraws);
+            // allDraws stays unculled — shadow passes need the full scene
+        }
 
         graph.Execute();
 

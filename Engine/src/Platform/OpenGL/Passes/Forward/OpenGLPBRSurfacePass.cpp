@@ -1,5 +1,6 @@
 #include "Platform/OpenGL/Passes/Forward/OpenGLPBRSurfacePass.h"
 #include "Platform/OpenGL/Passes/Shadows/OpenGLShadowPass.h"
+#include "Platform/OpenGL/Passes/Shadows/OpenGLCSMPass.h"
 #include "Platform/OpenGL/Passes/IBL/OpenGLIBLPass.h"
 #include <glad/gl.h>
 #include <glm/gtc/matrix_transform.hpp>
@@ -24,6 +25,7 @@ void OpenGLPBRSurfacePass::Render(
     const glm::vec3              lightColors[4],
     const SunLight&              sun,
     const OpenGLShadowPass&      shadowPass,
+    const OpenGLCSMPass&         csmPass,
     const OpenGLIBLPass&         iblPass,
     int viewportW, int viewportH)
 {
@@ -33,12 +35,15 @@ void OpenGLPBRSurfacePass::Render(
     shader.SetMat4("view", view);
     shader.SetMat4("projection", projection);
     shader.SetVec3("camPos", cameraPos);
-    shader.SetMat4("lightSpaceMatrix", sun.lightSpaceMatrix);
     shader.SetVec3("sunDirection", sun.direction);
     shader.SetVec3("sunColor",     sun.color);
-    shader.SetInt("shadowMap", 8);
+    shader.SetInt("csmShadowMaps", 8);
     glActiveTexture(GL_TEXTURE8);
-    glBindTexture(GL_TEXTURE_2D, shadowPass.GetShadowMap());
+    glBindTexture(GL_TEXTURE_2D_ARRAY, csmPass.GetShadowArray());
+    for (int i = 0; i < OpenGLCSMPass::NUM_CASCADES; ++i) {
+        shader.SetMat4("csmLightMatrices[" + std::to_string(i) + "]", csmPass.GetLightMatrices()[i]);
+        shader.SetFloat("csmSplitDepths[" + std::to_string(i) + "]",  csmPass.GetSplitDepths()[i]);
+    }
 
     for (int i = 0; i < 4; ++i) {
         shader.SetVec3("lightPositions[" + std::to_string(i) + "]", lightPositions[i]);

@@ -115,4 +115,14 @@ std::shared_ptr<Mesh> Mesh::Create(const MeshData& data)
     }
 }
 
+AABB MeshData::ComputeAABB() const
+{
+    AABB box;
+    for (const auto& v : Vertices) {
+        box.min = glm::min(box.min, v.Position);
+        box.max = glm::max(box.max, v.Position);
+    }
+    return box;
+}
+
 } // namespace Diamond

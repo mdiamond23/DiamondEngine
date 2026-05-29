@@ -21,9 +21,11 @@ uniform samplerCube irradianceMap;
 uniform samplerCube prefilterMap;
 uniform sampler2D   brdfLUT;
 
-// Directional shadow (slot 8)
-uniform sampler2D shadowMap;
-uniform mat4      lightSpaceMatrix;
+// CSM directional shadow (slot 8 — sampler2DArray with NUM_CASCADES layers)
+const int NUM_CASCADES = 4;
+uniform sampler2DArray csmShadowMaps;
+uniform mat4           csmLightMatrices[NUM_CASCADES];
+uniform float          csmSplitDepths[NUM_CASCADES];
 
 // Point shadows (slots 9-12)
 uniform samplerCube pointShadowMaps[4];
@@ -69,17 +71,27 @@ vec3 fresnelSchlickRoughness(float cosTheta, vec3 F0, float roughness)
               * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
 }
 // ----------------------------------------------------------------------------
-float ShadowCalculation(vec4 fragPosLightSpace, vec3 N, vec3 L)
+float ShadowCalculationCSM(vec3 WorldPos, vec3 viewPos, vec3 N, vec3 L)
 {
+    // Select cascade by view-space depth (viewPos.z is negative looking forward)
+    float fragDepth = -viewPos.z;
+    int cascadeIndex = NUM_CASCADES - 1;
+    for (int i = 0; i < NUM_CASCADES; ++i) {
+        if (fragDepth < csmSplitDepths[i]) { cascadeIndex = i; break; }
+    }
+
+    vec4 fragPosLightSpace = csmLightMatrices[cascadeIndex] * vec4(WorldPos, 1.0);
     vec3 proj = fragPosLightSpace.xyz / fragPosLightSpace.w;
     proj = proj * 0.5 + 0.5;
     if (proj.z > 1.0) return 0.0;
+
     float bias = max(0.005 * (1.0 - dot(N, L)), 0.0005);
     float shadow = 0.0;
-    vec2 texelSize = 1.0 / textureSize(shadowMap, 0);
+    vec2 texelSize = 1.0 / vec2(textureSize(csmShadowMaps, 0).xy);
     for (int x = -1; x <= 1; ++x)
         for (int y = -1; y <= 1; ++y)
-            shadow += (proj.z - bias) > texture(shadowMap, proj.xy + vec2(x, y) * texelSize).r
+            shadow += (proj.z - bias) > texture(csmShadowMaps,
+                          vec3(proj.xy + vec2(x, y) * texelSize, float(cascadeIndex))).r
                       ? 1.0 : 0.0;
     return shadow / 9.0;
 }
@@ -125,8 +137,6 @@ void main()
     vec3 WorldPos = V2W * viewPos + camPos;
     vec3 N        = normalize(V2W * viewNormal);
 
-    vec4 FragPosLightSpace = lightSpaceMatrix * vec4(WorldPos, 1.0);
-
     vec3 V  = normalize(camPos - WorldPos);
     vec3 R  = reflect(-V, N);
     vec3 F0 = mix(vec3(0.04), albedo, metallic);
@@ -164,7 +174,7 @@ void main()
 
         vec3 spec = NDF * G * F / (4.0 * max(dot(N, V), 0.0) * max(dot(N, L), 0.0) + 0.0001);
         vec3 kD   = (vec3(1.0) - F) * (1.0 - metallic);
-        float shad = ShadowCalculation(FragPosLightSpace, N, L);
+        float shad = ShadowCalculationCSM(WorldPos, viewPos, N, L);
 
         Lo += (kD * albedo / PI + spec) * sunColor * NdotL * (1.0 - shad);
     }

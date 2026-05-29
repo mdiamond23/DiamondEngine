@@ -25,6 +25,7 @@ void OpenGLDeferredLightingPass::Render(
     const glm::vec3          lightColors[4],
     const SunLight&          sun,
     const OpenGLShadowPass&  shadowPass,
+    const OpenGLCSMPass&     csmPass,
     const OpenGLIBLPass&     iblPass,
     uint32_t                 fbo,
     int viewportW, int viewportH)
@@ -52,10 +53,10 @@ void OpenGLDeferredLightingPass::Render(
     // IBL (slots 5-7, managed by BindIBL)
     iblPass.BindIBL(shader);
 
-    // Directional shadow (slot 8)
-    shader.SetInt("shadowMap", 8);
+    // CSM directional shadow (slot 8 — texture array)
+    shader.SetInt("csmShadowMaps", 8);
     glActiveTexture(GL_TEXTURE8);
-    glBindTexture(GL_TEXTURE_2D, shadowPass.GetShadowMap());
+    glBindTexture(GL_TEXTURE_2D_ARRAY, csmPass.GetShadowArray());
 
     // Point shadows (slots 9-12)
     shader.SetFloat("shadowFarPlane", shadowPass.GetPointShadowFarPlane());
@@ -70,9 +71,14 @@ void OpenGLDeferredLightingPass::Render(
     shader.SetInt("gEmissive", 13);
     glActiveTexture(GL_TEXTURE13); glBindTexture(GL_TEXTURE_2D, gEmissiveTex);
 
-    shader.SetMat4("view",             view);
-    shader.SetMat4("lightSpaceMatrix", sun.lightSpaceMatrix);
-    shader.SetVec3("camPos",           camPos);
+    // CSM matrices and split depths
+    for (int i = 0; i < OpenGLCSMPass::NUM_CASCADES; ++i) {
+        shader.SetMat4("csmLightMatrices[" + std::to_string(i) + "]", csmPass.GetLightMatrices()[i]);
+        shader.SetFloat("csmSplitDepths[" + std::to_string(i) + "]",  csmPass.GetSplitDepths()[i]);
+    }
+
+    shader.SetMat4("view",    view);
+    shader.SetVec3("camPos",  camPos);
     shader.SetVec3("sunDirection",     sun.direction);
     shader.SetVec3("sunColor",         sun.color);
     for (int i = 0; i < 4; ++i) {
