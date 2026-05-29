@@ -100,6 +100,7 @@ add_library(MyEngine STATIC
     src/Platform/OpenGL/Passes/Forward/OpenGLTransparencyPass.cpp
     src/Platform/OpenGL/Passes/PostProcess/OpenGLTonemapPass.cpp
     src/Platform/OpenGL/Passes/PostProcess/OpenGLBloomPass.cpp
+    src/Platform/OpenGL/Passes/PostProcess/OpenGLFXAAPass.cpp
     src/Renderer/RenderGraph.cpp
     src/Renderer/Material.cpp
     src/Renderer/MeshData.cpp

@@ -20,6 +20,7 @@
 #include "Platform/OpenGL/Passes/Deferred/OpenGLDeferredLightingPass.h"
 #include "Platform/OpenGL/Passes/PostProcess/OpenGLTonemapPass.h"
 #include "Platform/OpenGL/Passes/PostProcess/OpenGLBloomPass.h"
+#include "Platform/OpenGL/Passes/PostProcess/OpenGLFXAAPass.h"
 #include "Platform/OpenGL/Passes/Forward/OpenGLTransparencyPass.h"
 #include "Assets/ModelImporter.h"
 
@@ -124,6 +125,9 @@ int main()
     OpenGLShader bloomFinalShader(
         ENGINE_SHADERS_DIR "/Bloom/bloomfinal.vert",
         ENGINE_SHADERS_DIR "/Bloom/bloomfinal.frag");
+    OpenGLShader fxaaShader(
+        ENGINE_SHADERS_DIR "/PostProcess/tonemap.vert",
+        ENGINE_SHADERS_DIR "/PostProcess/fxaa.frag");
     OpenGLShader depthShader(
         ENGINE_SHADERS_DIR "/Shadows/depth.vert",
         ENGINE_SHADERS_DIR "/Shadows/depth.frag");
@@ -142,7 +146,9 @@ int main()
     OpenGLSSAOPass             ssaoPass;
     OpenGLDeferredLightingPass lightingPass;
     OpenGLBloomPass            bloomPass;
+    OpenGLFXAAPass             fxaaPass;
     OpenGLTransparencyPass     transparencyPass;
+    bool fxaaEnabled = true;
 
     // IBL bake — one-time
     {
@@ -181,6 +187,7 @@ int main()
     lavaMaterial.Roughness       = Texture::Create(LAVA + "_Roughness.png", false);
     lavaMaterial.Emissive        = Texture::Create(LAVA + "_Emission.png", false);
     lavaMaterial.EmissiveStrength = 2.5f;
+    lavaMaterial.UVScale          = 5.0f;
 
     std::vector<DrawCall> floorDraws = {
         { cube.get(), makeMat({  0.0f, -1.7f,  0.0f}, {20.0f, 0.4f, 20.0f}) },
@@ -263,6 +270,7 @@ int main()
     RGTextureHandle hSsaoRaw, hSsaoBlur;
     RGTextureHandle hdrBuffer, brightBuffer;
     RGTextureHandle pingPong[2];
+    RGTextureHandle ldrBuffer;
 
     auto buildGraph = [&](int w, int h)
     {
@@ -287,6 +295,9 @@ int main()
         // Bloom ping-pong
         pingPong[0] = graph.DeclareTexture("bloomPing", { w, h, GL_RGBA16F, false });
         pingPong[1] = graph.DeclareTexture("bloomPong", { w, h, GL_RGBA16F, false });
+
+        // LDR intermediate — bloom composite writes here, FXAA reads and outputs to backbuffer
+        ldrBuffer = graph.DeclareTexture("ldrBuffer", { w, h, GL_RGBA8, true });
 
         // Shadow passes — sinks (no graph writes), always alive
         graph.AddPass("DirectionalShadow")
@@ -395,14 +406,25 @@ int main()
                 }
             });
 
-        // Composite + tonemap → backbuffer
+        // Composite + tonemap → LDR intermediate
         graph.AddPass("BloomComposite")
             .Read(hdrBuffer).Read(pingPong[1])
+            .Write(ldrBuffer)
             .SetExecute([&]{
                 bloomPass.RenderCompositePass(bloomFinalShader,
                     graph.GetTexture(hdrBuffer),
                     graph.GetTexture(pingPong[1]),
-                    true, 0.1f);
+                    true, 0.1f,
+                    graph.GetFBO(ldrBuffer));
+            });
+
+        // FXAA → backbuffer
+        graph.AddPass("FXAA")
+            .Read(ldrBuffer)
+            .SetExecute([&]{
+                fxaaPass.Render(fxaaShader,
+                    graph.GetTexture(ldrBuffer),
+                    fbW, fbH, fxaaEnabled);
             });
 
         graph.Compile();

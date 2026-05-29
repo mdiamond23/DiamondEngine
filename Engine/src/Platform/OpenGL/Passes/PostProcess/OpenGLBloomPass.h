@@ -18,7 +18,8 @@ public:
                             uint32_t sceneTex,
                             uint32_t bloomBlurTex,
                             bool bloomEnabled,
-                            float exposure);
+                            float exposure,
+                            uint32_t destFBO = 0);
 private:
     OpenGLMesh m_Quad;
 

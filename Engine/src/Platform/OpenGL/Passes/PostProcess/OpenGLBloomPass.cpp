@@ -30,9 +30,10 @@ void OpenGLBloomPass::RenderCompositePass(const OpenGLShader& bloomFinalShader,
                         uint32_t sceneTex,
                         uint32_t bloomBlurTex,
                         bool bloomEnabled,
-                        float exposure)
+                        float exposure,
+                        uint32_t destFBO)
 {
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glBindFramebuffer(GL_FRAMEBUFFER, destFBO);
     glDisable(GL_DEPTH_TEST);
     glClear(GL_COLOR_BUFFER_BIT);
 

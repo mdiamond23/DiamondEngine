@@ -16,20 +16,23 @@ uniform sampler2D roughnessMap;
 uniform sampler2D aoMap;
 uniform sampler2D emissiveMap;
 uniform float     emissiveStrength;
+uniform float     uvScale;
 
 void main()
 {
-    vec3  albedo    = pow(texture(albedoMap,    TexCoords).rgb, vec3(2.2));
-    float metallic  = texture(metallicMap,  TexCoords).r;
-    float roughness = texture(roughnessMap, TexCoords).r;
-    float ao        = texture(aoMap,        TexCoords).r;
+    vec2 uv = TexCoords * uvScale;
+
+    vec3  albedo    = pow(texture(albedoMap,    uv).rgb, vec3(2.2));
+    float metallic  = texture(metallicMap,  uv).r;
+    float roughness = texture(roughnessMap, uv).r;
+    float ao        = texture(aoMap,        uv).r;
 
     // Normal map (tangent space) → view space
-    vec3 N = texture(normalMap, TexCoords).rgb * 2.0 - 1.0;
+    vec3 N = texture(normalMap, uv).rgb * 2.0 - 1.0;
     N = normalize(TBN_view * N);
 
     // Emissive — already in linear space, scaled by per-material strength
-    vec3 emissive = texture(emissiveMap, TexCoords).rgb * emissiveStrength;
+    vec3 emissive = texture(emissiveMap, uv).rgb * emissiveStrength;
 
     gViewPos    = vec4(ViewPos, 1.0);
     gViewNormal = vec4(N, 0.0);

@@ -11,6 +11,8 @@ void PBRMaterial::Bind(const Shader& shader) const
     if (Roughness) { Roughness->Bind(3); shader.SetInt("roughnessMap", 3); }
     if (AO)        { AO->Bind(4);        shader.SetInt("aoMap",        4); }
 
+    shader.SetFloat("uvScale", UVScale);
+
     // Emissive map — slot 5; strength=0 disables the contribution even if map is unbound
     shader.SetFloat("emissiveStrength", Emissive ? EmissiveStrength : 0.0f);
     if (Emissive) { Emissive->Bind(5); shader.SetInt("emissiveMap", 5); }
