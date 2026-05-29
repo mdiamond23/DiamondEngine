@@ -16,7 +16,11 @@ struct PBRMaterial {
     std::shared_ptr<Texture> Roughness;
     std::shared_ptr<Texture> AO;
 
-    // IBL maps (bind slots 5–7, set after environment pre-computation)
+    // Emissive (bind slot 5)
+    std::shared_ptr<Texture> Emissive;
+    float EmissiveStrength = 0.0f;
+
+    // IBL maps (bind slots 6–8, set after environment pre-computation)
     std::shared_ptr<Texture> IrradianceMap;
     std::shared_ptr<Texture> PrefilterMap;
     std::shared_ptr<Texture> BrdfLUT;

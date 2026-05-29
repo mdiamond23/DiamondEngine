@@ -13,7 +13,7 @@ class OpenGLDeferredLightingPass {
 public:
     OpenGLDeferredLightingPass();
 
-    // Fullscreen lighting pass — reads G-buffer + SSAO, outputs into fbo (HDR + bright MRT).
+    // Fullscreen lighting pass — reads G-buffer + SSAO + emissive, outputs into fbo (HDR + bright MRT).
     // Leaves fbo bound so the caller can blit G-buffer depth and draw the skybox.
     void Render(const OpenGLShader&      shader,
                 uint32_t                 gViewPosTex,
@@ -21,6 +21,7 @@ public:
                 uint32_t                 gAlbedoTex,
                 uint32_t                 gMaterialTex,
                 uint32_t                 ssaoTex,
+                uint32_t                 gEmissiveTex,
                 const glm::mat4&         view,
                 const glm::vec3&         camPos,
                 const glm::vec3          lightPositions[4],

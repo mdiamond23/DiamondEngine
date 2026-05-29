@@ -18,6 +18,7 @@ void OpenGLDeferredLightingPass::Render(
     uint32_t                 gAlbedoTex,
     uint32_t                 gMaterialTex,
     uint32_t                 ssaoTex,
+    uint32_t                 gEmissiveTex,
     const glm::mat4&         view,
     const glm::vec3&         camPos,
     const glm::vec3          lightPositions[4],
@@ -64,6 +65,10 @@ void OpenGLDeferredLightingPass::Render(
         glActiveTexture(GL_TEXTURE0 + slot);
         glBindTexture(GL_TEXTURE_CUBE_MAP, shadowPass.GetPointShadowMap(i));
     }
+
+    // Emissive G-buffer (slot 13)
+    shader.SetInt("gEmissive", 13);
+    glActiveTexture(GL_TEXTURE13); glBindTexture(GL_TEXTURE_2D, gEmissiveTex);
 
     shader.SetMat4("view",             view);
     shader.SetMat4("lightSpaceMatrix", sun.lightSpaceMatrix);

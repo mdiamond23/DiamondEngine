@@ -11,10 +11,14 @@ void PBRMaterial::Bind(const Shader& shader) const
     if (Roughness) { Roughness->Bind(3); shader.SetInt("roughnessMap", 3); }
     if (AO)        { AO->Bind(4);        shader.SetInt("aoMap",        4); }
 
-    // IBL maps — slots 5-7
-    if (IrradianceMap) { IrradianceMap->Bind(5); shader.SetInt("irradianceMap", 5); }
-    if (PrefilterMap)  { PrefilterMap->Bind(6);  shader.SetInt("prefilterMap",  6); }
-    if (BrdfLUT)       { BrdfLUT->Bind(7);       shader.SetInt("brdfLUT",       7); }
+    // Emissive map — slot 5; strength=0 disables the contribution even if map is unbound
+    shader.SetFloat("emissiveStrength", Emissive ? EmissiveStrength : 0.0f);
+    if (Emissive) { Emissive->Bind(5); shader.SetInt("emissiveMap", 5); }
+
+    // IBL maps — slots 6-8
+    if (IrradianceMap) { IrradianceMap->Bind(6); shader.SetInt("irradianceMap", 6); }
+    if (PrefilterMap)  { PrefilterMap->Bind(7);  shader.SetInt("prefilterMap",  7); }
+    if (BrdfLUT)       { BrdfLUT->Bind(8);       shader.SetInt("brdfLUT",       8); }
 }
 
 } // namespace Diamond

@@ -3,6 +3,7 @@ layout (location = 0) out vec4 gViewPos;
 layout (location = 1) out vec4 gViewNormal;
 layout (location = 2) out vec4 gAlbedo;
 layout (location = 3) out vec4 gMaterial;   // r=metallic, g=roughness, b=ao
+layout (location = 4) out vec4 gEmissive;   // rgb=emissive color (HDR)
 
 in vec2 TexCoords;
 in vec3 ViewPos;
@@ -13,6 +14,8 @@ uniform sampler2D normalMap;
 uniform sampler2D metallicMap;
 uniform sampler2D roughnessMap;
 uniform sampler2D aoMap;
+uniform sampler2D emissiveMap;
+uniform float     emissiveStrength;
 
 void main()
 {
@@ -25,8 +28,12 @@ void main()
     vec3 N = texture(normalMap, TexCoords).rgb * 2.0 - 1.0;
     N = normalize(TBN_view * N);
 
+    // Emissive — already in linear space, scaled by per-material strength
+    vec3 emissive = texture(emissiveMap, TexCoords).rgb * emissiveStrength;
+
     gViewPos    = vec4(ViewPos, 1.0);
     gViewNormal = vec4(N, 0.0);
     gAlbedo     = vec4(albedo, 1.0);
     gMaterial   = vec4(metallic, roughness, ao, 1.0);
+    gEmissive   = vec4(emissive, 1.0);
 }

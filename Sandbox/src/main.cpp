@@ -173,8 +173,19 @@ int main()
     auto makeMat = [](glm::vec3 t, glm::vec3 s) {
         return glm::scale(glm::translate(glm::mat4(1.0f), t), s);
     };
-    std::vector<DrawCall> cubeDraws = {
+
+    static const std::string LAVA = ASSETS_DIR "/Materials/Lava004_2K-PNG/Lava004_2K-PNG";
+    PBRMaterial lavaMaterial;
+    lavaMaterial.Albedo          = Texture::Create(LAVA + "_Color.png",    false);
+    lavaMaterial.Normal          = Texture::Create(LAVA + "_NormalGL.png", false);
+    lavaMaterial.Roughness       = Texture::Create(LAVA + "_Roughness.png", false);
+    lavaMaterial.Emissive        = Texture::Create(LAVA + "_Emission.png", false);
+    lavaMaterial.EmissiveStrength = 2.5f;
+
+    std::vector<DrawCall> floorDraws = {
         { cube.get(), makeMat({  0.0f, -1.7f,  0.0f}, {20.0f, 0.4f, 20.0f}) },
+    };
+    std::vector<DrawCall> cubeDraws = {
         { cube.get(), makeMat({  0.5f, -0.3f, -3.5f}, { 1.0f, 1.0f,  1.0f}) },
         { cube.get(), makeMat({  3.5f,  0.7f,  1.0f}, { 1.0f, 2.0f,  1.0f}) },
         { cube.get(), makeMat({ -4.5f,  1.7f, -2.0f}, { 1.0f, 3.0f,  1.0f}) },
@@ -248,7 +259,7 @@ int main()
 
     // --- Render graph ---
     RenderGraph     graph;
-    RGTextureHandle gViewPos, gViewNormal, gAlbedo, gMaterial;
+    RGTextureHandle gViewPos, gViewNormal, gAlbedo, gMaterial, gEmissive;
     RGTextureHandle hSsaoRaw, hSsaoBlur;
     RGTextureHandle hdrBuffer, brightBuffer;
     RGTextureHandle pingPong[2];
@@ -258,11 +269,12 @@ int main()
         fbW = w; fbH = h;
         graph.Clear();
 
-        // G-buffer — 4 attachments sharing one FBO (gViewPos owns it)
+        // G-buffer — 5 attachments sharing one FBO (gViewPos owns it)
         gViewPos    = graph.DeclareTexture("gViewPos",    { w, h, GL_RGBA16F, true  });
         gViewNormal = graph.DeclareTexture("gViewNormal", { w, h, GL_RGBA16F, false, gViewPos, 1 });
         gAlbedo     = graph.DeclareTexture("gAlbedo",     { w, h, GL_RGBA8,   false, gViewPos, 2 });
         gMaterial   = graph.DeclareTexture("gMaterial",   { w, h, GL_RGBA8,   false, gViewPos, 3 });
+        gEmissive   = graph.DeclareTexture("gEmissive",   { w, h, GL_RGB16F,  false, gViewPos, 4 });
 
         // SSAO intermediates
         hSsaoRaw  = graph.DeclareTexture("ssaoRaw",  { w, h, GL_R16F, false });
@@ -287,16 +299,17 @@ int main()
                 shadowPass.RenderPointShadowPass(pointDepthShader, allDraws, lightPositions, 4);
             });
 
-        // Geometry pass — fills all 4 G-buffer attachments
+        // Geometry pass — fills all 5 G-buffer attachments
         graph.AddPass("GBuffer")
-            .Write(gViewPos).Write(gViewNormal).Write(gAlbedo).Write(gMaterial)
+            .Write(gViewPos).Write(gViewNormal).Write(gAlbedo).Write(gMaterial).Write(gEmissive)
             .SetExecute([&]{
                 // Clear once, then render all material batches into the same FBO
                 glBindFramebuffer(GL_FRAMEBUFFER, graph.GetFBO(gViewPos));
                 glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
                 glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-                gbufferPass.Render(gbufferShader, draws,         material,         view, proj, graph.GetFBO(gViewPos), fbW, fbH);
+                gbufferPass.Render(gbufferShader, draws,         lavaMaterial,         view, proj, graph.GetFBO(gViewPos), fbW, fbH);
+                gbufferPass.Render(gbufferShader, floorDraws,   lavaMaterial,     view, proj, graph.GetFBO(gViewPos), fbW, fbH);
                 gbufferPass.Render(gbufferShader, cubeDraws,     material,         view, proj, graph.GetFBO(gViewPos), fbW, fbH);
                 gbufferPass.Render(gbufferShader, cerberusDraws, cerberusMaterial, view, proj, graph.GetFBO(gViewPos), fbW, fbH);
             });
@@ -328,7 +341,7 @@ int main()
         // Deferred lighting + skybox
         graph.AddPass("DeferredLighting")
             .Read(gViewPos).Read(gViewNormal).Read(gAlbedo).Read(gMaterial)
-            .Read(hSsaoBlur)
+            .Read(hSsaoBlur).Read(gEmissive)
             .Write(hdrBuffer).Write(brightBuffer)
             .SetExecute([&]{
                 lightingPass.Render(lightingShader,
@@ -337,6 +350,7 @@ int main()
                                     graph.GetTexture(gAlbedo),
                                     graph.GetTexture(gMaterial),
                                     graph.GetTexture(hSsaoBlur),
+                                    graph.GetTexture(gEmissive),
                                     view, g_camera.Position,
                                     lightPositions, lightColors, sun,
                                     shadowPass, iblPass,
@@ -432,6 +446,7 @@ int main()
         allDraws.clear();
         allDraws.insert(allDraws.end(), draws.begin(),        draws.end());
         allDraws.insert(allDraws.end(), cerberusDraws.begin(), cerberusDraws.end());
+        allDraws.insert(allDraws.end(), floorDraws.begin(),   floorDraws.end());
         allDraws.insert(allDraws.end(), cubeDraws.begin(),    cubeDraws.end());
 
         view = g_camera.GetViewMatrix();

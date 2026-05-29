@@ -13,6 +13,9 @@ uniform sampler2D gMaterial;    // r=metallic  g=roughness  b=ao
 // SSAO (slot 4)
 uniform sampler2D ssaoTex;
 
+// Emissive G-buffer (slot 13)
+uniform sampler2D gEmissive;
+
 // IBL (slots 5-7, bound by BindIBL)
 uniform samplerCube irradianceMap;
 uniform samplerCube prefilterMap;
@@ -178,7 +181,8 @@ void main()
     // Baked AO × SSAO both attenuate ambient
     vec3 ambient = (kD * diffuse + specular) * ao * occlusion;
 
-    vec3 color = ambient + Lo;
+    vec3 emissive = texture(gEmissive, TexCoords).rgb;
+    vec3 color = ambient + Lo + emissive;
 
     FragColor = vec4(color, 1.0);
     BrightColor = dot(color, vec3(0.2126, 0.7152, 0.0722)) > 1.0
