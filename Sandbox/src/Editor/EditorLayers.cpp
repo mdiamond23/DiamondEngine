@@ -2,6 +2,13 @@
 #include <cstdint>
 #include "EditorLayers.h"
 
+EditorLayer::EditorLayer(Scene* scene)
+{
+    m_Context.ActiveScene = scene;
+    m_Hierarchy.SetContext(&m_Context);
+    m_Inspector.SetContext(&m_Context);
+}
+
 void EditorLayer::SetupDockspace()
 {
     if (m_LayoutInitialized) return;

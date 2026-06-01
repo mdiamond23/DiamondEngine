@@ -108,6 +108,8 @@ add_library(MyEngine STATIC
     src/Renderer/RendererAPI.cpp
     src/Renderer/Shader.cpp
     src/Renderer/TextureData.cpp
+    src/Scene/Scene.cpp
+    src/Scene/UUIDGenerator.cpp
 )
 
 target_include_directories(MyEngine

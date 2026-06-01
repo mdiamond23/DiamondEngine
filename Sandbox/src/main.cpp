@@ -4,10 +4,14 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <vector>
+#include <unordered_map>
+#include <string>
 #include <imgui.h>
 #include <backends/imgui_impl_glfw.h>
 #include <backends/imgui_impl_opengl3.h>
 #include "Editor/EditorLayers.h"
+#include "Scene/Scene.h"
+#include "Scene/Components.h"
 
 #include "Core/Camera.h"
 #include "Renderer/MeshData.h"
@@ -104,7 +108,8 @@ int main()
     ImGui_ImplGlfw_InitForOpenGL(window, true);
     ImGui_ImplOpenGL3_Init("#version 410");
 
-    EditorLayer editorLayer;
+    Scene scene;
+    EditorLayer editorLayer(&scene);
 
     glEnable(GL_DEPTH_TEST);
     glEnable(GL_TEXTURE_CUBE_MAP_SEAMLESS);
@@ -183,64 +188,86 @@ int main()
     // --- Scene geometry ---
     static const std::string MAT =
         ASSETS_DIR "/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG";
-    PBRMaterial material;
-    material.Albedo    = Texture::Create(MAT + "_Color.png",            false);
-    material.Normal    = Texture::Create(MAT + "_NormalGL.png",         false);
-    material.Metallic  = Texture::Create(MAT + "_Metalness.png",        false);
-    material.Roughness = Texture::Create(MAT + "_Roughness.png",        false);
-    material.AO        = Texture::Create(MAT + "_AmbientOcclusion.png", false);
+    auto diamondMaterial = std::make_shared<PBRMaterial>();
+    diamondMaterial->Albedo    = Texture::Create(MAT + "_Color.png",            false);
+    diamondMaterial->Normal    = Texture::Create(MAT + "_NormalGL.png",         false);
+    diamondMaterial->Metallic  = Texture::Create(MAT + "_Metalness.png",        false);
+    diamondMaterial->Roughness = Texture::Create(MAT + "_Roughness.png",        false);
+    diamondMaterial->AO        = Texture::Create(MAT + "_AmbientOcclusion.png", false);
 
-    auto sphereData  = MeshData::UVSphere();
-    AABB sphereAABB  = sphereData.ComputeAABB();
-    auto sphere      = Mesh::Create(sphereData);
-    glm::mat4 sphereModel = glm::translate(glm::mat4(1.0f), glm::vec3(-3.0f, -0.3f, 1.0f));
-    std::vector<DrawCall> draws = { { sphere.get(), sphereModel, sphereAABB } };
+    auto sphereData = MeshData::UVSphere();
+    AABB sphereAABB = sphereData.ComputeAABB();
+    auto sphere     = Mesh::Create(sphereData);
 
     auto cubeData = MeshData::UnitCube();
     AABB cubeAABB = cubeData.ComputeAABB();
     auto cube     = Mesh::Create(cubeData);
-    auto makeMat = [](glm::vec3 t, glm::vec3 s) {
-        return glm::scale(glm::translate(glm::mat4(1.0f), t), s);
-    };
 
     static const std::string LAVA = ASSETS_DIR "/Materials/Lava004_2K-PNG/Lava004_2K-PNG";
-    PBRMaterial lavaMaterial;
-    lavaMaterial.Albedo          = Texture::Create(LAVA + "_Color.png",    false);
-    lavaMaterial.Normal          = Texture::Create(LAVA + "_NormalGL.png", false);
-    lavaMaterial.Roughness       = Texture::Create(LAVA + "_Roughness.png", false);
-    lavaMaterial.Emissive        = Texture::Create(LAVA + "_Emission.png", false);
-    lavaMaterial.EmissiveStrength = 2.5f;
-    lavaMaterial.UVScale          = 5.0f;
-
-    std::vector<DrawCall> floorDraws = {
-        { cube.get(), makeMat({  0.0f, -1.7f,  0.0f}, {20.0f, 0.4f, 20.0f}), cubeAABB },
-    };
-    std::vector<DrawCall> cubeDraws = {
-        { cube.get(), makeMat({  0.5f, -0.3f, -3.5f}, { 1.0f, 1.0f,  1.0f}), cubeAABB },
-        { cube.get(), makeMat({  3.5f,  0.7f,  1.0f}, { 1.0f, 2.0f,  1.0f}), cubeAABB },
-        { cube.get(), makeMat({ -4.5f,  1.7f, -2.0f}, { 1.0f, 3.0f,  1.0f}), cubeAABB },
-        { cube.get(), makeMat({ -1.5f, -0.3f,  3.5f}, { 1.2f, 1.2f,  1.2f}), cubeAABB },
-        { cube.get(), makeMat({  5.5f, -0.3f, -3.0f}, { 1.0f, 1.0f,  1.0f}), cubeAABB },
-    };
+    auto lavaMaterial = std::make_shared<PBRMaterial>();
+    lavaMaterial->Albedo          = Texture::Create(LAVA + "_Color.png",     false);
+    lavaMaterial->Normal          = Texture::Create(LAVA + "_NormalGL.png",  false);
+    lavaMaterial->Roughness       = Texture::Create(LAVA + "_Roughness.png", false);
+    lavaMaterial->Emissive        = Texture::Create(LAVA + "_Emission.png",  false);
+    lavaMaterial->EmissiveStrength = 2.5f;
+    lavaMaterial->UVScale          = 5.0f;
 
     static const std::string CERB =
         ASSETS_DIR "/Models/Cerberus_by_Andrew_Maximov/Textures/Cerberus";
-    PBRMaterial cerberusMaterial;
-    cerberusMaterial.Albedo    = Texture::Create(CERB + "_A.tga", false);
-    cerberusMaterial.Normal    = Texture::Create(CERB + "_N.tga", false);
-    cerberusMaterial.Metallic  = Texture::Create(CERB + "_M.tga", false);
-    cerberusMaterial.Roughness = Texture::Create(CERB + "_R.tga", false);
+    auto cerberusMaterial = std::make_shared<PBRMaterial>();
+    cerberusMaterial->Albedo    = Texture::Create(CERB + "_A.tga", false);
+    cerberusMaterial->Normal    = Texture::Create(CERB + "_N.tga", false);
+    cerberusMaterial->Metallic  = Texture::Create(CERB + "_M.tga", false);
+    cerberusMaterial->Roughness = Texture::Create(CERB + "_R.tga", false);
 
-    auto cerberusMeshData = ModelImporter::Load(
-        ASSETS_DIR "/Models/Cerberus_by_Andrew_Maximov/Cerberus_LP.FBX");
-    std::vector<std::shared_ptr<Mesh>> cerberusGpuMeshes;
-    std::vector<DrawCall> cerberusDraws;
-    glm::mat4 cerberusModel = glm::translate(glm::mat4(1.0f), glm::vec3(1.5f, 1.5f, 1.0f));
-    cerberusModel = glm::rotate(cerberusModel, glm::radians(-90.0f), glm::vec3(1.0f, 0.0f, 0.0f));
-    cerberusModel = glm::scale(cerberusModel, glm::vec3(0.05f));
-    for (auto& md : cerberusMeshData) {
-        cerberusGpuMeshes.push_back(Mesh::Create(md));
-        cerberusDraws.push_back({ cerberusGpuMeshes.back().get(), cerberusModel, md.ComputeAABB() });
+    // --- Populate scene with entities ---
+    {
+        auto e = scene.CreateEntity("Sphere");
+        auto& tc = scene.GetRegistry().get<TransformComponent>(e);
+        tc.position = glm::vec3(-3.0f, -0.3f, 1.0f);
+        scene.GetRegistry().emplace<MeshComponent>(e, sphere, diamondMaterial, sphereAABB);
+    }
+    {
+        auto e = scene.CreateEntity("Floor");
+        auto& tc = scene.GetRegistry().get<TransformComponent>(e);
+        tc.position = glm::vec3(0.0f, -1.7f, 0.0f);
+        tc.scale    = glm::vec3(20.0f, 0.4f, 20.0f);
+        scene.GetRegistry().emplace<MeshComponent>(e, cube, lavaMaterial, cubeAABB);
+    }
+    {
+        struct CubeDesc { glm::vec3 pos; glm::vec3 scale; };
+        CubeDesc cubes[] = {
+            {{ 0.5f, -0.3f, -3.5f}, {1.0f, 1.0f, 1.0f}},
+            {{ 3.5f,  0.7f,  1.0f}, {1.0f, 2.0f, 1.0f}},
+            {{-4.5f,  1.7f, -2.0f}, {1.0f, 3.0f, 1.0f}},
+            {{-1.5f, -0.3f,  3.5f}, {1.2f, 1.2f, 1.2f}},
+            {{ 5.5f, -0.3f, -3.0f}, {1.0f, 1.0f, 1.0f}},
+        };
+        for (int i = 0; i < 5; ++i) {
+            auto e = scene.CreateEntity("Cube " + std::to_string(i + 1));
+            auto& tc = scene.GetRegistry().get<TransformComponent>(e);
+            tc.position = cubes[i].pos;
+            tc.scale    = cubes[i].scale;
+            scene.GetRegistry().emplace<MeshComponent>(e, cube, diamondMaterial, cubeAABB);
+        }
+    }
+    {
+        auto cerberusMeshData = ModelImporter::Load(
+            ASSETS_DIR "/Models/Cerberus_by_Andrew_Maximov/Cerberus_LP.FBX");
+        std::vector<std::shared_ptr<Mesh>> cerberusGpuMeshes;
+        for (auto& md : cerberusMeshData)
+            cerberusGpuMeshes.push_back(Mesh::Create(md));
+
+        for (int i = 0; i < (int)cerberusMeshData.size(); ++i) {
+            auto e = scene.CreateEntity("Cerberus " + std::to_string(i));
+            auto& tc = scene.GetRegistry().get<TransformComponent>(e);
+            tc.position = glm::vec3(1.5f, 1.5f, 1.0f);
+            tc.rotation = glm::angleAxis(glm::radians(-90.0f), glm::vec3(1.0f, 0.0f, 0.0f));
+            tc.scale    = glm::vec3(0.05f);
+            scene.GetRegistry().emplace<MeshComponent>(e,
+                cerberusGpuMeshes[i], cerberusMaterial,
+                cerberusMeshData[i].ComputeAABB());
+        }
     }
 
     // Window quads — FullscreenQuad is a -1..1 XY plane, scaled/translated into world space
@@ -280,7 +307,7 @@ int main()
 
     // --- Per-frame state captured by render graph lambdas ---
     std::vector<DrawCall> allDraws;
-    std::vector<DrawCall> culledDraws, culledFloorDraws, culledCubeDraws, culledCerberusDraws;
+    std::unordered_map<PBRMaterial*, std::vector<DrawCall>> culledBatches;
     glm::mat4 view, proj;
     int fbW = 0, fbH = 0;
 
@@ -356,10 +383,9 @@ int main()
                 glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
                 glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-                gbufferPass.Render(gbufferShader, culledDraws,         lavaMaterial,     view, proj, graph.GetFBO(gViewPos), fbW, fbH);
-                gbufferPass.Render(gbufferShader, culledFloorDraws,    material,         view, proj, graph.GetFBO(gViewPos), fbW, fbH);
-                gbufferPass.Render(gbufferShader, culledCubeDraws,     material,         view, proj, graph.GetFBO(gViewPos), fbW, fbH);
-                gbufferPass.Render(gbufferShader, culledCerberusDraws, cerberusMaterial, view, proj, graph.GetFBO(gViewPos), fbW, fbH);
+                for (auto& [mat, batch] : culledBatches)
+                    if (!batch.empty())
+                        gbufferPass.Render(gbufferShader, batch, *mat, view, proj, graph.GetFBO(gViewPos), fbW, fbH);
             });
 
         // SSAO — raw occlusion
@@ -503,11 +529,15 @@ int main()
             lastFbH = fbH;
         }
 
+        // Build draw calls from scene — reads TransformComponent each frame so inspector edits are live
         allDraws.clear();
-        allDraws.insert(allDraws.end(), draws.begin(),        draws.end());
-        allDraws.insert(allDraws.end(), cerberusDraws.begin(), cerberusDraws.end());
-        allDraws.insert(allDraws.end(), floorDraws.begin(),   floorDraws.end());
-        allDraws.insert(allDraws.end(), cubeDraws.begin(),    cubeDraws.end());
+        std::unordered_map<PBRMaterial*, std::vector<DrawCall>> materialBatches;
+        for (auto [entity, tc, mc] : scene.GetRegistry().view<TransformComponent, MeshComponent>().each()) {
+            if (!mc.mesh || !mc.material) continue;
+            DrawCall dc{ mc.mesh.get(), tc.GetLocalMatrix(), mc.localBounds };
+            materialBatches[mc.material.get()].push_back(dc);
+            allDraws.push_back(dc);
+        }
 
         view = g_camera.GetViewMatrix();
         proj = glm::perspective(
@@ -523,10 +553,9 @@ int main()
                         out.push_back(dc);
                 return out;
             };
-            culledDraws         = cull(draws);
-            culledFloorDraws    = cull(floorDraws);
-            culledCubeDraws     = cull(cubeDraws);
-            culledCerberusDraws = cull(cerberusDraws);
+            culledBatches.clear();
+            for (auto& [mat, batch] : materialBatches)
+                culledBatches[mat] = cull(batch);
             // allDraws stays unculled — shadow passes need the full scene
         }
 
