@@ -12,9 +12,10 @@ OpenGLFXAAPass::OpenGLFXAAPass()
 void OpenGLFXAAPass::Render(const OpenGLShader& shader,
                              uint32_t sourceTex,
                              int viewportW, int viewportH,
-                             bool enabled)
+                             bool enabled,
+                             uint32_t outputFBO)
 {
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glBindFramebuffer(GL_FRAMEBUFFER, outputFBO);
     glViewport(0, 0, viewportW, viewportH);
     glDisable(GL_DEPTH_TEST);
     glClear(GL_COLOR_BUFFER_BIT);

@@ -9,11 +9,11 @@ class OpenGLFXAAPass {
 public:
     OpenGLFXAAPass();
 
-    // Renders sourceTex → backbuffer (FBO 0) with FXAA applied when enabled.
     void Render(const OpenGLShader& shader,
                 uint32_t sourceTex,
                 int viewportW, int viewportH,
-                bool enabled = true);
+                bool enabled = true,
+                uint32_t outputFBO = 0);
 
 private:
     OpenGLMesh m_Quad;

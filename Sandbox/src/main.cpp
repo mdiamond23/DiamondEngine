@@ -4,6 +4,10 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <vector>
+#include <imgui.h>
+#include <backends/imgui_impl_glfw.h>
+#include <backends/imgui_impl_opengl3.h>
+#include "Editor/EditorLayers.h"
 
 #include "Core/Camera.h"
 #include "Renderer/MeshData.h"
@@ -43,6 +47,7 @@ static void framebufferSizeCallback(GLFWwindow*, int w, int h) { glViewport(0, 0
 
 static void mouseCallback(GLFWwindow*, double x, double y)
 {
+    if (ImGui::GetIO().WantCaptureMouse) return;
     float fx = static_cast<float>(x), fy = static_cast<float>(y);
     if (g_firstMouse) { g_lastX = fx; g_lastY = fy; g_firstMouse = false; }
     g_camera.ProcessMouseMovement(fx - g_lastX, g_lastY - fy);
@@ -83,12 +88,23 @@ int main()
 
     glfwMakeContextCurrent(window);
     glfwSwapInterval(1);
-    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
     glfwSetFramebufferSizeCallback(window, framebufferSizeCallback);
     glfwSetCursorPosCallback(window, mouseCallback);
     glfwSetScrollCallback(window, scrollCallback);
 
     if (!gladLoadGL(glfwGetProcAddress)) { glfwTerminate(); return -1; }
+
+    // ImGui init
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGuiIO& io = ImGui::GetIO();
+    io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+    ImGui::StyleColorsDark();
+    ImGui_ImplGlfw_InitForOpenGL(window, true);
+    ImGui_ImplOpenGL3_Init("#version 410");
+
+    EditorLayer editorLayer;
 
     glEnable(GL_DEPTH_TEST);
     glEnable(GL_TEXTURE_CUBE_MAP_SEAMLESS);
@@ -276,6 +292,10 @@ int main()
     RGTextureHandle pingPong[2];
     RGTextureHandle ldrBuffer;
 
+    // Viewport FBO — managed outside the render graph so it isn't freed between frames
+    uint32_t viewportFBO     = 0;
+    uint32_t viewportTexture = 0;
+
     auto buildGraph = [&](int w, int h)
     {
         fbW = w; fbH = h;
@@ -300,8 +320,21 @@ int main()
         pingPong[0] = graph.DeclareTexture("bloomPing", { w, h, GL_RGBA16F, false });
         pingPong[1] = graph.DeclareTexture("bloomPong", { w, h, GL_RGBA16F, false });
 
-        // LDR intermediate — bloom composite writes here, FXAA reads and outputs to backbuffer
+        // LDR intermediate — bloom composite writes here, FXAA reads and outputs to viewport
         ldrBuffer = graph.DeclareTexture("ldrBuffer", { w, h, GL_RGBA8, true });
+
+        // Viewport FBO — recreate on resize
+        if (viewportTexture) glDeleteTextures(1,      &viewportTexture);
+        if (viewportFBO)     glDeleteFramebuffers(1,  &viewportFBO);
+        glGenTextures(1, &viewportTexture);
+        glBindTexture(GL_TEXTURE_2D, viewportTexture);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glGenFramebuffers(1, &viewportFBO);
+        glBindFramebuffer(GL_FRAMEBUFFER, viewportFBO);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, viewportTexture, 0);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
         // Shadow passes — sinks (no graph writes), always alive
         graph.AddPass("DirectionalShadow")
@@ -422,13 +455,14 @@ int main()
                     graph.GetFBO(ldrBuffer));
             });
 
-        // FXAA → backbuffer
+        // FXAA — sink pass, renders into the manually managed viewportFBO
         graph.AddPass("FXAA")
             .Read(ldrBuffer)
             .SetExecute([&]{
                 fxaaPass.Render(fxaaShader,
                     graph.GetTexture(ldrBuffer),
-                    fbW, fbH, fxaaEnabled);
+                    fbW, fbH, fxaaEnabled,
+                    viewportFBO);
             });
 
         graph.Compile();
@@ -498,9 +532,32 @@ int main()
 
         graph.Execute();
 
+        // Clear backbuffer for ImGui — scene now lives in viewportTex
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+
+        // ImGui frame
+        ImGui_ImplOpenGL3_NewFrame();
+        ImGui_ImplGlfw_NewFrame();
+        ImGui::NewFrame();
+
+        editorLayer.SetViewportTexture(viewportTexture);
+        editorLayer.OnImGuiRender();
+
+        ImGui::Render();
+        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+
         glfwSwapBuffers(window);
         glfwPollEvents();
     }
+
+    if (viewportTexture) glDeleteTextures(1,     &viewportTexture);
+    if (viewportFBO)     glDeleteFramebuffers(1, &viewportFBO);
+
+    ImGui_ImplOpenGL3_Shutdown();
+    ImGui_ImplGlfw_Shutdown();
+    ImGui::DestroyContext();
 
     glfwTerminate();
     return 0;
