@@ -37,9 +37,8 @@
 using namespace Diamond;
 
 static Camera g_camera(glm::vec3(0.0f, 0.0f, 5.0f));
-static float  g_lastX = 640.0f, g_lastY = 360.0f;
-static bool   g_firstMouse = true;
 static float  g_deltaTime = 0.0f, g_lastFrame = 0.0f;
+static bool   g_viewportActive = false;
 
 // timing
 float deltaTime = 0.0f;
@@ -49,24 +48,17 @@ int frameCount = 0;
 
 static void framebufferSizeCallback(GLFWwindow*, int w, int h) { glViewport(0, 0, w, h); }
 
-static void mouseCallback(GLFWwindow*, double x, double y)
-{
-    if (ImGui::GetIO().WantCaptureMouse) return;
-    float fx = static_cast<float>(x), fy = static_cast<float>(y);
-    if (g_firstMouse) { g_lastX = fx; g_lastY = fy; g_firstMouse = false; }
-    g_camera.ProcessMouseMovement(fx - g_lastX, g_lastY - fy);
-    g_lastX = fx; g_lastY = fy;
-}
-
 static void scrollCallback(GLFWwindow*, double, double y)
 {
-    g_camera.ProcessMouseScroll(static_cast<float>(y));
+    if (g_viewportActive)
+        g_camera.ProcessMouseScroll(static_cast<float>(y));
 }
 
 static void processInput(GLFWwindow* window)
 {
     if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
         glfwSetWindowShouldClose(window, true);
+    if (!g_viewportActive) return;
     if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS)
         g_camera.ProcessKeyboard(CameraMovement::Forward,  g_deltaTime);
     if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS)
@@ -94,7 +86,6 @@ int main()
     glfwSwapInterval(1);
     glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
     glfwSetFramebufferSizeCallback(window, framebufferSizeCallback);
-    glfwSetCursorPosCallback(window, mouseCallback);
     glfwSetScrollCallback(window, scrollCallback);
 
     if (!gladLoadGL(glfwGetProcAddress)) { glfwTerminate(); return -1; }
@@ -461,7 +452,7 @@ int main()
             .SetExecute([&]{
                 bool horizontal = true;
                 uint32_t src = graph.GetTexture(brightBuffer);
-                for (int i = 0; i < 10; ++i) {
+                for (int i = 0; i < 6; ++i) {
                     int dst = i % 2;
                     bloomPass.RenderBlurPass(blurShader, src, graph.GetFBO(pingPong[dst]), horizontal);
                     src        = graph.GetTexture(pingPong[dst]);
@@ -573,6 +564,14 @@ int main()
 
         editorLayer.SetViewportTexture(viewportTexture);
         editorLayer.OnImGuiRender();
+
+        // Read viewport active state and drive camera from ImGui mouse delta.
+        // io.MouseDelta is valid here (after NewFrame, before Render).
+        g_viewportActive = editorLayer.IsViewportActive();
+        if (g_viewportActive) {
+            ImGuiIO& io = ImGui::GetIO();
+            g_camera.ProcessMouseMovement(io.MouseDelta.x, -io.MouseDelta.y);
+        }
 
         ImGui::Render();
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());

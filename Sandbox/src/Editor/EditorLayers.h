@@ -13,6 +13,7 @@ public:
     void SetupDockspace();
     void OnImGuiRender();
     void SetViewportTexture(uint32_t textureID);
+    bool IsViewportActive() const { return m_Viewport.IsActive(); }
 
 private:
     bool           m_LayoutInitialized = false;

@@ -14,6 +14,13 @@ void ViewportPanel::OnImGuiRender() {
         );
     }
 
+    // Activate camera mode on right-click while hovering the viewport
+    if (ImGui::IsWindowHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Right))
+        m_IsViewportActive = true;
+    // Deactivate as soon as right button is released (fires even if cursor left the window)
+    if (!ImGui::IsMouseDown(ImGuiMouseButton_Right))
+        m_IsViewportActive = false;
+
     ImGui::End();
     ImGui::PopStyleVar();
 }
