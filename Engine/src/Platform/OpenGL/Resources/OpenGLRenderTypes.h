@@ -9,6 +9,7 @@ struct DrawCall {
     const Mesh* mesh;
     glm::mat4   modelMatrix;
     AABB        localBounds;
+    bool        castsShadow = true;
 };
 
 struct SunLight {

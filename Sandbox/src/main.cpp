@@ -298,6 +298,7 @@ int main()
 
     // --- Per-frame state captured by render graph lambdas ---
     std::vector<DrawCall> allDraws;
+    std::vector<DrawCall> shadowDraws;
     std::unordered_map<PBRMaterial*, std::vector<DrawCall>> culledBatches;
     glm::mat4 view, proj;
     int fbW = 0, fbH = 0;
@@ -357,12 +358,12 @@ int main()
         // Shadow passes — sinks (no graph writes), always alive
         graph.AddPass("DirectionalShadow")
             .SetExecute([&]{
-                csmPass.Render(depthShader, allDraws, sun, view, proj, 0.1f, 100.0f);
+                csmPass.Render(depthShader, shadowDraws, sun, view, proj, 0.1f, 100.0f);
             });
 
         graph.AddPass("PointShadow")
             .SetExecute([&]{
-                shadowPass.RenderPointShadowPass(pointDepthShader, allDraws, lightPositions, 4);
+                shadowPass.RenderPointShadowPass(pointDepthShader, shadowDraws, lightPositions, 4);
             });
 
         // Geometry pass — fills all 5 G-buffer attachments
@@ -524,11 +525,16 @@ int main()
         allDraws.clear();
         std::unordered_map<PBRMaterial*, std::vector<DrawCall>> materialBatches;
         for (auto [entity, tc, mc] : scene.GetRegistry().view<TransformComponent, MeshComponent>().each()) {
-            if (!mc.mesh || !mc.material) continue;
-            DrawCall dc{ mc.mesh.get(), tc.GetLocalMatrix(), mc.localBounds };
+            if (!mc.mesh || !mc.material || !mc.visible) continue;
+            DrawCall dc{ mc.mesh.get(), tc.GetLocalMatrix(), mc.localBounds, mc.castsShadow };
             materialBatches[mc.material.get()].push_back(dc);
             allDraws.push_back(dc);
         }
+
+        // Shadow draws are a subset — only casters
+        shadowDraws.clear();
+        for (const auto& dc : allDraws)
+            if (dc.castsShadow) shadowDraws.push_back(dc);
 
         view = g_camera.GetViewMatrix();
         proj = glm::perspective(

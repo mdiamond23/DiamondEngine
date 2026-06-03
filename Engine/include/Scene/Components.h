@@ -34,6 +34,10 @@ struct MeshComponent
     std::shared_ptr<Diamond::Mesh>        mesh;
     std::shared_ptr<Diamond::PBRMaterial> material;
     Diamond::AABB                         localBounds;
+
+    bool visible        = true;
+    bool castsShadow    = true;
+    bool receivesShadow = true;
 };
 
 struct IDComponent {

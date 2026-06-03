@@ -13,9 +13,9 @@ enum class AssetType { Folder, Texture, Mesh, Material, Shader, Scene, File };
 
 struct ContentItem {
     std::filesystem::path path;
-    bool isDirectory;
+    bool isDirectory  = false;
     std::string name;
-    AssetType type;
+    AssetType type    = AssetType::File;
 };
 
 class ContentPanel : public Panel {

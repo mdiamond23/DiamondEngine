@@ -55,8 +55,16 @@ uint32_t MeshThumbnailRenderer::Render(const std::vector<Diamond::MeshData>& mes
     float radius = glm::length(aabb.max - aabb.min) * 0.5f;
     if (radius < 1e-5f) radius = 1.0f;
 
-    // Isometric-ish camera angle
-    glm::vec3 camDir = glm::normalize(glm::vec3(1.0f, 0.8f, 1.0f));
+    // Pick camera direction based on AABB extents: face the smallest axis so the
+    // largest face of the bounding box fills the thumbnail.
+    glm::vec3 ext = aabb.max - aabb.min;
+    glm::vec3 camDir;
+    if (ext.x <= ext.y && ext.x <= ext.z)
+        camDir = glm::normalize(glm::vec3(1.0f, 0.5f, 0.4f)); // thin in X → look from side
+    else if (ext.y <= ext.x && ext.y <= ext.z)
+        camDir = glm::normalize(glm::vec3(0.5f, 1.0f, 0.5f)); // thin in Y → look from above
+    else
+        camDir = glm::normalize(glm::vec3(0.4f, 0.5f, 1.0f)); // thin in Z → look from front
     glm::vec3 camPos = center + camDir * (radius * 2.8f);
 
     glm::mat4 model = glm::mat4(1.0f);
