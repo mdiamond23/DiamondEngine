@@ -1,6 +1,7 @@
 add_executable(Sandbox
     src/main.cpp
     src/Editor/EditorLayers.cpp
+    src/Editor/MeshThumbnailRenderer.cpp
     src/Editor/Panels/HierarchyPanel.cpp
     src/Editor/Panels/ViewportPanel.cpp
     src/Editor/Panels/InspectorPanel.cpp

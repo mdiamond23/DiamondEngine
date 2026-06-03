@@ -13,6 +13,10 @@
 #endif
 #include <windows.h>
 
+#include <glad/gl.h>
+#include <Assets/ImageLoader.h>
+#include <Assets/ModelImporter.h>
+
 #include <filesystem>
 #include <algorithm>
 #include <cctype>
@@ -47,6 +51,11 @@ ContentPanel::ContentPanel()
     Refresh();
 }
 
+ContentPanel::~ContentPanel() {
+    for (auto& [key, texID] : m_ThumbnailCache)
+        glDeleteTextures(1, &texID);
+}
+
 void ContentPanel::Refresh() {
     m_Items.clear();
     if (!fs::exists(m_CurrentPath)) return;
@@ -56,7 +65,7 @@ void ContentPanel::Refresh() {
         item.path        = entry.path();
         item.isDirectory = entry.is_directory();
         item.name        = ToUtf8(entry.path().filename());
-        item.typeLabel   = GetFileTypeLabel(entry.path());
+        item.type        = GetAssetType(entry.path());
         m_Items.push_back(std::move(item));
     }
 
@@ -66,20 +75,71 @@ void ContentPanel::Refresh() {
     });
 }
 
-std::string ContentPanel::GetFileTypeLabel(const fs::path& p) {
-    if (fs::is_directory(p)) return "Folder";
+static const char* AssetTypeName(AssetType t) {
+    switch (t) {
+        case AssetType::Folder:   return "Folder";
+        case AssetType::Texture:  return "Texture";
+        case AssetType::Mesh:     return "Mesh";
+        case AssetType::Material: return "Material";
+        case AssetType::Shader:   return "Shader";
+        case AssetType::Scene:    return "Scene";
+        default:                  return "File";
+    }
+}
+
+AssetType ContentPanel::GetAssetType(const fs::path& p) {
+    if (fs::is_directory(p)) return AssetType::Folder;
     std::string ext = LowerExt(p);
     if (ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".bmp" || ext == ".tga")
-        return "Texture";
+        return AssetType::Texture;
     if (ext == ".obj" || ext == ".fbx" || ext == ".gltf" || ext == ".glb")
-        return "Mesh";
-    if (ext == ".mat")
-        return "Material";
-    if (ext == ".glsl" || ext == ".vert" || ext == ".frag")
-        return "Shader";
-    if (ext == ".scene")
-        return "Scene";
-    return "File";
+        return AssetType::Mesh;
+    if (ext == ".mat")  return AssetType::Material;
+    if (ext == ".glsl" || ext == ".vert" || ext == ".frag") return AssetType::Shader;
+    if (ext == ".scene") return AssetType::Scene;
+    return AssetType::File;
+}
+
+uint32_t ContentPanel::LoadThumbnail(const fs::path& p, AssetType type) {
+    std::string key = ToUtf8(p);
+
+    auto it = m_ThumbnailCache.find(key);
+    if (it != m_ThumbnailCache.end()) return it->second;
+    if (m_FailedPaths.count(key))     return 0;
+
+    uint32_t texID = 0;
+
+    if (type == AssetType::Texture) {
+        Diamond::ImageData img = Diamond::ImageLoader::Load(key, false);
+        if (img.Pixels.empty()) { m_FailedPaths.insert(key); return 0; }
+
+        GLenum fmt;
+        switch (img.Channels) {
+            case 1:  fmt = GL_RED;  break;
+            case 3:  fmt = GL_RGB;  break;
+            case 4:  fmt = GL_RGBA; break;
+            default: m_FailedPaths.insert(key); return 0;
+        }
+
+        glGenTextures(1, &texID);
+        glBindTexture(GL_TEXTURE_2D, texID);
+        glTexImage2D(GL_TEXTURE_2D, 0, fmt, img.Width, img.Height, 0,
+                     fmt, GL_UNSIGNED_BYTE, img.Pixels.data());
+        glGenerateMipmap(GL_TEXTURE_2D);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glBindTexture(GL_TEXTURE_2D, 0);
+    } else if (type == AssetType::Mesh) {
+        auto meshes = Diamond::ModelImporter::Load(key);
+        if (meshes.empty()) { m_FailedPaths.insert(key); return 0; }
+        texID = m_MeshRenderer.Render(meshes);
+    }
+
+    if (!texID) { m_FailedPaths.insert(key); return 0; }
+    m_ThumbnailCache[key] = texID;
+    return texID;
 }
 
 void ContentPanel::DrawFolderIcon(ImVec2 tl, float size) {
@@ -185,6 +245,8 @@ void ContentPanel::DrawItems() {
 
     ImGui::Columns(cols, nullptr, false);
 
+    fs::path pendingNav;
+
     for (auto& item : m_Items) {
         ImGui::PushID(ToUtf8(item.path).c_str());
 
@@ -205,10 +267,27 @@ void ContentPanel::DrawItems() {
         float pad  = m_IconSize * 0.09f;
         float iSz  = m_IconSize - pad * 2.0f;
         ImVec2 iPos = {cellOrigin.x + pad, cellOrigin.y + pad};
-        if (item.isDirectory)
+
+        uint32_t thumbID = 0;
+        if (item.type == AssetType::Texture || item.type == AssetType::Mesh) {
+            std::string key = ToUtf8(item.path);
+            auto cit = m_ThumbnailCache.find(key);
+            if (cit != m_ThumbnailCache.end())
+                thumbID = cit->second;
+            else if (!m_FailedPaths.count(key) &&
+                     ImGui::IsRectVisible(cellOrigin, {cellOrigin.x + m_IconSize, cellOrigin.y + cellH}))
+                thumbID = LoadThumbnail(item.path, item.type);
+        }
+
+        if (thumbID) {
+            ImGui::GetWindowDrawList()->AddImage(
+                (ImTextureID)(uintptr_t)thumbID,
+                iPos, {iPos.x + iSz, iPos.y + iSz});
+        } else if (item.isDirectory) {
             DrawFolderIcon(iPos, iSz);
-        else
+        } else {
             DrawFileIcon(iPos, iSz, LowerExt(item.path));
+        }
 
         // Name + type label drawn directly via DrawList so we don't disturb the cursor
         ImDrawList* dl    = ImGui::GetWindowDrawList();
@@ -232,18 +311,23 @@ void ContentPanel::DrawItems() {
         dl->AddText({cellOrigin.x + 2.0f, ty},
                     IM_COL32(220, 220, 220, 255), dispName.c_str());
         dl->AddText({cellOrigin.x + 2.0f, ty + lineH},
-                    IM_COL32(130, 130, 130, 255), item.typeLabel.c_str());
+                    IM_COL32(130, 130, 130, 255), AssetTypeName(item.type));
 
-        if (dblClick && item.isDirectory) {
-            m_CurrentPath = item.path;
-            Refresh();
-        }
+        if (dblClick && item.isDirectory)
+            pendingNav = item.path;
 
         ImGui::NextColumn();
         ImGui::PopID();
     }
 
     ImGui::Columns(1);
+
+    // Navigate after the loop — calling Refresh() inside the loop invalidates
+    // m_Items' iterators, which corrupts the range-for and causes a crash.
+    if (!pendingNav.empty()) {
+        m_CurrentPath = pendingNav;
+        Refresh();
+    }
 }
 
 void ContentPanel::OnImGuiRender() {

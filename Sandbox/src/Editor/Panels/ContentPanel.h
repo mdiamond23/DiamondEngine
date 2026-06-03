@@ -1,20 +1,27 @@
 #pragma once
 #include "Panels.h"
+#include "../MeshThumbnailRenderer.h"
 #include <imgui.h>
 #include <filesystem>
 #include <string>
 #include <vector>
+#include <unordered_map>
+#include <unordered_set>
+#include <cstdint>
+
+enum class AssetType { Folder, Texture, Mesh, Material, Shader, Scene, File };
 
 struct ContentItem {
     std::filesystem::path path;
     bool isDirectory;
     std::string name;
-    std::string typeLabel;
+    AssetType type;
 };
 
 class ContentPanel : public Panel {
 public:
     ContentPanel();
+    ~ContentPanel();
     void OnImGuiRender() override;
 
 private:
@@ -23,11 +30,16 @@ private:
     void DrawItems();
     void DrawFolderIcon(ImVec2 topLeft, float size);
     void DrawFileIcon(ImVec2 topLeft, float size, const std::string& ext);
-    std::string GetFileTypeLabel(const std::filesystem::path& p);
+    AssetType GetAssetType(const std::filesystem::path& p);
+    uint32_t LoadThumbnail(const std::filesystem::path& p, AssetType type);
 
     std::filesystem::path m_AssetsDir;
     std::filesystem::path m_CurrentPath;
     std::vector<ContentItem> m_Items;
+
+    std::unordered_map<std::string, uint32_t> m_ThumbnailCache;
+    std::unordered_set<std::string>           m_FailedPaths;
+    MeshThumbnailRenderer                     m_MeshRenderer;
 
     bool m_OpenNewFolderModal = false;
     char m_NewFolderName[256]{};
