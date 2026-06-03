@@ -3,6 +3,7 @@
 #include "../MeshThumbnailRenderer.h"
 #include <imgui.h>
 #include <filesystem>
+#include <functional>
 #include <string>
 #include <vector>
 #include <unordered_map>
@@ -24,6 +25,8 @@ public:
     ~ContentPanel();
     void OnImGuiRender() override;
 
+    void SetOnSceneOpen(std::function<void(const std::string&)> cb) { m_OnSceneOpen = std::move(cb); }
+
 private:
     void Refresh();
     void DrawToolbar();
@@ -40,6 +43,8 @@ private:
     std::unordered_map<std::string, uint32_t> m_ThumbnailCache;
     std::unordered_set<std::string>           m_FailedPaths;
     MeshThumbnailRenderer                     m_MeshRenderer;
+
+    std::function<void(const std::string&)> m_OnSceneOpen;
 
     bool m_OpenNewFolderModal = false;
     char m_NewFolderName[256]{};

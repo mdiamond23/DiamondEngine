@@ -1,5 +1,6 @@
 #pragma once
 #include <imgui.h>
+#include <string>
 #include "EditorContext.h"
 #include "Scene/Scene.h"
 #include "Panels/HierarchyPanel.h"
@@ -16,6 +17,11 @@ public:
     bool IsViewportActive() const { return m_Viewport.IsActive(); }
 
 private:
+    void DrawMenuBar();
+
+    static std::string OpenFileDialog();
+    static std::string SaveFileDialog();
+
     bool           m_LayoutInitialized = false;
     HierarchyPanel m_Hierarchy;
     ViewportPanel  m_Viewport;

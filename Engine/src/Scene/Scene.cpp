@@ -26,3 +26,9 @@ void Scene::SetEntityName(entt::entity entity, std::string_view name)
     m_EntityNames[entity] = name;
 }
 
+void Scene::Clear()
+{
+    m_Registry.clear();
+    m_EntityNames.clear();
+}
+

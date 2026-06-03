@@ -1,0 +1,284 @@
+{
+  "entities": [
+    {
+      "mesh": {
+        "albedoPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Color.png",
+        "aoPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_AmbientOcclusion.png",
+        "castsShadow": true,
+        "emissivePath": "",
+        "emissiveStrength": 0.0,
+        "materialPath": "",
+        "meshPath": "__sphere",
+        "meshSubIndex": 0,
+        "metallicPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Metalness.png",
+        "normalPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_NormalGL.png",
+        "receivesShadow": true,
+        "roughnessPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Roughness.png",
+        "uvScale": 1.0,
+        "visible": true
+      },
+      "name": "Sphere",
+      "transform": {
+        "position": [
+          -3.0,
+          -0.30000001192092896,
+          1.0
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "mesh": {
+        "albedoPath": "C:/Dev/DiamondEngine/Assets/Materials/Lava004_2K-PNG/Lava004_2K-PNG_Color.png",
+        "aoPath": "",
+        "castsShadow": true,
+        "emissivePath": "C:/Dev/DiamondEngine/Assets/Materials/Lava004_2K-PNG/Lava004_2K-PNG_Emission.png",
+        "emissiveStrength": 3.569999933242798,
+        "materialPath": "",
+        "meshPath": "__cube",
+        "meshSubIndex": 0,
+        "metallicPath": "",
+        "normalPath": "C:/Dev/DiamondEngine/Assets/Materials/Lava004_2K-PNG/Lava004_2K-PNG_NormalGL.png",
+        "receivesShadow": true,
+        "roughnessPath": "C:/Dev/DiamondEngine/Assets/Materials/Lava004_2K-PNG/Lava004_2K-PNG_Roughness.png",
+        "uvScale": 5.0,
+        "visible": true
+      },
+      "name": "Floor",
+      "transform": {
+        "position": [
+          0.0,
+          -1.7000000476837158,
+          0.0
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          20.0,
+          0.4000000059604645,
+          20.0
+        ]
+      }
+    },
+    {
+      "mesh": {
+        "albedoPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Color.png",
+        "aoPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_AmbientOcclusion.png",
+        "castsShadow": true,
+        "emissivePath": "",
+        "emissiveStrength": 0.0,
+        "materialPath": "",
+        "meshPath": "__cube",
+        "meshSubIndex": 0,
+        "metallicPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Metalness.png",
+        "normalPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_NormalGL.png",
+        "receivesShadow": true,
+        "roughnessPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Roughness.png",
+        "uvScale": 1.0,
+        "visible": true
+      },
+      "name": "Cube 2",
+      "transform": {
+        "position": [
+          -1.100000023841858,
+          0.699999988079071,
+          1.0
+        ],
+        "rotation": [
+          0.7748129963874817,
+          -0.21924348175525665,
+          0.3613019287586212,
+          0.4701681137084961
+        ],
+        "scale": [
+          1.0,
+          2.0,
+          1.600000023841858
+        ]
+      }
+    },
+    {
+      "mesh": {
+        "albedoPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Color.png",
+        "aoPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_AmbientOcclusion.png",
+        "castsShadow": true,
+        "emissivePath": "",
+        "emissiveStrength": 0.0,
+        "materialPath": "",
+        "meshPath": "__cube",
+        "meshSubIndex": 0,
+        "metallicPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Metalness.png",
+        "normalPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_NormalGL.png",
+        "receivesShadow": true,
+        "roughnessPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Roughness.png",
+        "uvScale": 1.0,
+        "visible": true
+      },
+      "name": "Cube 3",
+      "transform": {
+        "position": [
+          -4.5,
+          1.7000000476837158,
+          -2.0
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          3.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "mesh": {
+        "albedoPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Color.png",
+        "aoPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_AmbientOcclusion.png",
+        "castsShadow": true,
+        "emissivePath": "",
+        "emissiveStrength": 0.0,
+        "materialPath": "",
+        "meshPath": "__cube",
+        "meshSubIndex": 0,
+        "metallicPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Metalness.png",
+        "normalPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_NormalGL.png",
+        "receivesShadow": true,
+        "roughnessPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Roughness.png",
+        "uvScale": 1.0,
+        "visible": true
+      },
+      "name": "Cube 4",
+      "transform": {
+        "position": [
+          -1.5,
+          -0.30000001192092896,
+          3.5
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.2000000476837158,
+          1.2000000476837158,
+          1.2000000476837158
+        ]
+      }
+    },
+    {
+      "mesh": {
+        "albedoPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Color.png",
+        "aoPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_AmbientOcclusion.png",
+        "castsShadow": true,
+        "emissivePath": "",
+        "emissiveStrength": 0.0,
+        "materialPath": "",
+        "meshPath": "__cube",
+        "meshSubIndex": 0,
+        "metallicPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Metalness.png",
+        "normalPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_NormalGL.png",
+        "receivesShadow": true,
+        "roughnessPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Roughness.png",
+        "uvScale": 1.0,
+        "visible": true
+      },
+      "name": "Cube 5",
+      "transform": {
+        "position": [
+          5.5,
+          -0.30000001192092896,
+          -3.0
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          4.900000095367432,
+          1.0
+        ]
+      }
+    },
+    {
+      "mesh": {
+        "albedoPath": "C:/Dev/DiamondEngine/Assets/Models/Cerberus_by_Andrew_Maximov/Textures/Cerberus_A.tga",
+        "aoPath": "",
+        "castsShadow": true,
+        "emissivePath": "",
+        "emissiveStrength": 0.0,
+        "materialPath": "",
+        "meshPath": "C:/Dev/DiamondEngine/Assets/Models/Cerberus_by_Andrew_Maximov/Cerberus_LP.FBX",
+        "meshSubIndex": 0,
+        "metallicPath": "C:/Dev/DiamondEngine/Assets/Models/Cerberus_by_Andrew_Maximov/Textures/Cerberus_M.tga",
+        "normalPath": "C:/Dev/DiamondEngine/Assets/Models/Cerberus_by_Andrew_Maximov/Textures/Cerberus_N.tga",
+        "receivesShadow": true,
+        "roughnessPath": "C:/Dev/DiamondEngine/Assets/Models/Cerberus_by_Andrew_Maximov/Textures/Cerberus_R.tga",
+        "uvScale": 1.0,
+        "visible": true
+      },
+      "name": "Cerberus 0",
+      "transform": {
+        "position": [
+          -4.099999904632568,
+          1.5,
+          1.0
+        ],
+        "rotation": [
+          0.5644201040267944,
+          -0.421342134475708,
+          -0.5688406229019165,
+          -0.42464232444763184
+        ],
+        "scale": [
+          0.05000000074505806,
+          0.05000000074505806,
+          0.05000000074505806
+        ]
+      }
+    },
+    {
+      "name": "Empty Entity",
+      "transform": {
+        "position": [
+          2.0999999046325684,
+          0.0,
+          0.0
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      }
+    }
+  ]
+}

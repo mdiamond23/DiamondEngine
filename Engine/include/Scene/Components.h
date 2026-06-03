@@ -3,6 +3,7 @@
 #include <glm/gtc/quaternion.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <memory>
+#include <string>
 #include "Renderer/MeshData.h"
 #include "Renderer/Material.h"
 #include "Renderer/Frustum.h"
@@ -38,6 +39,10 @@ struct MeshComponent
     bool visible        = true;
     bool castsShadow    = true;
     bool receivesShadow = true;
+
+    std::string meshPath;
+    int         meshSubIndex = 0;
+    std::string materialPath;
 };
 
 struct IDComponent {

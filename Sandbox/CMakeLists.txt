@@ -1,6 +1,7 @@
 add_executable(Sandbox
     src/main.cpp
     src/Editor/EditorLayers.cpp
+    src/Editor/SceneSerializer.cpp
     src/Editor/MeshThumbnailRenderer.cpp
     src/Editor/Panels/HierarchyPanel.cpp
     src/Editor/Panels/ViewportPanel.cpp
@@ -8,7 +9,7 @@ add_executable(Sandbox
     src/Editor/Panels/ContentPanel.cpp
 )
 
-target_link_libraries(Sandbox PRIVATE MyEngine)
+target_link_libraries(Sandbox PRIVATE MyEngine nlohmann_json::nlohmann_json)
 
 target_include_directories(Sandbox PRIVATE
     ${CMAKE_SOURCE_DIR}/Engine/src

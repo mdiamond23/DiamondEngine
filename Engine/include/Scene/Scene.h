@@ -14,6 +14,9 @@ public:
     // Removes the entity and its name from the scene entirely.
     void DestroyEntity(entt::entity entity);
 
+    // Destroys all entities and clears the name map.
+    void Clear();
+
     // Returns the display name stored in the name map. Undefined if entity doesn't exist.
     const std::string& GetEntityName(entt::entity entity) const;
     void               SetEntityName(entt::entity entity, std::string_view name);

@@ -185,6 +185,11 @@ int main()
     diamondMaterial->Metallic  = Texture::Create(MAT + "_Metalness.png",        false);
     diamondMaterial->Roughness = Texture::Create(MAT + "_Roughness.png",        false);
     diamondMaterial->AO        = Texture::Create(MAT + "_AmbientOcclusion.png", false);
+    diamondMaterial->AlbedoPath    = MAT + "_Color.png";
+    diamondMaterial->NormalPath    = MAT + "_NormalGL.png";
+    diamondMaterial->MetallicPath  = MAT + "_Metalness.png";
+    diamondMaterial->RoughnessPath = MAT + "_Roughness.png";
+    diamondMaterial->AOPath        = MAT + "_AmbientOcclusion.png";
 
     auto sphereData = MeshData::UVSphere();
     AABB sphereAABB = sphereData.ComputeAABB();
@@ -202,6 +207,10 @@ int main()
     lavaMaterial->Emissive        = Texture::Create(LAVA + "_Emission.png",  false);
     lavaMaterial->EmissiveStrength = 2.5f;
     lavaMaterial->UVScale          = 5.0f;
+    lavaMaterial->AlbedoPath    = LAVA + "_Color.png";
+    lavaMaterial->NormalPath    = LAVA + "_NormalGL.png";
+    lavaMaterial->RoughnessPath = LAVA + "_Roughness.png";
+    lavaMaterial->EmissivePath  = LAVA + "_Emission.png";
 
     static const std::string CERB =
         ASSETS_DIR "/Models/Cerberus_by_Andrew_Maximov/Textures/Cerberus";
@@ -210,20 +219,24 @@ int main()
     cerberusMaterial->Normal    = Texture::Create(CERB + "_N.tga", false);
     cerberusMaterial->Metallic  = Texture::Create(CERB + "_M.tga", false);
     cerberusMaterial->Roughness = Texture::Create(CERB + "_R.tga", false);
+    cerberusMaterial->AlbedoPath    = CERB + "_A.tga";
+    cerberusMaterial->NormalPath    = CERB + "_N.tga";
+    cerberusMaterial->MetallicPath  = CERB + "_M.tga";
+    cerberusMaterial->RoughnessPath = CERB + "_R.tga";
 
     // --- Populate scene with entities ---
     {
         auto e = scene.CreateEntity("Sphere");
         auto& tc = scene.GetRegistry().get<TransformComponent>(e);
         tc.position = glm::vec3(-3.0f, -0.3f, 1.0f);
-        scene.GetRegistry().emplace<MeshComponent>(e, sphere, diamondMaterial, sphereAABB);
+        scene.GetRegistry().emplace<MeshComponent>(e, sphere, diamondMaterial, sphereAABB).meshPath = "__sphere";
     }
     {
         auto e = scene.CreateEntity("Floor");
         auto& tc = scene.GetRegistry().get<TransformComponent>(e);
         tc.position = glm::vec3(0.0f, -1.7f, 0.0f);
         tc.scale    = glm::vec3(20.0f, 0.4f, 20.0f);
-        scene.GetRegistry().emplace<MeshComponent>(e, cube, lavaMaterial, cubeAABB);
+        scene.GetRegistry().emplace<MeshComponent>(e, cube, lavaMaterial, cubeAABB).meshPath = "__cube";
     }
     {
         struct CubeDesc { glm::vec3 pos; glm::vec3 scale; };
@@ -239,7 +252,7 @@ int main()
             auto& tc = scene.GetRegistry().get<TransformComponent>(e);
             tc.position = cubes[i].pos;
             tc.scale    = cubes[i].scale;
-            scene.GetRegistry().emplace<MeshComponent>(e, cube, diamondMaterial, cubeAABB);
+            scene.GetRegistry().emplace<MeshComponent>(e, cube, diamondMaterial, cubeAABB).meshPath = "__cube";
         }
     }
     {
@@ -255,9 +268,11 @@ int main()
             tc.position = glm::vec3(1.5f, 1.5f, 1.0f);
             tc.rotation = glm::angleAxis(glm::radians(-90.0f), glm::vec3(1.0f, 0.0f, 0.0f));
             tc.scale    = glm::vec3(0.05f);
-            scene.GetRegistry().emplace<MeshComponent>(e,
+            auto& mc = scene.GetRegistry().emplace<MeshComponent>(e,
                 cerberusGpuMeshes[i], cerberusMaterial,
                 cerberusMeshData[i].ComputeAABB());
+            mc.meshPath     = ASSETS_DIR "/Models/Cerberus_by_Andrew_Maximov/Cerberus_LP.FBX";
+            mc.meshSubIndex = i;
         }
     }
 

@@ -315,6 +315,8 @@ void ContentPanel::DrawItems() {
 
         if (dblClick && item.isDirectory)
             pendingNav = item.path;
+        else if (dblClick && item.type == AssetType::Scene && m_OnSceneOpen)
+            m_OnSceneOpen(ToUtf8(item.path));
 
         ImGui::NextColumn();
         ImGui::PopID();
