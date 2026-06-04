@@ -172,7 +172,10 @@ static void DrawTextureRow(
 void InspectorPanel::OnImGuiRender() {
     ImGui::Begin("Inspector");
 
-    if (!m_Context || !m_Context->HasSelection()) {
+    if (!m_Context || !m_Context->HasSelection() ||
+        !m_Context->ActiveScene->GetRegistry().valid(m_Context->selectedEntity))
+    {
+        m_Context->selectedEntity = entt::null;
         ImGui::Text("(nothing selected)");
         ImGui::End();
         return;
@@ -240,44 +243,55 @@ void InspectorPanel::OnImGuiRender() {
         ImGui::DragFloat3("Scale", glm::value_ptr(tc.scale), 0.1f, 0.001f);
     }
 
+    bool removeMesh  = false;
+    bool removeLight = false;
+
     // Mesh Component
     if (registry.all_of<MeshComponent>(entity)) {
         ImGui::Separator();
         auto& mc = registry.get<MeshComponent>(entity);
 
         ImGui::Text("Mesh Renderer");
-        ImGui::Checkbox("Visible",         &mc.visible);
-        ImGui::SameLine();
-        ImGui::Checkbox("Cast Shadows",    &mc.castsShadow);
-        ImGui::SameLine();
-        ImGui::Checkbox("Recv Shadows",    &mc.receivesShadow);
+        if (ImGui::BeginPopupContextItem("##MeshCompCtx")) {
+            if (ImGui::MenuItem("Remove Component"))
+                removeMesh = true;
+            ImGui::EndPopup();
+        }
 
-        // -- Mesh slot --
-        ImGui::Spacing();
-        ImGui::TextDisabled("Mesh");
-        ImGui::Spacing();
-        DrawMeshSlot(mc, m_ContentPanel);
+        if (!removeMesh) {
+            ImGui::Checkbox("Visible",         &mc.visible);
+            ImGui::SameLine();
+            ImGui::Checkbox("Cast Shadows",    &mc.castsShadow);
+            ImGui::SameLine();
+            ImGui::Checkbox("Recv Shadows",    &mc.receivesShadow);
 
-        // -- Material --
-        ImGui::Spacing();
-        ImGui::TextDisabled("Material");
+            // -- Mesh slot --
+            ImGui::Spacing();
+            ImGui::TextDisabled("Mesh");
+            ImGui::Spacing();
+            DrawMeshSlot(mc, m_ContentPanel);
 
-        if (!mc.material)
-            mc.material = std::make_shared<PBRMaterial>();
+            // -- Material --
+            ImGui::Spacing();
+            ImGui::TextDisabled("Material");
 
-        ImGui::DragFloat("UV Scale",          &mc.material->UVScale,          0.01f, 0.01f,  64.0f);
-        ImGui::DragFloat("Emissive Strength", &mc.material->EmissiveStrength, 0.01f, 0.0f,  100.0f);
+            if (!mc.material)
+                mc.material = std::make_shared<PBRMaterial>();
 
-        ImGui::Spacing();
-        ImGui::TextDisabled("Textures");
-        ImGui::Separator();
+            ImGui::DragFloat("UV Scale",          &mc.material->UVScale,          0.01f, 0.01f,  64.0f);
+            ImGui::DragFloat("Emissive Strength", &mc.material->EmissiveStrength, 0.01f, 0.0f,  100.0f);
 
-        DrawTextureRow("Albedo",    mc.material->Albedo,    mc.material->AlbedoPath,    m_ContentPanel);
-        DrawTextureRow("Normal",    mc.material->Normal,    mc.material->NormalPath,    m_ContentPanel);
-        DrawTextureRow("Metallic",  mc.material->Metallic,  mc.material->MetallicPath,  m_ContentPanel);
-        DrawTextureRow("Roughness", mc.material->Roughness, mc.material->RoughnessPath, m_ContentPanel);
-        DrawTextureRow("AO",        mc.material->AO,        mc.material->AOPath,        m_ContentPanel);
-        DrawTextureRow("Emissive",  mc.material->Emissive,  mc.material->EmissivePath,  m_ContentPanel);
+            ImGui::Spacing();
+            ImGui::TextDisabled("Textures");
+            ImGui::Separator();
+
+            DrawTextureRow("Albedo",    mc.material->Albedo,    mc.material->AlbedoPath,    m_ContentPanel);
+            DrawTextureRow("Normal",    mc.material->Normal,    mc.material->NormalPath,    m_ContentPanel);
+            DrawTextureRow("Metallic",  mc.material->Metallic,  mc.material->MetallicPath,  m_ContentPanel);
+            DrawTextureRow("Roughness", mc.material->Roughness, mc.material->RoughnessPath, m_ContentPanel);
+            DrawTextureRow("AO",        mc.material->AO,        mc.material->AOPath,        m_ContentPanel);
+            DrawTextureRow("Emissive",  mc.material->Emissive,  mc.material->EmissivePath,  m_ContentPanel);
+        }
     }
 
     // Light Component
@@ -286,24 +300,78 @@ void InspectorPanel::OnImGuiRender() {
         auto& lc = registry.get<LightComponent>(entity);
 
         ImGui::Text("Light");
-
-        const char* types[] = { "Sun", "Point", "Spot" };
-        int typeIdx = (int)lc.type;
-        if (ImGui::Combo("Type", &typeIdx, types, 3))
-            lc.type = (LightType)typeIdx;
-
-        ImGui::ColorEdit3("Color", glm::value_ptr(lc.color));
-        ImGui::DragFloat("Intensity", &lc.intensity, 1.0f, 0.0f, 10000.0f, "%.1f");
-
-        if (lc.type == LightType::Point || lc.type == LightType::Spot)
-            ImGui::DragFloat("Radius", &lc.radius, 0.1f, 0.1f, 1000.0f, "%.1f");
-
-        if (lc.type == LightType::Spot) {
-            ImGui::DragFloat("Inner Cone", &lc.innerConeAngle, 0.5f, 0.5f, 89.0f, "%.1f deg");
-            lc.outerConeAngle = std::max(lc.outerConeAngle, lc.innerConeAngle + 0.5f);
-            ImGui::DragFloat("Outer Cone", &lc.outerConeAngle, 0.5f, 1.0f, 90.0f, "%.1f deg");
-            lc.innerConeAngle = std::min(lc.innerConeAngle, lc.outerConeAngle - 0.5f);
+        if (ImGui::BeginPopupContextItem("##LightCompCtx")) {
+            if (ImGui::MenuItem("Remove Component"))
+                removeLight = true;
+            ImGui::EndPopup();
         }
+
+        if (!removeLight) {
+            const char* types[] = { "Sun", "Point", "Spot" };
+            int typeIdx = (int)lc.type;
+            if (ImGui::Combo("Type", &typeIdx, types, 3))
+                lc.type = (LightType)typeIdx;
+
+            ImGui::ColorEdit3("Color", glm::value_ptr(lc.color));
+            ImGui::DragFloat("Intensity", &lc.intensity, 1.0f, 0.0f, 10000.0f, "%.1f");
+
+            if (lc.type == LightType::Point || lc.type == LightType::Spot)
+                ImGui::DragFloat("Radius", &lc.radius, 0.1f, 0.1f, 1000.0f, "%.1f");
+
+            if (lc.type == LightType::Spot) {
+                ImGui::DragFloat("Inner Cone", &lc.innerConeAngle, 0.5f, 0.5f, 89.0f, "%.1f deg");
+                lc.outerConeAngle = std::max(lc.outerConeAngle, lc.innerConeAngle + 0.5f);
+                ImGui::DragFloat("Outer Cone", &lc.outerConeAngle, 0.5f, 1.0f, 90.0f, "%.1f deg");
+                lc.innerConeAngle = std::min(lc.innerConeAngle, lc.outerConeAngle - 0.5f);
+            }
+        }
+    }
+
+    // Deferred removals — must happen after all component UI so no dangling refs
+    if (removeMesh)  registry.remove<MeshComponent>(entity);
+    if (removeLight) registry.remove<LightComponent>(entity);
+
+    ImGui::Spacing();
+    ImGui::Spacing();
+
+    // ---- Add Component button --------------------------------------------------
+    const float btnW = 180.0f;
+    ImGui::SetCursorPosX((ImGui::GetContentRegionAvail().x - btnW) * 0.5f);
+    if (ImGui::Button("Add Component +", {btnW, 0.0f}))
+        ImGui::OpenPopup("##AddComponentPopup");
+
+    if (ImGui::BeginPopup("##AddComponentPopup")) {
+        ImGui::TextDisabled("Components");
+        ImGui::Separator();
+
+        bool hasMesh  = registry.all_of<MeshComponent>(entity);
+        bool hasLight = registry.all_of<LightComponent>(entity);
+        bool anyShown = !hasMesh || !hasLight;
+
+        constexpr ImGuiSelectableFlags kCompFlags =
+            ImGuiSelectableFlags_AllowDoubleClick | ImGuiSelectableFlags_DontClosePopups;
+
+        if (!hasMesh) {
+            if (ImGui::Selectable("Mesh Renderer", false, kCompFlags))
+                if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                    auto& mc    = registry.emplace<MeshComponent>(entity);
+                    mc.material = std::make_shared<PBRMaterial>();
+                    ImGui::CloseCurrentPopup();
+                }
+        }
+
+        if (!hasLight) {
+            if (ImGui::Selectable("Light", false, kCompFlags))
+                if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                    registry.emplace<LightComponent>(entity);
+                    ImGui::CloseCurrentPopup();
+                }
+        }
+
+        if (!anyShown)
+            ImGui::TextDisabled("(all components already added)");
+
+        ImGui::EndPopup();
     }
 
     ImGui::End();

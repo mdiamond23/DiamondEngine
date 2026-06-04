@@ -51,6 +51,17 @@ void SceneSerializer::Save(Scene& scene, const std::string& path)
         json ej;
         ej["name"] = name;
 
+        // UUID — always present
+        if (reg.all_of<IDComponent>(entity))
+            ej["uuid"] = reg.get<IDComponent>(entity).uuid;
+
+        // Parent UUID — only for non-root entities
+        if (reg.all_of<HierarchyComponent>(entity)) {
+            entt::entity parent = reg.get<HierarchyComponent>(entity).parent;
+            if (parent != entt::null && reg.all_of<IDComponent>(parent))
+                ej["parentUuid"] = reg.get<IDComponent>(parent).uuid;
+        }
+
         if (reg.all_of<TransformComponent>(entity)) {
             auto& tc = reg.get<TransformComponent>(entity);
             ej["transform"] = {
@@ -119,10 +130,32 @@ bool SceneSerializer::Load(Scene& scene, const std::string& path)
     std::unordered_map<std::string, std::shared_ptr<Texture>>  texCache;
     std::unordered_map<std::string, std::vector<MeshData>>     meshCache;
 
+    // Pass 1 — create entities and build uuid→entity map.
+    std::unordered_map<uint64_t, entt::entity> uuidToEntity;
     for (const auto& ej : root.at("entities")) {
-        std::string name = ej.value("name", "Entity");
-        entt::entity e   = scene.CreateEntity(name);
-        auto& reg        = scene.GetRegistry();
+        std::string  name = ej.value("name", "Entity");
+        entt::entity e    = scene.CreateEntity(name);
+        if (ej.contains("uuid")) {
+            uint64_t uuid = ej["uuid"].get<uint64_t>();
+            // Overwrite the auto-generated UUID so it matches the saved file.
+            scene.GetRegistry().get<IDComponent>(e).uuid = uuid;
+            uuidToEntity[uuid] = e;
+        }
+    }
+
+    // Pass 2 — load components and re-establish hierarchy.
+    std::size_t idx = 0;
+    for (const auto& ej : root.at("entities")) {
+        // Resolve entity from uuid if present, otherwise fall back to creation order.
+        entt::entity e = entt::null;
+        if (ej.contains("uuid")) {
+            uint64_t uuid = ej["uuid"].get<uint64_t>();
+            auto it = uuidToEntity.find(uuid);
+            if (it != uuidToEntity.end()) e = it->second;
+        }
+        if (e == entt::null) continue;
+
+        auto& reg = scene.GetRegistry();
 
         // Transform
         if (ej.contains("transform")) {
@@ -201,6 +234,16 @@ bool SceneSerializer::Load(Scene& scene, const std::string& path)
             lc.innerConeAngle = lj.value("innerConeAngle", 15.0f);
             lc.outerConeAngle = lj.value("outerConeAngle", 30.0f);
         }
+
+        // Hierarchy — re-parent after all components exist.
+        if (ej.contains("parentUuid")) {
+            uint64_t parentUuid = ej["parentUuid"].get<uint64_t>();
+            auto it = uuidToEntity.find(parentUuid);
+            if (it != uuidToEntity.end())
+                scene.SetParent(e, it->second);
+        }
+
+        ++idx;
     }
 
     return true;

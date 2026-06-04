@@ -2,12 +2,14 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <entt/entt.hpp>
 #include <memory>
 #include <string>
+#include <vector>
 #include "Renderer/MeshData.h"
 #include "Renderer/Material.h"
 #include "Renderer/Frustum.h"
-#include <cstdint>  
+#include <cstdint>
 
 enum class LightType {
     Sun,
@@ -58,4 +60,12 @@ struct LightComponent
 
 struct IDComponent {
     uint64_t uuid;
+};
+
+// Scene hierarchy — parent/children stored as entity handles.
+// Always mutate through Scene::SetParent / Scene::UnsetParent so the
+// TransformSystem flat arrays stay consistent.
+struct HierarchyComponent {
+    entt::entity              parent   = entt::null;
+    std::vector<entt::entity> children;
 };

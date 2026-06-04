@@ -133,6 +133,7 @@ add_library(MyEngine STATIC
     src/Renderer/Shader.cpp
     src/Renderer/TextureData.cpp
     src/Scene/Scene.cpp
+    src/Scene/TransformSystem.cpp
     src/Scene/UUIDGenerator.cpp
 )
 

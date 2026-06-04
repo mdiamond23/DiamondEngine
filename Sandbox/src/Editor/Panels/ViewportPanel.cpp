@@ -7,12 +7,12 @@
 #include <algorithm>
 #include <cfloat>
 #include "Scene/Components.h"
+#include "Scene/Scene.h"
 
 void ViewportPanel::OnImGuiRender() {
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0, 0});
     ImGui::Begin("Viewport");
 
-    // Record where the image starts and how large it is — needed for NDC conversion and gizmo rect.
     ImVec2 vpSize = ImGui::GetContentRegionAvail();
     ImVec2 vpPos  = ImGui::GetCursorScreenPos();
 
@@ -20,18 +20,17 @@ void ViewportPanel::OnImGuiRender() {
         ImGui::Image(
             (ImTextureID)(intptr_t)m_TextureID,
             vpSize,
-            {0, 1}, {1, 0}  // flip Y: OpenGL origin is bottom-left
+            {0, 1}, {1, 0}
         );
     }
 
-    // W / E / R switch gizmo mode (only when not in free-look camera mode).
     if (ImGui::IsWindowHovered() && !m_IsViewportActive) {
         if (ImGui::IsKeyPressed(ImGuiKey_W)) m_GizmoOp = ImGuizmo::TRANSLATE;
         if (ImGui::IsKeyPressed(ImGuiKey_E)) m_GizmoOp = ImGuizmo::ROTATE;
         if (ImGui::IsKeyPressed(ImGuiKey_R)) m_GizmoOp = ImGuizmo::SCALE;
     }
 
-    // Left-click picking — skip if the cursor is over a gizmo handle.
+    // Left-click picking — ray vs world-space AABBs.
     if (m_Context
         && m_Context->ActiveScene
         && !m_IsViewportActive
@@ -58,10 +57,12 @@ void ViewportPanel::OnImGuiRender() {
             entt::entity picked = entt::null;
 
             auto& reg = m_Context->ActiveScene->GetRegistry();
-            for (auto [e, tc, mc] : reg.view<TransformComponent, MeshComponent>().each()) {
+            auto& ts  = m_Context->ActiveScene->GetTransformSystem();
+
+            for (auto [e, mc] : reg.view<MeshComponent>().each()) {
                 if (!mc.mesh || !mc.visible) continue;
 
-                Diamond::AABB world = mc.localBounds.Transform(tc.GetLocalMatrix());
+                Diamond::AABB world = mc.localBounds.Transform(ts.GetWorldMatrix(e));
                 glm::vec3 invD = 1.0f / rayDir;
                 glm::vec3 t0   = (world.min - rayOri) * invD;
                 glm::vec3 t1   = (world.max - rayOri) * invD;
@@ -83,30 +84,42 @@ void ViewportPanel::OnImGuiRender() {
         }
     }
 
-    // Transform gizmo — drawn over the viewport image using ImGui's draw list.
+    // Transform gizmo — operates in world space; decomposes result back to local.
     if (m_Context && m_Context->HasSelection() && vpSize.x > 0 && vpSize.y > 0) {
         auto& reg = m_Context->ActiveScene->GetRegistry();
-        if (reg.all_of<TransformComponent>(m_Context->selectedEntity)) {
-            auto& tc = reg.get<TransformComponent>(m_Context->selectedEntity);
+        auto& ts  = m_Context->ActiveScene->GetTransformSystem();
+        entt::entity sel = m_Context->selectedEntity;
 
+        if (reg.all_of<TransformComponent>(sel)) {
             ImGuizmo::SetOrthographic(false);
             ImGuizmo::SetDrawlist();
             ImGuizmo::SetRect(vpPos.x, vpPos.y, vpSize.x, vpSize.y);
 
-            glm::mat4 model = tc.GetLocalMatrix();
+            // Use the world matrix so the gizmo sits at the correct world position.
+            glm::mat4 worldModel = ts.GetWorldMatrix(sel);
 
             if (ImGuizmo::Manipulate(
                     glm::value_ptr(m_Context->viewMatrix),
                     glm::value_ptr(m_Context->projMatrix),
                     m_GizmoOp,
                     ImGuizmo::LOCAL,
-                    glm::value_ptr(model)))
+                    glm::value_ptr(worldModel)))
             {
+                // Convert the new world matrix back to local space.
+                glm::mat4 parentWorld(1.0f);
+                if (reg.all_of<HierarchyComponent>(sel)) {
+                    entt::entity parent = reg.get<HierarchyComponent>(sel).parent;
+                    if (parent != entt::null)
+                        parentWorld = ts.GetWorldMatrix(parent);
+                }
+                glm::mat4 localModel = glm::inverse(parentWorld) * worldModel;
+
                 glm::vec3 pos, scale, skew;
                 glm::vec4 persp;
                 glm::quat rot;
-                glm::decompose(model, scale, rot, pos, skew, persp);
+                glm::decompose(localModel, scale, rot, pos, skew, persp);
 
+                auto& tc        = reg.get<TransformComponent>(sel);
                 tc.position     = pos;
                 tc.rotation     = rot;
                 tc.eulerDegrees = glm::degrees(glm::eulerAngles(rot));
@@ -115,7 +128,6 @@ void ViewportPanel::OnImGuiRender() {
         }
     }
 
-    // Right-click activates free-look camera mode; releasing deactivates it.
     if (ImGui::IsWindowHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Right))
         m_IsViewportActive = true;
     if (!ImGui::IsMouseDown(ImGuiMouseButton_Right))

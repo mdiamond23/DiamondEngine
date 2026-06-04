@@ -259,7 +259,7 @@ int main()
     }
     {
         auto cerberusMeshData = ModelImporter::Load(
-            ASSETS_DIR "/Models/Cerberus_by_Andrew_Maximov/Cerberus_LP.FBX");
+            ASSETS_DIR "/Models/Cerberus_by_Andrew_Maximov/Revolver.FBX");
         std::vector<std::shared_ptr<Mesh>> cerberusGpuMeshes;
         for (auto& md : cerberusMeshData)
             cerberusGpuMeshes.push_back(Mesh::Create(md));
@@ -273,7 +273,7 @@ int main()
             auto& mc = scene.GetRegistry().emplace<MeshComponent>(e,
                 cerberusGpuMeshes[i], cerberusMaterial,
                 cerberusMeshData[i].ComputeAABB());
-            mc.meshPath     = ASSETS_DIR "/Models/Cerberus_by_Andrew_Maximov/Cerberus_LP.FBX";
+            mc.meshPath     = ASSETS_DIR "/Models/Cerberus_by_Andrew_Maximov/Revolver.FBX";
             mc.meshSubIndex = i;
         }
     }
@@ -571,12 +571,15 @@ int main()
             lastFbH = fbH;
         }
 
-        // Build draw calls from scene — reads TransformComponent each frame so inspector edits are live
+        // Update world transforms — rebuilds sorted arrays if hierarchy changed, then linear pass.
+        scene.GetTransformSystem().Update(scene.GetRegistry());
+
+        // Build draw calls from scene — uses world matrices so parented entities render correctly.
         allDraws.clear();
         std::unordered_map<PBRMaterial*, std::vector<DrawCall>> materialBatches;
-        for (auto [entity, tc, mc] : scene.GetRegistry().view<TransformComponent, MeshComponent>().each()) {
+        for (auto [entity, mc] : scene.GetRegistry().view<MeshComponent>().each()) {
             if (!mc.mesh || !mc.material || !mc.visible) continue;
-            DrawCall dc{ mc.mesh.get(), tc.GetLocalMatrix(), mc.localBounds, mc.castsShadow };
+            DrawCall dc{ mc.mesh.get(), scene.GetTransformSystem().GetWorldMatrix(entity), mc.localBounds, mc.castsShadow };
             materialBatches[mc.material.get()].push_back(dc);
             allDraws.push_back(dc);
         }
@@ -596,18 +599,22 @@ int main()
         spotCosOuter.clear();
         sun = Diamond::SunLight{ glm::vec3(0,-1,0), glm::vec3(0) };
         bool foundSun = false;
-        for (auto [entity, tc, lc] : scene.GetRegistry().view<TransformComponent, LightComponent>().each()) {
+        for (auto [entity, lc] : scene.GetRegistry().view<LightComponent>().each()) {
+            const glm::mat4& worldMat = scene.GetTransformSystem().GetWorldMatrix(entity);
+            glm::vec3 worldPos = glm::vec3(worldMat[3]);
+            glm::vec3 worldDir = glm::normalize(glm::mat3(worldMat) * glm::vec3(0.0f, -1.0f, 0.0f));
+
             if (lc.type == LightType::Point && (int)pointPositions.size() < 4) {
-                pointPositions.push_back(tc.position);
+                pointPositions.push_back(worldPos);
                 pointColors.push_back(lc.color * lc.intensity);
             } else if (lc.type == LightType::Spot && (int)spotPositions.size() < 4) {
-                spotPositions.push_back(tc.position);
-                spotDirs.push_back(glm::normalize(tc.rotation * glm::vec3(0.0f, -1.0f, 0.0f)));
+                spotPositions.push_back(worldPos);
+                spotDirs.push_back(worldDir);
                 spotColors.push_back(lc.color * lc.intensity);
                 spotCosInner.push_back(std::cos(glm::radians(lc.innerConeAngle)));
                 spotCosOuter.push_back(std::cos(glm::radians(lc.outerConeAngle)));
             } else if (lc.type == LightType::Sun && !foundSun) {
-                sun.direction = glm::normalize(tc.rotation * glm::vec3(0.0f, -1.0f, 0.0f));
+                sun.direction = worldDir;
                 sun.color     = lc.color * lc.intensity;
                 foundSun = true;
             }
