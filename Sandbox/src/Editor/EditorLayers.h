@@ -14,6 +14,7 @@ public:
     void SetupDockspace();
     void OnImGuiRender();
     void SetViewportTexture(uint32_t textureID);
+    void UpdateCamera(const glm::mat4& view, const glm::mat4& proj, const glm::vec3& camPos);
     bool IsViewportActive() const { return m_Viewport.IsActive(); }
 
 private:

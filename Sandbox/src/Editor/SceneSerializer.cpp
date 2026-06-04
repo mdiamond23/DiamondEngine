@@ -54,9 +54,10 @@ void SceneSerializer::Save(Scene& scene, const std::string& path)
         if (reg.all_of<TransformComponent>(entity)) {
             auto& tc = reg.get<TransformComponent>(entity);
             ej["transform"] = {
-                { "position", JVec3(tc.position) },
-                { "rotation", JQuat(tc.rotation)  },
-                { "scale",    JVec3(tc.scale)     }
+                { "position",     JVec3(tc.position)     },
+                { "rotation",     JQuat(tc.rotation)     },
+                { "eulerDegrees", JVec3(tc.eulerDegrees) },
+                { "scale",        JVec3(tc.scale)        }
             };
         }
 
@@ -118,6 +119,12 @@ bool SceneSerializer::Load(Scene& scene, const std::string& path)
             tc.position = ToVec3(tj["position"]);
             tc.rotation = ToQuat(tj["rotation"]);
             tc.scale    = ToVec3(tj["scale"]);
+            // Restore the editor Euler cache; fall back to deriving from quat for
+            // older scene files that don't have the eulerDegrees field.
+            if (tj.contains("eulerDegrees"))
+                tc.eulerDegrees = ToVec3(tj["eulerDegrees"]);
+            else
+                tc.eulerDegrees = glm::degrees(glm::eulerAngles(tc.rotation));
         }
 
         // Mesh

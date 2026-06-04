@@ -27,6 +27,10 @@ public:
 
     void SetOnSceneOpen(std::function<void(const std::string&)> cb) { m_OnSceneOpen = std::move(cb); }
 
+    // Returns the cached (or freshly generated) GL texture ID for the given asset path.
+    // Returns 0 if the path is empty, the asset type has no preview, or loading fails.
+    uint32_t GetThumbnail(const std::string& path, AssetType type);
+
 private:
     void Refresh();
     void DrawToolbar();

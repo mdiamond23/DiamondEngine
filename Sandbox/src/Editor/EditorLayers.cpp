@@ -31,6 +31,8 @@ EditorLayer::EditorLayer(Scene* scene)
     m_Context.ActiveScene = scene;
     m_Hierarchy.SetContext(&m_Context);
     m_Inspector.SetContext(&m_Context);
+    m_Inspector.SetContentPanel(&m_Content);
+    m_Viewport.SetContext(&m_Context);
 
     m_Content.SetOnSceneOpen([this](const std::string& path) {
         m_Context.selectedEntity = entt::null;
@@ -68,6 +70,14 @@ void EditorLayer::SetupDockspace()
 void EditorLayer::SetViewportTexture(uint32_t textureID)
 {
     m_Viewport.SetTexture(textureID);
+}
+
+void EditorLayer::UpdateCamera(const glm::mat4& view, const glm::mat4& proj,
+                               const glm::vec3& camPos)
+{
+    m_Context.viewMatrix = view;
+    m_Context.projMatrix = proj;
+    m_Context.cameraPos  = camPos;
 }
 
 std::string EditorLayer::OpenFileDialog()

@@ -11,9 +11,10 @@
 
 struct TransformComponent
 {
-    glm::vec3 position { 0, 0, 0 };
-    glm::quat rotation { 1, 0, 0, 0 };  // identity
-    glm::vec3 scale    { 1, 1, 1 };
+    glm::vec3 position     { 0, 0, 0 };
+    glm::quat rotation     { 1, 0, 0, 0 };  // identity
+    glm::vec3 eulerDegrees { 0, 0, 0 };     // editor display cache; kept in sync with rotation
+    glm::vec3 scale        { 1, 1, 1 };
 
     inline glm::mat4 GetLocalMatrix() const
     {
@@ -21,12 +22,6 @@ struct TransformComponent
         glm::mat4 r = glm::mat4_cast(rotation);
         glm::mat4 s = glm::scale(glm::mat4(1.0f), scale);
         return t * r * s;
-    }
-
-    // inspector only
-    inline  glm::vec3 GetEulerAngles() const
-    {
-        return glm::degrees(glm::eulerAngles(rotation));
     }
 };
 

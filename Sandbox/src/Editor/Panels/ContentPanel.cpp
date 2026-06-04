@@ -142,6 +142,11 @@ uint32_t ContentPanel::LoadThumbnail(const fs::path& p, AssetType type) {
     return texID;
 }
 
+uint32_t ContentPanel::GetThumbnail(const std::string& path, AssetType type) {
+    if (path.empty()) return 0;
+    return LoadThumbnail(fs::path(path), type);
+}
+
 void ContentPanel::DrawFolderIcon(ImVec2 tl, float size) {
     ImDrawList* dl = ImGui::GetWindowDrawList();
     float tabW = size * 0.45f;
@@ -312,6 +317,23 @@ void ContentPanel::DrawItems() {
                     IM_COL32(220, 220, 220, 255), dispName.c_str());
         dl->AddText({cellOrigin.x + 2.0f, ty + lineH},
                     IM_COL32(130, 130, 130, 255), AssetTypeName(item.type));
+
+        // Drag-drop source for mesh and texture assets.
+        // BeginDragDropSource checks the InvisibleButton above — no ImGui widgets
+        // between it and here, only DrawList calls, so the last item is still valid.
+        if (item.type == AssetType::Mesh || item.type == AssetType::Texture) {
+            if (ImGui::BeginDragDropSource()) {
+                std::string pathStr = ToUtf8(item.path);
+                ImGui::SetDragDropPayload("CONTENT_ITEM_PATH",
+                                          pathStr.c_str(), pathStr.size() + 1);
+                if (thumbID) {
+                    ImGui::Image((ImTextureID)(uintptr_t)thumbID, {40.0f, 40.0f});
+                    ImGui::SameLine();
+                }
+                ImGui::TextUnformatted(item.name.c_str());
+                ImGui::EndDragDropSource();
+            }
+        }
 
         if (dblClick && item.isDirectory)
             pendingNav = item.path;

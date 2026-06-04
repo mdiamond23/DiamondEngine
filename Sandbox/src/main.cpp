@@ -9,6 +9,7 @@
 #include <imgui.h>
 #include <backends/imgui_impl_glfw.h>
 #include <backends/imgui_impl_opengl3.h>
+#include <ImGuizmo.h>
 #include "Editor/EditorLayers.h"
 #include "Scene/Scene.h"
 #include "Scene/Components.h"
@@ -582,8 +583,10 @@ int main()
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
+        ImGuizmo::BeginFrame();
 
         editorLayer.SetViewportTexture(viewportTexture);
+        editorLayer.UpdateCamera(view, proj, g_camera.Position);
         editorLayer.OnImGuiRender();
 
         // Read viewport active state and drive camera from ImGui mouse delta.

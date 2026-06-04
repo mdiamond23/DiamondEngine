@@ -65,6 +65,22 @@ target_include_directories(imgui PUBLIC
 # imgui_impl_glfw.cpp needs GLFW headers
 target_link_libraries(imgui PUBLIC glfw)
 
+FetchContent_Declare(
+    imguizmo
+    GIT_REPOSITORY https://github.com/CedricGuillemet/ImGuizmo.git
+    GIT_TAG master
+)
+FetchContent_GetProperties(imguizmo)
+if(NOT imguizmo_POPULATED)
+    FetchContent_Populate(imguizmo)
+endif()
+
+add_library(imguizmo STATIC
+    ${imguizmo_SOURCE_DIR}/src/ImGuizmo.cpp
+)
+target_include_directories(imguizmo PUBLIC ${imguizmo_SOURCE_DIR}/src)
+target_link_libraries(imguizmo PUBLIC imgui)
+
 set(ASSIMP_BUILD_ALL_IMPORTERS_BY_DEFAULT OFF CACHE BOOL "" FORCE)
 set(ASSIMP_BUILD_OBJ_IMPORTER  ON  CACHE BOOL "" FORCE)
 set(ASSIMP_BUILD_FBX_IMPORTER  ON  CACHE BOOL "" FORCE)
