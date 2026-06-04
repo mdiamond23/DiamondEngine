@@ -9,6 +9,12 @@
 #include "Renderer/Frustum.h"
 #include <cstdint>  
 
+enum class LightType {
+    Sun,
+    Point,
+    Spot
+};
+
 struct TransformComponent
 {
     glm::vec3 position     { 0, 0, 0 };
@@ -38,6 +44,16 @@ struct MeshComponent
     std::string meshPath;
     int         meshSubIndex = 0;
     std::string materialPath;
+};
+
+struct LightComponent
+{
+    LightType type           = LightType::Point;
+    glm::vec3 color          = { 1.0f, 1.0f, 1.0f };
+    float     intensity      = 100.0f;
+    float     radius         = 10.0f;    // Point/Spot: max influence range
+    float     innerConeAngle = 15.0f;   // Spot: inner cone, degrees
+    float     outerConeAngle = 30.0f;   // Spot: outer cone, degrees
 };
 
 struct IDComponent {

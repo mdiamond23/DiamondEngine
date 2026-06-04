@@ -53,5 +53,9 @@ private:
     bool m_OpenNewFolderModal = false;
     char m_NewFolderName[256]{};
 
+    std::filesystem::path m_RenamingPath;
+    char                  m_RenameBuffer[256]{};
+    bool                  m_RenameFocusSet = false;
+
     float m_IconSize = 68.0f;
 };

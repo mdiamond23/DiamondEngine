@@ -58,6 +58,7 @@ ContentPanel::~ContentPanel() {
 
 void ContentPanel::Refresh() {
     m_Items.clear();
+    m_RenamingPath.clear();
     if (!fs::exists(m_CurrentPath)) return;
 
     for (auto& entry : fs::directory_iterator(m_CurrentPath)) {
@@ -251,6 +252,7 @@ void ContentPanel::DrawItems() {
     ImGui::Columns(cols, nullptr, false);
 
     fs::path pendingNav;
+    fs::path pendingRenameOld, pendingRenameNew;
 
     for (auto& item : m_Items) {
         ImGui::PushID(ToUtf8(item.path).c_str());
@@ -260,6 +262,19 @@ void ContentPanel::DrawItems() {
         ImGui::InvisibleButton("##cell", {m_IconSize, cellH});
         bool hovered  = ImGui::IsItemHovered();
         bool dblClick = hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
+
+        // Right-click context menu
+        if (ImGui::BeginPopupContextItem("##ctx")) {
+            if (ImGui::MenuItem("Rename")) {
+                m_RenamingPath   = item.path;
+                m_RenameFocusSet = false;
+                // Pre-fill with stem only so the user can't accidentally edit the extension
+                std::string stem = ToUtf8(item.path.stem());
+                std::strncpy(m_RenameBuffer, stem.c_str(), sizeof(m_RenameBuffer) - 1);
+                m_RenameBuffer[sizeof(m_RenameBuffer) - 1] = '\0';
+            }
+            ImGui::EndPopup();
+        }
 
         if (hovered) {
             ImGui::GetWindowDrawList()->AddRectFilled(
@@ -313,10 +328,41 @@ void ContentPanel::DrawItems() {
             dispName = dispName.substr(0, lo) + "...";
         }
 
-        dl->AddText({cellOrigin.x + 2.0f, ty},
-                    IM_COL32(220, 220, 220, 255), dispName.c_str());
-        dl->AddText({cellOrigin.x + 2.0f, ty + lineH},
-                    IM_COL32(130, 130, 130, 255), AssetTypeName(item.type));
+        if (m_RenamingPath == item.path) {
+            // Inject an InputText into the label area below the icon
+            ImGui::SetCursorScreenPos({cellOrigin.x, ty});
+            ImGui::SetNextItemWidth(m_IconSize);
+
+            if (!m_RenameFocusSet) {
+                ImGui::SetKeyboardFocusHere();
+                m_RenameFocusSet = true;
+            }
+
+            bool confirm = ImGui::InputText("##rename", m_RenameBuffer, sizeof(m_RenameBuffer),
+                                            ImGuiInputTextFlags_EnterReturnsTrue);
+            bool lostFocus = !ImGui::IsItemActive() && ImGui::IsItemDeactivated();
+
+            if ((confirm || lostFocus) && m_RenameBuffer[0] != '\0') {
+                // Re-attach the original extension so it can never be lost
+                fs::path newPath = item.path.parent_path()
+                                   / (std::string(m_RenameBuffer) + ToUtf8(item.path.extension()));
+                if (newPath != item.path) {
+                    pendingRenameOld = item.path;
+                    pendingRenameNew = newPath;
+                }
+                m_RenamingPath.clear();
+            } else if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+                m_RenamingPath.clear();
+            }
+
+            dl->AddText({cellOrigin.x + 2.0f, ty + lineH},
+                        IM_COL32(130, 130, 130, 255), AssetTypeName(item.type));
+        } else {
+            dl->AddText({cellOrigin.x + 2.0f, ty},
+                        IM_COL32(220, 220, 220, 255), dispName.c_str());
+            dl->AddText({cellOrigin.x + 2.0f, ty + lineH},
+                        IM_COL32(130, 130, 130, 255), AssetTypeName(item.type));
+        }
 
         // Drag-drop source for mesh and texture assets.
         // BeginDragDropSource checks the InvisibleButton above — no ImGui widgets
@@ -346,9 +392,12 @@ void ContentPanel::DrawItems() {
 
     ImGui::Columns(1);
 
-    // Navigate after the loop — calling Refresh() inside the loop invalidates
-    // m_Items' iterators, which corrupts the range-for and causes a crash.
-    if (!pendingNav.empty()) {
+    // Apply deferred operations — Refresh() inside the loop would invalidate iterators.
+    if (!pendingRenameOld.empty()) {
+        std::error_code ec;
+        fs::rename(pendingRenameOld, pendingRenameNew, ec);
+        Refresh();
+    } else if (!pendingNav.empty()) {
         m_CurrentPath = pendingNav;
         Refresh();
     }

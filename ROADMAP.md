@@ -21,7 +21,10 @@ The renderer is already ahead of schedule for a learning engine.
 | ECS (EnTT) | Done |
 | Editor — Hierarchy panel | Done |
 | Editor — Inspector panel (Transform + Mesh Renderer flags) | Done |
+| Editor — Inspector: drag-drop mesh/material from Content Browser, asset path display, per-texture slot editing | Done |
 | Editor — Content browser with thumbnails | Done |
+| Editor — Viewport click-to-select (ray-AABB picking) | Done |
+| Editor — Transform gizmos (Translate W / Rotate E / Scale R) | Done |
 | MeshComponent flags (visible, castsShadow, receivesShadows) | Done |
 
 ---
@@ -30,9 +33,9 @@ The renderer is already ahead of schedule for a learning engine.
 > Goal: build and save a scene without touching code
 
 - [x] Scene serialization — save/load entities + components to JSON
-- [ ] Drag-drop mesh + material assignment from Content Browser to Inspector ([#20](https://github.com/mdiamond23/DiamondEngine/issues/20))
-- [ ] Show asset paths in Inspector for assigned mesh/material ([#20](https://github.com/mdiamond23/DiamondEngine/issues/20))
-- [ ] Light components in ECS (move hardcoded lights into entities with Inspector UI)
+- [x] Drag-drop mesh + material assignment from Content Browser to Inspector ([#20](https://github.com/mdiamond23/DiamondEngine/issues/20))
+- [x] Show asset paths in Inspector for assigned mesh/material ([#20](https://github.com/mdiamond23/DiamondEngine/issues/20))
+- [x] Light components in ECS (move hardcoded lights into entities with Inspector UI)
 - [ ] Parent-child transforms (hierarchy grouping, inherited transform)
 - [ ] Undo / redo (at minimum for transform edits)
 
@@ -102,4 +105,3 @@ the existing OpenGL ones, then switch the backend via a compile-time or runtime 
 |---|-------|----------|
 | [#18](https://github.com/mdiamond23/DiamondEngine/issues/18) | Improve mesh thumbnail camera angle using PCA of vertices | Low |
 | [#19](https://github.com/mdiamond23/DiamondEngine/issues/19) | Wire up receivesShadows flag in deferred renderer | Low |
-| [#20](https://github.com/mdiamond23/DiamondEngine/issues/20) | Inspector: assign mesh and material assets via drag-drop, show asset paths | Medium |

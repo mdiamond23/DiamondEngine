@@ -1,5 +1,6 @@
 #include "HierarchyPanel.h"
 #include <imgui.h>
+#include <cstring>
 
 void HierarchyPanel::OnImGuiRender() {
     ImGui::Begin("Hierarchy");
@@ -12,18 +13,60 @@ void HierarchyPanel::OnImGuiRender() {
         ImGui::Separator();
 
         entt::entity toDelete = entt::null;
+        Scene* scene = m_Context->ActiveScene;
 
-        for (auto& [entity, name] : m_Context->ActiveScene->GetEntityNames())
+        for (auto& [entity, name] : scene->GetEntityNames())
         {
             bool selected = (m_Context->selectedEntity == entity);
-            if (ImGui::Selectable(name.c_str(), selected))
-                m_Context->selectedEntity = entity;
 
-            if (ImGui::BeginPopupContextItem())
+            if (m_RenamingEntity == entity)
             {
-                if (ImGui::MenuItem("Delete Entity"))
-                    toDelete = entity;
-                ImGui::EndPopup();
+                // Auto-focus the input on the first frame it appears
+                if (!m_RenameFocusSet) {
+                    ImGui::SetKeyboardFocusHere();
+                    m_RenameFocusSet = true;
+                }
+
+                ImGui::SetNextItemWidth(-1.0f);
+                if (ImGui::InputText("##rename", m_RenameBuffer, sizeof(m_RenameBuffer),
+                                     ImGuiInputTextFlags_EnterReturnsTrue))
+                {
+                    // Commit on Enter
+                    if (m_RenameBuffer[0] != '\0')
+                        scene->SetEntityName(entity, m_RenameBuffer);
+                    m_RenamingEntity = entt::null;
+                }
+                else if (!ImGui::IsItemActive() && ImGui::IsItemDeactivated())
+                {
+                    // Commit on click-away (lost focus without Enter)
+                    if (m_RenameBuffer[0] != '\0')
+                        scene->SetEntityName(entity, m_RenameBuffer);
+                    m_RenamingEntity = entt::null;
+                }
+                else if (ImGui::IsKeyPressed(ImGuiKey_Escape))
+                {
+                    // Cancel on Escape — discard changes
+                    m_RenamingEntity = entt::null;
+                }
+            }
+            else
+            {
+                if (ImGui::Selectable(name.c_str(), selected))
+                    m_Context->selectedEntity = entity;
+
+                if (ImGui::BeginPopupContextItem())
+                {
+                    if (ImGui::MenuItem("Rename"))
+                    {
+                        m_RenamingEntity = entity;
+                        m_RenameFocusSet = false;
+                        std::strncpy(m_RenameBuffer, name.c_str(), sizeof(m_RenameBuffer) - 1);
+                        m_RenameBuffer[sizeof(m_RenameBuffer) - 1] = '\0';
+                    }
+                    if (ImGui::MenuItem("Delete"))
+                        toDelete = entity;
+                    ImGui::EndPopup();
+                }
             }
         }
 
@@ -31,7 +74,7 @@ void HierarchyPanel::OnImGuiRender() {
         {
             if (m_Context->selectedEntity == toDelete)
                 m_Context->selectedEntity = entt::null;
-            m_Context->ActiveScene->DestroyEntity(toDelete);
+            scene->DestroyEntity(toDelete);
         }
     }
 

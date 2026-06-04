@@ -84,6 +84,18 @@ void SceneSerializer::Save(Scene& scene, const std::string& path)
             ej["mesh"] = mj;
         }
 
+        if (reg.all_of<LightComponent>(entity)) {
+            auto& lc = reg.get<LightComponent>(entity);
+            ej["light"] = {
+                { "type",           (int)lc.type          },
+                { "color",          JVec3(lc.color)       },
+                { "intensity",      lc.intensity          },
+                { "radius",         lc.radius             },
+                { "innerConeAngle", lc.innerConeAngle     },
+                { "outerConeAngle", lc.outerConeAngle     }
+            };
+        }
+
         entities.push_back(ej);
     }
 
@@ -176,6 +188,18 @@ bool SceneSerializer::Load(Scene& scene, const std::string& path)
             mc.visible         = mj.value("visible",        true);
             mc.castsShadow     = mj.value("castsShadow",    true);
             mc.receivesShadow  = mj.value("receivesShadow", true);
+        }
+
+        // Light
+        if (ej.contains("light")) {
+            const auto& lj = ej["light"];
+            auto& lc     = reg.emplace<LightComponent>(e);
+            lc.type           = (LightType)lj.value("type", 1);
+            lc.color          = ToVec3(lj["color"]);
+            lc.intensity      = lj.value("intensity",      100.0f);
+            lc.radius         = lj.value("radius",         10.0f);
+            lc.innerConeAngle = lj.value("innerConeAngle", 15.0f);
+            lc.outerConeAngle = lj.value("outerConeAngle", 30.0f);
         }
     }
 

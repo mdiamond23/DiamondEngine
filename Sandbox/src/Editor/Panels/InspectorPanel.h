@@ -12,4 +12,8 @@ public:
 private:
     EditorContext* m_Context      = nullptr;
     ContentPanel*  m_ContentPanel = nullptr;
+
+    bool m_Renaming        = false;
+    char m_RenameBuffer[256] = {};
+    bool m_RenameFocusSet  = false;
 };

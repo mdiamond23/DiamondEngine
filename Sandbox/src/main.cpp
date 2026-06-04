@@ -3,6 +3,7 @@
 #include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/quaternion.hpp>
 #include <vector>
 #include <unordered_map>
 #include <string>
@@ -295,22 +296,52 @@ int main()
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glBindTexture(GL_TEXTURE_2D, 0);
 
-    const glm::vec3 lightPositions[4] = {
-        {  1.0f, 3.0f,  2.0f },
-        { -5.0f, 2.0f,  4.0f },
-        {  8.0f, 4.0f, -6.0f },
-        { -8.0f, 4.0f, -6.0f },
-    };
-    const glm::vec3 lightColors[4] = {
-        { 600.0f, 200.0f, 100.0f },
-        {  80.0f, 200.0f, 600.0f },
-        { 300.0f, 600.0f, 200.0f },
-        { 500.0f, 400.0f,  50.0f },
-    };
+    // --- Create light entities (replaces hardcoded arrays) ---
+    {
+        struct PLDesc { const char* name; glm::vec3 pos; glm::vec3 color; float intensity; };
+        PLDesc ptLights[] = {
+            { "Point Light 1", { 1.0f, 3.0f,  2.0f}, {1.000f, 0.333f, 0.167f}, 600.0f },
+            { "Point Light 2", {-5.0f, 2.0f,  4.0f}, {0.133f, 0.333f, 1.000f}, 600.0f },
+            { "Point Light 3", { 8.0f, 4.0f, -6.0f}, {0.500f, 1.000f, 0.333f}, 600.0f },
+            { "Point Light 4", {-8.0f, 4.0f, -6.0f}, {1.000f, 0.800f, 0.100f}, 500.0f },
+        };
+        for (auto& d : ptLights) {
+            auto e = scene.CreateEntity(d.name);
+            auto& tc = scene.GetRegistry().get<TransformComponent>(e);
+            tc.position = d.pos;
+            auto& lc = scene.GetRegistry().emplace<LightComponent>(e);
+            lc.type      = LightType::Point;
+            lc.color     = d.color;
+            lc.intensity = d.intensity;
+        }
+    }
+    {
+        auto e = scene.CreateEntity("Sun");
+        auto& tc = scene.GetRegistry().get<TransformComponent>(e);
+        // Rotate so the local -Y axis points toward normalize(-0.5,-1,-0.3)
+        glm::vec3 dir  = glm::normalize(glm::vec3(-0.5f, -1.0f, -0.3f));
+        glm::vec3 axis = glm::cross(glm::vec3(0,-1,0), dir);
+        float     len  = glm::length(axis);
+        if (len > 1e-4f) {
+            float angle = std::acos(glm::clamp(glm::dot(glm::vec3(0,-1,0), dir), -1.0f, 1.0f));
+            tc.rotation = glm::angleAxis(angle, axis / len);
+        }
+        tc.eulerDegrees = glm::degrees(glm::eulerAngles(tc.rotation));
+        auto& lc = scene.GetRegistry().emplace<LightComponent>(e);
+        lc.type      = LightType::Sun;
+        lc.color     = { 1.0f, 1.0f, 1.0f };
+        lc.intensity = 3.0f;
+    }
 
-    Diamond::SunLight sun;
-    sun.direction = glm::normalize(glm::vec3(-0.5f, -1.0f, -0.3f));
-    sun.color     = glm::vec3(3.0f);
+    // Per-frame light data gathered from ECS each frame
+    std::vector<glm::vec3> pointPositions;
+    std::vector<glm::vec3> pointColors;
+    std::vector<glm::vec3> spotPositions;
+    std::vector<glm::vec3> spotDirs;
+    std::vector<glm::vec3> spotColors;
+    std::vector<float>     spotCosInner;
+    std::vector<float>     spotCosOuter;
+    Diamond::SunLight      sun;
 
     // --- Per-frame state captured by render graph lambdas ---
     std::vector<DrawCall> allDraws;
@@ -379,7 +410,8 @@ int main()
 
         graph.AddPass("PointShadow")
             .SetExecute([&]{
-                shadowPass.RenderPointShadowPass(pointDepthShader, shadowDraws, lightPositions, 4);
+                shadowPass.RenderPointShadowPass(pointDepthShader, shadowDraws,
+                    pointPositions.data(), (int)pointPositions.size());
             });
 
         // Geometry pass — fills all 5 G-buffer attachments
@@ -434,7 +466,9 @@ int main()
                                     graph.GetTexture(hSsaoBlur),
                                     graph.GetTexture(gEmissive),
                                     view, g_camera.Position,
-                                    lightPositions, lightColors, sun,
+                                    pointPositions, pointColors,
+                                    spotPositions, spotDirs, spotColors,
+                                    spotCosInner, spotCosOuter, sun,
                                     shadowPass, csmPass, iblPass,
                                     graph.GetFBO(hdrBuffer),
                                     fbW, fbH);
@@ -507,7 +541,7 @@ int main()
 
     while (!glfwWindowShouldClose(window))
     {
-                // per-frame time logic
+        // per-frame time logic
         // --------------------
         float currentFrame = static_cast<float>(glfwGetTime());
         deltaTime = currentFrame - lastFrame;
@@ -551,6 +585,33 @@ int main()
         shadowDraws.clear();
         for (const auto& dc : allDraws)
             if (dc.castsShadow) shadowDraws.push_back(dc);
+
+        // Gather lights from ECS
+        pointPositions.clear();
+        pointColors.clear();
+        spotPositions.clear();
+        spotDirs.clear();
+        spotColors.clear();
+        spotCosInner.clear();
+        spotCosOuter.clear();
+        sun = Diamond::SunLight{ glm::vec3(0,-1,0), glm::vec3(0) };
+        bool foundSun = false;
+        for (auto [entity, tc, lc] : scene.GetRegistry().view<TransformComponent, LightComponent>().each()) {
+            if (lc.type == LightType::Point && (int)pointPositions.size() < 4) {
+                pointPositions.push_back(tc.position);
+                pointColors.push_back(lc.color * lc.intensity);
+            } else if (lc.type == LightType::Spot && (int)spotPositions.size() < 4) {
+                spotPositions.push_back(tc.position);
+                spotDirs.push_back(glm::normalize(tc.rotation * glm::vec3(0.0f, -1.0f, 0.0f)));
+                spotColors.push_back(lc.color * lc.intensity);
+                spotCosInner.push_back(std::cos(glm::radians(lc.innerConeAngle)));
+                spotCosOuter.push_back(std::cos(glm::radians(lc.outerConeAngle)));
+            } else if (lc.type == LightType::Sun && !foundSun) {
+                sun.direction = glm::normalize(tc.rotation * glm::vec3(0.0f, -1.0f, 0.0f));
+                sun.color     = lc.color * lc.intensity;
+                foundSun = true;
+            }
+        }
 
         view = g_camera.GetViewMatrix();
         proj = glm::perspective(

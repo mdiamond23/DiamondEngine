@@ -2,10 +2,12 @@
 #include "ContentPanel.h"
 #include <imgui.h>
 #include <glm/gtc/type_ptr.hpp>
+#include <cstring>
 #include "Scene/Components.h"
 #include "Assets/ModelImporter.h"
 #include "Renderer/MeshData.h"
 #include "Renderer/TextureData.h"
+#include <algorithm>
 
 using namespace Diamond;
 
@@ -179,9 +181,50 @@ void InspectorPanel::OnImGuiRender() {
     entt::entity entity   = m_Context->selectedEntity;
     auto&        registry = m_Context->ActiveScene->GetRegistry();
 
-    // Entity name
+    // Entity name — click to rename inline
     const std::string& name = m_Context->ActiveScene->GetEntityName(entity);
-    ImGui::Text("%s", name.c_str());
+
+    // Reset rename state when selection changes
+    static entt::entity lastEntity = entt::null;
+    if (entity != lastEntity) {
+        m_Renaming       = false;
+        m_RenameFocusSet = false;
+        lastEntity       = entity;
+    }
+
+    if (m_Renaming) {
+        if (!m_RenameFocusSet) {
+            ImGui::SetKeyboardFocusHere();
+            m_RenameFocusSet = true;
+        }
+        ImGui::SetNextItemWidth(-1.0f);
+        if (ImGui::InputText("##ename", m_RenameBuffer, sizeof(m_RenameBuffer),
+                             ImGuiInputTextFlags_EnterReturnsTrue))
+        {
+            if (m_RenameBuffer[0] != '\0')
+                m_Context->ActiveScene->SetEntityName(entity, m_RenameBuffer);
+            m_Renaming = false;
+        }
+        else if (!ImGui::IsItemActive() && ImGui::IsItemDeactivated())
+        {
+            if (m_RenameBuffer[0] != '\0')
+                m_Context->ActiveScene->SetEntityName(entity, m_RenameBuffer);
+            m_Renaming = false;
+        }
+        else if (ImGui::IsKeyPressed(ImGuiKey_Escape))
+        {
+            m_Renaming = false;
+        }
+    } else {
+        ImGui::Text("%s", name.c_str());
+        if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+            m_Renaming       = true;
+            m_RenameFocusSet = false;
+            std::strncpy(m_RenameBuffer, name.c_str(), sizeof(m_RenameBuffer) - 1);
+            m_RenameBuffer[sizeof(m_RenameBuffer) - 1] = '\0';
+        }
+    }
+
     ImGui::Separator();
 
     // Transform
@@ -235,6 +278,32 @@ void InspectorPanel::OnImGuiRender() {
         DrawTextureRow("Roughness", mc.material->Roughness, mc.material->RoughnessPath, m_ContentPanel);
         DrawTextureRow("AO",        mc.material->AO,        mc.material->AOPath,        m_ContentPanel);
         DrawTextureRow("Emissive",  mc.material->Emissive,  mc.material->EmissivePath,  m_ContentPanel);
+    }
+
+    // Light Component
+    if (registry.all_of<LightComponent>(entity)) {
+        ImGui::Separator();
+        auto& lc = registry.get<LightComponent>(entity);
+
+        ImGui::Text("Light");
+
+        const char* types[] = { "Sun", "Point", "Spot" };
+        int typeIdx = (int)lc.type;
+        if (ImGui::Combo("Type", &typeIdx, types, 3))
+            lc.type = (LightType)typeIdx;
+
+        ImGui::ColorEdit3("Color", glm::value_ptr(lc.color));
+        ImGui::DragFloat("Intensity", &lc.intensity, 1.0f, 0.0f, 10000.0f, "%.1f");
+
+        if (lc.type == LightType::Point || lc.type == LightType::Spot)
+            ImGui::DragFloat("Radius", &lc.radius, 0.1f, 0.1f, 1000.0f, "%.1f");
+
+        if (lc.type == LightType::Spot) {
+            ImGui::DragFloat("Inner Cone", &lc.innerConeAngle, 0.5f, 0.5f, 89.0f, "%.1f deg");
+            lc.outerConeAngle = std::max(lc.outerConeAngle, lc.innerConeAngle + 0.5f);
+            ImGui::DragFloat("Outer Cone", &lc.outerConeAngle, 0.5f, 1.0f, 90.0f, "%.1f deg");
+            lc.innerConeAngle = std::min(lc.innerConeAngle, lc.outerConeAngle - 0.5f);
+        }
     }
 
     ImGui::End();

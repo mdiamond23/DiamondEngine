@@ -7,6 +7,7 @@
 #include "Platform/OpenGL/Passes/Shadows/OpenGLCSMPass.h"
 #include <glm/glm.hpp>
 #include <cstdint>
+#include <vector>
 
 namespace Diamond {
 
@@ -25,9 +26,14 @@ public:
                 uint32_t                 gEmissiveTex,
                 const glm::mat4&         view,
                 const glm::vec3&         camPos,
-                const glm::vec3          lightPositions[4],
-                const glm::vec3          lightColors[4],
-                const SunLight&          sun,
+                const std::vector<glm::vec3>& ptPositions,
+                const std::vector<glm::vec3>& ptColors,
+                const std::vector<glm::vec3>& spotPositions,
+                const std::vector<glm::vec3>& spotDirections,
+                const std::vector<glm::vec3>& spotColors,
+                const std::vector<float>&     spotCosInner,
+                const std::vector<float>&     spotCosOuter,
+                const SunLight&               sun,
                 const OpenGLShadowPass&  shadowPass,
                 const OpenGLCSMPass&     csmPass,
                 const OpenGLIBLPass&     iblPass,

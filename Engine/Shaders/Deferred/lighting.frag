@@ -31,9 +31,20 @@ uniform float          csmSplitDepths[NUM_CASCADES];
 uniform samplerCube pointShadowMaps[4];
 uniform float       shadowFarPlane;
 
-// Lights
+// Point lights
 uniform vec3 lightPositions[4];
 uniform vec3 lightColors[4];
+uniform int  numPointLights;
+
+// Spot lights
+uniform vec3  spotPositions[4];
+uniform vec3  spotDirections[4];
+uniform vec3  spotColors[4];
+uniform float spotCosInner[4];
+uniform float spotCosOuter[4];
+uniform int   numSpotLights;
+
+// Sun / directional
 uniform vec3 sunDirection;
 uniform vec3 sunColor;
 
@@ -143,7 +154,7 @@ void main()
 
     // --- Point lights ---
     vec3 Lo = vec3(0.0);
-    for (int i = 0; i < 4; ++i)
+    for (int i = 0; i < numPointLights; ++i)
     {
         vec3  L     = normalize(lightPositions[i] - WorldPos);
         vec3  H     = normalize(V + L);
@@ -160,6 +171,30 @@ void main()
         float shad  = ShadowCalculationPoint(WorldPos, lightPositions[i], pointShadowMaps[i]);
 
         Lo += (kD * albedo / PI + spec) * rad * NdotL * (1.0 - shad);
+    }
+
+    // --- Spot lights ---
+    for (int i = 0; i < numSpotLights; ++i)
+    {
+        vec3  toFrag    = WorldPos - spotPositions[i];
+        vec3  L         = normalize(-toFrag);
+        vec3  H         = normalize(V + L);
+        float dist      = length(toFrag);
+
+        float cosTheta  = dot(-L, normalize(spotDirections[i]));
+        float epsilon   = spotCosInner[i] - spotCosOuter[i];
+        float angAtten  = clamp((cosTheta - spotCosOuter[i]) / epsilon, 0.0, 1.0);
+        if (angAtten <= 0.0) continue;
+
+        vec3  rad   = spotColors[i] / (dist * dist) * angAtten;
+        float NDF   = DistributionGGX(N, H, roughness);
+        float G     = GeometrySmith(N, V, L, roughness);
+        vec3  F     = fresnelSchlick(max(dot(H, V), 0.0), F0);
+        vec3  spec  = NDF * G * F / (4.0 * max(dot(N, V), 0.0) * max(dot(N, L), 0.0) + 0.0001);
+        vec3  kD    = (vec3(1.0) - F) * (1.0 - metallic);
+        float NdotL = max(dot(N, L), 0.0);
+
+        Lo += (kD * albedo / PI + spec) * rad * NdotL;
     }
 
     // --- Directional sun ---

@@ -3,6 +3,8 @@
 #include <glad/gl.h>
 #include <glm/gtc/matrix_transform.hpp>
 #include <string>
+#include <vector>
+#include <algorithm>
 
 namespace Diamond {
 
@@ -12,22 +14,27 @@ OpenGLDeferredLightingPass::OpenGLDeferredLightingPass()
 {}
 
 void OpenGLDeferredLightingPass::Render(
-    const OpenGLShader&      shader,
-    uint32_t                 gViewPosTex,
-    uint32_t                 gViewNormalTex,
-    uint32_t                 gAlbedoTex,
-    uint32_t                 gMaterialTex,
-    uint32_t                 ssaoTex,
-    uint32_t                 gEmissiveTex,
-    const glm::mat4&         view,
-    const glm::vec3&         camPos,
-    const glm::vec3          lightPositions[4],
-    const glm::vec3          lightColors[4],
-    const SunLight&          sun,
-    const OpenGLShadowPass&  shadowPass,
-    const OpenGLCSMPass&     csmPass,
-    const OpenGLIBLPass&     iblPass,
-    uint32_t                 fbo,
+    const OpenGLShader&           shader,
+    uint32_t                      gViewPosTex,
+    uint32_t                      gViewNormalTex,
+    uint32_t                      gAlbedoTex,
+    uint32_t                      gMaterialTex,
+    uint32_t                      ssaoTex,
+    uint32_t                      gEmissiveTex,
+    const glm::mat4&              view,
+    const glm::vec3&              camPos,
+    const std::vector<glm::vec3>& ptPositions,
+    const std::vector<glm::vec3>& ptColors,
+    const std::vector<glm::vec3>& spotPositions,
+    const std::vector<glm::vec3>& spotDirections,
+    const std::vector<glm::vec3>& spotColors,
+    const std::vector<float>&     spotCosInner,
+    const std::vector<float>&     spotCosOuter,
+    const SunLight&               sun,
+    const OpenGLShadowPass&       shadowPass,
+    const OpenGLCSMPass&          csmPass,
+    const OpenGLIBLPass&          iblPass,
+    uint32_t                      fbo,
     int viewportW, int viewportH)
 {
     glBindFramebuffer(GL_FRAMEBUFFER, fbo);
@@ -79,11 +86,24 @@ void OpenGLDeferredLightingPass::Render(
 
     shader.SetMat4("view",    view);
     shader.SetVec3("camPos",  camPos);
-    shader.SetVec3("sunDirection",     sun.direction);
-    shader.SetVec3("sunColor",         sun.color);
-    for (int i = 0; i < 4; ++i) {
-        shader.SetVec3("lightPositions[" + std::to_string(i) + "]", lightPositions[i]);
-        shader.SetVec3("lightColors["    + std::to_string(i) + "]", lightColors[i]);
+    shader.SetVec3("sunDirection", sun.direction);
+    shader.SetVec3("sunColor",     sun.color);
+
+    int np = std::min((int)ptPositions.size(), 4);
+    shader.SetInt("numPointLights", np);
+    for (int i = 0; i < np; ++i) {
+        shader.SetVec3("lightPositions[" + std::to_string(i) + "]", ptPositions[i]);
+        shader.SetVec3("lightColors["    + std::to_string(i) + "]", ptColors[i]);
+    }
+
+    int ns = std::min((int)spotPositions.size(), 4);
+    shader.SetInt("numSpotLights", ns);
+    for (int i = 0; i < ns; ++i) {
+        shader.SetVec3 ("spotPositions["  + std::to_string(i) + "]", spotPositions[i]);
+        shader.SetVec3 ("spotDirections[" + std::to_string(i) + "]", spotDirections[i]);
+        shader.SetVec3 ("spotColors["     + std::to_string(i) + "]", spotColors[i]);
+        shader.SetFloat("spotCosInner["   + std::to_string(i) + "]", spotCosInner[i]);
+        shader.SetFloat("spotCosOuter["   + std::to_string(i) + "]", spotCosOuter[i]);
     }
 
     m_Quad.Draw(shader);
