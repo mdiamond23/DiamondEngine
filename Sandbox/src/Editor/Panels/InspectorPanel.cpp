@@ -172,16 +172,25 @@ static void DrawTextureRow(
 void InspectorPanel::OnImGuiRender() {
     ImGui::Begin("Inspector");
 
-    if (!m_Context || !m_Context->HasSelection() ||
-        !m_Context->ActiveScene->GetRegistry().valid(m_Context->selectedEntity))
-    {
-        m_Context->selectedEntity = entt::null;
+    if (!m_Context || !m_Context->HasSelection()) {
         ImGui::Text("(nothing selected)");
         ImGui::End();
         return;
     }
 
-    entt::entity entity   = m_Context->selectedEntity;
+    if (m_Context->selectedEntities.size() > 1) {
+        ImGui::Text("%zu entities selected", m_Context->selectedEntities.size());
+        ImGui::End();
+        return;
+    }
+
+    entt::entity entity = m_Context->PrimarySelection();
+    if (!m_Context->ActiveScene->GetRegistry().valid(entity)) {
+        m_Context->ClearSelection();
+        ImGui::Text("(nothing selected)");
+        ImGui::End();
+        return;
+    }
     auto&        registry = m_Context->ActiveScene->GetRegistry();
 
     // Entity name — click to rename inline

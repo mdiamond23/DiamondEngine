@@ -35,7 +35,7 @@ EditorLayer::EditorLayer(Scene* scene)
     m_Viewport.SetContext(&m_Context);
 
     m_Content.SetOnSceneOpen([this](const std::string& path) {
-        m_Context.selectedEntity = entt::null;
+        m_Context.ClearSelection();
         if (SceneSerializer::Load(*m_Context.ActiveScene, path))
             m_Context.currentScenePath = path;
     });
@@ -113,7 +113,7 @@ void EditorLayer::DrawMenuBar()
 
     if (ImGui::BeginMenu("File")) {
         if (ImGui::MenuItem("New Scene", "Ctrl+N")) {
-            m_Context.selectedEntity   = entt::null;
+            m_Context.ClearSelection();
             m_Context.currentScenePath = "";
             m_Context.ActiveScene->Clear();
         }
@@ -121,7 +121,7 @@ void EditorLayer::DrawMenuBar()
         if (ImGui::MenuItem("Open Scene...", "Ctrl+O")) {
             std::string path = OpenFileDialog();
             if (!path.empty()) {
-                m_Context.selectedEntity = entt::null;
+                m_Context.ClearSelection();
                 if (SceneSerializer::Load(*m_Context.ActiveScene, path))
                     m_Context.currentScenePath = path;
             }

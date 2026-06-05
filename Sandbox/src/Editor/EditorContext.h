@@ -1,18 +1,40 @@
 #pragma once
 #include <entt/entt.hpp>
 #include <string>
+#include <unordered_set>
 #include <glm/glm.hpp>
 #include "Scene/Scene.h"
 
 struct EditorContext {
     Scene*       ActiveScene    = nullptr;
-    entt::entity selectedEntity = entt::null;
-    std::string  currentScenePath;          // empty = unsaved new scene
+    std::unordered_set<entt::entity> selectedEntities;
+    std::string  currentScenePath;
 
-    // Updated each frame by EditorLayer::UpdateCamera before ImGui renders.
     glm::mat4 viewMatrix  = glm::mat4(1.0f);
     glm::mat4 projMatrix  = glm::mat4(1.0f);
     glm::vec3 cameraPos   = {};
 
-    bool HasSelection() const { return selectedEntity != entt::null; }
+    bool HasSelection() const { return !selectedEntities.empty(); }
+
+    entt::entity PrimarySelection() const {
+        if (selectedEntities.empty()) return entt::null;
+        return *selectedEntities.begin();
+    }
+
+    bool IsSelected(entt::entity e) const {
+        return selectedEntities.count(e) > 0;
+    }
+
+    void SelectOnly(entt::entity e) {
+        selectedEntities.clear();
+        if (e != entt::null) selectedEntities.insert(e);
+    }
+
+    void ToggleSelect(entt::entity e) {
+        if (e == entt::null) return;
+        if (selectedEntities.count(e)) selectedEntities.erase(e);
+        else selectedEntities.insert(e);
+    }
+
+    void ClearSelection() { selectedEntities.clear(); }
 };

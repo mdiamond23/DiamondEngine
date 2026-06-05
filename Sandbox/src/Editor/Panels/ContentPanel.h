@@ -6,6 +6,7 @@
 #include <functional>
 #include <string>
 #include <vector>
+#include <utility>
 #include <unordered_map>
 #include <unordered_set>
 #include <cstdint>
@@ -58,12 +59,18 @@ private:
     bool                   m_OpenDeleteModal = false;
     std::filesystem::path  m_DeletingPath;
 
-    std::filesystem::path  m_PendingMoveSrc;
-    std::filesystem::path  m_PendingMoveDest;
+    bool m_OpenMultiDeleteModal = false;
+
+    // Internal drag-drop moves — queued during render, applied after loop exits.
+    std::vector<std::pair<std::filesystem::path, std::filesystem::path>> m_PendingMoves;
 
     std::filesystem::path m_RenamingPath;
     char                  m_RenameBuffer[256]{};
     bool                  m_RenameFocusSet = false;
+
+    // Multi-selection state
+    std::unordered_set<std::string> m_SelectedPaths;
+    int                             m_SelectionPivotIdx = -1;
 
     float m_IconSize = 68.0f;
 };

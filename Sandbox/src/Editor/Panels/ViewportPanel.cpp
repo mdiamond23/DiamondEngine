@@ -80,15 +80,22 @@ void ViewportPanel::OnImGuiRender() {
                 }
             }
 
-            m_Context->selectedEntity = picked;
+            if (picked != entt::null) {
+                if (ImGui::GetIO().KeyCtrl)
+                    m_Context->ToggleSelect(picked);
+                else
+                    m_Context->SelectOnly(picked);
+            } else if (!ImGui::GetIO().KeyCtrl) {
+                m_Context->ClearSelection();
+            }
         }
     }
 
-    // Transform gizmo — operates in world space; decomposes result back to local.
-    if (m_Context && m_Context->HasSelection() && vpSize.x > 0 && vpSize.y > 0) {
+    // Transform gizmo — only shown when exactly one entity is selected.
+    if (m_Context && m_Context->selectedEntities.size() == 1 && vpSize.x > 0 && vpSize.y > 0) {
         auto& reg = m_Context->ActiveScene->GetRegistry();
         auto& ts  = m_Context->ActiveScene->GetTransformSystem();
-        entt::entity sel = m_Context->selectedEntity;
+        entt::entity sel = m_Context->PrimarySelection();
 
         if (reg.all_of<TransformComponent>(sel)) {
             ImGuizmo::SetOrthographic(false);

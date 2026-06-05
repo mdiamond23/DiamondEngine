@@ -123,6 +123,8 @@ ContentPanel::~ContentPanel() {
 void ContentPanel::Refresh() {
     m_Items.clear();
     m_RenamingPath.clear();
+    m_SelectedPaths.clear();
+    m_SelectionPivotIdx = -1;
     if (!fs::exists(m_CurrentPath)) return;
 
     for (auto& entry : fs::directory_iterator(m_CurrentPath)) {
@@ -298,12 +300,17 @@ void ContentPanel::DrawToolbar() {
                 srcPath = fs::path(static_cast<const char*>(p->Data));
             else if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload("CONTENT_ITEM_PATH"))
                 srcPath = fs::path(static_cast<const char*>(p->Data));
-            if (!srcPath.empty() &&
-                srcPath.parent_path() != crumbs[i].second &&   // not already there
-                !PathStartsWith(crumbs[i].second, srcPath))    // not into own descendant
-            {
-                m_PendingMoveSrc  = srcPath;
-                m_PendingMoveDest = crumbs[i].second;
+            if (!srcPath.empty() && !PathStartsWith(crumbs[i].second, srcPath)) {
+                std::string srcStr = ToUtf8(srcPath);
+                if (m_SelectedPaths.count(srcStr) && m_SelectedPaths.size() > 1) {
+                    for (auto& sel : m_SelectedPaths) {
+                        fs::path s(sel);
+                        if (s.parent_path() != crumbs[i].second && !PathStartsWith(crumbs[i].second, s))
+                            m_PendingMoves.push_back({s, crumbs[i].second});
+                    }
+                } else if (srcPath.parent_path() != crumbs[i].second) {
+                    m_PendingMoves.push_back({srcPath, crumbs[i].second});
+                }
             }
             ImGui::EndDragDropTarget();
         }
@@ -333,8 +340,10 @@ void ContentPanel::DrawItems() {
 
     fs::path pendingNav;
     fs::path pendingRenameOld, pendingRenameNew;
+    bool     anyItemClicked = false;
 
-    for (auto& item : m_Items) {
+    for (int idx = 0; idx < (int)m_Items.size(); idx++) {
+        const auto& item = m_Items[idx];
         ImGui::PushID(ToUtf8(item.path).c_str());
 
         ImVec2 cellOrigin = ImGui::GetCursorScreenPos();
@@ -342,6 +351,16 @@ void ContentPanel::DrawItems() {
         ImGui::InvisibleButton("##cell", {m_IconSize, cellH});
         bool hovered  = ImGui::IsItemHovered();
         bool dblClick = hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
+
+        // Right-click selects item if not already in selection, then opens context menu
+        if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
+            std::string pathStr = ToUtf8(item.path);
+            if (!m_SelectedPaths.count(pathStr)) {
+                m_SelectedPaths.clear();
+                m_SelectedPaths.insert(pathStr);
+                m_SelectionPivotIdx = idx;
+            }
+        }
 
         // Right-click context menu
         if (ImGui::BeginPopupContextItem("##ctx")) {
@@ -354,12 +373,34 @@ void ContentPanel::DrawItems() {
             }
             ImGui::Separator();
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.35f, 0.35f, 1.0f));
-            if (ImGui::MenuItem("Delete")) {
-                m_DeletingPath    = item.path;
-                m_OpenDeleteModal = true;
-            }
+            if (ImGui::MenuItem("Delete"))
+                m_OpenMultiDeleteModal = true;
             ImGui::PopStyleColor();
             ImGui::EndPopup();
+        }
+
+        // Left-click selection (single, Ctrl-toggle, Shift-range)
+        bool clicked = ImGui::IsItemClicked(ImGuiMouseButton_Left) && !dblClick;
+        if (clicked && m_RenamingPath != item.path) {
+            anyItemClicked = true;
+            std::string pathStr = ToUtf8(item.path);
+            if (ImGui::GetIO().KeyCtrl) {
+                if (m_SelectedPaths.count(pathStr)) m_SelectedPaths.erase(pathStr);
+                else m_SelectedPaths.insert(pathStr);
+                m_SelectionPivotIdx = idx;
+            } else if (ImGui::GetIO().KeyShift && m_SelectionPivotIdx >= 0) {
+                m_SelectedPaths.clear();
+                int lo = std::min(idx, m_SelectionPivotIdx);
+                int hi = std::max(idx, m_SelectionPivotIdx);
+                for (int k = lo; k <= hi; k++)
+                    m_SelectedPaths.insert(ToUtf8(m_Items[k].path));
+            } else if (!m_SelectedPaths.count(pathStr)) {
+                // Clicking an already-selected item keeps the multi-selection intact
+                // so the user can drag all selected items without losing the selection.
+                m_SelectedPaths.clear();
+                m_SelectedPaths.insert(pathStr);
+                m_SelectionPivotIdx = idx;
+            }
         }
 
         // Determine whether an in-progress drag would be a valid drop onto this folder
@@ -373,11 +414,17 @@ void ContentPanel::DrawItems() {
             isValidFolderDrop = dragSrc != item.path && !PathStartsWith(item.path, dragSrc);
         }
 
+        bool isSelected = m_SelectedPaths.count(ToUtf8(item.path)) > 0;
+
         ImDrawList* dl = ImGui::GetWindowDrawList();
         if (isValidFolderDrop) {
             dl->AddRectFilled(cellOrigin,
                 {cellOrigin.x + m_IconSize, cellOrigin.y + cellH},
                 IM_COL32(60, 110, 235, 120), 4.0f);
+        } else if (isSelected) {
+            dl->AddRectFilled(cellOrigin,
+                {cellOrigin.x + m_IconSize, cellOrigin.y + cellH},
+                hovered ? IM_COL32(80, 120, 240, 130) : IM_COL32(65, 105, 225, 90), 4.0f);
         } else if (hovered) {
             dl->AddRectFilled(cellOrigin,
                 {cellOrigin.x + m_IconSize, cellOrigin.y + cellH},
@@ -411,8 +458,8 @@ void ContentPanel::DrawItems() {
         }
 
         // Name + type label drawn directly via DrawList so we don't disturb the cursor
-        float        lineH = ImGui::GetTextLineHeight();
-        float        ty    = cellOrigin.y + m_IconSize + 2.0f;
+        float  lineH = ImGui::GetTextLineHeight();
+        float  ty    = cellOrigin.y + m_IconSize + 2.0f;
 
         // Truncate name to fit cell width (binary search to avoid O(n) loop)
         std::string dispName = item.name;
@@ -443,7 +490,6 @@ void ContentPanel::DrawItems() {
             bool lostFocus = !ImGui::IsItemActive() && ImGui::IsItemDeactivated();
 
             if ((confirm || lostFocus) && m_RenameBuffer[0] != '\0') {
-                // Re-attach the original extension so it can never be lost
                 fs::path newPath = item.path.parent_path()
                                    / (std::string(m_RenameBuffer) + ToUtf8(item.path.extension()));
                 if (newPath != item.path) {
@@ -464,9 +510,8 @@ void ContentPanel::DrawItems() {
                         IM_COL32(130, 130, 130, 255), AssetTypeName(item.type));
         }
 
-        // Drag-drop source — all items are draggable for internal moves.
+        // Drag-drop source — all items are draggable.
         // Mesh/Texture keep "CONTENT_ITEM_PATH" so the inspector can still accept them.
-        // Everything else uses "CONTENT_MOVE".
         if (ImGui::BeginDragDropSource()) {
             std::string pathStr = ToUtf8(item.path);
             bool isInspectorDraggable = (item.type == AssetType::Mesh ||
@@ -474,8 +519,13 @@ void ContentPanel::DrawItems() {
             const char* payloadType = isInspectorDraggable ? "CONTENT_ITEM_PATH"
                                                             : "CONTENT_MOVE";
             ImGui::SetDragDropPayload(payloadType, pathStr.c_str(), pathStr.size() + 1);
-            if (thumbID) { ImGui::Image((ImTextureID)(uintptr_t)thumbID, {40.0f, 40.0f}); ImGui::SameLine(); }
-            ImGui::TextUnformatted(item.name.c_str());
+            bool multiDrag = m_SelectedPaths.count(pathStr) > 0 && m_SelectedPaths.size() > 1;
+            if (multiDrag) {
+                ImGui::Text("Moving %zu items", m_SelectedPaths.size());
+            } else {
+                if (thumbID) { ImGui::Image((ImTextureID)(uintptr_t)thumbID, {40.0f, 40.0f}); ImGui::SameLine(); }
+                ImGui::TextUnformatted(item.name.c_str());
+            }
             ImGui::EndDragDropSource();
         }
 
@@ -487,12 +537,17 @@ void ContentPanel::DrawItems() {
                     srcPath = fs::path(static_cast<const char*>(p->Data));
                 else if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload("CONTENT_ITEM_PATH"))
                     srcPath = fs::path(static_cast<const char*>(p->Data));
-                if (!srcPath.empty() &&
-                    srcPath != item.path &&
-                    !PathStartsWith(item.path, srcPath))
-                {
-                    m_PendingMoveSrc  = srcPath;
-                    m_PendingMoveDest = item.path;
+                if (!srcPath.empty() && srcPath != item.path && !PathStartsWith(item.path, srcPath)) {
+                    std::string srcStr = ToUtf8(srcPath);
+                    if (m_SelectedPaths.count(srcStr) && m_SelectedPaths.size() > 1) {
+                        for (auto& sel : m_SelectedPaths) {
+                            fs::path s(sel);
+                            if (s != item.path && !PathStartsWith(item.path, s))
+                                m_PendingMoves.push_back({s, item.path});
+                        }
+                    } else {
+                        m_PendingMoves.push_back({srcPath, item.path});
+                    }
                 }
                 ImGui::EndDragDropTarget();
             }
@@ -509,6 +564,19 @@ void ContentPanel::DrawItems() {
 
     ImGui::Columns(1);
 
+    // Click on empty space deselects all
+    if (ImGui::IsWindowHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !anyItemClicked) {
+        m_SelectedPaths.clear();
+        m_SelectionPivotIdx = -1;
+    }
+
+    // Delete key — open multi-delete modal (guard: no rename active)
+    if (ImGui::IsWindowFocused() && ImGui::IsKeyPressed(ImGuiKey_Delete)
+        && !m_SelectedPaths.empty() && m_RenamingPath.empty())
+    {
+        m_OpenMultiDeleteModal = true;
+    }
+
     // Apply deferred operations — Refresh() inside the loop would invalidate iterators.
     if (!pendingRenameOld.empty()) {
         std::error_code ec;
@@ -519,16 +587,14 @@ void ContentPanel::DrawItems() {
         Refresh();
     }
 
-    // Apply pending internal move (may also be set by DrawToolbar breadcrumb drops)
-    if (!m_PendingMoveSrc.empty()) {
-        if (!m_PendingMoveDest.empty()) {
+    // Apply pending internal moves (queued by folder drops and breadcrumb drops)
+    if (!m_PendingMoves.empty()) {
+        for (auto& [src, dest] : m_PendingMoves) {
             std::error_code ec;
-            fs::path dest = UniqueDestPath(m_PendingMoveDest / m_PendingMoveSrc.filename());
-            fs::rename(m_PendingMoveSrc, dest, ec);
-            Refresh();
+            fs::rename(src, UniqueDestPath(dest / src.filename()), ec);
         }
-        m_PendingMoveSrc.clear();
-        m_PendingMoveDest.clear();
+        m_PendingMoves.clear();
+        Refresh();
     }
 }
 
@@ -637,6 +703,46 @@ void ContentPanel::OnImGuiRender() {
             m_DeletingPath.clear();
             ImGui::CloseCurrentPopup();
         }
+
+        ImGui::EndPopup();
+    }
+
+    if (m_OpenMultiDeleteModal) {
+        ImGui::OpenPopup("Delete##multimodal");
+        m_OpenMultiDeleteModal = false;
+    }
+
+    if (ImGui::BeginPopupModal("Delete##multimodal", nullptr,
+                               ImGuiWindowFlags_AlwaysAutoResize))
+    {
+        if (m_SelectedPaths.size() == 1) {
+            fs::path p(*m_SelectedPaths.begin());
+            std::string nm = ToUtf8(p.filename());
+            if (fs::is_directory(p))
+                ImGui::Text("Delete folder \"%s\" and all its contents?", nm.c_str());
+            else
+                ImGui::Text("Delete \"%s\"?", nm.c_str());
+        } else {
+            ImGui::Text("Delete %zu items?", m_SelectedPaths.size());
+        }
+        ImGui::TextDisabled("This cannot be undone.");
+
+        ImGui::Spacing();
+        ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.7f, 0.15f, 0.15f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.9f, 0.2f,  0.2f,  1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4(0.5f, 0.1f,  0.1f,  1.0f));
+        if (ImGui::Button("Delete", {120.0f, 0})) {
+            for (auto& p : m_SelectedPaths) {
+                std::error_code ec;
+                fs::remove_all(fs::path(p), ec);
+            }
+            Refresh();
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::PopStyleColor(3);
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", {120.0f, 0}))
+            ImGui::CloseCurrentPopup();
 
         ImGui::EndPopup();
     }

@@ -1,6 +1,7 @@
 #include "HierarchyPanel.h"
 #include <imgui.h>
 #include <cstring>
+#include <vector>
 #include "Scene/Components.h"
 #include "Scene/Scene.h"
 
@@ -13,6 +14,7 @@ struct HierarchyDrawCtx {
     entt::entity&  renamingEntity;
     char*          renameBuffer;
     bool&          renameFocusSet;
+    entt::entity&  selectionPivot;
 };
 
 static void DrawEntityNode(entt::entity entity, const HierarchyDrawCtx& ctx)
@@ -22,7 +24,7 @@ static void DrawEntityNode(entt::entity entity, const HierarchyDrawCtx& ctx)
 
     bool hasChildren = reg.all_of<HierarchyComponent>(entity)
                     && !reg.get<HierarchyComponent>(entity).children.empty();
-    bool selected    = (ctx.edCtx->selectedEntity == entity);
+    bool selected    = ctx.edCtx->IsSelected(entity);
     bool renaming    = (ctx.renamingEntity == entity);
 
     // --- Rename mode: show InputText instead of the tree node ----------------
@@ -61,15 +63,26 @@ static void DrawEntityNode(entt::entity entity, const HierarchyDrawCtx& ctx)
 
     bool opened = ImGui::TreeNodeEx((void*)(uintptr_t)(uint32_t)entity, flags, "%s", name.c_str());
 
-    if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen())
-        ctx.edCtx->selectedEntity = entity;
+    if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen()) {
+        if (ImGui::GetIO().KeyCtrl) {
+            ctx.edCtx->ToggleSelect(entity);
+            ctx.selectionPivot = entity;
+        } else if (!ctx.edCtx->IsSelected(entity)) {
+            // Only clear selection when clicking an unselected entity.
+            // Clicking an already-selected entity keeps the multi-selection
+            // intact so it can be dragged as a group.
+            ctx.edCtx->SelectOnly(entity);
+            ctx.selectionPivot = entity;
+        }
+    }
 
     // --- Context menu --------------------------------------------------------
     if (ImGui::BeginPopupContextItem()) {
         if (ImGui::MenuItem("Create Child Entity")) {
             entt::entity child = ctx.scene->CreateEntity("Empty Entity");
             ctx.scene->SetParent(child, entity);
-            ctx.edCtx->selectedEntity = child;
+            ctx.edCtx->SelectOnly(child);
+            ctx.selectionPivot = child;
         }
         if (ImGui::MenuItem("Rename")) {
             ctx.renamingEntity  = entity;
@@ -91,7 +104,11 @@ static void DrawEntityNode(entt::entity entity, const HierarchyDrawCtx& ctx)
     // --- Drag source ---------------------------------------------------------
     if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
         ImGui::SetDragDropPayload("HIERARCHY_ENTITY", &entity, sizeof(entt::entity));
-        ImGui::Text("Move: %s", name.c_str());
+        bool multiDrag = ctx.edCtx->IsSelected(entity) && ctx.edCtx->selectedEntities.size() > 1;
+        if (multiDrag)
+            ImGui::Text("Moving %zu entities", ctx.edCtx->selectedEntities.size());
+        else
+            ImGui::Text("Move: %s", name.c_str());
         ImGui::EndDragDropSource();
     }
 
@@ -99,8 +116,15 @@ static void DrawEntityNode(entt::entity entity, const HierarchyDrawCtx& ctx)
     if (ImGui::BeginDragDropTarget()) {
         if (auto* payload = ImGui::AcceptDragDropPayload("HIERARCHY_ENTITY")) {
             entt::entity dragged = *(const entt::entity*)payload->Data;
-            if (dragged != entity)
-                ctx.scene->SetParent(dragged, entity);   // cycle guard is inside SetParent
+            if (dragged != entity) {
+                if (ctx.edCtx->IsSelected(dragged) && ctx.edCtx->selectedEntities.size() > 1) {
+                    for (auto e : ctx.edCtx->selectedEntities)
+                        if (e != entity && !ctx.scene->IsAncestorOf(e, entity))
+                            ctx.scene->SetParent(e, entity);
+                } else {
+                    ctx.scene->SetParent(dragged, entity);
+                }
+            }
         }
         ImGui::EndDragDropTarget();
     }
@@ -140,7 +164,8 @@ void HierarchyPanel::OnImGuiRender() {
         toDelete,
         m_RenamingEntity,
         m_RenameBuffer,
-        m_RenameFocusSet
+        m_RenameFocusSet,
+        m_SelectionPivot
     };
 
     // Render roots only — they recurse into children.
@@ -158,18 +183,48 @@ void HierarchyPanel::OnImGuiRender() {
         if (ImGui::BeginDragDropTarget()) {
             if (auto* payload = ImGui::AcceptDragDropPayload("HIERARCHY_ENTITY")) {
                 entt::entity dragged = *(const entt::entity*)payload->Data;
-                scene->UnsetParent(dragged);
+                if (m_Context->IsSelected(dragged) && m_Context->selectedEntities.size() > 1) {
+                    for (auto e : m_Context->selectedEntities)
+                        scene->UnsetParent(e);
+                } else {
+                    scene->UnsetParent(dragged);
+                }
             }
             ImGui::EndDragDropTarget();
         }
     }
 
+    // Ctrl+A — select all entities
+    if (ImGui::IsWindowFocused() && ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_A)) {
+        for (auto& [entity, name] : scene->GetEntityNames())
+            m_Context->selectedEntities.insert(entity);
+    }
+
+    // Delete key — delete all selected entities (guard: no rename active)
+    if (ImGui::IsWindowFocused() && (ImGui::IsKeyPressed(ImGuiKey_Delete) || ImGui::IsKeyPressed(ImGuiKey_Backspace))
+        && !m_Context->selectedEntities.empty()
+        && m_RenamingEntity == entt::null)
+    {
+        std::vector<entt::entity> toDeleteAll(
+            m_Context->selectedEntities.begin(),
+            m_Context->selectedEntities.end());
+        m_Context->ClearSelection();
+        m_SelectionPivot = entt::null;
+        for (auto e : toDeleteAll)
+            if (reg.valid(e))
+                scene->DestroyEntity(e);
+    }
+
+    // Context menu single-entity delete
     if (toDelete != entt::null) {
-        // Clear selection if the selected entity is the one being deleted or
-        // lives anywhere inside its subtree (cascade-destroyed children).
-        if (m_Context->selectedEntity == toDelete ||
-            scene->IsAncestorOf(toDelete, m_Context->selectedEntity))
-            m_Context->selectedEntity = entt::null;
+        std::vector<entt::entity> toRemove;
+        for (auto e : m_Context->selectedEntities)
+            if (e == toDelete || scene->IsAncestorOf(toDelete, e))
+                toRemove.push_back(e);
+        for (auto e : toRemove)
+            m_Context->selectedEntities.erase(e);
+        if (m_SelectionPivot == toDelete || scene->IsAncestorOf(toDelete, m_SelectionPivot))
+            m_SelectionPivot = entt::null;
         scene->DestroyEntity(toDelete);
     }
 
