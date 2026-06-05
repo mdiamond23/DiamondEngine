@@ -50,6 +50,11 @@ int frameCount = 0;
 
 static void framebufferSizeCallback(GLFWwindow*, int w, int h) { glViewport(0, 0, w, h); }
 
+static void dropCallback(GLFWwindow* window, int count, const char** paths) {
+    auto* layer = static_cast<EditorLayer*>(glfwGetWindowUserPointer(window));
+    if (layer) layer->NotifyDroppedFiles(count, paths);
+}
+
 static void scrollCallback(GLFWwindow*, double, double y)
 {
     if (g_viewportActive)
@@ -103,6 +108,8 @@ int main()
 
     Scene scene;
     EditorLayer editorLayer(&scene);
+    glfwSetWindowUserPointer(window, &editorLayer);
+    glfwSetDropCallback(window, dropCallback);
 
     glEnable(GL_DEPTH_TEST);
     glEnable(GL_TEXTURE_CUBE_MAP_SEAMLESS);
@@ -169,7 +176,7 @@ int main()
 
     // IBL bake — one-time
     {
-        OpenGLTexture envTex(ASSETS_DIR "/Textures/debris_basement_corridor_2k.hdr", true, true);
+        OpenGLTexture envTex(ASSETS_DIR "/Textures/citrus_orchard_road_puresky_4k.hdr", true, true);
         iblPass.BakeEnvironment(envTex, equirectShader, irradianceShader,
                                 prefilterShader, brdfShader);
     }

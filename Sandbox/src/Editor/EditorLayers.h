@@ -16,6 +16,7 @@ public:
     void SetViewportTexture(uint32_t textureID);
     void UpdateCamera(const glm::mat4& view, const glm::mat4& proj, const glm::vec3& camPos);
     bool IsViewportActive() const { return m_Viewport.IsActive(); }
+    void NotifyDroppedFiles(int count, const char** paths) { m_Content.QueueDroppedFiles(count, paths); }
 
 private:
     void DrawMenuBar();

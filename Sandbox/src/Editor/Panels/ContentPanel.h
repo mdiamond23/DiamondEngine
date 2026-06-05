@@ -26,6 +26,7 @@ public:
     void OnImGuiRender() override;
 
     void SetOnSceneOpen(std::function<void(const std::string&)> cb) { m_OnSceneOpen = std::move(cb); }
+    void QueueDroppedFiles(int count, const char** paths);
 
     // Returns the cached (or freshly generated) GL texture ID for the given asset path.
     // Returns 0 if the path is empty, the asset type has no preview, or loading fails.
@@ -35,7 +36,7 @@ private:
     void Refresh();
     void DrawToolbar();
     void DrawItems();
-    void DrawFolderIcon(ImVec2 topLeft, float size);
+    void DrawFolderIcon(ImVec2 topLeft, float size, bool highlighted = false);
     void DrawFileIcon(ImVec2 topLeft, float size, const std::string& ext);
     AssetType GetAssetType(const std::filesystem::path& p);
     uint32_t LoadThumbnail(const std::filesystem::path& p, AssetType type);
@@ -49,9 +50,16 @@ private:
     MeshThumbnailRenderer                     m_MeshRenderer;
 
     std::function<void(const std::string&)> m_OnSceneOpen;
+    std::vector<std::filesystem::path>      m_PendingDropFiles;
 
     bool m_OpenNewFolderModal = false;
     char m_NewFolderName[256]{};
+
+    bool                   m_OpenDeleteModal = false;
+    std::filesystem::path  m_DeletingPath;
+
+    std::filesystem::path  m_PendingMoveSrc;
+    std::filesystem::path  m_PendingMoveDest;
 
     std::filesystem::path m_RenamingPath;
     char                  m_RenameBuffer[256]{};

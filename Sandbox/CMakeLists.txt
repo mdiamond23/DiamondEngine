@@ -9,7 +9,7 @@ add_executable(Sandbox
     src/Editor/Panels/ContentPanel.cpp
 )
 
-target_link_libraries(Sandbox PRIVATE MyEngine nlohmann_json::nlohmann_json imguizmo)
+target_link_libraries(Sandbox PRIVATE MyEngine nlohmann_json::nlohmann_json imguizmo miniz)
 
 target_include_directories(Sandbox PRIVATE
     ${CMAKE_SOURCE_DIR}/Engine/src

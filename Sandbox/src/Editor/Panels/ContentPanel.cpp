@@ -17,6 +17,7 @@
 #include <Assets/ImageLoader.h>
 #include <Assets/ModelImporter.h>
 
+#include <miniz.h>
 #include <filesystem>
 #include <algorithm>
 #include <cctype>
@@ -43,6 +44,69 @@ static std::string LowerExt(const fs::path& p) {
     std::string ext = ToUtf8(p.extension());
     for (char& c : ext) c = (char)std::tolower((unsigned char)c);
     return ext;
+}
+
+static fs::path UniqueDestPath(const fs::path& dest) {
+    if (!fs::exists(dest)) return dest;
+    std::string stem = ToUtf8(dest.stem());
+    std::string ext  = ToUtf8(dest.extension());
+    fs::path    dir  = dest.parent_path();
+    for (int n = 1; ; ++n) {
+        fs::path candidate = dir / (stem + " (" + std::to_string(n) + ")" + ext);
+        if (!fs::exists(candidate)) return candidate;
+    }
+}
+
+// Returns true if `path` equals `base` or is anywhere inside it.
+static bool PathStartsWith(const fs::path& path, const fs::path& base) {
+    std::error_code ec;
+    fs::path rel = fs::relative(path, base, ec);
+    if (ec) return false;
+    if (rel.empty()) return true;
+    return *rel.begin() != fs::path("..");
+}
+
+static bool ExtractZip(const fs::path& zipPath, const fs::path& destDir) {
+    mz_zip_archive zip{};
+    if (!mz_zip_reader_init_file(&zip, ToUtf8(zipPath).c_str(), 0))
+        return false;
+
+    mz_uint count = mz_zip_reader_get_num_files(&zip);
+    for (mz_uint i = 0; i < count; ++i) {
+        if (mz_zip_reader_is_file_a_directory(&zip, i)) continue;
+
+        mz_zip_archive_file_stat stat;
+        if (!mz_zip_reader_file_stat(&zip, i, &stat)) continue;
+
+        fs::path outPath = (destDir / stat.m_filename).lexically_normal();
+        std::error_code ec;
+        fs::create_directories(outPath.parent_path(), ec);
+        mz_zip_reader_extract_to_file(&zip, i, ToUtf8(outPath).c_str(), 0);
+    }
+
+    mz_zip_reader_end(&zip);
+    return true;
+}
+
+static void ExtractZipsInDir(const fs::path& dir) {
+    std::vector<fs::path> zips;
+    for (auto& entry : fs::recursive_directory_iterator(
+             dir, fs::directory_options::skip_permission_denied)) {
+        if (entry.is_regular_file() && LowerExt(entry.path()) == ".zip")
+            zips.push_back(entry.path());
+    }
+    for (auto& zip : zips) {
+        fs::path dest = UniqueDestPath(zip.parent_path() / zip.stem());
+        std::error_code ec;
+        fs::create_directory(dest, ec);
+        if (ExtractZip(zip, dest))
+            fs::remove(zip, ec);
+    }
+}
+
+void ContentPanel::QueueDroppedFiles(int count, const char** paths) {
+    for (int i = 0; i < count; ++i)
+        m_PendingDropFiles.emplace_back(paths[i]);
 }
 
 ContentPanel::ContentPanel()
@@ -148,13 +212,13 @@ uint32_t ContentPanel::GetThumbnail(const std::string& path, AssetType type) {
     return LoadThumbnail(fs::path(path), type);
 }
 
-void ContentPanel::DrawFolderIcon(ImVec2 tl, float size) {
+void ContentPanel::DrawFolderIcon(ImVec2 tl, float size, bool highlighted) {
     ImDrawList* dl = ImGui::GetWindowDrawList();
     float tabW = size * 0.45f;
     float tabH = size * 0.20f;
 
-    ImU32 tabCol  = IM_COL32(240, 190, 65, 255);
-    ImU32 bodyCol = IM_COL32(215, 160, 45, 255);
+    ImU32 tabCol  = highlighted ? IM_COL32(100, 160, 255, 255) : IM_COL32(240, 190,  65, 255);
+    ImU32 bodyCol = highlighted ? IM_COL32( 65, 120, 245, 255) : IM_COL32(215, 160,  45, 255);
 
     // Tab (top-left bump above the body)
     dl->AddRectFilled(
@@ -227,6 +291,22 @@ void ContentPanel::DrawToolbar() {
             m_CurrentPath = crumbs[i].second;
             Refresh();
         }
+        // Accept internal drag-drop moves onto breadcrumb path segments
+        if (ImGui::BeginDragDropTarget()) {
+            fs::path srcPath;
+            if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload("CONTENT_MOVE"))
+                srcPath = fs::path(static_cast<const char*>(p->Data));
+            else if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload("CONTENT_ITEM_PATH"))
+                srcPath = fs::path(static_cast<const char*>(p->Data));
+            if (!srcPath.empty() &&
+                srcPath.parent_path() != crumbs[i].second &&   // not already there
+                !PathStartsWith(crumbs[i].second, srcPath))    // not into own descendant
+            {
+                m_PendingMoveSrc  = srcPath;
+                m_PendingMoveDest = crumbs[i].second;
+            }
+            ImGui::EndDragDropTarget();
+        }
     }
 
     float rightEdge = ImGui::GetContentRegionAvail().x;
@@ -268,17 +348,38 @@ void ContentPanel::DrawItems() {
             if (ImGui::MenuItem("Rename")) {
                 m_RenamingPath   = item.path;
                 m_RenameFocusSet = false;
-                // Pre-fill with stem only so the user can't accidentally edit the extension
                 std::string stem = ToUtf8(item.path.stem());
                 std::strncpy(m_RenameBuffer, stem.c_str(), sizeof(m_RenameBuffer) - 1);
                 m_RenameBuffer[sizeof(m_RenameBuffer) - 1] = '\0';
             }
+            ImGui::Separator();
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.35f, 0.35f, 1.0f));
+            if (ImGui::MenuItem("Delete")) {
+                m_DeletingPath    = item.path;
+                m_OpenDeleteModal = true;
+            }
+            ImGui::PopStyleColor();
             ImGui::EndPopup();
         }
 
-        if (hovered) {
-            ImGui::GetWindowDrawList()->AddRectFilled(
-                cellOrigin,
+        // Determine whether an in-progress drag would be a valid drop onto this folder
+        const ImGuiPayload* activeDrag = ImGui::GetDragDropPayload();
+        bool hasMovePayload = activeDrag &&
+            (strcmp(activeDrag->DataType, "CONTENT_MOVE") == 0 ||
+             strcmp(activeDrag->DataType, "CONTENT_ITEM_PATH") == 0);
+        bool isValidFolderDrop = false;
+        if (item.isDirectory && hovered && hasMovePayload) {
+            fs::path dragSrc(static_cast<const char*>(activeDrag->Data));
+            isValidFolderDrop = dragSrc != item.path && !PathStartsWith(item.path, dragSrc);
+        }
+
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        if (isValidFolderDrop) {
+            dl->AddRectFilled(cellOrigin,
+                {cellOrigin.x + m_IconSize, cellOrigin.y + cellH},
+                IM_COL32(60, 110, 235, 120), 4.0f);
+        } else if (hovered) {
+            dl->AddRectFilled(cellOrigin,
                 {cellOrigin.x + m_IconSize, cellOrigin.y + cellH},
                 IM_COL32(110, 110, 110, 90), 4.0f);
         }
@@ -300,17 +401,16 @@ void ContentPanel::DrawItems() {
         }
 
         if (thumbID) {
-            ImGui::GetWindowDrawList()->AddImage(
+            dl->AddImage(
                 (ImTextureID)(uintptr_t)thumbID,
                 iPos, {iPos.x + iSz, iPos.y + iSz});
         } else if (item.isDirectory) {
-            DrawFolderIcon(iPos, iSz);
+            DrawFolderIcon(iPos, iSz, isValidFolderDrop);
         } else {
             DrawFileIcon(iPos, iSz, LowerExt(item.path));
         }
 
         // Name + type label drawn directly via DrawList so we don't disturb the cursor
-        ImDrawList* dl    = ImGui::GetWindowDrawList();
         float        lineH = ImGui::GetTextLineHeight();
         float        ty    = cellOrigin.y + m_IconSize + 2.0f;
 
@@ -364,20 +464,37 @@ void ContentPanel::DrawItems() {
                         IM_COL32(130, 130, 130, 255), AssetTypeName(item.type));
         }
 
-        // Drag-drop source for mesh and texture assets.
-        // BeginDragDropSource checks the InvisibleButton above — no ImGui widgets
-        // between it and here, only DrawList calls, so the last item is still valid.
-        if (item.type == AssetType::Mesh || item.type == AssetType::Texture) {
-            if (ImGui::BeginDragDropSource()) {
-                std::string pathStr = ToUtf8(item.path);
-                ImGui::SetDragDropPayload("CONTENT_ITEM_PATH",
-                                          pathStr.c_str(), pathStr.size() + 1);
-                if (thumbID) {
-                    ImGui::Image((ImTextureID)(uintptr_t)thumbID, {40.0f, 40.0f});
-                    ImGui::SameLine();
+        // Drag-drop source — all items are draggable for internal moves.
+        // Mesh/Texture keep "CONTENT_ITEM_PATH" so the inspector can still accept them.
+        // Everything else uses "CONTENT_MOVE".
+        if (ImGui::BeginDragDropSource()) {
+            std::string pathStr = ToUtf8(item.path);
+            bool isInspectorDraggable = (item.type == AssetType::Mesh ||
+                                         item.type == AssetType::Texture);
+            const char* payloadType = isInspectorDraggable ? "CONTENT_ITEM_PATH"
+                                                            : "CONTENT_MOVE";
+            ImGui::SetDragDropPayload(payloadType, pathStr.c_str(), pathStr.size() + 1);
+            if (thumbID) { ImGui::Image((ImTextureID)(uintptr_t)thumbID, {40.0f, 40.0f}); ImGui::SameLine(); }
+            ImGui::TextUnformatted(item.name.c_str());
+            ImGui::EndDragDropSource();
+        }
+
+        // Drag-drop target — folders accept moves from both payload types
+        if (item.isDirectory) {
+            if (ImGui::BeginDragDropTarget()) {
+                fs::path srcPath;
+                if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload("CONTENT_MOVE"))
+                    srcPath = fs::path(static_cast<const char*>(p->Data));
+                else if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload("CONTENT_ITEM_PATH"))
+                    srcPath = fs::path(static_cast<const char*>(p->Data));
+                if (!srcPath.empty() &&
+                    srcPath != item.path &&
+                    !PathStartsWith(item.path, srcPath))
+                {
+                    m_PendingMoveSrc  = srcPath;
+                    m_PendingMoveDest = item.path;
                 }
-                ImGui::TextUnformatted(item.name.c_str());
-                ImGui::EndDragDropSource();
+                ImGui::EndDragDropTarget();
             }
         }
 
@@ -401,6 +518,18 @@ void ContentPanel::DrawItems() {
         m_CurrentPath = pendingNav;
         Refresh();
     }
+
+    // Apply pending internal move (may also be set by DrawToolbar breadcrumb drops)
+    if (!m_PendingMoveSrc.empty()) {
+        if (!m_PendingMoveDest.empty()) {
+            std::error_code ec;
+            fs::path dest = UniqueDestPath(m_PendingMoveDest / m_PendingMoveSrc.filename());
+            fs::rename(m_PendingMoveSrc, dest, ec);
+            Refresh();
+        }
+        m_PendingMoveSrc.clear();
+        m_PendingMoveDest.clear();
+    }
 }
 
 void ContentPanel::OnImGuiRender() {
@@ -408,6 +537,45 @@ void ContentPanel::OnImGuiRender() {
 
     DrawToolbar();
     DrawItems();
+
+    // OS file drop — copy/extract into current folder when this panel is under the mouse
+    if (!m_PendingDropFiles.empty()) {
+        if (ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem)) {
+            bool changed = false;
+            for (auto& src : m_PendingDropFiles) {
+                std::error_code ec;
+                if (LowerExt(src) == ".zip") {
+                    fs::path dest = UniqueDestPath(m_CurrentPath / src.stem());
+                    fs::create_directory(dest, ec);
+                    if (ExtractZip(src, dest)) {
+                        ExtractZipsInDir(dest);
+                        changed = true;
+                    }
+                } else if (fs::is_regular_file(src)) {
+                    fs::copy_file(src, UniqueDestPath(m_CurrentPath / src.filename()), ec);
+                    changed = true;
+                } else if (fs::is_directory(src)) {
+                    fs::path dest = UniqueDestPath(m_CurrentPath / src.filename());
+                    fs::copy(src, dest, fs::copy_options::recursive, ec);
+                    ExtractZipsInDir(dest);
+                    changed = true;
+                }
+            }
+            if (changed) Refresh();
+        }
+        m_PendingDropFiles.clear();
+    }
+
+    // Right-click on empty space
+    if (ImGui::BeginPopupContextWindow("##bg_ctx",
+            ImGuiPopupFlags_MouseButtonRight | ImGuiPopupFlags_NoOpenOverItems))
+    {
+        if (ImGui::MenuItem("New Folder")) {
+            std::memset(m_NewFolderName, 0, sizeof(m_NewFolderName));
+            m_OpenNewFolderModal = true;
+        }
+        ImGui::EndPopup();
+    }
 
     // Trigger modal on the same frame as the button press
     if (m_OpenNewFolderModal) {
@@ -433,6 +601,42 @@ void ContentPanel::OnImGuiRender() {
         ImGui::SameLine();
         if (ImGui::Button("Cancel", {125.0f, 0}))
             ImGui::CloseCurrentPopup();
+
+        ImGui::EndPopup();
+    }
+
+    if (m_OpenDeleteModal) {
+        ImGui::OpenPopup("Delete##modal");
+        m_OpenDeleteModal = false;
+    }
+
+    if (ImGui::BeginPopupModal("Delete##modal", nullptr,
+                               ImGuiWindowFlags_AlwaysAutoResize))
+    {
+        std::string name = ToUtf8(m_DeletingPath.filename());
+        if (fs::is_directory(m_DeletingPath))
+            ImGui::Text("Delete folder \"%s\" and all its contents?", name.c_str());
+        else
+            ImGui::Text("Delete \"%s\"?", name.c_str());
+        ImGui::TextDisabled("This cannot be undone.");
+
+        ImGui::Spacing();
+        ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.7f, 0.15f, 0.15f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.9f, 0.2f,  0.2f,  1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4(0.5f, 0.1f,  0.1f,  1.0f));
+        if (ImGui::Button("Delete", {120.0f, 0})) {
+            std::error_code ec;
+            fs::remove_all(m_DeletingPath, ec);
+            m_DeletingPath.clear();
+            Refresh();
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::PopStyleColor(3);
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", {120.0f, 0})) {
+            m_DeletingPath.clear();
+            ImGui::CloseCurrentPopup();
+        }
 
         ImGui::EndPopup();
     }
