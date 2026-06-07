@@ -37,7 +37,7 @@ The renderer is already ahead of schedule for a learning engine.
 - [x] Show asset paths in Inspector for assigned mesh/material ([#20](https://github.com/mdiamond23/DiamondEngine/issues/20))
 - [x] Light components in ECS (move hardcoded lights into entities with Inspector UI)
 - [x] Parent-child transforms (hierarchy grouping, inherited transform)
-- [ ] Undo / redo (at minimum for transform edits)
+- [x] Undo / redo (at minimum for transform edits)
 
 ---
 

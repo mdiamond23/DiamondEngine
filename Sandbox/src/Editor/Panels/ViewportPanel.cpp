@@ -1,4 +1,5 @@
 #include "ViewportPanel.h"
+#include "../Command.h"
 #include <imgui.h>
 #define GLM_ENABLE_EXPERIMENTAL
 #include <glm/glm.hpp>
@@ -102,8 +103,18 @@ void ViewportPanel::OnImGuiRender() {
             ImGuizmo::SetDrawlist();
             ImGuizmo::SetRect(vpPos.x, vpPos.y, vpSize.x, vpSize.y);
 
-            // Use the world matrix so the gizmo sits at the correct world position.
             glm::mat4 worldModel = ts.GetWorldMatrix(sel);
+
+            bool gizmoUsing = ImGuizmo::IsUsing();
+
+            // Snapshot the full transform on the first frame the gizmo becomes active.
+            if (gizmoUsing && !m_GizmoWasUsing) {
+                auto& tc      = reg.get<TransformComponent>(sel);
+                m_GizmoOldPos   = tc.position;
+                m_GizmoOldRot   = tc.rotation;
+                m_GizmoOldEuler = tc.eulerDegrees;
+                m_GizmoOldScale = tc.scale;
+            }
 
             if (ImGuizmo::Manipulate(
                     glm::value_ptr(m_Context->viewMatrix),
@@ -112,7 +123,6 @@ void ViewportPanel::OnImGuiRender() {
                     ImGuizmo::LOCAL,
                     glm::value_ptr(worldModel)))
             {
-                // Convert the new world matrix back to local space.
                 glm::mat4 parentWorld(1.0f);
                 if (reg.all_of<HierarchyComponent>(sel)) {
                     entt::entity parent = reg.get<HierarchyComponent>(sel).parent;
@@ -132,6 +142,34 @@ void ViewportPanel::OnImGuiRender() {
                 tc.eulerDegrees = glm::degrees(glm::eulerAngles(rot));
                 tc.scale        = scale;
             }
+
+            // Submit one command when the drag ends.
+            if (!gizmoUsing && m_GizmoWasUsing) {
+                auto& tc    = reg.get<TransformComponent>(sel);
+                Scene* scene = m_Context->ActiveScene;
+
+                struct TransformState {
+                    glm::vec3 pos, euler, scale;
+                    glm::quat rot;
+                };
+                TransformState oldState { m_GizmoOldPos, m_GizmoOldEuler, m_GizmoOldScale, m_GizmoOldRot };
+                TransformState newState { tc.position,   tc.eulerDegrees, tc.scale,         tc.rotation   };
+
+                const char* desc = m_GizmoOp == ImGuizmo::TRANSLATE ? "Move Entity" :
+                                   m_GizmoOp == ImGuizmo::ROTATE    ? "Rotate Entity" : "Scale Entity";
+
+                m_Context->Commands.ExecuteCommand(std::make_unique<ValueChangeCommand<TransformState>>(
+                    [scene, sel](const TransformState& s) {
+                        auto& t     = scene->GetRegistry().get<TransformComponent>(sel);
+                        t.position     = s.pos;
+                        t.rotation     = s.rot;
+                        t.eulerDegrees = s.euler;
+                        t.scale        = s.scale;
+                    },
+                    oldState, newState, desc));
+            }
+
+            m_GizmoWasUsing = gizmoUsing;
         }
     }
 

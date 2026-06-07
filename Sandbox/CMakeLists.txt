@@ -1,12 +1,14 @@
 add_executable(Sandbox
     src/main.cpp
     src/Editor/EditorLayers.cpp
+    src/Editor/Command.cpp
     src/Editor/SceneSerializer.cpp
     src/Editor/MeshThumbnailRenderer.cpp
     src/Editor/Panels/HierarchyPanel.cpp
     src/Editor/Panels/ViewportPanel.cpp
     src/Editor/Panels/InspectorPanel.cpp
     src/Editor/Panels/ContentPanel.cpp
+    src/Editor/Panels/ConsolePanel.cpp
 )
 
 target_link_libraries(Sandbox PRIVATE MyEngine nlohmann_json::nlohmann_json imguizmo miniz)

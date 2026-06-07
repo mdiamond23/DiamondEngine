@@ -29,6 +29,7 @@ static std::string UniqueNewScenePath()
 EditorLayer::EditorLayer(Scene* scene)
 {
     m_Context.ActiveScene = scene;
+    m_Context.Commands.SetConsole(&m_Console);
     m_Hierarchy.SetContext(&m_Context);
     m_Inspector.SetContext(&m_Context);
     m_Inspector.SetContentPanel(&m_Content);
@@ -36,6 +37,7 @@ EditorLayer::EditorLayer(Scene* scene)
 
     m_Content.SetOnSceneOpen([this](const std::string& path) {
         m_Context.ClearSelection();
+        m_Context.Commands.Clear();
         if (SceneSerializer::Load(*m_Context.ActiveScene, path))
             m_Context.currentScenePath = path;
     });
@@ -64,6 +66,7 @@ void EditorLayer::SetupDockspace()
     ImGui::DockBuilderDockWindow("Viewport", center);
     ImGui::DockBuilderDockWindow("Inspector", right);
     ImGui::DockBuilderDockWindow("Content Browser", down);
+    ImGui::DockBuilderDockWindow("Console", down);
     ImGui::DockBuilderFinish(id);
 }
 
@@ -111,9 +114,18 @@ void EditorLayer::DrawMenuBar()
 {
     if (!ImGui::BeginMainMenuBar()) return;
 
+    if (ImGui::BeginMenu("Edit")) {
+        if (ImGui::MenuItem("Undo", "Ctrl+Z", false, m_Context.Commands.CanUndo()))
+            m_Context.Commands.Undo();
+        if (ImGui::MenuItem("Redo", "Ctrl+Y", false, m_Context.Commands.CanRedo()))
+            m_Context.Commands.Redo();
+        ImGui::EndMenu();
+    }
+
     if (ImGui::BeginMenu("File")) {
         if (ImGui::MenuItem("New Scene", "Ctrl+N")) {
             m_Context.ClearSelection();
+            m_Context.Commands.Clear();
             m_Context.currentScenePath = "";
             m_Context.ActiveScene->Clear();
         }
@@ -122,6 +134,7 @@ void EditorLayer::DrawMenuBar()
             std::string path = OpenFileDialog();
             if (!path.empty()) {
                 m_Context.ClearSelection();
+                m_Context.Commands.Clear();
                 if (SceneSerializer::Load(*m_Context.ActiveScene, path))
                     m_Context.currentScenePath = path;
             }
@@ -146,6 +159,17 @@ void EditorLayer::DrawMenuBar()
 
 void EditorLayer::OnImGuiRender()
 {
+    // Undo / Redo keyboard shortcuts
+    if (ImGui::IsKeyDown(ImGuiKey_LeftCtrl) || ImGui::IsKeyDown(ImGuiKey_RightCtrl))
+    {
+        bool shift = ImGui::IsKeyDown(ImGuiKey_LeftShift) || ImGui::IsKeyDown(ImGuiKey_RightShift);
+        if (!shift && ImGui::IsKeyPressed(ImGuiKey_Z, false))
+            m_Context.Commands.Undo();
+        if ((ImGui::IsKeyPressed(ImGuiKey_Y, false)) ||
+            (shift && ImGui::IsKeyPressed(ImGuiKey_Z, false)))
+            m_Context.Commands.Redo();
+    }
+
     // Menu bar first — its height is needed to offset the dockspace host below it
     DrawMenuBar();
 
@@ -181,4 +205,5 @@ void EditorLayer::OnImGuiRender()
     m_Viewport.OnImGuiRender();
     m_Inspector.OnImGuiRender();
     m_Content.OnImGuiRender();
+    m_Console.OnImGuiRender();
 }

@@ -1,5 +1,6 @@
 #include "InspectorPanel.h"
 #include "ContentPanel.h"
+#include "../Command.h"
 #include <imgui.h>
 #include <glm/gtc/type_ptr.hpp>
 #include <cstring>
@@ -39,8 +40,20 @@ static bool IsTexturePath(const std::string& p) {
 // ---- mesh slot --------------------------------------------------------------
 // A 54 px tall bordered box: thumbnail on the left, filename + path on the right.
 // Accepts CONTENT_ITEM_PATH drag-drop payloads; updates mc on a valid mesh drop.
+// Returns old state if a change occurred so the caller can submit an undo command.
 
-static void DrawMeshSlot(MeshComponent& mc, ContentPanel* cp) {
+struct MeshSlotChange {
+    bool                       changed    = false;
+    std::shared_ptr<Mesh>      oldMesh;
+    AABB                       oldBounds  = {};
+    std::string                oldMeshPath;
+    int                        oldSubIndex = 0;
+    std::shared_ptr<PBRMaterial> oldMaterial;
+};
+
+static MeshSlotChange DrawMeshSlot(MeshComponent& mc, ContentPanel* cp) {
+    MeshSlotChange result;
+
     float   avail  = ImGui::GetContentRegionAvail().x;
     float   slotH  = 54.0f;
     ImVec2  origin = ImGui::GetCursorScreenPos();
@@ -88,29 +101,46 @@ static void DrawMeshSlot(MeshComponent& mc, ContentPanel* cp) {
             if (IsMeshPath(path)) {
                 auto meshes = ModelImporter::Load(path);
                 if (!meshes.empty()) {
+                    result.oldMesh     = mc.mesh;
+                    result.oldBounds   = mc.localBounds;
+                    result.oldMeshPath = mc.meshPath;
+                    result.oldSubIndex = mc.meshSubIndex;
+                    result.oldMaterial = mc.material;
+
                     mc.mesh         = Mesh::Create(meshes[0]);
                     mc.localBounds  = meshes[0].ComputeAABB();
                     mc.meshPath     = path;
                     mc.meshSubIndex = 0;
                     if (!mc.material)
                         mc.material = std::make_shared<PBRMaterial>();
+
+                    result.changed = true;
                 }
             }
         }
         ImGui::EndDragDropTarget();
     }
+
+    return result;
 }
 
 // ---- texture row ------------------------------------------------------------
 // [24×24 thumbnail]  Label  filename  [x]
-// The thumbnail square and the filename text are both drag-drop targets.
+// Returns old state in TextureRowChange::changed so the caller can submit an undo command.
 
-static void DrawTextureRow(
-    const char*                      label,
-    std::shared_ptr<Texture>&        texPtr,
-    std::string&                     texPath,
-    ContentPanel*                    cp)
+struct TextureRowChange {
+    bool                     changed = false;
+    std::shared_ptr<Texture> oldTex;
+    std::string              oldPath;
+};
+
+static TextureRowChange DrawTextureRow(
+    const char*               label,
+    std::shared_ptr<Texture>& texPtr,
+    std::string&              texPath,
+    ContentPanel*             cp)
 {
+    TextureRowChange result;
     ImGui::PushID(label);
 
     const float sz = 24.0f;
@@ -136,8 +166,11 @@ static void DrawTextureRow(
         if (auto* payload = ImGui::AcceptDragDropPayload("CONTENT_ITEM_PATH")) {
             std::string path((const char*)payload->Data);
             if (IsTexturePath(path)) {
+                result.oldTex  = texPtr;
+                result.oldPath = texPath;
                 texPtr  = Texture::Create(path, false);
                 texPath = path;
+                result.changed = true;
             }
         }
         ImGui::EndDragDropTarget();
@@ -159,12 +192,16 @@ static void DrawTextureRow(
         ImGui::TextUnformatted(Basename(texPath).c_str());
         ImGui::SameLine(0.0f, 4.0f);
         if (ImGui::SmallButton("x")) {
+            result.oldTex  = texPtr;
+            result.oldPath = texPath;
             texPtr.reset();
             texPath.clear();
+            result.changed = true;
         }
     }
 
     ImGui::PopID();
+    return result;
 }
 
 // ---- panel ------------------------------------------------------------------
@@ -192,6 +229,7 @@ void InspectorPanel::OnImGuiRender() {
         return;
     }
     auto&        registry = m_Context->ActiveScene->GetRegistry();
+    Scene*       scene    = m_Context->ActiveScene;
 
     // Entity name — click to rename inline
     const std::string& name = m_Context->ActiveScene->GetEntityName(entity);
@@ -244,12 +282,45 @@ void InspectorPanel::OnImGuiRender() {
         auto& tc = registry.get<TransformComponent>(entity);
 
         ImGui::Text("Transform");
+
         ImGui::DragFloat3("Position", glm::value_ptr(tc.position), 0.1f);
+        if (ImGui::IsItemActivated())
+            m_OldPosition = tc.position;
+        if (ImGui::IsItemDeactivatedAfterEdit()) {
+            glm::vec3 newVal = tc.position;
+            m_Context->Commands.ExecuteCommand(std::make_unique<ValueChangeCommand<glm::vec3>>(
+                [scene, entity](const glm::vec3& v) {
+                    scene->GetRegistry().get<TransformComponent>(entity).position = v;
+                },
+                m_OldPosition, newVal, "Move Entity"));
+        }
 
         if (ImGui::DragFloat3("Rotation", glm::value_ptr(tc.eulerDegrees), 0.5f))
             tc.rotation = glm::quat(glm::radians(tc.eulerDegrees));
+        if (ImGui::IsItemActivated())
+            m_OldEulerDegrees = tc.eulerDegrees;
+        if (ImGui::IsItemDeactivatedAfterEdit()) {
+            glm::vec3 newEuler = tc.eulerDegrees;
+            m_Context->Commands.ExecuteCommand(std::make_unique<ValueChangeCommand<glm::vec3>>(
+                [scene, entity](const glm::vec3& v) {
+                    auto& t = scene->GetRegistry().get<TransformComponent>(entity);
+                    t.eulerDegrees = v;
+                    t.rotation     = glm::quat(glm::radians(v));
+                },
+                m_OldEulerDegrees, newEuler, "Rotate Entity"));
+        }
 
         ImGui::DragFloat3("Scale", glm::value_ptr(tc.scale), 0.1f, 0.001f);
+        if (ImGui::IsItemActivated())
+            m_OldScale = tc.scale;
+        if (ImGui::IsItemDeactivatedAfterEdit()) {
+            glm::vec3 newScale = tc.scale;
+            m_Context->Commands.ExecuteCommand(std::make_unique<ValueChangeCommand<glm::vec3>>(
+                [scene, entity](const glm::vec3& v) {
+                    scene->GetRegistry().get<TransformComponent>(entity).scale = v;
+                },
+                m_OldScale, newScale, "Scale Entity"));
+        }
     }
 
     bool removeMesh  = false;
@@ -262,23 +333,56 @@ void InspectorPanel::OnImGuiRender() {
 
         ImGui::Text("Mesh Renderer");
         if (ImGui::BeginPopupContextItem("##MeshCompCtx")) {
-            if (ImGui::MenuItem("Remove Component"))
+            if (ImGui::MenuItem("Remove Component")) {
+                m_PendingRemovedMesh = mc;
                 removeMesh = true;
+            }
             ImGui::EndPopup();
         }
 
         if (!removeMesh) {
-            ImGui::Checkbox("Visible",         &mc.visible);
+            if (ImGui::Checkbox("Visible", &mc.visible)) {
+                bool v = mc.visible;
+                m_Context->Commands.ExecuteCommand(std::make_unique<ValueChangeCommand<bool>>(
+                    [scene, entity](const bool& x) { scene->GetRegistry().get<MeshComponent>(entity).visible = x; },
+                    !v, v, "Toggle Visibility"));
+            }
             ImGui::SameLine();
-            ImGui::Checkbox("Cast Shadows",    &mc.castsShadow);
+            if (ImGui::Checkbox("Cast Shadows", &mc.castsShadow)) {
+                bool v = mc.castsShadow;
+                m_Context->Commands.ExecuteCommand(std::make_unique<ValueChangeCommand<bool>>(
+                    [scene, entity](const bool& x) { scene->GetRegistry().get<MeshComponent>(entity).castsShadow = x; },
+                    !v, v, "Toggle Cast Shadows"));
+            }
             ImGui::SameLine();
-            ImGui::Checkbox("Recv Shadows",    &mc.receivesShadow);
+            if (ImGui::Checkbox("Recv Shadows", &mc.receivesShadow)) {
+                bool v = mc.receivesShadow;
+                m_Context->Commands.ExecuteCommand(std::make_unique<ValueChangeCommand<bool>>(
+                    [scene, entity](const bool& x) { scene->GetRegistry().get<MeshComponent>(entity).receivesShadow = x; },
+                    !v, v, "Toggle Receive Shadows"));
+            }
 
             // -- Mesh slot --
             ImGui::Spacing();
             ImGui::TextDisabled("Mesh");
             ImGui::Spacing();
-            DrawMeshSlot(mc, m_ContentPanel);
+            if (auto r = DrawMeshSlot(mc, m_ContentPanel); r.changed) {
+                auto om = r.oldMesh, nm = mc.mesh;
+                auto ob = r.oldBounds, nb = mc.localBounds;
+                auto op = r.oldMeshPath, np = mc.meshPath;
+                auto oi = r.oldSubIndex, ni = mc.meshSubIndex;
+                auto omat = r.oldMaterial, nmat = mc.material;
+                m_Context->Commands.RecordCommand(std::make_unique<FunctionCommand>(
+                    [scene, entity, nm, nb, np, ni, nmat]() {
+                        auto& c = scene->GetRegistry().get<MeshComponent>(entity);
+                        c.mesh = nm; c.localBounds = nb; c.meshPath = np; c.meshSubIndex = ni; c.material = nmat;
+                    },
+                    [scene, entity, om, ob, op, oi, omat]() {
+                        auto& c = scene->GetRegistry().get<MeshComponent>(entity);
+                        c.mesh = om; c.localBounds = ob; c.meshPath = op; c.meshSubIndex = oi; c.material = omat;
+                    },
+                    "Change Mesh"));
+            }
 
             // -- Material --
             ImGui::Spacing();
@@ -287,19 +391,59 @@ void InspectorPanel::OnImGuiRender() {
             if (!mc.material)
                 mc.material = std::make_shared<PBRMaterial>();
 
-            ImGui::DragFloat("UV Scale",          &mc.material->UVScale,          0.01f, 0.01f,  64.0f);
-            ImGui::DragFloat("Emissive Strength", &mc.material->EmissiveStrength, 0.01f, 0.0f,  100.0f);
+            ImGui::DragFloat("UV Scale", &mc.material->UVScale, 0.01f, 0.01f, 64.0f);
+            if (ImGui::IsItemActivated())   m_OldUVScale = mc.material->UVScale;
+            if (ImGui::IsItemDeactivatedAfterEdit()) {
+                float newVal = mc.material->UVScale, oldVal = m_OldUVScale;
+                m_Context->Commands.ExecuteCommand(std::make_unique<FunctionCommand>(
+                    [scene, entity, newVal]() { scene->GetRegistry().get<MeshComponent>(entity).material->UVScale = newVal; },
+                    [scene, entity, oldVal]() { scene->GetRegistry().get<MeshComponent>(entity).material->UVScale = oldVal; },
+                    "Change UV Scale"));
+            }
+
+            ImGui::DragFloat("Emissive Strength", &mc.material->EmissiveStrength, 0.01f, 0.0f, 100.0f);
+            if (ImGui::IsItemActivated())   m_OldEmissiveStrength = mc.material->EmissiveStrength;
+            if (ImGui::IsItemDeactivatedAfterEdit()) {
+                float newVal = mc.material->EmissiveStrength, oldVal = m_OldEmissiveStrength;
+                m_Context->Commands.ExecuteCommand(std::make_unique<FunctionCommand>(
+                    [scene, entity, newVal]() { scene->GetRegistry().get<MeshComponent>(entity).material->EmissiveStrength = newVal; },
+                    [scene, entity, oldVal]() { scene->GetRegistry().get<MeshComponent>(entity).material->EmissiveStrength = oldVal; },
+                    "Change Emissive Strength"));
+            }
 
             ImGui::Spacing();
             ImGui::TextDisabled("Textures");
             ImGui::Separator();
 
-            DrawTextureRow("Albedo",    mc.material->Albedo,    mc.material->AlbedoPath,    m_ContentPanel);
-            DrawTextureRow("Normal",    mc.material->Normal,    mc.material->NormalPath,    m_ContentPanel);
-            DrawTextureRow("Metallic",  mc.material->Metallic,  mc.material->MetallicPath,  m_ContentPanel);
-            DrawTextureRow("Roughness", mc.material->Roughness, mc.material->RoughnessPath, m_ContentPanel);
-            DrawTextureRow("AO",        mc.material->AO,        mc.material->AOPath,        m_ContentPanel);
-            DrawTextureRow("Emissive",  mc.material->Emissive,  mc.material->EmissivePath,  m_ContentPanel);
+            // Helper: draw a texture row and submit an undo command if it changed.
+            // Uses pointer-to-member so all 6 slots share one lambda body.
+            using TexMem  = std::shared_ptr<Texture> PBRMaterial::*;
+            using PathMem = std::string              PBRMaterial::*;
+            auto texRow = [&](const char* label,
+                               std::shared_ptr<Texture>& texPtr, std::string& texPath,
+                               TexMem tm, PathMem pm, const char* desc) {
+                auto r = DrawTextureRow(label, texPtr, texPath, m_ContentPanel);
+                if (!r.changed) return;
+                auto ot = r.oldTex, nt = texPtr;
+                auto op = r.oldPath, np = texPath;
+                m_Context->Commands.RecordCommand(std::make_unique<FunctionCommand>(
+                    [scene, entity, nt, np, tm, pm]() {
+                        auto& mat = *scene->GetRegistry().get<MeshComponent>(entity).material;
+                        mat.*tm = nt; mat.*pm = np;
+                    },
+                    [scene, entity, ot, op, tm, pm]() {
+                        auto& mat = *scene->GetRegistry().get<MeshComponent>(entity).material;
+                        mat.*tm = ot; mat.*pm = op;
+                    },
+                    desc));
+            };
+
+            texRow("Albedo",    mc.material->Albedo,    mc.material->AlbedoPath,    &PBRMaterial::Albedo,    &PBRMaterial::AlbedoPath,    "Change Albedo Texture");
+            texRow("Normal",    mc.material->Normal,    mc.material->NormalPath,    &PBRMaterial::Normal,    &PBRMaterial::NormalPath,    "Change Normal Texture");
+            texRow("Metallic",  mc.material->Metallic,  mc.material->MetallicPath,  &PBRMaterial::Metallic,  &PBRMaterial::MetallicPath,  "Change Metallic Texture");
+            texRow("Roughness", mc.material->Roughness, mc.material->RoughnessPath, &PBRMaterial::Roughness, &PBRMaterial::RoughnessPath, "Change Roughness Texture");
+            texRow("AO",        mc.material->AO,        mc.material->AOPath,        &PBRMaterial::AO,        &PBRMaterial::AOPath,        "Change AO Texture");
+            texRow("Emissive",  mc.material->Emissive,  mc.material->EmissivePath,  &PBRMaterial::Emissive,  &PBRMaterial::EmissivePath,  "Change Emissive Texture");
         }
     }
 
@@ -310,35 +454,99 @@ void InspectorPanel::OnImGuiRender() {
 
         ImGui::Text("Light");
         if (ImGui::BeginPopupContextItem("##LightCompCtx")) {
-            if (ImGui::MenuItem("Remove Component"))
+            if (ImGui::MenuItem("Remove Component")) {
+                m_PendingRemovedLight = lc;
                 removeLight = true;
+            }
             ImGui::EndPopup();
         }
 
         if (!removeLight) {
             const char* types[] = { "Sun", "Point", "Spot" };
+            LightType oldType = lc.type;
             int typeIdx = (int)lc.type;
-            if (ImGui::Combo("Type", &typeIdx, types, 3))
+            if (ImGui::Combo("Type", &typeIdx, types, 3)) {
                 lc.type = (LightType)typeIdx;
+                LightType newType = lc.type;
+                m_Context->Commands.ExecuteCommand(std::make_unique<ValueChangeCommand<LightType>>(
+                    [scene, entity](const LightType& t) { scene->GetRegistry().get<LightComponent>(entity).type = t; },
+                    oldType, newType, "Change Light Type"));
+            }
 
             ImGui::ColorEdit3("Color", glm::value_ptr(lc.color));
-            ImGui::DragFloat("Intensity", &lc.intensity, 1.0f, 0.0f, 10000.0f, "%.1f");
+            if (ImGui::IsItemActivated())          m_OldLightColor = lc.color;
+            if (ImGui::IsItemDeactivatedAfterEdit()) {
+                glm::vec3 n = lc.color, o = m_OldLightColor;
+                m_Context->Commands.ExecuteCommand(std::make_unique<ValueChangeCommand<glm::vec3>>(
+                    [scene, entity](const glm::vec3& v) { scene->GetRegistry().get<LightComponent>(entity).color = v; },
+                    o, n, "Change Light Color"));
+            }
 
-            if (lc.type == LightType::Point || lc.type == LightType::Spot)
+            ImGui::DragFloat("Intensity", &lc.intensity, 1.0f, 0.0f, 10000.0f, "%.1f");
+            if (ImGui::IsItemActivated())          m_OldIntensity = lc.intensity;
+            if (ImGui::IsItemDeactivatedAfterEdit()) {
+                float n = lc.intensity, o = m_OldIntensity;
+                m_Context->Commands.ExecuteCommand(std::make_unique<ValueChangeCommand<float>>(
+                    [scene, entity](const float& v) { scene->GetRegistry().get<LightComponent>(entity).intensity = v; },
+                    o, n, "Change Light Intensity"));
+            }
+
+            if (lc.type == LightType::Point || lc.type == LightType::Spot) {
                 ImGui::DragFloat("Radius", &lc.radius, 0.1f, 0.1f, 1000.0f, "%.1f");
+                if (ImGui::IsItemActivated())          m_OldRadius = lc.radius;
+                if (ImGui::IsItemDeactivatedAfterEdit()) {
+                    float n = lc.radius, o = m_OldRadius;
+                    m_Context->Commands.ExecuteCommand(std::make_unique<ValueChangeCommand<float>>(
+                        [scene, entity](const float& v) { scene->GetRegistry().get<LightComponent>(entity).radius = v; },
+                        o, n, "Change Light Radius"));
+                }
+            }
 
             if (lc.type == LightType::Spot) {
                 ImGui::DragFloat("Inner Cone", &lc.innerConeAngle, 0.5f, 0.5f, 89.0f, "%.1f deg");
+                if (ImGui::IsItemActivated()) { m_OldInnerCone = lc.innerConeAngle; m_OldOuterCone = lc.outerConeAngle; }
+                if (ImGui::IsItemDeactivatedAfterEdit()) {
+                    float ni = lc.innerConeAngle, no = lc.outerConeAngle, oi = m_OldInnerCone, oo = m_OldOuterCone;
+                    m_Context->Commands.ExecuteCommand(std::make_unique<FunctionCommand>(
+                        [scene, entity, ni, no]() { auto& l = scene->GetRegistry().get<LightComponent>(entity); l.innerConeAngle = ni; l.outerConeAngle = no; },
+                        [scene, entity, oi, oo]() { auto& l = scene->GetRegistry().get<LightComponent>(entity); l.innerConeAngle = oi; l.outerConeAngle = oo; },
+                        "Change Inner Cone"));
+                }
                 lc.outerConeAngle = std::max(lc.outerConeAngle, lc.innerConeAngle + 0.5f);
+
                 ImGui::DragFloat("Outer Cone", &lc.outerConeAngle, 0.5f, 1.0f, 90.0f, "%.1f deg");
+                if (ImGui::IsItemActivated()) { m_OldInnerCone = lc.innerConeAngle; m_OldOuterCone = lc.outerConeAngle; }
+                if (ImGui::IsItemDeactivatedAfterEdit()) {
+                    float ni = lc.innerConeAngle, no = lc.outerConeAngle, oi = m_OldInnerCone, oo = m_OldOuterCone;
+                    m_Context->Commands.ExecuteCommand(std::make_unique<FunctionCommand>(
+                        [scene, entity, ni, no]() { auto& l = scene->GetRegistry().get<LightComponent>(entity); l.innerConeAngle = ni; l.outerConeAngle = no; },
+                        [scene, entity, oi, oo]() { auto& l = scene->GetRegistry().get<LightComponent>(entity); l.innerConeAngle = oi; l.outerConeAngle = oo; },
+                        "Change Outer Cone"));
+                }
                 lc.innerConeAngle = std::min(lc.innerConeAngle, lc.outerConeAngle - 0.5f);
             }
         }
     }
 
-    // Deferred removals — must happen after all component UI so no dangling refs
-    if (removeMesh)  registry.remove<MeshComponent>(entity);
-    if (removeLight) registry.remove<LightComponent>(entity);
+    // Deferred removals — component refs (mc/lc) are no longer live past here
+    if (removeMesh && m_PendingRemovedMesh) {
+        MeshComponent saved = *m_PendingRemovedMesh;
+        m_PendingRemovedMesh.reset();
+        registry.remove<MeshComponent>(entity);
+        m_Context->Commands.RecordCommand(std::make_unique<FunctionCommand>(
+            [scene, entity]()       { scene->GetRegistry().remove<MeshComponent>(entity); },
+            [scene, entity, saved]() { scene->GetRegistry().emplace_or_replace<MeshComponent>(entity, saved); },
+            "Remove Mesh Component"));
+    }
+    if (removeLight && m_PendingRemovedLight) {
+        LightComponent saved = *m_PendingRemovedLight;
+        m_PendingRemovedLight.reset();
+        registry.remove<LightComponent>(entity);
+        m_Context->Commands.RecordCommand(std::make_unique<FunctionCommand>(
+            [scene, entity]()       { scene->GetRegistry().remove<LightComponent>(entity); },
+            [scene, entity, saved]() { scene->GetRegistry().emplace_or_replace<LightComponent>(entity, saved); },
+            "Remove Light Component"));
+    }
 
     ImGui::Spacing();
     ImGui::Spacing();
@@ -363,8 +571,10 @@ void InspectorPanel::OnImGuiRender() {
         if (!hasMesh) {
             if (ImGui::Selectable("Mesh Renderer", false, kCompFlags))
                 if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
-                    auto& mc    = registry.emplace<MeshComponent>(entity);
-                    mc.material = std::make_shared<PBRMaterial>();
+                    m_Context->Commands.ExecuteCommand(std::make_unique<FunctionCommand>(
+                        [scene, entity]() { scene->GetRegistry().emplace<MeshComponent>(entity).material = std::make_shared<PBRMaterial>(); },
+                        [scene, entity]() { scene->GetRegistry().remove<MeshComponent>(entity); },
+                        "Add Mesh Component"));
                     ImGui::CloseCurrentPopup();
                 }
         }
@@ -372,7 +582,10 @@ void InspectorPanel::OnImGuiRender() {
         if (!hasLight) {
             if (ImGui::Selectable("Light", false, kCompFlags))
                 if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
-                    registry.emplace<LightComponent>(entity);
+                    m_Context->Commands.ExecuteCommand(std::make_unique<FunctionCommand>(
+                        [scene, entity]() { scene->GetRegistry().emplace<LightComponent>(entity); },
+                        [scene, entity]() { scene->GetRegistry().remove<LightComponent>(entity); },
+                        "Add Light Component"));
                     ImGui::CloseCurrentPopup();
                 }
         }

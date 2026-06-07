@@ -4,9 +4,11 @@
 #include <unordered_set>
 #include <glm/glm.hpp>
 #include "Scene/Scene.h"
+#include "Command.h"
 
 struct EditorContext {
-    Scene*       ActiveScene    = nullptr;
+    Scene*          ActiveScene    = nullptr;
+    CommandManager  Commands;
     std::unordered_set<entt::entity> selectedEntities;
     std::string  currentScenePath;
 
