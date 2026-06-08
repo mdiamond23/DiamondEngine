@@ -1,0 +1,209 @@
+#include "Core/Input.h"
+
+#define GLFW_INCLUDE_NONE
+#include <GLFW/glfw3.h>
+
+#include <array>
+#include <unordered_map>
+
+namespace
+{
+    constexpr int KeyCount   = 349; // GLFW_KEY_LAST + 1
+    constexpr int MouseCount = 8;   // GLFW_MOUSE_BUTTON_LAST + 1
+
+    std::array<bool, KeyCount>   s_heldKeys{};
+    std::array<bool, KeyCount>   s_pressedKeys{};
+    std::array<bool, KeyCount>   s_releasedKeys{};
+
+    std::array<bool, MouseCount> s_heldMouse{};
+    std::array<bool, MouseCount> s_pressedMouse{};
+    std::array<bool, MouseCount> s_releasedMouse{};
+
+    struct ActionBinding { bool isMouse; int code; };
+    struct AxisBinding   { int positiveKey; int negativeKey; };
+
+    std::unordered_map<std::string, ActionBinding> s_actions;
+    std::unordered_map<std::string, AxisBinding>   s_axes;
+
+    GLFWwindow* s_window = nullptr;
+
+    float s_mouseX = 0.0f,     s_mouseY = 0.0f;
+    float s_lastMouseX = 0.0f, s_lastMouseY = 0.0f;
+    float s_scrollY = 0.0f;
+
+    void KeyCallback(GLFWwindow*, int key, int, int action, int)
+    {
+        if (key < 0 || key >= KeyCount)
+            return;
+
+        if (action == GLFW_PRESS)
+        {
+            s_pressedKeys[key] = true;
+            s_heldKeys[key] = true;
+        }
+        else if (action == GLFW_RELEASE)
+        {
+            s_releasedKeys[key] = true;
+            s_heldKeys[key] = false;
+        }
+    }
+
+    void MouseButtonCallback(GLFWwindow*, int button, int action, int)
+    {
+        if (button < 0 || button >= MouseCount)
+            return;
+
+        if (action == GLFW_PRESS)
+        {
+            s_pressedMouse[button] = true;
+            s_heldMouse[button] = true;
+        }
+        else if (action == GLFW_RELEASE)
+        {
+            s_releasedMouse[button] = true;
+            s_heldMouse[button] = false;
+        }
+    }
+
+    void ScrollCallback(GLFWwindow*, double, double yOffset)
+    {
+        s_scrollY += static_cast<float>(yOffset);
+    }
+}
+
+namespace Input
+{
+    void Init(GLFWwindow* window)
+    {
+        s_window = window;
+        glfwSetKeyCallback(window, KeyCallback);
+        glfwSetMouseButtonCallback(window, MouseButtonCallback);
+        glfwSetScrollCallback(window, ScrollCallback);
+
+        double x, y;
+        glfwGetCursorPos(window, &x, &y);
+        s_mouseX = s_lastMouseX = static_cast<float>(x);
+        s_mouseY = s_lastMouseY = static_cast<float>(y);
+    }
+
+    void Update()
+    {
+        s_pressedKeys.fill(false);
+        s_releasedKeys.fill(false);
+        s_pressedMouse.fill(false);
+        s_releasedMouse.fill(false);
+
+        s_lastMouseX = s_mouseX;
+        s_lastMouseY = s_mouseY;
+
+        double x, y;
+        glfwGetCursorPos(s_window, &x, &y);
+        s_mouseX = static_cast<float>(x);
+        s_mouseY = static_cast<float>(y);
+
+        s_scrollY = 0.0f;
+    }
+
+    void BindAction(const std::string& name, Key key)
+    {
+        s_actions[name] = { false, static_cast<int>(key) };
+    }
+
+    void BindAction(const std::string& name, MouseButton button)
+    {
+        s_actions[name] = { true, static_cast<int>(button) };
+    }
+
+    void BindAxis(const std::string& name, Key positiveKey, Key negativeKey)
+    {
+        s_axes[name] = { static_cast<int>(positiveKey), static_cast<int>(negativeKey) };
+    }
+
+    bool IsPressed(const std::string& name)
+    {
+        auto it = s_actions.find(name);
+        if (it == s_actions.end()) return false;
+        const auto& b = it->second;
+        return b.isMouse ? IsMouseButtonPressed(static_cast<MouseButton>(b.code))
+                         : IsKeyPressed(static_cast<Key>(b.code));
+    }
+
+    bool IsHeld(const std::string& name)
+    {
+        auto it = s_actions.find(name);
+        if (it == s_actions.end()) return false;
+        const auto& b = it->second;
+        return b.isMouse ? IsMouseButtonHeld(static_cast<MouseButton>(b.code))
+                         : IsKeyHeld(static_cast<Key>(b.code));
+    }
+
+    bool IsReleased(const std::string& name)
+    {
+        auto it = s_actions.find(name);
+        if (it == s_actions.end()) return false;
+        const auto& b = it->second;
+        return b.isMouse ? IsMouseButtonReleased(static_cast<MouseButton>(b.code))
+                         : IsKeyReleased(static_cast<Key>(b.code));
+    }
+
+    float GetAxis(const std::string& name)
+    {
+        auto it = s_axes.find(name);
+        if (it == s_axes.end()) return 0.0f;
+        const auto& b = it->second;
+        float pos = s_heldKeys[b.positiveKey] ? 1.0f : 0.0f;
+        float neg = s_heldKeys[b.negativeKey] ? 1.0f : 0.0f;
+        return pos - neg;
+    }
+
+    glm::vec2 GetMousePosition()
+    {
+        return { s_mouseX, s_mouseY };
+    }
+
+    glm::vec2 GetMouseDelta()
+    {
+        return { s_mouseX - s_lastMouseX, s_mouseY - s_lastMouseY };
+    }
+
+    float GetScrollDelta()
+    {
+        return s_scrollY;
+    }
+
+    bool IsKeyPressed(Key key)
+    {
+        int k = static_cast<int>(key);
+        return k >= 0 && k < KeyCount && s_pressedKeys[k];
+    }
+
+    bool IsKeyHeld(Key key)
+    {
+        int k = static_cast<int>(key);
+        return k >= 0 && k < KeyCount && s_heldKeys[k];
+    }
+
+    bool IsKeyReleased(Key key)
+    {
+        int k = static_cast<int>(key);
+        return k >= 0 && k < KeyCount && s_releasedKeys[k];
+    }
+
+    bool IsMouseButtonPressed(MouseButton button)
+    {
+        int b = static_cast<int>(button);
+        return b >= 0 && b < MouseCount && s_pressedMouse[b];
+    }
+
+    bool IsMouseButtonHeld(MouseButton button)
+    {
+        int b = static_cast<int>(button);
+        return b >= 0 && b < MouseCount && s_heldMouse[b];
+    }
+
+    bool IsMouseButtonReleased(MouseButton button)
+    {
+        int b = static_cast<int>(button);
+        return b >= 0 && b < MouseCount && s_releasedMouse[b];
+    }
+}

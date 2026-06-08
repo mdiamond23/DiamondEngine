@@ -1,4 +1,5 @@
 #include "Application.h"
+#include "Core/Input.h"
 
 #include <glad/gl.h>
 #define GLFW_INCLUDE_NONE
@@ -33,6 +34,7 @@ void Application::Run()
     }
 
     glfwMakeContextCurrent(window);
+    Input::Init(window);
 
     if (!gladLoadGL(glfwGetProcAddress))
     {
@@ -46,11 +48,13 @@ void Application::Run()
 
     while (!glfwWindowShouldClose(window))
     {
+        Input::Update();
+        glfwPollEvents();
+
         glClearColor(0.08f, 0.09f, 0.11f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
 
         glfwSwapBuffers(window);
-        glfwPollEvents();
     }
 
     glfwDestroyWindow(window);

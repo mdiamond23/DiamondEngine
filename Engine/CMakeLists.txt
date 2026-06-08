@@ -130,6 +130,7 @@ target_include_directories(miniz PUBLIC ${miniz_SOURCE_DIR})
 find_package(OpenGL REQUIRED)
 
 add_library(MyEngine STATIC
+    src/Core/Input.cpp
     src/Application.cpp
     src/Assets/ImageLoader.cpp
     src/Assets/ModelImporter.cpp

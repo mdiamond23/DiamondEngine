@@ -16,6 +16,7 @@
 #include "Scene/Components.h"
 
 #include "Core/Camera.h"
+#include "Core/Input.h"
 #include "Renderer/MeshData.h"
 #include "Renderer/Material.h"
 #include "Renderer/TextureData.h"
@@ -55,12 +56,6 @@ static void dropCallback(GLFWwindow* window, int count, const char** paths) {
     if (layer) layer->NotifyDroppedFiles(count, paths);
 }
 
-static void scrollCallback(GLFWwindow*, double, double y)
-{
-    if (g_viewportActive)
-        g_camera.ProcessMouseScroll(static_cast<float>(y));
-}
-
 static void processInput(GLFWwindow* window)
 {
     if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
@@ -93,9 +88,10 @@ int main()
     glfwSwapInterval(1);
     glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
     glfwSetFramebufferSizeCallback(window, framebufferSizeCallback);
-    glfwSetScrollCallback(window, scrollCallback);
 
     if (!gladLoadGL(glfwGetProcAddress)) { glfwTerminate(); return -1; }
+
+    Input::Init(window);
 
     // ImGui init
     IMGUI_CHECKVERSION();
@@ -670,12 +666,14 @@ int main()
         if (g_viewportActive) {
             ImGuiIO& io = ImGui::GetIO();
             g_camera.ProcessMouseMovement(io.MouseDelta.x, -io.MouseDelta.y);
+            g_camera.ProcessMouseScroll(io.MouseWheel);
         }
 
         ImGui::Render();
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
         glfwSwapBuffers(window);
+        Input::Update();
         glfwPollEvents();
     }
 
