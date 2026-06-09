@@ -5,6 +5,7 @@
 #include <glm/gtc/type_ptr.hpp>
 #include <cstring>
 #include "Scene/Components.h"
+#include "Scene/ComponentRegistry.h"
 #include "Assets/ModelImporter.h"
 #include "Renderer/MeshData.h"
 #include "Renderer/TextureData.h"
@@ -528,6 +529,28 @@ void InspectorPanel::OnImGuiRender() {
         }
     }
 
+    // Registered game components
+    const ComponentDescriptor* removeUserComp = nullptr;
+
+    for (const auto& desc : ComponentRegistry::Get().GetAll())
+    {
+        if (!desc.has(*scene, entity)) continue;
+
+        ImGui::Separator();
+        ImGui::Text("%s", desc.name.c_str());
+
+        std::string ctxId = "##Ctx_" + desc.name;
+        if (ImGui::BeginPopupContextItem(ctxId.c_str()))
+        {
+            if (ImGui::MenuItem("Remove Component"))
+                removeUserComp = &desc;
+            ImGui::EndPopup();
+        }
+
+        if (desc.drawInspector)
+            desc.drawInspector(*scene, entity);
+    }
+
     // Deferred removals — component refs (mc/lc) are no longer live past here
     if (removeMesh && m_PendingRemovedMesh) {
         MeshComponent saved = *m_PendingRemovedMesh;
@@ -546,6 +569,17 @@ void InspectorPanel::OnImGuiRender() {
             [scene, entity]()       { scene->GetRegistry().remove<LightComponent>(entity); },
             [scene, entity, saved]() { scene->GetRegistry().emplace_or_replace<LightComponent>(entity, saved); },
             "Remove Light Component"));
+    }
+    if (removeUserComp)
+    {
+        auto removeFn  = removeUserComp->remove;
+        auto addFn     = removeUserComp->add;
+        std::string nm = removeUserComp->name;
+        removeFn(*scene, entity);
+        m_Context->Commands.RecordCommand(std::make_unique<FunctionCommand>(
+            [scene, entity, removeFn]() { removeFn(*scene, entity); },
+            [scene, entity, addFn]()    { addFn(*scene, entity); },
+            "Remove " + nm));
     }
 
     ImGui::Spacing();
@@ -586,6 +620,24 @@ void InspectorPanel::OnImGuiRender() {
                         [scene, entity]() { scene->GetRegistry().emplace<LightComponent>(entity); },
                         [scene, entity]() { scene->GetRegistry().remove<LightComponent>(entity); },
                         "Add Light Component"));
+                    ImGui::CloseCurrentPopup();
+                }
+        }
+
+        for (const auto& desc : ComponentRegistry::Get().GetAll())
+        {
+            if (desc.has(*scene, entity)) continue;
+            anyShown = true;
+            if (ImGui::Selectable(desc.name.c_str(), false, kCompFlags))
+                if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+                {
+                    auto addFn    = desc.add;
+                    auto removeFn = desc.remove;
+                    std::string nm = desc.name;
+                    m_Context->Commands.ExecuteCommand(std::make_unique<FunctionCommand>(
+                        [scene, entity, addFn]()    { addFn(*scene, entity); },
+                        [scene, entity, removeFn]() { removeFn(*scene, entity); },
+                        "Add " + nm));
                     ImGui::CloseCurrentPopup();
                 }
         }

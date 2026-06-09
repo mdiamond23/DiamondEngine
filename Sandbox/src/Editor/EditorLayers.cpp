@@ -3,6 +3,7 @@
 #include <filesystem>
 #include "EditorLayers.h"
 #include "SceneSerializer.h"
+#include <IconsFontAwesome5.h>
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -26,9 +27,10 @@ static std::string UniqueNewScenePath()
     }
 }
 
-EditorLayer::EditorLayer(Scene* scene)
+EditorLayer::EditorLayer(Scene* scene, ImFont* iconFont)
 {
     m_Context.ActiveScene = scene;
+    m_Context.IconFont    = iconFont;
     m_Context.Commands.SetConsole(&m_Console);
     m_Hierarchy.SetContext(&m_Context);
     m_Inspector.SetContext(&m_Context);
@@ -110,6 +112,41 @@ std::string EditorLayer::SaveFileDialog()
     return GetSaveFileNameA(&ofn) ? buf : "";
 }
 
+void EditorLayer::DrawToolbar()
+{
+    Scene* scene   = m_Context.ActiveScene;
+    bool   playing = scene->IsPlaying();
+
+    float btnW    = 28.0f;
+    float centerX = (ImGui::GetWindowWidth() - btnW) * 0.5f;
+    ImGui::SetCursorPosX(centerX);
+
+    if (m_Context.IconFont)
+        ImGui::PushFont(m_Context.IconFont);
+
+    if (!playing)
+    {
+        ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.18f, 0.60f, 0.18f, 1.00f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.25f, 0.75f, 0.25f, 1.00f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4(0.12f, 0.45f, 0.12f, 1.00f));
+        if (ImGui::Button(ICON_FA_PLAY, ImVec2(btnW, 0)))
+            scene->StartPlay();
+        ImGui::PopStyleColor(3);
+    }
+    else
+    {
+        ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.65f, 0.15f, 0.15f, 1.00f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.80f, 0.20f, 0.20f, 1.00f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4(0.50f, 0.10f, 0.10f, 1.00f));
+        if (ImGui::Button(ICON_FA_STOP, ImVec2(btnW, 0)))
+            scene->StopPlay();
+        ImGui::PopStyleColor(3);
+    }
+
+    if (m_Context.IconFont)
+        ImGui::PopFont();
+}
+
 void EditorLayer::DrawMenuBar()
 {
     if (!ImGui::BeginMainMenuBar()) return;
@@ -153,6 +190,8 @@ void EditorLayer::DrawMenuBar()
         }
         ImGui::EndMenu();
     }
+
+    DrawToolbar();
 
     ImGui::EndMainMenuBar();
 }

@@ -121,3 +121,30 @@ bool Scene::IsAncestorOf(entt::entity entity, entt::entity potentialDescendant) 
     }
     return false;
 }
+
+// ---- play mode --------------------------------------------------------------
+
+void Scene::StartPlay()
+{
+    if (m_Playing) return;
+    m_Playing = true;
+    m_Systems = SystemRegistry::Get().CreateSystems();
+    for (auto& system : m_Systems)
+        system->OnStart(*this);
+}
+
+void Scene::StopPlay()
+{
+    if (!m_Playing) return;
+    for (auto& system : m_Systems)
+        system->OnDestroy(*this);
+    m_Systems.clear();
+    m_Playing = false;
+}
+
+void Scene::UpdateSystems(float dt)
+{
+    if (!m_Playing) return;
+    for (auto& system : m_Systems)
+        system->OnUpdate(*this, dt);
+}

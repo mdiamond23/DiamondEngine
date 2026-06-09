@@ -53,7 +53,7 @@ struct LightComponent
     LightType type           = LightType::Point;
     glm::vec3 color          = { 1.0f, 1.0f, 1.0f };
     float     intensity      = 100.0f;
-    float     radius         = 10.0f;    // Point/Spot: max influence range
+    float     radius         = 10.0f;   // Point/Spot: max influence range
     float     innerConeAngle = 15.0f;   // Spot: inner cone, degrees
     float     outerConeAngle = 30.0f;   // Spot: outer cone, degrees
 };

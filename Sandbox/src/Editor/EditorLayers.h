@@ -11,7 +11,7 @@
 
 class EditorLayer {
 public:
-    explicit EditorLayer(Scene* scene);
+    explicit EditorLayer(Scene* scene, ImFont* iconFont = nullptr);
     void SetupDockspace();
     void OnImGuiRender();
     void SetViewportTexture(uint32_t textureID);
@@ -21,6 +21,7 @@ public:
 
 private:
     void DrawMenuBar();
+    void DrawToolbar();
 
     static std::string OpenFileDialog();
     static std::string SaveFileDialog();

@@ -3,8 +3,11 @@
 #include <unordered_map>
 #include <string>
 #include <string_view>
+#include <memory>
+#include <vector>
 #include "Components.h"
 #include "TransformSystem.h"
+#include "Scripting.h"
 
 class Scene
 {
@@ -31,6 +34,37 @@ public:
     // Cycle guard: returns true if `potentialDescendant` lives inside `entity`'s subtree.
     bool IsAncestorOf(entt::entity entity, entt::entity potentialDescendant) const;
 
+    // ---- Component access --------------------------------------------------
+    template<typename... Ts>
+    auto View() { return m_Registry.view<Ts...>(); }
+
+    template<typename... Ts>
+    auto View() const { return m_Registry.view<Ts...>(); }
+
+    template<typename... Ts>
+    bool Has(entt::entity entity) const { return m_Registry.all_of<Ts...>(entity); }
+
+    template<typename T>
+    T& Get(entt::entity entity) { return m_Registry.get<T>(entity); }
+
+    template<typename T>
+    const T& Get(entt::entity entity) const { return m_Registry.get<T>(entity); }
+
+    template<typename T, typename... Args>
+    T& Add(entt::entity entity, Args&&... args)
+    {
+        return m_Registry.emplace<T>(entity, std::forward<Args>(args)...);
+    }
+
+    template<typename T>
+    void Remove(entt::entity entity) { m_Registry.remove<T>(entity); }
+
+    // ---- Play mode ---------------------------------------------------------
+    void StartPlay();
+    void StopPlay();
+    void UpdateSystems(float dt);
+    bool IsPlaying() const { return m_Playing; }
+
     // ---- Accessors ---------------------------------------------------------
     TransformSystem&       GetTransformSystem()       { return m_TransformSystem; }
     const TransformSystem& GetTransformSystem() const { return m_TransformSystem; }
@@ -44,4 +78,7 @@ private:
     entt::registry   m_Registry;
     TransformSystem  m_TransformSystem;
     std::unordered_map<entt::entity, std::string> m_EntityNames;
+
+    std::vector<std::unique_ptr<GameSystem>> m_Systems;
+    bool                                     m_Playing = false;
 };

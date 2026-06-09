@@ -17,6 +17,8 @@
 
 #include "Core/Camera.h"
 #include "Core/Input.h"
+#include "Scripts/TestHealth.h"
+#include <IconsFontAwesome5.h>
 #include "Renderer/MeshData.h"
 #include "Renderer/Material.h"
 #include "Renderer/TextureData.h"
@@ -102,8 +104,18 @@ int main()
     ImGui_ImplGlfw_InitForOpenGL(window, true);
     ImGui_ImplOpenGL3_Init("#version 410");
 
+    ImFont* iconFont = nullptr;
+    {
+        ImGuiIO& io = ImGui::GetIO();
+        io.Fonts->AddFontDefault();
+        static const ImWchar icon_ranges[] = { ICON_MIN_FA, ICON_MAX_FA, 0 };
+        ImFontConfig icon_cfg;
+        icon_cfg.PixelSnapH = true;
+        iconFont = io.Fonts->AddFontFromFileTTF(FONTS_DIR "/fa-solid-900.ttf", 16.0f, &icon_cfg, icon_ranges);
+    }
+
     Scene scene;
-    EditorLayer editorLayer(&scene);
+    EditorLayer editorLayer(&scene, iconFont);
     glfwSetWindowUserPointer(window, &editorLayer);
     glfwSetDropCallback(window, dropCallback);
 
@@ -573,6 +585,8 @@ int main()
             lastFbW = fbW;
             lastFbH = fbH;
         }
+
+        scene.UpdateSystems(deltaTime);
 
         // Update world transforms — rebuilds sorted arrays if hierarchy changed, then linear pass.
         scene.GetTransformSystem().Update(scene.GetRegistry());

@@ -3,11 +3,13 @@
 #include <string>
 #include <unordered_set>
 #include <glm/glm.hpp>
+#include <imgui.h>
 #include "Scene/Scene.h"
 #include "Command.h"
 
 struct EditorContext {
     Scene*          ActiveScene    = nullptr;
+    ImFont*         IconFont       = nullptr;
     CommandManager  Commands;
     std::unordered_set<entt::entity> selectedEntities;
     std::string  currentScenePath;
