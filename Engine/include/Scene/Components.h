@@ -58,6 +58,14 @@ struct LightComponent
     float     outerConeAngle = 30.0f;   // Spot: outer cone, degrees
 };
 
+struct CameraComponent
+{
+    bool  isPrimary = true;
+    float fov       = 60.0f;
+    float nearClip  = 0.1f;
+    float farClip   = 1000.0f;
+};
+
 struct IDComponent {
     uint64_t uuid;
 };

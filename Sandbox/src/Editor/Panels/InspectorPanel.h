@@ -35,7 +35,13 @@ private:
     float m_OldUVScale          = 1.0f;
     float m_OldEmissiveStrength = 0.0f;
 
+    // Camera field drag snapshots
+    float m_OldFov     = 60.0f;
+    float m_OldNear    = 0.1f;
+    float m_OldFar     = 1000.0f;
+
     // Saved component state for deferred remove commands
-    std::optional<MeshComponent>  m_PendingRemovedMesh;
-    std::optional<LightComponent> m_PendingRemovedLight;
+    std::optional<MeshComponent>    m_PendingRemovedMesh;
+    std::optional<LightComponent>   m_PendingRemovedLight;
+    std::optional<CameraComponent>  m_PendingRemovedCamera;
 };

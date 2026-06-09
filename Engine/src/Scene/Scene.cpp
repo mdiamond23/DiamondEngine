@@ -148,3 +148,12 @@ void Scene::UpdateSystems(float dt)
     for (auto& system : m_Systems)
         system->OnUpdate(*this, dt);
 }
+
+// ---- camera -----------------------------------------------------------------
+
+entt::entity Scene::GetPrimaryCamera() const
+{
+    for (auto [entity, cam] : m_Registry.view<CameraComponent>().each())
+        if (cam.isPrimary) return entity;
+    return entt::null;
+}

@@ -66,9 +66,7 @@ public:
 
             if (health.current <= health.max * .5f)
             {
-                // move component or just mess with the transform
-                if (scene.Has<TransformComponent>(entity))
-                    scene.Get<TransformComponent>(entity).scale *= 2.0f * dt;
+
             }
         }
     }

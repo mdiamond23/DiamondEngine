@@ -1,6 +1,6 @@
 add_executable(Sandbox
     src/main.cpp
-    src/Scripts/TestHealth.h
+    src/Scripts/AllScripts.h
     src/Editor/EditorLayers.cpp
     src/Editor/Command.cpp
     src/Editor/SceneSerializer.cpp
@@ -10,6 +10,7 @@ add_executable(Sandbox
     src/Editor/Panels/InspectorPanel.cpp
     src/Editor/Panels/ContentPanel.cpp
     src/Editor/Panels/ConsolePanel.cpp
+    src/Editor/Panels/GameViewportPanel.cpp
 )
 
 target_link_libraries(Sandbox PRIVATE MyEngine nlohmann_json::nlohmann_json imguizmo miniz)
@@ -24,4 +25,5 @@ target_compile_definitions(Sandbox PRIVATE
     ENGINE_SHADERS_DIR="${CMAKE_SOURCE_DIR}/Engine/Shaders"
     ASSETS_DIR="${CMAKE_SOURCE_DIR}/Assets"
     FONTS_DIR="${fontawesome_SOURCE_DIR}/webfonts"
+    SCRIPTS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/src/Scripts"
 )

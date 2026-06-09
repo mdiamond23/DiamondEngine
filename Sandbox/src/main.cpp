@@ -17,7 +17,7 @@
 
 #include "Core/Camera.h"
 #include "Core/Input.h"
-#include "Scripts/TestHealth.h"
+#include "Scripts/AllScripts.h"
 #include <IconsFontAwesome5.h>
 #include "Renderer/MeshData.h"
 #include "Renderer/Material.h"
@@ -373,9 +373,12 @@ int main()
     RGTextureHandle pingPong[2];
     RGTextureHandle ldrBuffer;
 
-    // Viewport FBO — managed outside the render graph so it isn't freed between frames
-    uint32_t viewportFBO     = 0;
-    uint32_t viewportTexture = 0;
+    // Viewport FBOs — managed outside the render graph so they aren't freed between frames
+    uint32_t viewportFBO      = 0;
+    uint32_t viewportTexture  = 0;
+    uint32_t gameViewportFBO  = 0;
+    uint32_t gameViewportTex  = 0;
+    uint32_t outputFBO        = 0;  // set before each graph.Execute() to select render target
 
     auto buildGraph = [&](int w, int h)
     {
@@ -404,18 +407,22 @@ int main()
         // LDR intermediate — bloom composite writes here, FXAA reads and outputs to viewport
         ldrBuffer = graph.DeclareTexture("ldrBuffer", { w, h, GL_RGBA8, true });
 
-        // Viewport FBO — recreate on resize
-        if (viewportTexture) glDeleteTextures(1,      &viewportTexture);
-        if (viewportFBO)     glDeleteFramebuffers(1,  &viewportFBO);
-        glGenTextures(1, &viewportTexture);
-        glBindTexture(GL_TEXTURE_2D, viewportTexture);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glGenFramebuffers(1, &viewportFBO);
-        glBindFramebuffer(GL_FRAMEBUFFER, viewportFBO);
-        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, viewportTexture, 0);
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        // Viewport FBOs — recreate on resize
+        auto makeViewportFBO = [](uint32_t& fbo, uint32_t& tex, int w, int h) {
+            if (tex) glDeleteTextures(1,      &tex);
+            if (fbo) glDeleteFramebuffers(1,  &fbo);
+            glGenTextures(1, &tex);
+            glBindTexture(GL_TEXTURE_2D, tex);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            glGenFramebuffers(1, &fbo);
+            glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, 0);
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        };
+        makeViewportFBO(viewportFBO,     viewportTexture, w, h);
+        makeViewportFBO(gameViewportFBO, gameViewportTex, w, h);
 
         // Shadow passes — sinks (no graph writes), always alive
         graph.AddPass("DirectionalShadow")
@@ -538,14 +545,14 @@ int main()
                     graph.GetFBO(ldrBuffer));
             });
 
-        // FXAA — sink pass, renders into the manually managed viewportFBO
+        // FXAA — sink pass, renders into whichever FBO outputFBO points to
         graph.AddPass("FXAA")
             .Read(ldrBuffer)
             .SetExecute([&]{
                 fxaaPass.Render(fxaaShader,
                     graph.GetTexture(ldrBuffer),
                     fbW, fbH, fxaaEnabled,
-                    viewportFBO);
+                    outputFBO);
             });
 
         graph.Compile();
@@ -637,27 +644,45 @@ int main()
             }
         }
 
-        view = g_camera.GetViewMatrix();
-        proj = glm::perspective(
-            glm::radians(g_camera.Zoom), (float)fbW / (float)fbH, 0.1f, 100.0f);
-
-        {
+        // Cull and execute the render graph into the given FBO
+        auto cullAndExecute = [&](uint32_t targetFBO) {
             Frustum frustum = Frustum::Extract(proj * view);
-            auto cull = [&](const std::vector<DrawCall>& src) {
-                std::vector<DrawCall> out;
-                out.reserve(src.size());
-                for (const auto& dc : src)
+            culledBatches.clear();
+            for (auto& [mat, batch] : materialBatches) {
+                auto& out = culledBatches[mat];
+                out.clear();
+                for (const auto& dc : batch)
                     if (frustum.TestAABB(dc.localBounds.Transform(dc.modelMatrix)))
                         out.push_back(dc);
-                return out;
-            };
-            culledBatches.clear();
-            for (auto& [mat, batch] : materialBatches)
-                culledBatches[mat] = cull(batch);
-            // allDraws stays unculled — shadow passes need the full scene
+            }
+            outputFBO = targetFBO;
+            graph.Execute();
+        };
+
+        // --- Scene viewport: editor camera ---
+        view = g_camera.GetViewMatrix();
+        proj = glm::perspective(glm::radians(g_camera.Zoom), (float)fbW / (float)fbH, 0.1f, 100.0f);
+        cullAndExecute(viewportFBO);
+
+        // --- Game viewport: primary camera entity (play mode only) ---
+        entt::entity primaryCam = scene.GetPrimaryCamera();
+        if (scene.IsPlaying() && primaryCam != entt::null)
+        {
+            auto& cc       = scene.Get<CameraComponent>(primaryCam);
+            glm::mat4 camW = scene.GetTransformSystem().GetWorldMatrix(primaryCam);
+            view = glm::inverse(camW);
+            proj = glm::perspective(glm::radians(cc.fov), (float)fbW / (float)fbH, cc.nearClip, cc.farClip);
+            cullAndExecute(gameViewportFBO);
+            editorLayer.SetGameViewportTexture(gameViewportTex);
+        }
+        else
+        {
+            editorLayer.SetGameViewportTexture(0);
         }
 
-        graph.Execute();
+        // Restore editor camera matrices for ImGuizmo / editor systems
+        view = g_camera.GetViewMatrix();
+        proj = glm::perspective(glm::radians(g_camera.Zoom), (float)fbW / (float)fbH, 0.1f, 100.0f);
 
         // Clear backbuffer for ImGui — scene now lives in viewportTex
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
@@ -693,6 +718,8 @@ int main()
 
     if (viewportTexture) glDeleteTextures(1,     &viewportTexture);
     if (viewportFBO)     glDeleteFramebuffers(1, &viewportFBO);
+    if (gameViewportTex) glDeleteTextures(1,     &gameViewportTex);
+    if (gameViewportFBO) glDeleteFramebuffers(1, &gameViewportFBO);
 
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplGlfw_Shutdown();

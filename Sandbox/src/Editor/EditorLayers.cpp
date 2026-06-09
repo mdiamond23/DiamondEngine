@@ -1,8 +1,11 @@
 #include <imgui_internal.h>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
+#include <cctype>
 #include "EditorLayers.h"
 #include "SceneSerializer.h"
+#include "Scene/Components.h"
 #include <IconsFontAwesome5.h>
 
 #ifndef WIN32_LEAN_AND_MEAN
@@ -13,6 +16,87 @@
 #endif
 #include <windows.h>
 #include <commdlg.h>
+
+// Converts "enemy health" or "enemy_health" → "EnemyHealth"
+static std::string ToClassName(const char* input)
+{
+    std::string result;
+    bool capitalize = true;
+    for (char c : std::string(input)) {
+        if (c == ' ' || c == '_' || c == '-') {
+            capitalize = true;
+        } else if (capitalize) {
+            result += (char)std::toupper((unsigned char)c);
+            capitalize = false;
+        } else {
+            result += c;
+        }
+    }
+    return result;
+}
+
+// Writes Scripts/{ClassName}.h and appends its include to AllScripts.h.
+// Returns false if the file already exists.
+static bool CreateScriptFile(const std::string& className)
+{
+    namespace fs = std::filesystem;
+    std::string dir      = SCRIPTS_DIR;
+    std::string filePath = dir + "/" + className + ".h";
+    if (fs::exists(filePath)) return false;
+
+    {
+        std::ofstream f(filePath);
+        f << "#pragma once\n"
+             "#include \"Scene/Scripting.h\"\n"
+             "#include \"Scene/Scene.h\"\n"
+             "#include \"Scene/ComponentRegistry.h\"\n"
+             "#include <imgui.h>\n"
+             "#include <spdlog/spdlog.h>\n"
+             "\n"
+             "// ---- Data -------------------------------------------------------------------\n"
+             "\n"
+             "struct " << className << "Component\n"
+             "{\n"
+             "    // TODO: Add component fields here\n"
+             "};\n"
+             "\n"
+             "// ---- Inspector UI -----------------------------------------------------------\n"
+             "\n"
+             "template<>\n"
+             "inline void DrawComponentInspector<" << className << "Component>(" << className << "Component& c)\n"
+             "{\n"
+             "    // TODO: Add ImGui fields here\n"
+             "    ImGui::Text(\"" << className << "\");\n"
+             "}\n"
+             "\n"
+             "// ---- Registration -----------------------------------------------------------\n"
+             "\n"
+             "DECLARE_COMPONENT(" << className << "Component, \"" << className << "\")\n"
+             "\n"
+             "// ---- Behavior ---------------------------------------------------------------\n"
+             "\n"
+             "class " << className << "System : public GameSystem\n"
+             "{\n"
+             "    DECLARE_SYSTEM(" << className << "System, 100)\n"
+             "public:\n"
+             "    void OnStart(Scene& scene) override {}\n"
+             "\n"
+             "    void OnUpdate(Scene& scene, float dt) override\n"
+             "    {\n"
+             "        for (auto [entity, comp] : scene.View<" << className << "Component>().each())\n"
+             "        {\n"
+             "            // TODO: Add behavior here\n"
+             "        }\n"
+             "    }\n"
+             "\n"
+             "    void OnDestroy(Scene& scene) override {}\n"
+             "};\n";
+    }
+
+    std::ofstream manifest(dir + "/AllScripts.h", std::ios::app);
+    manifest << "#include \"" << className << ".h\"\n";
+    return true;
+}
 
 // Returns Assets/Scenes/NewScene.scene, or NewScene (1).scene etc. if taken.
 static std::string UniqueNewScenePath()
@@ -36,6 +120,7 @@ EditorLayer::EditorLayer(Scene* scene, ImFont* iconFont)
     m_Inspector.SetContext(&m_Context);
     m_Inspector.SetContentPanel(&m_Content);
     m_Viewport.SetContext(&m_Context);
+    m_GameViewport.SetContext(&m_Context);
 
     m_Content.SetOnSceneOpen([this](const std::string& path) {
         m_Context.ClearSelection();
@@ -66,6 +151,7 @@ void EditorLayer::SetupDockspace()
     // Attach and finish dock
     ImGui::DockBuilderDockWindow("Hierarchy", left);
     ImGui::DockBuilderDockWindow("Viewport", center);
+    ImGui::DockBuilderDockWindow("Game", center);
     ImGui::DockBuilderDockWindow("Inspector", right);
     ImGui::DockBuilderDockWindow("Content Browser", down);
     ImGui::DockBuilderDockWindow("Console", down);
@@ -75,6 +161,11 @@ void EditorLayer::SetupDockspace()
 void EditorLayer::SetViewportTexture(uint32_t textureID)
 {
     m_Viewport.SetTexture(textureID);
+}
+
+void EditorLayer::SetGameViewportTexture(uint32_t textureID)
+{
+    m_GameViewport.SetTexture(textureID);
 }
 
 void EditorLayer::UpdateCamera(const glm::mat4& view, const glm::mat4& proj,
@@ -130,7 +221,10 @@ void EditorLayer::DrawToolbar()
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.25f, 0.75f, 0.25f, 1.00f));
         ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4(0.12f, 0.45f, 0.12f, 1.00f));
         if (ImGui::Button(ICON_FA_PLAY, ImVec2(btnW, 0)))
+        {
+            m_SceneSnapshot = SceneSerializer::Stringify(*scene);
             scene->StartPlay();
+        }
         ImGui::PopStyleColor(3);
     }
     else
@@ -139,12 +233,74 @@ void EditorLayer::DrawToolbar()
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.80f, 0.20f, 0.20f, 1.00f));
         ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4(0.50f, 0.10f, 0.10f, 1.00f));
         if (ImGui::Button(ICON_FA_STOP, ImVec2(btnW, 0)))
+        {
             scene->StopPlay();
+            m_Context.ClearSelection();
+            m_Context.Commands.Clear();
+            if (!m_SceneSnapshot.empty())
+                SceneSerializer::FromString(*scene, m_SceneSnapshot);
+        }
         ImGui::PopStyleColor(3);
     }
 
     if (m_Context.IconFont)
         ImGui::PopFont();
+}
+
+void EditorLayer::DrawNewScriptDialog()
+{
+    if (m_OpenNewScriptDialog)
+    {
+        ImGui::OpenPopup("New Script");
+        m_OpenNewScriptDialog = false;
+    }
+
+    ImVec2 center = ImGui::GetMainViewport()->GetCenter();
+    ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(ImVec2(360, 0), ImGuiCond_Appearing);
+
+    if (ImGui::BeginPopupModal("New Script", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+    {
+        ImGui::Text("Script name:");
+        ImGui::SetNextItemWidth(-1.0f);
+        bool entered = ImGui::InputText("##scriptname", m_NewScriptNameBuf, sizeof(m_NewScriptNameBuf),
+                                        ImGuiInputTextFlags_EnterReturnsTrue);
+
+        std::string preview = ToClassName(m_NewScriptNameBuf);
+        if (!preview.empty())
+            ImGui::TextDisabled("-> %sComponent / %sSystem", preview.c_str(), preview.c_str());
+        else
+            ImGui::TextDisabled("Enter a name above");
+
+        if (!m_NewScriptError.empty())
+            ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.35f, 1.0f), "%s", m_NewScriptError.c_str());
+
+        ImGui::Spacing();
+
+        bool create = entered || ImGui::Button("Create", ImVec2(160, 0));
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", ImVec2(160, 0)))
+            ImGui::CloseCurrentPopup();
+
+        if (create)
+        {
+            std::string name = ToClassName(m_NewScriptNameBuf);
+            if (name.empty())
+            {
+                m_NewScriptError = "Name cannot be empty.";
+            }
+            else if (!CreateScriptFile(name))
+            {
+                m_NewScriptError = name + ".h already exists.";
+            }
+            else
+            {
+                ImGui::CloseCurrentPopup();
+            }
+        }
+
+        ImGui::EndPopup();
+    }
 }
 
 void EditorLayer::DrawMenuBar()
@@ -156,6 +312,16 @@ void EditorLayer::DrawMenuBar()
             m_Context.Commands.Undo();
         if (ImGui::MenuItem("Redo", "Ctrl+Y", false, m_Context.Commands.CanRedo()))
             m_Context.Commands.Redo();
+        ImGui::EndMenu();
+    }
+
+    if (ImGui::BeginMenu("Scripts")) {
+        if (ImGui::MenuItem("New Script..."))
+        {
+            m_OpenNewScriptDialog = true;
+            memset(m_NewScriptNameBuf, 0, sizeof(m_NewScriptNameBuf));
+            m_NewScriptError.clear();
+        }
         ImGui::EndMenu();
     }
 
@@ -239,9 +405,12 @@ void EditorLayer::OnImGuiRender()
 
     ImGui::End();
 
+    DrawNewScriptDialog();
+
     // Render each panel
     m_Hierarchy.OnImGuiRender();
     m_Viewport.OnImGuiRender();
+    m_GameViewport.OnImGuiRender();
     m_Inspector.OnImGuiRender();
     m_Content.OnImGuiRender();
     m_Console.OnImGuiRender();

@@ -3,12 +3,17 @@
 
 void ConsolePanel::Log(LogLevel level, const std::string& message)
 {
-    m_Entries.push_back({ level, message });
+    switch (level)
+    {
+        case LogLevel::Warning: Debug::Warn(message);  break;
+        case LogLevel::Error:   Debug::Error(message); break;
+        default:                Debug::Log(message);   break;
+    }
 }
 
 void ConsolePanel::Clear()
 {
-    m_Entries.clear();
+    Debug::Clear();
 }
 
 void ConsolePanel::OnImGuiRender()
@@ -22,7 +27,7 @@ void ConsolePanel::OnImGuiRender()
     ImGui::Separator();
 
     ImGui::BeginChild("ScrollRegion", ImVec2(0, 0), false, ImGuiWindowFlags_HorizontalScrollbar);
-    for (const auto& entry : m_Entries)
+    for (const auto& entry : Debug::GetEntries())
     {
         ImVec4 color;
         switch (entry.level)

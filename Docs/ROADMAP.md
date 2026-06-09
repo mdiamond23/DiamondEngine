@@ -44,10 +44,10 @@ The renderer is already ahead of schedule for a learning engine.
 ## Milestone 2 — Gameplay Foundation
 > Goal: something can actually happen at runtime
 
-- [ ] Input system — named actions mapped to keys, not raw GLFW calls
-- [ ] Scripting — native C++ components with `OnStart()` / `OnUpdate(dt)` / `OnDestroy()`
+- [x] Input system — named actions mapped to keys, not raw GLFW calls
+- [x] Scripting — native C++ components with `OnStart()` / `OnUpdate(dt)` / `OnDestroy()`
 - [ ] Collision + physics — [Jolt Physics](https://github.com/jrouwe/JoltPhysics) recommended
-- [ ] Play mode — start/stop the game loop inside the editor without relaunching
+- [x] Play mode — start/stop the game loop inside the editor without relaunching
 
 ---
 

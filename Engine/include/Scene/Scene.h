@@ -72,8 +72,9 @@ public:
     entt::registry&       GetRegistry()       { return m_Registry; }
     const entt::registry& GetRegistry() const { return m_Registry; }
 
-    const std::unordered_map<entt::entity, std::string>& GetEntityNames() const { return m_EntityNames; }
+    entt::entity GetPrimaryCamera() const;
 
+    const std::unordered_map<entt::entity, std::string>& GetEntityNames() const { return m_EntityNames; }
 private:
     entt::registry   m_Registry;
     TransformSystem  m_TransformSystem;

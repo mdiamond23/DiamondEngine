@@ -324,8 +324,9 @@ void InspectorPanel::OnImGuiRender() {
         }
     }
 
-    bool removeMesh  = false;
-    bool removeLight = false;
+    bool removeMesh   = false;
+    bool removeLight  = false;
+    bool removeCamera = false;
 
     // Mesh Component
     if (registry.all_of<MeshComponent>(entity)) {
@@ -529,6 +530,57 @@ void InspectorPanel::OnImGuiRender() {
         }
     }
 
+    // Camera Component
+    if (registry.all_of<CameraComponent>(entity)) {
+        ImGui::Separator();
+        auto& cc = registry.get<CameraComponent>(entity);
+
+        ImGui::Text("Camera");
+        if (ImGui::BeginPopupContextItem("##CameraCompCtx")) {
+            if (ImGui::MenuItem("Remove Component")) {
+                m_PendingRemovedCamera = cc;
+                removeCamera = true;
+            }
+            ImGui::EndPopup();
+        }
+
+        if (!removeCamera) {
+            if (ImGui::Checkbox("Primary Camera", &cc.isPrimary)) {
+                bool v = cc.isPrimary;
+                m_Context->Commands.ExecuteCommand(std::make_unique<ValueChangeCommand<bool>>(
+                    [scene, entity](const bool& x) { scene->GetRegistry().get<CameraComponent>(entity).isPrimary = x; },
+                    !v, v, "Toggle Primary Camera"));
+            }
+
+            ImGui::DragFloat("FOV", &cc.fov, 0.5f, 1.0f, 179.0f, "%.1f deg");
+            if (ImGui::IsItemActivated())           m_OldFov = cc.fov;
+            if (ImGui::IsItemDeactivatedAfterEdit()) {
+                float n = cc.fov, o = m_OldFov;
+                m_Context->Commands.ExecuteCommand(std::make_unique<ValueChangeCommand<float>>(
+                    [scene, entity](const float& v) { scene->GetRegistry().get<CameraComponent>(entity).fov = v; },
+                    o, n, "Change Camera FOV"));
+            }
+
+            ImGui::DragFloat("Near Clip", &cc.nearClip, 0.01f, 0.001f, cc.farClip - 0.01f, "%.3f");
+            if (ImGui::IsItemActivated())           m_OldNear = cc.nearClip;
+            if (ImGui::IsItemDeactivatedAfterEdit()) {
+                float n = cc.nearClip, o = m_OldNear;
+                m_Context->Commands.ExecuteCommand(std::make_unique<ValueChangeCommand<float>>(
+                    [scene, entity](const float& v) { scene->GetRegistry().get<CameraComponent>(entity).nearClip = v; },
+                    o, n, "Change Near Clip"));
+            }
+
+            ImGui::DragFloat("Far Clip", &cc.farClip, 1.0f, cc.nearClip + 0.01f, 100000.0f, "%.1f");
+            if (ImGui::IsItemActivated())           m_OldFar = cc.farClip;
+            if (ImGui::IsItemDeactivatedAfterEdit()) {
+                float n = cc.farClip, o = m_OldFar;
+                m_Context->Commands.ExecuteCommand(std::make_unique<ValueChangeCommand<float>>(
+                    [scene, entity](const float& v) { scene->GetRegistry().get<CameraComponent>(entity).farClip = v; },
+                    o, n, "Change Far Clip"));
+            }
+        }
+    }
+
     // Registered game components
     const ComponentDescriptor* removeUserComp = nullptr;
 
@@ -570,6 +622,15 @@ void InspectorPanel::OnImGuiRender() {
             [scene, entity, saved]() { scene->GetRegistry().emplace_or_replace<LightComponent>(entity, saved); },
             "Remove Light Component"));
     }
+    if (removeCamera && m_PendingRemovedCamera) {
+        CameraComponent saved = *m_PendingRemovedCamera;
+        m_PendingRemovedCamera.reset();
+        registry.remove<CameraComponent>(entity);
+        m_Context->Commands.RecordCommand(std::make_unique<FunctionCommand>(
+            [scene, entity]()        { scene->GetRegistry().remove<CameraComponent>(entity); },
+            [scene, entity, saved]() { scene->GetRegistry().emplace_or_replace<CameraComponent>(entity, saved); },
+            "Remove Camera Component"));
+    }
     if (removeUserComp)
     {
         auto removeFn  = removeUserComp->remove;
@@ -595,9 +656,10 @@ void InspectorPanel::OnImGuiRender() {
         ImGui::TextDisabled("Components");
         ImGui::Separator();
 
-        bool hasMesh  = registry.all_of<MeshComponent>(entity);
-        bool hasLight = registry.all_of<LightComponent>(entity);
-        bool anyShown = !hasMesh || !hasLight;
+        bool hasMesh   = registry.all_of<MeshComponent>(entity);
+        bool hasLight  = registry.all_of<LightComponent>(entity);
+        bool hasCamera = registry.all_of<CameraComponent>(entity);
+        bool anyShown  = !hasMesh || !hasLight || !hasCamera;
 
         constexpr ImGuiSelectableFlags kCompFlags =
             ImGuiSelectableFlags_AllowDoubleClick | ImGuiSelectableFlags_DontClosePopups;
@@ -620,6 +682,17 @@ void InspectorPanel::OnImGuiRender() {
                         [scene, entity]() { scene->GetRegistry().emplace<LightComponent>(entity); },
                         [scene, entity]() { scene->GetRegistry().remove<LightComponent>(entity); },
                         "Add Light Component"));
+                    ImGui::CloseCurrentPopup();
+                }
+        }
+
+        if (!hasCamera) {
+            if (ImGui::Selectable("Camera", false, kCompFlags))
+                if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                    m_Context->Commands.ExecuteCommand(std::make_unique<FunctionCommand>(
+                        [scene, entity]() { scene->GetRegistry().emplace<CameraComponent>(entity); },
+                        [scene, entity]() { scene->GetRegistry().remove<CameraComponent>(entity); },
+                        "Add Camera Component"));
                     ImGui::CloseCurrentPopup();
                 }
         }

@@ -19,7 +19,6 @@ static json JQuat(const glm::quat& q) { return { q.w, q.x, q.y, q.z }; }
 static glm::vec3 ToVec3(const json& j) { return { j[0], j[1], j[2] }; }
 static glm::quat ToQuat(const json& j) { return glm::quat(float(j[0]), float(j[1]), float(j[2]), float(j[3])); }
 
-// Loads a texture once and returns the cached result on subsequent calls.
 static std::shared_ptr<Texture> LoadCached(
     const std::string& path,
     std::unordered_map<std::string, std::shared_ptr<Texture>>& cache)
@@ -30,7 +29,6 @@ static std::shared_ptr<Texture> LoadCached(
     return it->second;
 }
 
-// Loads all sub-meshes for a file once and caches them.
 static const std::vector<MeshData>& LoadMeshCached(
     const std::string& path,
     std::unordered_map<std::string, std::vector<MeshData>>& cache)
@@ -40,9 +38,9 @@ static const std::vector<MeshData>& LoadMeshCached(
     return it->second;
 }
 
-// ---- Save -------------------------------------------------------------------
+// ---- shared JSON core -------------------------------------------------------
 
-void SceneSerializer::Save(Scene& scene, const std::string& path)
+static json ToJson(Scene& scene)
 {
     json entities = json::array();
 
@@ -51,11 +49,9 @@ void SceneSerializer::Save(Scene& scene, const std::string& path)
         json ej;
         ej["name"] = name;
 
-        // UUID — always present
         if (reg.all_of<IDComponent>(entity))
             ej["uuid"] = reg.get<IDComponent>(entity).uuid;
 
-        // Parent UUID — only for non-root entities
         if (reg.all_of<HierarchyComponent>(entity)) {
             entt::entity parent = reg.get<HierarchyComponent>(entity).parent;
             if (parent != entt::null && reg.all_of<IDComponent>(parent))
@@ -107,72 +103,62 @@ void SceneSerializer::Save(Scene& scene, const std::string& path)
             };
         }
 
+        if (reg.all_of<CameraComponent>(entity)) {
+            auto& cc = reg.get<CameraComponent>(entity);
+            ej["camera"] = {
+                { "isPrimary", cc.isPrimary },
+                { "fov",       cc.fov       },
+                { "nearClip",  cc.nearClip  },
+                { "farClip",   cc.farClip   }
+            };
+        }
+
         entities.push_back(ej);
     }
 
-    std::ofstream f(path);
-    f << json{ { "entities", entities } }.dump(2);
+    return json{ { "entities", entities } };
 }
 
-// ---- Load -------------------------------------------------------------------
-
-bool SceneSerializer::Load(Scene& scene, const std::string& path)
+static bool FromJson(Scene& scene, const json& root)
 {
-    std::ifstream f(path);
-    if (!f.is_open()) return false;
-
-    json root;
-    try { root = json::parse(f); }
-    catch (...) { return false; }
-
     scene.Clear();
 
     std::unordered_map<std::string, std::shared_ptr<Texture>>  texCache;
     std::unordered_map<std::string, std::vector<MeshData>>     meshCache;
 
-    // Pass 1 — create entities and build uuid→entity map.
     std::unordered_map<uint64_t, entt::entity> uuidToEntity;
     for (const auto& ej : root.at("entities")) {
         std::string  name = ej.value("name", "Entity");
         entt::entity e    = scene.CreateEntity(name);
         if (ej.contains("uuid")) {
             uint64_t uuid = ej["uuid"].get<uint64_t>();
-            // Overwrite the auto-generated UUID so it matches the saved file.
             scene.GetRegistry().get<IDComponent>(e).uuid = uuid;
             uuidToEntity[uuid] = e;
         }
     }
 
-    // Pass 2 — load components and re-establish hierarchy.
-    std::size_t idx = 0;
     for (const auto& ej : root.at("entities")) {
-        // Resolve entity from uuid if present, otherwise fall back to creation order.
         entt::entity e = entt::null;
         if (ej.contains("uuid")) {
-            uint64_t uuid = ej["uuid"].get<uint64_t>();
-            auto it = uuidToEntity.find(uuid);
+            auto it = uuidToEntity.find(ej["uuid"].get<uint64_t>());
             if (it != uuidToEntity.end()) e = it->second;
         }
         if (e == entt::null) continue;
 
         auto& reg = scene.GetRegistry();
 
-        // Transform
         if (ej.contains("transform")) {
             auto& tc = reg.get<TransformComponent>(e);
             auto& tj = ej["transform"];
             tc.position = ToVec3(tj["position"]);
             tc.rotation = ToQuat(tj["rotation"]);
             tc.scale    = ToVec3(tj["scale"]);
-            // Restore the editor Euler cache; fall back to deriving from quat for
-            // older scene files that don't have the eulerDegrees field.
             if (tj.contains("eulerDegrees"))
                 tc.eulerDegrees = ToVec3(tj["eulerDegrees"]);
             else
                 tc.eulerDegrees = glm::degrees(glm::eulerAngles(tc.rotation));
         }
 
-        // Mesh
         if (ej.contains("mesh")) {
             const auto& mj     = ej["mesh"];
             std::string mpath  = mj.value("meshPath", "");
@@ -198,14 +184,14 @@ bool SceneSerializer::Load(Scene& scene, const std::string& path)
             }
 
             auto mat = std::make_shared<PBRMaterial>();
-            mat->AlbedoPath    = mj.value("albedoPath",    "");
-            mat->NormalPath    = mj.value("normalPath",    "");
-            mat->MetallicPath  = mj.value("metallicPath",  "");
-            mat->RoughnessPath = mj.value("roughnessPath", "");
-            mat->AOPath        = mj.value("aoPath",        "");
-            mat->EmissivePath  = mj.value("emissivePath",  "");
+            mat->AlbedoPath       = mj.value("albedoPath",       "");
+            mat->NormalPath       = mj.value("normalPath",       "");
+            mat->MetallicPath     = mj.value("metallicPath",     "");
+            mat->RoughnessPath    = mj.value("roughnessPath",    "");
+            mat->AOPath           = mj.value("aoPath",           "");
+            mat->EmissivePath     = mj.value("emissivePath",     "");
             mat->EmissiveStrength = mj.value("emissiveStrength", 0.0f);
-            mat->UVScale          = mj.value("uvScale", 1.0f);
+            mat->UVScale          = mj.value("uvScale",          1.0f);
 
             mat->Albedo    = LoadCached(mat->AlbedoPath,    texCache);
             mat->Normal    = LoadCached(mat->NormalPath,    texCache);
@@ -214,19 +200,18 @@ bool SceneSerializer::Load(Scene& scene, const std::string& path)
             mat->AO        = LoadCached(mat->AOPath,        texCache);
             mat->Emissive  = LoadCached(mat->EmissivePath,  texCache);
 
-            auto& mc           = reg.emplace<MeshComponent>(e, mesh, mat, bounds);
-            mc.meshPath        = mpath;
-            mc.meshSubIndex    = subIdx;
-            mc.materialPath    = mj.value("materialPath", "");
-            mc.visible         = mj.value("visible",        true);
-            mc.castsShadow     = mj.value("castsShadow",    true);
-            mc.receivesShadow  = mj.value("receivesShadow", true);
+            auto& mc          = reg.emplace<MeshComponent>(e, mesh, mat, bounds);
+            mc.meshPath       = mpath;
+            mc.meshSubIndex   = subIdx;
+            mc.materialPath   = mj.value("materialPath",   "");
+            mc.visible        = mj.value("visible",        true);
+            mc.castsShadow    = mj.value("castsShadow",    true);
+            mc.receivesShadow = mj.value("receivesShadow", true);
         }
 
-        // Light
         if (ej.contains("light")) {
             const auto& lj = ej["light"];
-            auto& lc     = reg.emplace<LightComponent>(e);
+            auto& lc          = reg.emplace<LightComponent>(e);
             lc.type           = (LightType)lj.value("type", 1);
             lc.color          = ToVec3(lj["color"]);
             lc.intensity      = lj.value("intensity",      100.0f);
@@ -235,16 +220,53 @@ bool SceneSerializer::Load(Scene& scene, const std::string& path)
             lc.outerConeAngle = lj.value("outerConeAngle", 30.0f);
         }
 
-        // Hierarchy — re-parent after all components exist.
+        if (ej.contains("camera")) {
+            const auto& cj = ej["camera"];
+            auto& cc    = reg.emplace<CameraComponent>(e);
+            cc.isPrimary = cj.value("isPrimary", true);
+            cc.fov       = cj.value("fov",       60.0f);
+            cc.nearClip  = cj.value("nearClip",  0.1f);
+            cc.farClip   = cj.value("farClip",   1000.0f);
+        }
+
         if (ej.contains("parentUuid")) {
             uint64_t parentUuid = ej["parentUuid"].get<uint64_t>();
             auto it = uuidToEntity.find(parentUuid);
             if (it != uuidToEntity.end())
                 scene.SetParent(e, it->second);
         }
-
-        ++idx;
     }
 
     return true;
+}
+
+// ---- public API -------------------------------------------------------------
+
+void SceneSerializer::Save(Scene& scene, const std::string& path)
+{
+    std::ofstream f(path);
+    f << ToJson(scene).dump(2);
+}
+
+bool SceneSerializer::Load(Scene& scene, const std::string& path)
+{
+    std::ifstream f(path);
+    if (!f.is_open()) return false;
+    json root;
+    try { root = json::parse(f); }
+    catch (...) { return false; }
+    return FromJson(scene, root);
+}
+
+std::string SceneSerializer::Stringify(Scene& scene)
+{
+    return ToJson(scene).dump();
+}
+
+bool SceneSerializer::FromString(Scene& scene, const std::string& data)
+{
+    json root;
+    try { root = json::parse(data); }
+    catch (...) { return false; }
+    return FromJson(scene, root);
 }
