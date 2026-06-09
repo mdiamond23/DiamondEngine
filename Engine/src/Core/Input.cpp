@@ -30,6 +30,7 @@ namespace
     float s_mouseX = 0.0f,     s_mouseY = 0.0f;
     float s_lastMouseX = 0.0f, s_lastMouseY = 0.0f;
     float s_scrollY = 0.0f;
+    bool  s_enabled = true;
 
     void KeyCallback(GLFWwindow*, int key, int, int action, int)
     {
@@ -114,6 +115,8 @@ namespace Input
         s_actions[name] = { true, static_cast<int>(button) };
     }
 
+    void SetEnabled(bool enabled) { s_enabled = enabled; }
+
     void BindAxis(const std::string& name, Key positiveKey, Key negativeKey)
     {
         s_axes[name] = { static_cast<int>(positiveKey), static_cast<int>(negativeKey) };
@@ -121,6 +124,7 @@ namespace Input
 
     bool IsPressed(const std::string& name)
     {
+        if (!s_enabled) return false;
         auto it = s_actions.find(name);
         if (it == s_actions.end()) return false;
         const auto& b = it->second;
@@ -130,6 +134,7 @@ namespace Input
 
     bool IsHeld(const std::string& name)
     {
+        if (!s_enabled) return false;
         auto it = s_actions.find(name);
         if (it == s_actions.end()) return false;
         const auto& b = it->second;
@@ -139,6 +144,7 @@ namespace Input
 
     bool IsReleased(const std::string& name)
     {
+        if (!s_enabled) return false;
         auto it = s_actions.find(name);
         if (it == s_actions.end()) return false;
         const auto& b = it->second;
@@ -148,6 +154,7 @@ namespace Input
 
     float GetAxis(const std::string& name)
     {
+        if (!s_enabled) return 0.0f;
         auto it = s_axes.find(name);
         if (it == s_axes.end()) return 0.0f;
         const auto& b = it->second;
@@ -163,46 +170,54 @@ namespace Input
 
     glm::vec2 GetMouseDelta()
     {
+        if (!s_enabled) return { 0.0f, 0.0f };
         return { s_mouseX - s_lastMouseX, s_mouseY - s_lastMouseY };
     }
 
     float GetScrollDelta()
     {
+        if (!s_enabled) return 0.0f;
         return s_scrollY;
     }
 
     bool IsKeyPressed(Key key)
     {
+        if (!s_enabled) return false;
         int k = static_cast<int>(key);
         return k >= 0 && k < KeyCount && s_pressedKeys[k];
     }
 
     bool IsKeyHeld(Key key)
     {
+        if (!s_enabled) return false;
         int k = static_cast<int>(key);
         return k >= 0 && k < KeyCount && s_heldKeys[k];
     }
 
     bool IsKeyReleased(Key key)
     {
+        if (!s_enabled) return false;
         int k = static_cast<int>(key);
         return k >= 0 && k < KeyCount && s_releasedKeys[k];
     }
 
     bool IsMouseButtonPressed(MouseButton button)
     {
+        if (!s_enabled) return false;
         int b = static_cast<int>(button);
         return b >= 0 && b < MouseCount && s_pressedMouse[b];
     }
 
     bool IsMouseButtonHeld(MouseButton button)
     {
+        if (!s_enabled) return false;
         int b = static_cast<int>(button);
         return b >= 0 && b < MouseCount && s_heldMouse[b];
     }
 
     bool IsMouseButtonReleased(MouseButton button)
     {
+        if (!s_enabled) return false;
         int b = static_cast<int>(button);
         return b >= 0 && b < MouseCount && s_releasedMouse[b];
     }

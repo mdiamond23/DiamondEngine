@@ -593,7 +593,9 @@ int main()
             lastFbH = fbH;
         }
 
+        Input::SetEnabled(scene.IsPlaying() && editorLayer.IsGameViewportActive());
         scene.UpdateSystems(deltaTime);
+        Input::SetEnabled(true);
 
         // Update world transforms — rebuilds sorted arrays if hierarchy changed, then linear pass.
         scene.GetTransformSystem().Update(scene.GetRegistry());

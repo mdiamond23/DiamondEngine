@@ -58,6 +58,7 @@ namespace Input
 {
     void Init(GLFWwindow* window);
     void Update();
+    void SetEnabled(bool enabled);
 
     void BindAction(const std::string& name, Key key);
     void BindAction(const std::string& name, MouseButton button);
