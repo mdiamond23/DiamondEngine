@@ -5,6 +5,7 @@
 #include "Scene/Physics/PhysicsAPI.h"
 #include "Scene/Physics/Rigidbody.h"
 #include <imgui.h>
+#include <nlohmann/json.hpp>
 #include "Core/Input.h"
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -26,6 +27,27 @@ inline void DrawComponentInspector<MoveComponent>(MoveComponent& c)
     ImGui::DragFloat("Move Force",  &c.moveForce,  0.1f, 0.0f, 200.0f);
     ImGui::DragFloat("Jump Force",  &c.jumpForce,  0.1f, 0.0f, 100.0f);
     ImGui::Checkbox("Air Control",  &c.airControl);
+}
+
+// ---- Serialization ----------------------------------------------------------
+
+template<>
+inline std::string SerializeComponent<MoveComponent>(const MoveComponent& c)
+{
+    nlohmann::json j;
+    j["moveForce"]  = c.moveForce;
+    j["jumpForce"]  = c.jumpForce;
+    j["airControl"] = c.airControl;
+    return j.dump();
+}
+
+template<>
+inline void DeserializeComponent<MoveComponent>(MoveComponent& c, const std::string& data)
+{
+    auto j       = nlohmann::json::parse(data);
+    c.moveForce  = j.value("moveForce",  12.0f);
+    c.jumpForce  = j.value("jumpForce",  6.0f);
+    c.airControl = j.value("airControl", true);
 }
 
 // ---- Registration -----------------------------------------------------------

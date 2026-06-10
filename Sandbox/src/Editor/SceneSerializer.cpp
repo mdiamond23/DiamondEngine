@@ -4,6 +4,7 @@
 #include <unordered_map>
 
 #include "Scene/Components.h"
+#include "Scene/ComponentRegistry.h"
 #include "Scene/Physics/Collision.h"
 #include "Scene/Physics/Rigidbody.h"
 #include "Assets/ModelImporter.h"
@@ -150,6 +151,17 @@ static json ToJson(Scene& scene)
                 { "lockRotZ",       rb.lockRotZ            }
             };
         }
+
+        // Script components registered via DECLARE_COMPONENT
+        json sc = json::object();
+        for (auto& desc : ComponentRegistry::Get().GetAll()) {
+            if (desc.serialize && desc.has(scene, entity)) {
+                try { sc[desc.name] = json::parse(desc.serialize(scene, entity)); }
+                catch (...) {}
+            }
+        }
+        if (!sc.empty())
+            ej["scriptComponents"] = sc;
 
         entities.push_back(ej);
     }
@@ -298,6 +310,19 @@ static bool FromJson(Scene& scene, const json& root)
             rb.lockRotX       = rj.value("lockRotX",       false);
             rb.lockRotY       = rj.value("lockRotY",       false);
             rb.lockRotZ       = rj.value("lockRotZ",       false);
+        }
+
+        // Script components registered via DECLARE_COMPONENT
+        if (ej.contains("scriptComponents")) {
+            const auto& sc = ej["scriptComponents"];
+            for (auto& desc : ComponentRegistry::Get().GetAll()) {
+                if (desc.add && desc.deserialize && sc.contains(desc.name)) {
+                    if (!desc.has(scene, e))
+                        desc.add(scene, e);
+                    try { desc.deserialize(scene, e, sc[desc.name].dump()); }
+                    catch (...) {}
+                }
+            }
         }
 
         if (ej.contains("parentUuid")) {

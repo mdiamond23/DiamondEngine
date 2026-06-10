@@ -51,6 +51,13 @@
         "lockRotZ": false,
         "mass": 1.0
       },
+      "scriptComponents": {
+        "Move": {
+          "airControl": true,
+          "jumpForce": 6.0,
+          "moveForce": 12.0
+        }
+      },
       "transform": {
         "eulerDegrees": [
           0.0,

@@ -3,6 +3,7 @@
 #include "Scene/Scene.h"
 #include "Scene/ComponentRegistry.h"
 #include <imgui.h>
+#include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
 
 // ---- Data -------------------------------------------------------------------
@@ -24,8 +25,29 @@ inline void DrawComponentInspector<HealthComponent>(HealthComponent& h)
     ImGui::Checkbox("Dead",        &h.isDead);
 }
 
+// ---- Serialization ----------------------------------------------------------
+
+template<>
+inline std::string SerializeComponent<HealthComponent>(const HealthComponent& c)
+{
+    nlohmann::json j;
+    j["max"]     = c.max;
+    j["current"] = c.current;
+    j["isDead"]  = c.isDead;
+    return j.dump();
+}
+
+template<>
+inline void DeserializeComponent<HealthComponent>(HealthComponent& c, const std::string& data)
+{
+    auto j     = nlohmann::json::parse(data);
+    c.max     = j.value("max",     100.0f);
+    c.current = j.value("current", 100.0f);
+    c.isDead  = j.value("isDead",  false);
+}
+
 // ---- Registration -----------------------------------------------------------
-// Must come after DrawComponentInspector specialization so the lambda captures it.
+// Must come after DrawComponentInspector and SerializeComponent specializations.
 
 DECLARE_COMPONENT(HealthComponent, "Health")
 

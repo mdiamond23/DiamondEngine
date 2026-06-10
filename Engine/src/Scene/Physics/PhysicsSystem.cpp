@@ -17,7 +17,6 @@
 
 #include "Scene/Physics/PhysicsSystem.h"
 #include "Scene/Physics/PhysicsAPI.h"
-#include <spdlog/spdlog.h>
 #include "Scene/Physics/Rigidbody.h"
 #include "Scene/Physics/Collision.h"
 #include "Scene/Scene.h"
@@ -410,26 +409,20 @@ static void CreateStaticCollider(JPH::BodyInterface&,
 // PhysicsSystem — OnStart / OnUpdate / OnDestroy
 // ---------------------------------------------------------------------------
 void PhysicsSystem::OnStart(Scene& scene) {
-    spdlog::info("[Physics] OnStart begin");
-
     JPH::RegisterDefaultAllocator();
-    spdlog::info("[Physics] RegisterDefaultAllocator OK");
 
     JPH::Factory::sInstance = new JPH::Factory();
     JPH::RegisterTypes();
-    spdlog::info("[Physics] RegisterTypes OK");
 
     m_impl = std::make_unique<Impl>();
     m_impl->tempAllocator = std::make_unique<JPH::TempAllocatorImpl>(32 * 1024 * 1024);
     m_impl->jobSystem     = std::make_unique<JPH::JobSystemSingleThreaded>(2048);
-    spdlog::info("[Physics] JobSystem OK");
 
     m_impl->joltSystem = std::make_unique<JPH::PhysicsSystem>();
     m_impl->joltSystem->Init(
         cMaxBodies, cNumBodyMutexes, cMaxBodyPairs, cMaxContactConstraints,
         m_impl->bpLayerInterface, m_impl->objVsBPFilter, m_impl->objLayerFilter
     );
-    spdlog::info("[Physics] PhysicsSystem::Init OK");
 
     m_impl->contactListener = std::make_unique<ContactListener>(m_impl->bodyMap);
     m_impl->joltSystem->SetContactListener(m_impl->contactListener.get());
@@ -438,14 +431,12 @@ void PhysicsSystem::OnStart(Scene& scene) {
 
     // Entities with RigidBodyComponent + ColliderComponent → full physics body
     for (auto [entity, rb, col, xform] : scene.View<RigidBodyComponent, ColliderComponent, TransformComponent>().each()) {
-        spdlog::info("[Physics] Creating full body for entity {}", (uint32_t)entity);
         CreateBody(bi, m_impl->bodyMap, entity, rb, col, xform);
     }
 
     // Entities with only ColliderComponent → static collision geometry
     for (auto [entity, col, xform] : scene.View<ColliderComponent, TransformComponent>().each()) {
         if (scene.Has<RigidBodyComponent>(entity)) continue;
-        spdlog::info("[Physics] Creating static collider for entity {}", (uint32_t)entity);
         CreateStaticCollider(bi, m_impl->bodyMap, entity, col, xform);
     }
 
@@ -458,7 +449,6 @@ void PhysicsSystem::OnStart(Scene& scene) {
     reg.on_destroy<RigidBodyComponent>().connect<&OnRbDestroyed>();
     reg.on_destroy<ColliderComponent>().connect<&OnColDestroyed>();
 
-    spdlog::info("[Physics] OnStart complete — {} bodies registered", m_impl->bodyMap.size());
 }
 
 // ---------------------------------------------------------------------------
@@ -592,17 +582,12 @@ void PhysicsSystem::OnUpdate(Scene& scene, float dt) {
 
     JPH::BodyInterface& bi = m_impl->joltSystem->GetBodyInterface();
     while (m_accumulator >= FIXED_DT) {
-        spdlog::info("[Physics] SyncKinematic...");
         SyncKinematicBodies(scene, bi);
-        spdlog::info("[Physics] Jolt Update...");
         m_impl->joltSystem->Update(FIXED_DT, 1, m_impl->tempAllocator.get(), m_impl->jobSystem.get());
-        spdlog::info("[Physics] SyncTransforms...");
         SyncTransforms(scene, bi);
-        spdlog::info("[Physics] DispatchCallbacks...");
         DispatchCallbacks(scene, m_impl->contactListener->DrainEvents());
         m_accumulator -= FIXED_DT;
     }
-    spdlog::info("[Physics] OnUpdate done");
 }
 
 void PhysicsSystem::OnDestroy(Scene& scene) {
