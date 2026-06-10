@@ -3,6 +3,8 @@
 #include "../EditorContext.h"
 #include <glm/glm.hpp>
 #include <optional>
+#include "Scene/Physics/Collision.h"
+#include "Scene/Physics/Rigidbody.h"
 
 class ContentPanel;
 
@@ -40,8 +42,22 @@ private:
     float m_OldNear    = 0.1f;
     float m_OldFar     = 1000.0f;
 
+    // Collider drag snapshots
+    glm::vec3 m_OldColHalfExtents = { 0.5f, 0.5f, 0.5f };
+    float     m_OldColRadius      = 0.5f;
+    float     m_OldColHalfHeight  = 0.5f;
+    glm::vec3 m_OldColOffset      = {};
+
+    // Rigidbody drag snapshots
+    float m_OldRbMass            = 1.0f;
+    float m_OldRbLinearDamping   = 0.05f;
+    float m_OldRbAngularDamping  = 0.05f;
+    float m_OldRbGravityScale    = 1.0f;
+
     // Saved component state for deferred remove commands
-    std::optional<MeshComponent>    m_PendingRemovedMesh;
-    std::optional<LightComponent>   m_PendingRemovedLight;
-    std::optional<CameraComponent>  m_PendingRemovedCamera;
+    std::optional<MeshComponent>       m_PendingRemovedMesh;
+    std::optional<LightComponent>      m_PendingRemovedLight;
+    std::optional<CameraComponent>     m_PendingRemovedCamera;
+    std::optional<ColliderComponent>   m_PendingRemovedCollider;
+    std::optional<RigidBodyComponent>  m_PendingRemovedRigidbody;
 };

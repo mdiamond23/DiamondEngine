@@ -6,6 +6,8 @@
 #include <cstring>
 #include "Scene/Components.h"
 #include "Scene/ComponentRegistry.h"
+#include "Scene/Physics/Collision.h"
+#include "Scene/Physics/Rigidbody.h"
 #include "Assets/ModelImporter.h"
 #include "Renderer/MeshData.h"
 #include "Renderer/TextureData.h"
@@ -324,9 +326,11 @@ void InspectorPanel::OnImGuiRender() {
         }
     }
 
-    bool removeMesh   = false;
-    bool removeLight  = false;
-    bool removeCamera = false;
+    bool removeMesh      = false;
+    bool removeLight     = false;
+    bool removeCamera    = false;
+    bool removeCollider  = false;
+    bool removeRigidbody = false;
 
     // Mesh Component
     if (registry.all_of<MeshComponent>(entity)) {
@@ -581,6 +585,183 @@ void InspectorPanel::OnImGuiRender() {
         }
     }
 
+    // Collider Component
+    if (registry.all_of<ColliderComponent>(entity)) {
+        ImGui::Separator();
+        auto& col = registry.get<ColliderComponent>(entity);
+
+        ImGui::Text("Collider");
+        if (ImGui::BeginPopupContextItem("##ColliderCompCtx")) {
+            if (ImGui::MenuItem("Remove Component")) {
+                m_PendingRemovedCollider = col;
+                removeCollider = true;
+            }
+            ImGui::EndPopup();
+        }
+
+        if (!removeCollider) {
+            const char* shapes[] = { "Box", "Sphere", "Capsule", "Convex Hull", "Triangle Mesh" };
+            CollisionShape oldShape = col.shapeType;
+            int shapeIdx = (int)col.shapeType;
+            if (ImGui::Combo("Shape", &shapeIdx, shapes, 5)) {
+                col.shapeType = (CollisionShape)shapeIdx;
+                CollisionShape newShape = col.shapeType;
+                m_Context->Commands.ExecuteCommand(std::make_unique<ValueChangeCommand<CollisionShape>>(
+                    [scene, entity](const CollisionShape& s) { scene->GetRegistry().get<ColliderComponent>(entity).shapeType = s; },
+                    oldShape, newShape, "Change Collision Shape"));
+            }
+
+            switch (col.shapeType) {
+                case CollisionShape::Box:
+                    ImGui::DragFloat3("Half Extents", glm::value_ptr(col.halfExtents), 0.01f, 0.001f, 1000.0f);
+                    if (ImGui::IsItemActivated())            m_OldColHalfExtents = col.halfExtents;
+                    if (ImGui::IsItemDeactivatedAfterEdit()) {
+                        glm::vec3 n = col.halfExtents, o = m_OldColHalfExtents;
+                        m_Context->Commands.ExecuteCommand(std::make_unique<ValueChangeCommand<glm::vec3>>(
+                            [scene, entity](const glm::vec3& v) { scene->GetRegistry().get<ColliderComponent>(entity).halfExtents = v; },
+                            o, n, "Change Half Extents"));
+                    }
+                    break;
+                case CollisionShape::Sphere:
+                    ImGui::DragFloat("Radius", &col.radius, 0.01f, 0.001f, 1000.0f);
+                    if (ImGui::IsItemActivated())            m_OldColRadius = col.radius;
+                    if (ImGui::IsItemDeactivatedAfterEdit()) {
+                        float n = col.radius, o = m_OldColRadius;
+                        m_Context->Commands.ExecuteCommand(std::make_unique<ValueChangeCommand<float>>(
+                            [scene, entity](const float& v) { scene->GetRegistry().get<ColliderComponent>(entity).radius = v; },
+                            o, n, "Change Radius"));
+                    }
+                    break;
+                case CollisionShape::Capsule:
+                    ImGui::DragFloat("Radius", &col.radius, 0.01f, 0.001f, 1000.0f);
+                    if (ImGui::IsItemActivated())            m_OldColRadius = col.radius;
+                    if (ImGui::IsItemDeactivatedAfterEdit()) {
+                        float n = col.radius, o = m_OldColRadius;
+                        m_Context->Commands.ExecuteCommand(std::make_unique<ValueChangeCommand<float>>(
+                            [scene, entity](const float& v) { scene->GetRegistry().get<ColliderComponent>(entity).radius = v; },
+                            o, n, "Change Radius"));
+                    }
+                    ImGui::DragFloat("Half Height", &col.halfHeight, 0.01f, 0.001f, 1000.0f);
+                    if (ImGui::IsItemActivated())            m_OldColHalfHeight = col.halfHeight;
+                    if (ImGui::IsItemDeactivatedAfterEdit()) {
+                        float n = col.halfHeight, o = m_OldColHalfHeight;
+                        m_Context->Commands.ExecuteCommand(std::make_unique<ValueChangeCommand<float>>(
+                            [scene, entity](const float& v) { scene->GetRegistry().get<ColliderComponent>(entity).halfHeight = v; },
+                            o, n, "Change Half Height"));
+                    }
+                    break;
+                case CollisionShape::ConvexHull:
+                case CollisionShape::TriangleMesh:
+                    ImGui::TextDisabled("(mesh shapes require asset pipeline — not yet editable)");
+                    break;
+            }
+
+            ImGui::Spacing();
+            ImGui::TextDisabled("Offset");
+            ImGui::DragFloat3("Local Offset", glm::value_ptr(col.localOffset), 0.01f);
+            if (ImGui::IsItemActivated())            m_OldColOffset = col.localOffset;
+            if (ImGui::IsItemDeactivatedAfterEdit()) {
+                glm::vec3 n = col.localOffset, o = m_OldColOffset;
+                m_Context->Commands.ExecuteCommand(std::make_unique<ValueChangeCommand<glm::vec3>>(
+                    [scene, entity](const glm::vec3& v) { scene->GetRegistry().get<ColliderComponent>(entity).localOffset = v; },
+                    o, n, "Change Collider Offset"));
+            }
+
+            ImGui::Spacing();
+            ImGui::Checkbox("Is Trigger", &col.isTrigger);
+
+            ImGui::Spacing();
+            ImGui::TextDisabled("Physics Material");
+            if (!col.material) {
+                ImGui::TextDisabled("None");
+                ImGui::SameLine();
+                if (ImGui::SmallButton("Create"))
+                    col.material = std::make_shared<PhysicsMaterial>();
+            } else {
+                ImGui::DragFloat("Static Friction",  &col.material->staticFriction,  0.01f, 0.0f, 1.0f);
+                ImGui::DragFloat("Dynamic Friction", &col.material->dynamicFriction, 0.01f, 0.0f, 1.0f);
+                ImGui::DragFloat("Restitution",      &col.material->restitution,     0.01f, 0.0f, 1.0f);
+                if (ImGui::SmallButton("Remove Material")) col.material.reset();
+            }
+        }
+    }
+
+    // Rigidbody Component
+    if (registry.all_of<RigidBodyComponent>(entity)) {
+        ImGui::Separator();
+        auto& rb = registry.get<RigidBodyComponent>(entity);
+
+        ImGui::Text("Rigidbody");
+        if (ImGui::BeginPopupContextItem("##RigidbodyCompCtx")) {
+            if (ImGui::MenuItem("Remove Component")) {
+                m_PendingRemovedRigidbody = rb;
+                removeRigidbody = true;
+            }
+            ImGui::EndPopup();
+        }
+
+        if (!removeRigidbody) {
+            const char* bodyTypes[] = { "Static", "Dynamic", "Kinematic" };
+            BodyType oldType = rb.bodyType;
+            int typeIdx = (int)rb.bodyType;
+            if (ImGui::Combo("Body Type", &typeIdx, bodyTypes, 3)) {
+                rb.bodyType = (BodyType)typeIdx;
+                BodyType newType = rb.bodyType;
+                m_Context->Commands.ExecuteCommand(std::make_unique<ValueChangeCommand<BodyType>>(
+                    [scene, entity](const BodyType& t) { scene->GetRegistry().get<RigidBodyComponent>(entity).bodyType = t; },
+                    oldType, newType, "Change Body Type"));
+            }
+
+            if (rb.bodyType == BodyType::Dynamic) {
+                ImGui::DragFloat("Mass", &rb.mass, 0.1f, 0.001f, 100000.0f);
+                if (ImGui::IsItemActivated())            m_OldRbMass = rb.mass;
+                if (ImGui::IsItemDeactivatedAfterEdit()) {
+                    float n = rb.mass, o = m_OldRbMass;
+                    m_Context->Commands.ExecuteCommand(std::make_unique<ValueChangeCommand<float>>(
+                        [scene, entity](const float& v) { scene->GetRegistry().get<RigidBodyComponent>(entity).mass = v; },
+                        o, n, "Change Mass"));
+                }
+
+                ImGui::DragFloat("Gravity Scale", &rb.gravityScale, 0.01f, 0.0f, 10.0f);
+                if (ImGui::IsItemActivated())            m_OldRbGravityScale = rb.gravityScale;
+                if (ImGui::IsItemDeactivatedAfterEdit()) {
+                    float n = rb.gravityScale, o = m_OldRbGravityScale;
+                    m_Context->Commands.ExecuteCommand(std::make_unique<ValueChangeCommand<float>>(
+                        [scene, entity](const float& v) { scene->GetRegistry().get<RigidBodyComponent>(entity).gravityScale = v; },
+                        o, n, "Change Gravity Scale"));
+                }
+            }
+
+            if (rb.bodyType != BodyType::Static) {
+                ImGui::DragFloat("Linear Damping",  &rb.linearDamping,  0.001f, 0.0f, 1.0f);
+                if (ImGui::IsItemActivated())            m_OldRbLinearDamping = rb.linearDamping;
+                if (ImGui::IsItemDeactivatedAfterEdit()) {
+                    float n = rb.linearDamping, o = m_OldRbLinearDamping;
+                    m_Context->Commands.ExecuteCommand(std::make_unique<ValueChangeCommand<float>>(
+                        [scene, entity](const float& v) { scene->GetRegistry().get<RigidBodyComponent>(entity).linearDamping = v; },
+                        o, n, "Change Linear Damping"));
+                }
+
+                ImGui::DragFloat("Angular Damping", &rb.angularDamping, 0.001f, 0.0f, 1.0f);
+                if (ImGui::IsItemActivated())            m_OldRbAngularDamping = rb.angularDamping;
+                if (ImGui::IsItemDeactivatedAfterEdit()) {
+                    float n = rb.angularDamping, o = m_OldRbAngularDamping;
+                    m_Context->Commands.ExecuteCommand(std::make_unique<ValueChangeCommand<float>>(
+                        [scene, entity](const float& v) { scene->GetRegistry().get<RigidBodyComponent>(entity).angularDamping = v; },
+                        o, n, "Change Angular Damping"));
+                }
+
+                ImGui::Spacing();
+                ImGui::TextDisabled("Freeze Rotation");
+                ImGui::Checkbox("X##lockRotX", &rb.lockRotX);
+                ImGui::SameLine();
+                ImGui::Checkbox("Y##lockRotY", &rb.lockRotY);
+                ImGui::SameLine();
+                ImGui::Checkbox("Z##lockRotZ", &rb.lockRotZ);
+            }
+        }
+    }
+
     // Registered game components
     const ComponentDescriptor* removeUserComp = nullptr;
 
@@ -631,6 +812,24 @@ void InspectorPanel::OnImGuiRender() {
             [scene, entity, saved]() { scene->GetRegistry().emplace_or_replace<CameraComponent>(entity, saved); },
             "Remove Camera Component"));
     }
+    if (removeCollider && m_PendingRemovedCollider) {
+        ColliderComponent saved = *m_PendingRemovedCollider;
+        m_PendingRemovedCollider.reset();
+        registry.remove<ColliderComponent>(entity);
+        m_Context->Commands.RecordCommand(std::make_unique<FunctionCommand>(
+            [scene, entity]()        { scene->GetRegistry().remove<ColliderComponent>(entity); },
+            [scene, entity, saved]() { scene->GetRegistry().emplace_or_replace<ColliderComponent>(entity, saved); },
+            "Remove Collider Component"));
+    }
+    if (removeRigidbody && m_PendingRemovedRigidbody) {
+        RigidBodyComponent saved = *m_PendingRemovedRigidbody;
+        m_PendingRemovedRigidbody.reset();
+        registry.remove<RigidBodyComponent>(entity);
+        m_Context->Commands.RecordCommand(std::make_unique<FunctionCommand>(
+            [scene, entity]()        { scene->GetRegistry().remove<RigidBodyComponent>(entity); },
+            [scene, entity, saved]() { scene->GetRegistry().emplace_or_replace<RigidBodyComponent>(entity, saved); },
+            "Remove Rigidbody Component"));
+    }
     if (removeUserComp)
     {
         auto removeFn  = removeUserComp->remove;
@@ -656,10 +855,12 @@ void InspectorPanel::OnImGuiRender() {
         ImGui::TextDisabled("Components");
         ImGui::Separator();
 
-        bool hasMesh   = registry.all_of<MeshComponent>(entity);
-        bool hasLight  = registry.all_of<LightComponent>(entity);
-        bool hasCamera = registry.all_of<CameraComponent>(entity);
-        bool anyShown  = !hasMesh || !hasLight || !hasCamera;
+        bool hasMesh      = registry.all_of<MeshComponent>(entity);
+        bool hasLight     = registry.all_of<LightComponent>(entity);
+        bool hasCamera    = registry.all_of<CameraComponent>(entity);
+        bool hasCollider  = registry.all_of<ColliderComponent>(entity);
+        bool hasRigidbody = registry.all_of<RigidBodyComponent>(entity);
+        bool anyShown     = !hasMesh || !hasLight || !hasCamera || !hasCollider || !hasRigidbody;
 
         constexpr ImGuiSelectableFlags kCompFlags =
             ImGuiSelectableFlags_AllowDoubleClick | ImGuiSelectableFlags_DontClosePopups;
@@ -693,6 +894,28 @@ void InspectorPanel::OnImGuiRender() {
                         [scene, entity]() { scene->GetRegistry().emplace<CameraComponent>(entity); },
                         [scene, entity]() { scene->GetRegistry().remove<CameraComponent>(entity); },
                         "Add Camera Component"));
+                    ImGui::CloseCurrentPopup();
+                }
+        }
+
+        if (!hasCollider) {
+            if (ImGui::Selectable("Collider", false, kCompFlags))
+                if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                    m_Context->Commands.ExecuteCommand(std::make_unique<FunctionCommand>(
+                        [scene, entity]() { scene->GetRegistry().emplace<ColliderComponent>(entity); },
+                        [scene, entity]() { scene->GetRegistry().remove<ColliderComponent>(entity); },
+                        "Add Collider Component"));
+                    ImGui::CloseCurrentPopup();
+                }
+        }
+
+        if (!hasRigidbody) {
+            if (ImGui::Selectable("Rigidbody", false, kCompFlags))
+                if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                    m_Context->Commands.ExecuteCommand(std::make_unique<FunctionCommand>(
+                        [scene, entity]() { scene->GetRegistry().emplace<RigidBodyComponent>(entity); },
+                        [scene, entity]() { scene->GetRegistry().remove<RigidBodyComponent>(entity); },
+                        "Add Rigidbody Component"));
                     ImGui::CloseCurrentPopup();
                 }
         }

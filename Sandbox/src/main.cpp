@@ -14,6 +14,9 @@
 #include "Editor/EditorLayers.h"
 #include "Scene/Scene.h"
 #include "Scene/Components.h"
+#include "Scene/Physics/PhysicsSystem.h"
+#include "Scene/Physics/PhysicsAPI.h"
+#include "DebugDraw.h"
 
 #include "Core/Camera.h"
 #include "Core/Input.h"
@@ -665,6 +668,11 @@ int main()
         view = g_camera.GetViewMatrix();
         proj = glm::perspective(glm::radians(g_camera.Zoom), (float)fbW / (float)fbH, 0.1f, 100.0f);
         cullAndExecute(viewportFBO);
+
+        // Collider debug wireframes — drawn into the editor viewport after the scene pass
+        glBindFramebuffer(GL_FRAMEBUFFER, viewportFBO);
+        Physics::DrawColliders(scene);
+        DebugDraw::Flush(proj * view);
 
         // --- Game viewport: primary camera entity (play mode only) ---
         entt::entity primaryCam = scene.GetPrimaryCamera();

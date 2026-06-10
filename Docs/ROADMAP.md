@@ -46,7 +46,7 @@ The renderer is already ahead of schedule for a learning engine.
 
 - [x] Input system — named actions mapped to keys, not raw GLFW calls
 - [x] Scripting — native C++ components with `OnStart()` / `OnUpdate(dt)` / `OnDestroy()`
-- [ ] Collision + physics — [Jolt Physics](https://github.com/jrouwe/JoltPhysics) recommended
+- [ ] Collision + physics — [Jolt Physics](https://github.com/jrouwe/JoltPhysics); full rigid body (Static/Dynamic/Kinematic), all shapes, triggers, callbacks — see [`physics-design.md`](physics-design.md)
 - [x] Play mode — start/stop the game loop inside the editor without relaunching
 
 ---

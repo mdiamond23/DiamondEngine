@@ -172,56 +172,14 @@ The editor component panel lists all registered component types. Attaching a com
 
 ## 3. Collision + Physics (Jolt)
 
-### Scope — Phase 1
-Phase 1 covers collision queries and trigger volumes only. Rigid body simulation (crates falling, ragdolls, forces) is deferred to Phase 2.
+> **Full design moved to [`physics-design.md`](physics-design.md).** We are implementing full rigid body simulation directly (Static, Dynamic, Kinematic bodies; all collision shapes; triggers; collision callbacks; fixed timestep). The Phase 1 / Phase 2 split described below is superseded.
 
-Phase 1 deliverables:
-- Raycasts (`scene->Raycast(origin, direction, maxDist)`)
-- Overlap queries (`scene->OverlapSphere(center, radius)`)
-- Trigger volumes — `OnTriggerEnter / OnTriggerExit` called on scripts
-- Static colliders for world geometry
-
-Phase 2 (later):
-- `RigidBodyComponent` — mass, velocity, forces, constraints
-- Kinematic character controller
-
-### PhysicsComponent (ECS)
-Physics is an optional component — not every entity needs it. `TransformComponent` remains the source of truth for position/rotation; physics writes back to it each frame.
-
-```
-Entity
-├── TransformComponent    ← always present, owns the canonical position
-└── ColliderComponent     ← optional, shape + trigger flag
-    └── (RigidBodyComponent added in Phase 2)
-```
-
-```cpp
-struct ColliderComponent {
-    ColliderShape shape;   // Box, Sphere, Capsule, Mesh
-    glm::vec3     offset;
-    bool          isTrigger;
-};
-```
-
-### Jolt Integration
-Jolt runs its own internal body representation. Each frame:
-1. Jolt simulation steps (Phase 2 only in Phase 1 this is a no-op)
-2. Jolt body transforms are written back to `TransformComponent`
-
-Jolt bodies are created/destroyed when `ColliderComponent` is added/removed from an entity (EnTT `on_construct` / `on_destroy` listeners).
-
-### Raycasts and Queries from Scripts
-
-```cpp
-void GunScript::OnUpdate(float dt) {
-    if (Input::IsPressed("Fire")) {
-        auto hit = scene->Raycast(muzzlePos, forward, 100.0f);
-        if (hit && scene->Has<HealthComponent>(hit.entity)) {
-            scene->Get<HealthComponent>(hit.entity).value -= 25.0f;
-        }
-    }
-}
-```
+Summary of what is implemented:
+- `RigidBodyComponent` — body type, mass, damping, gravity scale, `std::function` collision/trigger callbacks
+- `ColliderComponent` — Box, Sphere, Capsule, ConvexHull, TriangleMesh shapes; trigger flag; `PhysicsMaterial`
+- `PhysicsSystem` as a `GameSystem` at priority 200 (after pre-physics scripts, before post-physics scripts)
+- Fixed 60 Hz step via accumulator; at most one step per frame when fps < 60
+- Raycasts and overlap queries via `PhysicsSystem`
 
 ---
 

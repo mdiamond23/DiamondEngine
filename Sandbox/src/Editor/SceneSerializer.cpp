@@ -4,6 +4,8 @@
 #include <unordered_map>
 
 #include "Scene/Components.h"
+#include "Scene/Physics/Collision.h"
+#include "Scene/Physics/Rigidbody.h"
 #include "Assets/ModelImporter.h"
 #include "Assets/ImageLoader.h"
 #include "Renderer/MeshData.h"
@@ -110,6 +112,42 @@ static json ToJson(Scene& scene)
                 { "fov",       cc.fov       },
                 { "nearClip",  cc.nearClip  },
                 { "farClip",   cc.farClip   }
+            };
+        }
+
+        if (reg.all_of<ColliderComponent>(entity)) {
+            auto& col = reg.get<ColliderComponent>(entity);
+            json cj = {
+                { "shapeType",     (int)col.shapeType      },
+                { "halfExtents",   JVec3(col.halfExtents)  },
+                { "radius",        col.radius              },
+                { "halfHeight",    col.halfHeight          },
+                { "meshPath",      col.meshPath            },
+                { "localOffset",   JVec3(col.localOffset)  },
+                { "localRotation", JQuat(col.localRotation) },
+                { "isTrigger",     col.isTrigger           }
+            };
+            if (col.material) {
+                cj["material"] = {
+                    { "staticFriction",  col.material->staticFriction  },
+                    { "dynamicFriction", col.material->dynamicFriction },
+                    { "restitution",     col.material->restitution     }
+                };
+            }
+            ej["collider"] = cj;
+        }
+
+        if (reg.all_of<RigidBodyComponent>(entity)) {
+            auto& rb = reg.get<RigidBodyComponent>(entity);
+            ej["rigidbody"] = {
+                { "bodyType",       (int)rb.bodyType       },
+                { "mass",           rb.mass                },
+                { "linearDamping",  rb.linearDamping       },
+                { "angularDamping", rb.angularDamping      },
+                { "gravityScale",   rb.gravityScale        },
+                { "lockRotX",       rb.lockRotX            },
+                { "lockRotY",       rb.lockRotY            },
+                { "lockRotZ",       rb.lockRotZ            }
             };
         }
 
@@ -227,6 +265,39 @@ static bool FromJson(Scene& scene, const json& root)
             cc.fov       = cj.value("fov",       60.0f);
             cc.nearClip  = cj.value("nearClip",  0.1f);
             cc.farClip   = cj.value("farClip",   1000.0f);
+        }
+
+        if (ej.contains("collider")) {
+            const auto& cj = ej["collider"];
+            auto& col = reg.emplace<ColliderComponent>(e);
+            col.shapeType  = (CollisionShape)cj.value("shapeType", 0);
+            col.radius     = cj.value("radius",    0.5f);
+            col.halfHeight = cj.value("halfHeight", 0.5f);
+            col.meshPath   = cj.value("meshPath",   "");
+            col.isTrigger  = cj.value("isTrigger",  false);
+            if (cj.contains("halfExtents"))   col.halfExtents   = ToVec3(cj["halfExtents"]);
+            if (cj.contains("localOffset"))   col.localOffset   = ToVec3(cj["localOffset"]);
+            if (cj.contains("localRotation")) col.localRotation = ToQuat(cj["localRotation"]);
+            if (cj.contains("material")) {
+                auto mat = std::make_shared<PhysicsMaterial>();
+                mat->staticFriction  = cj["material"].value("staticFriction",  0.5f);
+                mat->dynamicFriction = cj["material"].value("dynamicFriction", 0.5f);
+                mat->restitution     = cj["material"].value("restitution",     0.3f);
+                col.material = mat;
+            }
+        }
+
+        if (ej.contains("rigidbody")) {
+            const auto& rj = ej["rigidbody"];
+            auto& rb = reg.emplace<RigidBodyComponent>(e);
+            rb.bodyType       = (BodyType)rj.value("bodyType",       0);
+            rb.mass           = rj.value("mass",           1.0f);
+            rb.linearDamping  = rj.value("linearDamping",  0.05f);
+            rb.angularDamping = rj.value("angularDamping", 0.05f);
+            rb.gravityScale   = rj.value("gravityScale",   1.0f);
+            rb.lockRotX       = rj.value("lockRotX",       false);
+            rb.lockRotY       = rj.value("lockRotY",       false);
+            rb.lockRotZ       = rj.value("lockRotZ",       false);
         }
 
         if (ej.contains("parentUuid")) {

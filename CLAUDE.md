@@ -44,6 +44,7 @@ All managed via FetchContent — sources download to `build/_deps/` on first con
 | spdlog | v1.15.3 | `spdlog::spdlog` | `<spdlog/spdlog.h>` |
 | ImGui | docking branch | `imgui` | `<imgui.h>` |
 | GLAD2 | glad2 branch | `glad_gl` | `<glad/gl.h>` |
+| Jolt Physics | v5.2.0 | `Jolt` (PRIVATE) | `<Jolt/Jolt.h>` |
 
 GLAD2 generates its sources at configure time using Python + jinja2. If generation fails, run `pip3 install jinja2`.
 
@@ -57,3 +58,6 @@ GLAD2 generates its sources at configure time using Python + jinja2. If generati
 - Root project uses `LANGUAGES C CXX` — C is required by GLAD2.
 - ImGui uses the deprecated `FetchContent_Populate` (not `FetchContent_MakeAvailable`) because ImGui has no CMakeLists.txt; its sources are compiled manually into a static library.
 - `jinja2` must be installed for GLAD2 source generation: `pip3 install jinja2`.
+- Jolt defaults to `/MT` (static CRT) on MSVC; `USE_STATIC_MSVC_RUNTIME_LIBRARY OFF` forces `/MD` to match the rest of the project and avoid CRT mismatch linker errors.
+- Jolt is linked `PRIVATE` to `MyEngine` — Jolt types never appear in Engine's public headers; `_bodyId` is stored as `uint32_t`.
+- Jolt's `CMakeLists.txt` lives in the `Build/` subdirectory of the repo, not at the root — `SOURCE_SUBDIR Build` is required in `FetchContent_Declare` or Jolt will never be compiled (LNK1104 at link time).

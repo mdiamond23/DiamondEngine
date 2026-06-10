@@ -127,9 +127,37 @@ add_library(miniz STATIC
 )
 target_include_directories(miniz PUBLIC ${miniz_SOURCE_DIR})
 
+# Disable everything we don't need before Jolt is populated
+set(PHYSICS_DOUBLE_PRECISION        OFF CACHE BOOL "" FORCE)
+set(TARGET_UNIT_TESTS               OFF CACHE BOOL "" FORCE)
+set(TARGET_SAMPLES                  OFF CACHE BOOL "" FORCE)
+set(TARGET_VIEWER                   OFF CACHE BOOL "" FORCE)
+set(TARGET_PERFORMANCE_TEST         OFF CACHE BOOL "" FORCE)
+set(TARGET_HELLO_WORLD              OFF CACHE BOOL "" FORCE)
+# Match the default CMake CRT linkage (/MD) on MSVC instead of Jolt's /MT default
+set(USE_STATIC_MSVC_RUNTIME_LIBRARY OFF CACHE BOOL "" FORCE)
+
+FetchContent_Declare(
+    JoltPhysics
+    GIT_REPOSITORY https://github.com/jrouwe/JoltPhysics.git
+    GIT_TAG        v5.2.0
+    GIT_SHALLOW    TRUE
+    SOURCE_SUBDIR  Build   # CMakeLists.txt lives in Build/, not the repo root
+)
+FetchContent_MakeAvailable(JoltPhysics)
+
+# Jolt's Build/CMakeLists.txt enables /WX + /Zc:enumTypes by default, which
+# causes Windows SDK 10.0.26100 headers to emit C4865 warnings that are then
+# promoted to errors.  Strip /WX from the Jolt target so our SDK headers don't
+# break the Jolt build.
+if(MSVC AND TARGET Jolt)
+    target_compile_options(Jolt PRIVATE /WX- /wd4865)
+endif()
+
 find_package(OpenGL REQUIRED)
 
 add_library(MyEngine STATIC
+    src/DebugDraw.cpp
     src/Core/Input.cpp
     src/Application.cpp
     src/Assets/ImageLoader.cpp
@@ -158,6 +186,7 @@ add_library(MyEngine STATIC
     src/Scene/Scene.cpp
     src/Scene/TransformSystem.cpp
     src/Scene/UUIDGenerator.cpp
+    src/Scene/Physics/PhysicsSystem.cpp
 )
 
 target_include_directories(MyEngine
@@ -166,15 +195,19 @@ target_include_directories(MyEngine
         ${CMAKE_SOURCE_DIR}/ThirdParty/stb
     PRIVATE
         src
+        ${joltphysics_SOURCE_DIR}
 )
 
-target_link_libraries(MyEngine PUBLIC
-    glfw
-    OpenGL::GL
-    glm::glm
-    EnTT::EnTT
-    spdlog::spdlog
-    imgui
-    glad_gl
-    assimp::assimp
+target_link_libraries(MyEngine
+    PUBLIC
+        glfw
+        OpenGL::GL
+        glm::glm
+        EnTT::EnTT
+        spdlog::spdlog
+        imgui
+        glad_gl
+        assimp::assimp
+    PRIVATE
+        Jolt
 )
