@@ -4,3 +4,4 @@
 // You can also add includes manually.
 #include "TestHealth.h"
 #include "Move.h"
+#include "TriggerTest.h"

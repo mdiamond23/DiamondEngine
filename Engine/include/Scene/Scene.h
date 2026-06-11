@@ -45,15 +45,24 @@ public:
     bool Has(entt::entity entity) const { return m_Registry.all_of<Ts...>(entity); }
 
     template<typename T>
-    T& Get(entt::entity entity) { return m_Registry.get<T>(entity); }
+    T& Get(entt::entity entity)
+    {
+        if constexpr (std::is_empty_v<T>) { static T t{}; m_Registry.get<T>(entity); return t; }
+        else return m_Registry.get<T>(entity);
+    }
 
     template<typename T>
-    const T& Get(entt::entity entity) const { return m_Registry.get<T>(entity); }
+    const T& Get(entt::entity entity) const
+    {
+        if constexpr (std::is_empty_v<T>) { static T t{}; m_Registry.get<T>(entity); return t; }
+        else return m_Registry.get<T>(entity);
+    }
 
     template<typename T, typename... Args>
     T& Add(entt::entity entity, Args&&... args)
     {
-        return m_Registry.emplace<T>(entity, std::forward<Args>(args)...);
+        if constexpr (std::is_empty_v<T>) { m_Registry.emplace<T>(entity, std::forward<Args>(args)...); static T t{}; return t; }
+        else return m_Registry.emplace<T>(entity, std::forward<Args>(args)...);
     }
 
     template<typename T>

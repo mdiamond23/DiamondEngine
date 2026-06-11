@@ -2,9 +2,17 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
+#include <entt/entt.hpp>
+#include <functional>
 #include <string>
 #include <memory>
 #include <cstdint>
+
+struct CollisionContact {
+    entt::entity other;
+    glm::vec3    contactPoint;
+    glm::vec3    contactNormal;
+};
 
 struct PhysicsMaterial
 {
@@ -33,6 +41,14 @@ struct ColliderComponent
 
     bool isTrigger = false;
     std::shared_ptr<PhysicsMaterial> material;  // null = engine default
+
+    // Collision callbacks — set by scripts, fired by PhysicsSystem
+    std::function<void(CollisionContact)> onCollisionEnter;
+    std::function<void(CollisionContact)> onCollisionStay;
+    std::function<void(CollisionContact)> onCollisionExit;
+    std::function<void(entt::entity)>     onTriggerEnter;
+    std::function<void(entt::entity)>     onTriggerStay;
+    std::function<void(entt::entity)>     onTriggerExit;
 
     uint32_t _bodyId = 0xFFFFFFFFu;  // set by PhysicsSystem; invalid sentinel mirrors RigidBodyComponent
 };

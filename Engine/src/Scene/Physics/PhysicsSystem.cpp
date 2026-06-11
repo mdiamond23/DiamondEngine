@@ -118,7 +118,7 @@ static inline glm::quat FromJolt(JPH::QuatArg q)   { return { q.GetW(), q.GetX()
 // We queue events and drain them after the step to safely call std::function.
 // ---------------------------------------------------------------------------
 struct ContactEvent {
-    enum class Type { Enter, Stay, Exit, TriggerEnter, TriggerExit };
+    enum class Type { Enter, Stay, Exit, TriggerEnter, TriggerStay, TriggerExit };
     Type         type;
     entt::entity entityA     = entt::null;
     entt::entity entityB     = entt::null;
@@ -162,9 +162,9 @@ public:
 
     void OnContactPersisted(const JPH::Body& a, const JPH::Body& b,
         const JPH::ContactManifold& manifold, JPH::ContactSettings&) override {
-        if (a.IsSensor() || b.IsSensor()) return; // no Stay event for triggers
+        bool isTrigger = a.IsSensor() || b.IsSensor();
         ContactEvent ev;
-        ev.type    = ContactEvent::Type::Stay;
+        ev.type = isTrigger ? ContactEvent::Type::TriggerStay : ContactEvent::Type::Stay;
         ev.entityA = static_cast<entt::entity>(static_cast<uint32_t>(a.GetUserData()));
         ev.entityB = static_cast<entt::entity>(static_cast<uint32_t>(b.GetUserData()));
         JPH::RVec3 wp = manifold.GetWorldSpaceContactPointOn1(0);
@@ -522,21 +522,23 @@ static void DispatchCallbacks(Scene& scene, std::vector<ContactEvent> events)
 {
     for (const auto& ev : events) {
         auto fire = [&](entt::entity self, entt::entity other, bool flipNormal) {
-            if (!scene.Has<RigidBodyComponent>(self)) return;
-            auto& rb = scene.Get<RigidBodyComponent>(self);
+            if (!scene.Has<ColliderComponent>(self)) return;
+            auto& col = scene.Get<ColliderComponent>(self);
             glm::vec3 normal = flipNormal ? -ev.contactNormal : ev.contactNormal;
             CollisionContact contact { other, ev.contactPoint, normal };
             switch (ev.type) {
                 case ContactEvent::Type::Enter:
-                    if (rb.onCollisionEnter) rb.onCollisionEnter(contact); break;
+                    if (col.onCollisionEnter) col.onCollisionEnter(contact); break;
                 case ContactEvent::Type::Stay:
-                    if (rb.onCollisionStay)  rb.onCollisionStay(contact);  break;
+                    if (col.onCollisionStay)  col.onCollisionStay(contact);  break;
                 case ContactEvent::Type::Exit:
-                    if (rb.onCollisionExit)  rb.onCollisionExit(contact);  break;
+                    if (col.onCollisionExit)  col.onCollisionExit(contact);  break;
                 case ContactEvent::Type::TriggerEnter:
-                    if (rb.onTriggerEnter) rb.onTriggerEnter(other); break;
+                    if (col.onTriggerEnter) col.onTriggerEnter(other); break;
+                case ContactEvent::Type::TriggerStay:
+                    if (col.onTriggerStay) col.onTriggerStay(other); break;
                 case ContactEvent::Type::TriggerExit:
-                    if (rb.onTriggerExit)  rb.onTriggerExit(other);  break;
+                    if (col.onTriggerExit)  col.onTriggerExit(other);  break;
             }
         };
         fire(ev.entityA, ev.entityB, false);
