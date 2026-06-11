@@ -16,6 +16,8 @@
 #include <Jolt/Physics/Collision/Shape/RotatedTranslatedShape.h>
 #include <Jolt/Physics/Collision/RayCast.h>
 #include <Jolt/Physics/Collision/CastResult.h>
+#include <Jolt/Physics/Collision/ShapeCast.h>
+#include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
 #include <Jolt/Physics/Body/BodyLockInterface.h>
 
 #include "Scene/Physics/PhysicsSystem.h"
@@ -699,7 +701,7 @@ private:
 };
 
 HitResult Raycast(glm::vec3 origin, glm::vec3 direction, float distance,
-                  entt::entity ignore) {
+                  entt::entity ignore, bool drawDebug) {
     HitResult result;
     float len = glm::length(direction);
     if (!s_Impl || len < 1e-6f || distance <= 0.0f) return result;
@@ -726,8 +728,11 @@ HitResult Raycast(glm::vec3 origin, glm::vec3 direction, float distance,
     JPH::BroadPhaseLayerFilter bpFilter;
     JPH::ObjectLayerFilter     objFilter;
     JPH::RayCastResult hit;
-    if (!s_Impl->joltSystem->GetNarrowPhaseQuery().CastRay(ray, hit, bpFilter, objFilter, bodyFilter))
+    if (!s_Impl->joltSystem->GetNarrowPhaseQuery().CastRay(ray, hit, bpFilter, objFilter, bodyFilter)) {
+        if (drawDebug)
+            DebugDraw::Line(result.traceStart, result.traceEnd, {1.0f, 0.0f, 0.0f});
         return result;
+    }
 
     result.hit      = true;
     result.distance = hit.mFraction * distance;
@@ -745,7 +750,239 @@ HitResult Raycast(glm::vec3 origin, glm::vec3 direction, float distance,
         result.normal = FromJolt(n);
     }
 
+    if (drawDebug) {
+        DebugDraw::Line(result.traceStart, result.point, {0.0f, 1.0f, 0.0f});
+        DebugDraw::Sphere(result.point, 0.05f, {1.0f, 1.0f, 0.0f});
+    }
+
     return result;
+}
+
+HitResult SphereCast(glm::vec3 origin, float radius, glm::vec3 direction, float distance,
+                     entt::entity ignore, bool drawDebug) {
+    HitResult result;
+    float len = glm::length(direction);
+    if (!s_Impl || len < 1e-6f || distance <= 0.0f || radius <= 0.0f) return result;
+
+    glm::vec3 normDir = direction / len;
+    result.traceStart = origin;
+    result.traceEnd   = origin + normDir * distance;
+
+    JPH::SphereShapeSettings sphereSettings(radius);
+    auto shapeResult = sphereSettings.Create();
+    if (!shapeResult.IsValid()) return result;
+
+    JPH::RShapeCast shapeCast = JPH::RShapeCast::sFromWorldTransform(
+        shapeResult.Get(),
+        JPH::Vec3::sReplicate(1.0f),
+        JPH::RMat44::sTranslation(JPH::RVec3(origin.x, origin.y, origin.z)),
+        JPH::Vec3(normDir.x * distance, normDir.y * distance, normDir.z * distance)
+    );
+
+    JPH::BodyID ignoreID = JPH::BodyID();
+    if (ignore != entt::null) {
+        for (auto& [id, record] : s_Impl->bodyMap) {
+            if (record.entity == ignore) { ignoreID = JPH::BodyID(id); break; }
+        }
+    }
+    SingleBodyIgnoreFilter bodyFilter(ignoreID);
+
+    JPH::ShapeCastSettings settings;
+    JPH::ClosestHitCollisionCollector<JPH::CastShapeCollector> collector;
+    JPH::BroadPhaseLayerFilter bpFilter;
+    JPH::ObjectLayerFilter     objFilter;
+
+    s_Impl->joltSystem->GetNarrowPhaseQuery().CastShape(
+        shapeCast, settings, JPH::RVec3::sZero(), collector,
+        bpFilter, objFilter, bodyFilter
+    );
+
+    if (!collector.HadHit()) {
+        if (drawDebug) {
+            DebugDraw::Line(result.traceStart, result.traceEnd, {1.0f, 0.0f, 0.0f});
+            DebugDraw::Sphere(result.traceStart, radius, {1.0f, 0.0f, 0.0f});
+        }
+        return result;
+    }
+
+    const auto& hit = collector.mHit;
+    result.hit      = true;
+    result.distance = hit.mFraction * distance;
+    result.point    = FromJolt((JPH::Vec3)hit.mContactPointOn2);
+
+    auto it = s_Impl->bodyMap.find(hit.mBodyID2.GetIndexAndSequenceNumber());
+    if (it != s_Impl->bodyMap.end())
+        result.entity = it->second.entity;
+
+    JPH::BodyLockRead lock(s_Impl->joltSystem->GetBodyLockInterface(), hit.mBodyID2);
+    if (lock.Succeeded()) {
+        JPH::Vec3 n = lock.GetBody().GetWorldSpaceSurfaceNormal(
+            hit.mSubShapeID2,
+            hit.mContactPointOn2);
+        result.normal = FromJolt(n);
+    }
+
+    if (drawDebug) {
+        glm::vec3 impactCenter = origin + normDir * result.distance;
+        DebugDraw::Line(result.traceStart, impactCenter, {0.0f, 1.0f, 0.0f});
+        DebugDraw::Sphere(result.traceStart, radius, {0.0f, 1.0f, 0.0f});
+        DebugDraw::Sphere(impactCenter,      radius, {1.0f, 1.0f, 0.0f});
+    }
+
+    return result;
+}
+
+std::vector<HitResult> RaycastMulti(glm::vec3 origin, glm::vec3 direction, float distance,
+                                    entt::entity ignore, bool drawDebug) {
+    std::vector<HitResult> results;
+    float len = glm::length(direction);
+    if (!s_Impl || len < 1e-6f || distance <= 0.0f) return results;
+
+    glm::vec3 normDir = direction / len;
+    glm::vec3 traceEnd = origin + normDir * distance;
+
+    JPH::RRayCast ray {
+        JPH::RVec3(origin.x, origin.y, origin.z),
+        JPH::Vec3(normDir.x * distance, normDir.y * distance, normDir.z * distance)
+    };
+
+    JPH::BodyID ignoreID = JPH::BodyID();
+    if (ignore != entt::null) {
+        for (auto& [id, record] : s_Impl->bodyMap) {
+            if (record.entity == ignore) { ignoreID = JPH::BodyID(id); break; }
+        }
+    }
+    SingleBodyIgnoreFilter bodyFilter(ignoreID);
+
+    JPH::RayCastSettings              rayCastSettings;
+    JPH::AllHitCollisionCollector<JPH::CastRayCollector> collector;
+    JPH::BroadPhaseLayerFilter bpFilter;
+    JPH::ObjectLayerFilter     objFilter;
+    s_Impl->joltSystem->GetNarrowPhaseQuery().CastRay(
+        ray, rayCastSettings, collector, bpFilter, objFilter, bodyFilter);
+
+    if (drawDebug)
+        DebugDraw::Line(origin, traceEnd, collector.HadHit() ? glm::vec3{0,1,0} : glm::vec3{1,0,0});
+
+    if (!collector.HadHit()) return results;
+
+    // Sort nearest-first
+    auto& hits = collector.mHits;
+    std::sort(hits.begin(), hits.end(),
+        [](const JPH::RayCastResult& a, const JPH::RayCastResult& b) {
+            return a.mFraction < b.mFraction;
+        });
+
+    results.reserve(hits.size());
+    for (const auto& hit : hits) {
+        HitResult r;
+        r.hit        = true;
+        r.distance   = hit.mFraction * distance;
+        r.traceStart = origin;
+        r.traceEnd   = traceEnd;
+        r.point      = origin + normDir * r.distance;
+
+        auto it = s_Impl->bodyMap.find(hit.mBodyID.GetIndexAndSequenceNumber());
+        if (it != s_Impl->bodyMap.end())
+            r.entity = it->second.entity;
+
+        JPH::BodyLockRead lock(s_Impl->joltSystem->GetBodyLockInterface(), hit.mBodyID);
+        if (lock.Succeeded()) {
+            JPH::Vec3 n = lock.GetBody().GetWorldSpaceSurfaceNormal(
+                hit.mSubShapeID2,
+                JPH::RVec3(r.point.x, r.point.y, r.point.z));
+            r.normal = FromJolt(n);
+        }
+
+        if (drawDebug)
+            DebugDraw::Sphere(r.point, 0.05f, {1.0f, 1.0f, 0.0f});
+
+        results.push_back(r);
+    }
+
+    return results;
+}
+
+std::vector<HitResult> SphereCastMulti(glm::vec3 origin, float radius, glm::vec3 direction, float distance,
+                                       entt::entity ignore, bool drawDebug) {
+    std::vector<HitResult> results;
+    float len = glm::length(direction);
+    if (!s_Impl || len < 1e-6f || distance <= 0.0f || radius <= 0.0f) return results;
+
+    glm::vec3 normDir  = direction / len;
+    glm::vec3 traceEnd = origin + normDir * distance;
+
+    JPH::SphereShapeSettings sphereSettings(radius);
+    auto shapeResult = sphereSettings.Create();
+    if (!shapeResult.IsValid()) return results;
+
+    JPH::RShapeCast shapeCast = JPH::RShapeCast::sFromWorldTransform(
+        shapeResult.Get(),
+        JPH::Vec3::sReplicate(1.0f),
+        JPH::RMat44::sTranslation(JPH::RVec3(origin.x, origin.y, origin.z)),
+        JPH::Vec3(normDir.x * distance, normDir.y * distance, normDir.z * distance)
+    );
+
+    JPH::BodyID ignoreID = JPH::BodyID();
+    if (ignore != entt::null) {
+        for (auto& [id, record] : s_Impl->bodyMap) {
+            if (record.entity == ignore) { ignoreID = JPH::BodyID(id); break; }
+        }
+    }
+    SingleBodyIgnoreFilter bodyFilter(ignoreID);
+
+    JPH::ShapeCastSettings settings;
+    JPH::AllHitCollisionCollector<JPH::CastShapeCollector> collector;
+    JPH::BroadPhaseLayerFilter bpFilter;
+    JPH::ObjectLayerFilter     objFilter;
+    s_Impl->joltSystem->GetNarrowPhaseQuery().CastShape(
+        shapeCast, settings, JPH::RVec3::sZero(), collector,
+        bpFilter, objFilter, bodyFilter);
+
+    if (drawDebug) {
+        glm::vec3 lineColor = collector.HadHit() ? glm::vec3{0,1,0} : glm::vec3{1,0,0};
+        DebugDraw::Line(origin, traceEnd, lineColor);
+        DebugDraw::Sphere(origin, radius, lineColor);
+    }
+
+    if (!collector.HadHit()) return results;
+
+    // Sort nearest-first
+    auto& hits = collector.mHits;
+    std::sort(hits.begin(), hits.end(),
+        [](const JPH::ShapeCastResult& a, const JPH::ShapeCastResult& b) {
+            return a.mFraction < b.mFraction;
+        });
+
+    results.reserve(hits.size());
+    for (const auto& hit : hits) {
+        HitResult r;
+        r.hit        = true;
+        r.distance   = hit.mFraction * distance;
+        r.traceStart = origin;
+        r.traceEnd   = traceEnd;
+        r.point      = FromJolt((JPH::Vec3)hit.mContactPointOn2);
+
+        auto it = s_Impl->bodyMap.find(hit.mBodyID2.GetIndexAndSequenceNumber());
+        if (it != s_Impl->bodyMap.end())
+            r.entity = it->second.entity;
+
+        JPH::BodyLockRead lock(s_Impl->joltSystem->GetBodyLockInterface(), hit.mBodyID2);
+        if (lock.Succeeded()) {
+            JPH::Vec3 n = lock.GetBody().GetWorldSpaceSurfaceNormal(
+                hit.mSubShapeID2, hit.mContactPointOn2);
+            r.normal = FromJolt(n);
+        }
+
+        if (drawDebug) {
+            glm::vec3 impactCenter = origin + normDir * r.distance;
+            DebugDraw::Sphere(impactCenter, radius, {1.0f, 1.0f, 0.0f});
+        }
+
+        results.push_back(r);
+    }
+
+    return results;
 }
 
 void DrawColliders(Scene& scene, glm::vec3 color) {

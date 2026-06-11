@@ -1,6 +1,7 @@
 #pragma once
 #include <glm/glm.hpp>
 #include <entt/entt.hpp>
+#include <vector>
 #include "Rigidbody.h"
 
 class Scene;
@@ -49,7 +50,18 @@ namespace Physics {
     // Only hits entities with a ColliderComponent registered in the physics world.
     // Returns a HitResult with hit=false if nothing is hit or the session is not active.
     HitResult Raycast(glm::vec3 origin, glm::vec3 direction, float distance,
-                      entt::entity ignore = entt::null);
+                      entt::entity ignore = entt::null, bool drawDebug = false);
+
+    // Returns all hits along the ray sorted nearest-first. Empty if nothing hit.
+    std::vector<HitResult> RaycastMulti(glm::vec3 origin, glm::vec3 direction, float distance,
+                                        entt::entity ignore = entt::null, bool drawDebug = false);
+
+    HitResult SphereCast(glm::vec3 origin, float radius, glm::vec3 direction, float distance,
+                         entt::entity ignore = entt::null, bool drawDebug = false);
+
+    // Returns all hits along the sweep sorted nearest-first. Empty if nothing hit.
+    std::vector<HitResult> SphereCastMulti(glm::vec3 origin, float radius, glm::vec3 direction, float distance,
+                                           entt::entity ignore = entt::null, bool drawDebug = false);
 
     // ---- Debug visualization ----
     // Submits wireframe collider shapes for all entities in the scene to DebugDraw.
