@@ -4,6 +4,8 @@
 
 struct GLFWwindow;
 
+// ---- Keyboard ---------------------------------------------------------------
+
 enum class Key : int
 {
     Space       = 32,
@@ -47,6 +49,8 @@ enum class Key : int
     RightAlt    = 346,
 };
 
+// ---- Mouse ------------------------------------------------------------------
+
 enum class MouseButton : int
 {
     Left   = 0,
@@ -54,28 +58,87 @@ enum class MouseButton : int
     Middle = 2,
 };
 
+// ---- Gamepad ----------------------------------------------------------------
+// Values match GLFW_GAMEPAD_BUTTON_* constants.
+// GLFW maps all controllers (Xbox, PS4/PS5, Switch Pro, etc.) to this layout
+// via its built-in SDL gamepad database, so button names are hardware-neutral.
+
+enum class GamepadButton : int
+{
+    South        = 0,   // A (Xbox) / Cross    (PS) / B (Switch)
+    East         = 1,   // B (Xbox) / Circle   (PS) / A (Switch)
+    West         = 2,   // X (Xbox) / Square   (PS) / Y (Switch)
+    North        = 3,   // Y (Xbox) / Triangle (PS) / X (Switch)
+    LeftBumper   = 4,   // LB / L1 / L
+    RightBumper  = 5,   // RB / R1 / R
+    Back         = 6,   // View / Select / Share / Minus
+    Start        = 7,   // Menu  / Options     / Plus
+    Guide        = 8,   // Xbox / PS / Home button
+    LeftThumb    = 9,   // L3 — left stick click
+    RightThumb   = 10,  // R3 — right stick click
+    DpadUp       = 11,
+    DpadRight    = 12,
+    DpadDown     = 13,
+    DpadLeft     = 14,
+};
+
+// Values match GLFW_GAMEPAD_AXIS_* constants.
+// Sticks rest at 0. Triggers rest at -1 and reach +1 when fully pressed;
+// Input::GetGamepadAxis remaps triggers to 0..1 automatically.
+enum class GamepadAxis : int
+{
+    LeftX        = 0,
+    LeftY        = 1,
+    RightX       = 2,
+    RightY       = 3,
+    LeftTrigger  = 4,
+    RightTrigger = 5,
+};
+
+// ---- Input namespace --------------------------------------------------------
+
 namespace Input
 {
     void Init(GLFWwindow* window);
     void Update();
     void SetEnabled(bool enabled);
 
+    // --- Named bindings (keyboard / mouse) ---
     void BindAction(const std::string& name, Key key);
     void BindAction(const std::string& name, MouseButton button);
     void BindAxis(const std::string& name, Key positiveKey, Key negativeKey);
 
+    // --- Named bindings (gamepad) ---
+    // gamepadId is 0-based: 0 = first controller, up to 3.
+    void BindAction(const std::string& name, GamepadButton button, int gamepadId = 0);
+    void BindAxis(const std::string& name, GamepadAxis axis, int gamepadId = 0);
+
+    // --- Named binding queries ---
     bool  IsPressed(const std::string& name);
     bool  IsHeld(const std::string& name);
     bool  IsReleased(const std::string& name);
     float GetAxis(const std::string& name);
+
+    // --- Mouse queries ---
     glm::vec2 GetMousePosition();
     glm::vec2 GetMouseDelta();
-    float GetScrollDelta();
+    float     GetScrollDelta();
 
-    bool  IsKeyPressed(Key key);
-    bool  IsKeyHeld(Key key);
-    bool  IsKeyReleased(Key key);
-    bool  IsMouseButtonPressed(MouseButton button);
-    bool  IsMouseButtonHeld(MouseButton button);
-    bool  IsMouseButtonReleased(MouseButton button);
+    // --- Raw keyboard queries ---
+    bool IsKeyPressed(Key key);
+    bool IsKeyHeld(Key key);
+    bool IsKeyReleased(Key key);
+
+    // --- Raw mouse queries ---
+    bool IsMouseButtonPressed(MouseButton button);
+    bool IsMouseButtonHeld(MouseButton button);
+    bool IsMouseButtonReleased(MouseButton button);
+
+    // --- Raw gamepad queries ---
+    bool  IsGamepadConnected(int gamepadId = 0);
+    bool  IsGamepadButtonPressed(GamepadButton button, int gamepadId = 0);
+    bool  IsGamepadButtonHeld(GamepadButton button, int gamepadId = 0);
+    bool  IsGamepadButtonReleased(GamepadButton button, int gamepadId = 0);
+    // Sticks: -1..1 with deadzone applied. Triggers: remapped to 0..1.
+    float GetGamepadAxis(GamepadAxis axis, int gamepadId = 0);
 }

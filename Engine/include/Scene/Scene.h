@@ -71,8 +71,11 @@ public:
     // ---- Play mode ---------------------------------------------------------
     void StartPlay();
     void StopPlay();
+    void Pause();
+    void Resume();
     void UpdateSystems(float dt);
     bool IsPlaying() const { return m_Playing; }
+    bool IsPaused()  const { return m_Paused;  }
 
     // ---- Accessors ---------------------------------------------------------
     TransformSystem&       GetTransformSystem()       { return m_TransformSystem; }
@@ -91,4 +94,5 @@ private:
 
     std::vector<std::unique_ptr<GameSystem>> m_Systems;
     bool                                     m_Playing = false;
+    bool                                     m_Paused  = false;
 };

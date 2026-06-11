@@ -17,6 +17,7 @@ public:
     void OnImGuiRender();
     void SetViewportTexture(uint32_t textureID);
     void SetGameViewportTexture(uint32_t textureID);
+    void SetEditorCamera(Diamond::Camera* cam) { m_Context.EditorCamera = cam; }
     void UpdateCamera(const glm::mat4& view, const glm::mat4& proj, const glm::vec3& camPos);
     bool IsViewportActive() const     { return m_Viewport.IsActive(); }
     bool IsGameViewportActive() const { return m_GameViewport.IsActive(); }

@@ -2,6 +2,7 @@
 
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <cmath>
 
 namespace Diamond {
 
@@ -61,6 +62,14 @@ public:
     void ProcessMouseScroll(float yOffset)
     {
         Zoom = glm::clamp(Zoom - yOffset, 1.0f, 45.0f);
+    }
+
+    void LookAt(glm::vec3 target)
+    {
+        glm::vec3 dir = glm::normalize(target - Position);
+        Pitch = glm::degrees(std::asin(glm::clamp(dir.y, -1.0f, 1.0f)));
+        Yaw   = glm::degrees(std::atan2(dir.z, dir.x));
+        UpdateVectors();
     }
 
 private:

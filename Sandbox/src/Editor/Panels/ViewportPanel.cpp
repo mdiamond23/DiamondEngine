@@ -7,6 +7,7 @@
 #include <glm/gtx/matrix_decompose.hpp>
 #include <algorithm>
 #include <cfloat>
+#include <cmath>
 #include "Scene/Components.h"
 #include "Scene/Scene.h"
 
@@ -29,6 +30,38 @@ void ViewportPanel::OnImGuiRender() {
         if (ImGui::IsKeyPressed(ImGuiKey_W)) m_GizmoOp = ImGuizmo::TRANSLATE;
         if (ImGui::IsKeyPressed(ImGuiKey_E)) m_GizmoOp = ImGuizmo::ROTATE;
         if (ImGui::IsKeyPressed(ImGuiKey_R)) m_GizmoOp = ImGuizmo::SCALE;
+
+        // F — frame selected entity
+        if (ImGui::IsKeyPressed(ImGuiKey_F)
+            && m_Context && m_Context->HasSelection() && m_Context->EditorCamera)
+        {
+            auto& reg = m_Context->ActiveScene->GetRegistry();
+            auto& ts  = m_Context->ActiveScene->GetTransformSystem();
+            entt::entity sel = m_Context->PrimarySelection();
+
+            glm::vec3 center(0.0f);
+            float radius = 1.0f;
+
+            if (reg.all_of<MeshComponent>(sel)) {
+                auto& mc = reg.get<MeshComponent>(sel);
+                Diamond::AABB world = mc.localBounds.Transform(ts.GetWorldMatrix(sel));
+                center = (world.min + world.max) * 0.5f;
+                radius = glm::length(world.max - world.min) * 0.5f;
+                if (radius < 0.01f) radius = 1.0f;
+            } else {
+                center = glm::vec3(ts.GetWorldMatrix(sel)[3]);
+            }
+
+            Diamond::Camera* cam = m_Context->EditorCamera;
+            float fovRad  = glm::radians(cam->Zoom);
+            float distance = std::max(radius / std::tan(fovRad * 0.5f) * 1.2f, radius * 2.0f);
+
+            glm::vec3 offset = cam->Position - center;
+            float len = glm::length(offset);
+            glm::vec3 dir = (len > 0.001f) ? offset / len : -cam->Front;
+            cam->Position = center + dir * distance;
+            cam->LookAt(center);
+        }
     }
 
     // Left-click picking — ray vs world-space AABBs.

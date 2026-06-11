@@ -140,11 +140,22 @@ void Scene::StopPlay()
         system->OnDestroy(*this);
     m_Systems.clear();
     m_Playing = false;
+    m_Paused  = false;
+}
+
+void Scene::Pause()
+{
+    if (m_Playing) m_Paused = true;
+}
+
+void Scene::Resume()
+{
+    m_Paused = false;
 }
 
 void Scene::UpdateSystems(float dt)
 {
-    if (!m_Playing) return;
+    if (!m_Playing || m_Paused) return;
     for (auto& system : m_Systems)
         system->OnUpdate(*this, dt);
 }

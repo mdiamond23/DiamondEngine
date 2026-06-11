@@ -119,6 +119,7 @@ int main()
 
     Scene scene;
     EditorLayer editorLayer(&scene, iconFont);
+    editorLayer.SetEditorCamera(&g_camera);
     glfwSetWindowUserPointer(window, &editorLayer);
     glfwSetDropCallback(window, dropCallback);
 
@@ -596,7 +597,7 @@ int main()
             lastFbH = fbH;
         }
 
-        Input::SetEnabled(scene.IsPlaying() && editorLayer.IsGameViewportActive());
+        Input::SetEnabled(scene.IsPlaying() && !scene.IsPaused() && editorLayer.IsGameViewportActive());
         scene.UpdateSystems(deltaTime);
         Input::SetEnabled(true);
 

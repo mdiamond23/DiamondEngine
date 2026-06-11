@@ -63,11 +63,11 @@ class MoveSystem : public GameSystem
 public:
     void OnStart(Scene& scene) override
     {
-        Input::BindAxis("Horizontal", Key::D,     Key::A);
-        Input::BindAxis("Forward",    Key::W,     Key::S);
-        Input::BindAction("Jump", Key::Space);
-        Input::BindAction("Ray", MouseButton::Left);
-        Input::BindAction("Sphere", MouseButton::Right);
+        Input::BindAxis("Horizontal", GamepadAxis::LeftX);
+        Input::BindAxis("Forward",    GamepadAxis::LeftY);
+        Input::BindAction("Jump",   GamepadButton::South);
+        Input::BindAxis("Ray",    GamepadAxis::RightTrigger);
+        Input::BindAxis("Sphere", GamepadAxis::LeftTrigger);
     }
 
     void OnUpdate(Scene& scene, float dt) override
@@ -75,8 +75,14 @@ public:
         float h = Input::GetAxis("Horizontal");
         float f = Input::GetAxis("Forward");
         bool  jump = Input::IsPressed("Jump");
-        bool castRay = Input::IsPressed("Ray");
-        bool castSphere = Input::IsPressed("Sphere");
+
+        // Triggers are axes (0..1); treat crossing 0.5 as a "just pressed" event.
+        bool rayHeld    = Input::GetAxis("Ray")    > 0.5f;
+        bool sphereHeld = Input::GetAxis("Sphere") > 0.5f;
+        bool castRay    = rayHeld    && !m_prevRay;
+        bool castSphere = sphereHeld && !m_prevSphere;
+        m_prevRay    = rayHeld;
+        m_prevSphere = sphereHeld;
 
 
         for (auto [entity, comp] : scene.View<MoveComponent>().each())
@@ -126,6 +132,9 @@ public:
     void OnDestroy(Scene& scene) override {}
 
 private:
+    bool m_prevRay    = false;
+    bool m_prevSphere = false;
+
     // Simple ground check: body's vertical velocity is near zero and it is active.
     // Replace with a ray-cast ground probe once raycasting is available.
     static bool IsGrounded(const RigidBodyComponent& rb)

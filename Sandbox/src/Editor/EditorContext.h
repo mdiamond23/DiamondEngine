@@ -5,12 +5,14 @@
 #include <glm/glm.hpp>
 #include <imgui.h>
 #include "Scene/Scene.h"
+#include "Core/Camera.h"
 #include "Command.h"
 
 struct EditorContext {
-    Scene*          ActiveScene    = nullptr;
-    ImFont*         IconFont       = nullptr;
-    CommandManager  Commands;
+    Scene*            ActiveScene   = nullptr;
+    ImFont*           IconFont      = nullptr;
+    Diamond::Camera*  EditorCamera  = nullptr;
+    CommandManager    Commands;
     std::unordered_set<entt::entity> selectedEntities;
     std::string  currentScenePath;
 

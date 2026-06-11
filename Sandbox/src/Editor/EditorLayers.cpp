@@ -225,9 +225,14 @@ void EditorLayer::DrawToolbar()
 {
     Scene* scene   = m_Context.ActiveScene;
     bool   playing = scene->IsPlaying();
+    bool   paused  = scene->IsPaused();
 
-    float btnW    = 28.0f;
-    float centerX = (ImGui::GetWindowWidth() - btnW) * 0.5f;
+    static constexpr float btnW = 28.0f;
+    static constexpr float gap  =  4.0f;
+
+    // When playing we show two buttons (Stop + Pause/Resume), otherwise one.
+    float totalW  = playing ? (btnW * 2 + gap) : btnW;
+    float centerX = (ImGui::GetWindowWidth() - totalW) * 0.5f;
     ImGui::SetCursorPosX(centerX);
 
     if (m_Context.IconFont)
@@ -247,6 +252,7 @@ void EditorLayer::DrawToolbar()
     }
     else
     {
+        // Stop button
         ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.65f, 0.15f, 0.15f, 1.00f));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.80f, 0.20f, 0.20f, 1.00f));
         ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4(0.50f, 0.10f, 0.10f, 1.00f));
@@ -257,6 +263,27 @@ void EditorLayer::DrawToolbar()
             m_Context.Commands.Clear();
             if (!m_SceneSnapshot.empty())
                 SceneSerializer::FromString(*scene, m_SceneSnapshot);
+        }
+        ImGui::PopStyleColor(3);
+
+        ImGui::SameLine(0.0f, gap);
+
+        // Pause / Resume button
+        if (paused)
+        {
+            ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.18f, 0.60f, 0.18f, 1.00f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.25f, 0.75f, 0.25f, 1.00f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4(0.12f, 0.45f, 0.12f, 1.00f));
+            if (ImGui::Button(ICON_FA_PLAY, ImVec2(btnW, 0)))
+                scene->Resume();
+        }
+        else
+        {
+            ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.70f, 0.55f, 0.05f, 1.00f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.85f, 0.70f, 0.10f, 1.00f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4(0.55f, 0.40f, 0.02f, 1.00f));
+            if (ImGui::Button(ICON_FA_PAUSE, ImVec2(btnW, 0)))
+                scene->Pause();
         }
         ImGui::PopStyleColor(3);
     }
