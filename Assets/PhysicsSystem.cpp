@@ -279,7 +279,7 @@ static void OnColDestroyed(entt::registry& reg, entt::entity entity) {
 // CreateShape
 // Returns a JPH::ShapeRefC (Jolt's ref-counted shape handle), or nullptr on failure.
 // ---------------------------------------------------------------------------
-static JPH::ShapeRefC CreateShape(const ColliderComponent& col, const glm::vec3& meshScale = glm::vec3(1.0f))
+static JPH::ShapeRefC CreateShape(const ColliderComponent& col)
 {
     JPH::ShapeRefC shape;
 
@@ -315,11 +315,7 @@ static JPH::ShapeRefC CreateShape(const ColliderComponent& col, const glm::vec3&
             spdlog::warn("CreateShape: ConvexHull collider has no meshPath");
             return nullptr;
         }
-        char scaleSuffix[64];
-        snprintf(scaleSuffix, sizeof(scaleSuffix), "|%.6f,%.6f,%.6f", meshScale.x, meshScale.y, meshScale.z);
-        std::string cacheKey = col.meshPath + scaleSuffix;
-
-        auto cacheIt = s_convexHullCache.find(cacheKey);
+        auto cacheIt = s_convexHullCache.find(col.meshPath);
         if (cacheIt != s_convexHullCache.end()) { shape = cacheIt->second; break; }
 
         auto meshes = Diamond::ModelImporter::Load(col.meshPath);
@@ -328,7 +324,7 @@ static JPH::ShapeRefC CreateShape(const ColliderComponent& col, const glm::vec3&
         JPH::Array<JPH::Vec3> points;
         for (auto& mesh : meshes)
             for (auto& v : mesh.Vertices)
-                points.push_back({ v.Position.x * meshScale.x, v.Position.y * meshScale.y, v.Position.z * meshScale.z });
+                points.push_back({ v.Position.x, v.Position.y, v.Position.z });
 
         if (points.empty()) return nullptr;
 
@@ -339,7 +335,7 @@ static JPH::ShapeRefC CreateShape(const ColliderComponent& col, const glm::vec3&
             return nullptr;
         }
         shape = result.Get();
-        s_convexHullCache[cacheKey] = shape;
+        s_convexHullCache[col.meshPath] = shape;
         break;
     }
     case CollisionShape::TriangleMesh:
@@ -348,11 +344,7 @@ static JPH::ShapeRefC CreateShape(const ColliderComponent& col, const glm::vec3&
             spdlog::warn("CreateShape: TriangleMesh collider has no meshPath");
             return nullptr;
         }
-        char scaleSuffix[64];
-        snprintf(scaleSuffix, sizeof(scaleSuffix), "|%.6f,%.6f,%.6f", meshScale.x, meshScale.y, meshScale.z);
-        std::string cacheKey = col.meshPath + scaleSuffix;
-
-        auto cacheIt = s_triangleMeshCache.find(cacheKey);
+        auto cacheIt = s_triangleMeshCache.find(col.meshPath);
         if (cacheIt != s_triangleMeshCache.end()) { shape = cacheIt->second; break; }
 
         auto meshes = Diamond::ModelImporter::Load(col.meshPath);
@@ -365,9 +357,9 @@ static JPH::ShapeRefC CreateShape(const ColliderComponent& col, const glm::vec3&
                 const auto& v1 = mesh.Vertices[mesh.Indices[i + 1]].Position;
                 const auto& v2 = mesh.Vertices[mesh.Indices[i + 2]].Position;
                 triangles.push_back(JPH::Triangle(
-                    JPH::Float3(v0.x * meshScale.x, v0.y * meshScale.y, v0.z * meshScale.z),
-                    JPH::Float3(v1.x * meshScale.x, v1.y * meshScale.y, v1.z * meshScale.z),
-                    JPH::Float3(v2.x * meshScale.x, v2.y * meshScale.y, v2.z * meshScale.z)
+                    JPH::Float3(v0.x, v0.y, v0.z),
+                    JPH::Float3(v1.x, v1.y, v1.z),
+                    JPH::Float3(v2.x, v2.y, v2.z)
                 ));
             }
         }
@@ -381,7 +373,7 @@ static JPH::ShapeRefC CreateShape(const ColliderComponent& col, const glm::vec3&
             return nullptr;
         }
         shape = result.Get();
-        s_triangleMeshCache[cacheKey] = shape;
+        s_triangleMeshCache[col.meshPath] = shape;
         break;
     }
     default:
@@ -427,7 +419,7 @@ static void CreateBody(JPH::BodyInterface& bi,
         return;
     }
 
-    JPH::ShapeRefC shapeRef = CreateShape(col, xform.scale);
+    JPH::ShapeRefC shapeRef = CreateShape(col);
     if (!shapeRef) return;
 
     JPH::EMotionType motionType;
@@ -561,7 +553,7 @@ static void CreateStaticCollider(JPH::BodyInterface& bi,
     std::unordered_map<uint32_t, BodyRecord>& bodyMap,
     entt::entity entity, ColliderComponent& col, const TransformComponent& xform)
 {
-    JPH::ShapeRefC shapeRef = CreateShape(col, xform.scale);
+    JPH::ShapeRefC shapeRef = CreateShape(col);
     if (!shapeRef) return;
 
     JPH::BodyCreationSettings settings(

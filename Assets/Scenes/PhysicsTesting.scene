@@ -388,6 +388,29 @@
       "uuid": 18329544406845670732
     },
     {
+      "collider": {
+        "halfExtents": [
+          0.5,
+          0.5,
+          0.5
+        ],
+        "halfHeight": 0.5,
+        "isTrigger": false,
+        "localOffset": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "localRotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "meshPath": "",
+        "radius": 0.5,
+        "shapeType": 3
+      },
       "mesh": {
         "albedoPath": "C:/Dev/DiamondEngine/Assets/Models/Cerberus_by_Andrew_Maximov/Textures/Cerberus_A.tga",
         "aoPath": "",
@@ -395,7 +418,7 @@
         "emissivePath": "",
         "emissiveStrength": 0.0,
         "materialPath": "",
-        "meshPath": "C:/Dev/DiamondEngine/Assets/Models/Cerberus_by_Andrew_Maximov/Revolver.FBX",
+        "meshPath": "C:/Dev/DiamondEngine\\Assets\\Models\\Cerberus_by_Andrew_Maximov\\Revolver.FBX",
         "meshSubIndex": 0,
         "metallicPath": "C:/Dev/DiamondEngine/Assets/Models/Cerberus_by_Andrew_Maximov/Textures/Cerberus_M.tga",
         "normalPath": "C:/Dev/DiamondEngine/Assets/Models/Cerberus_by_Andrew_Maximov/Textures/Cerberus_N.tga",
@@ -405,27 +428,37 @@
         "visible": true
       },
       "name": "Cerberus 0",
+      "rigidbody": {
+        "angularDamping": 0.05000000074505806,
+        "bodyType": 1,
+        "gravityScale": 1.0,
+        "linearDamping": 0.05000000074505806,
+        "lockRotX": false,
+        "lockRotY": false,
+        "lockRotZ": false,
+        "mass": 1.0
+      },
       "transform": {
         "eulerDegrees": [
-          0.0,
+          -89.99998474121094,
           0.0,
           0.0
         ],
         "position": [
-          1.5,
-          1.5,
+          2.268566131591797,
+          2.7214553356170654,
           1.0
         ],
         "rotation": [
-          0.7071067690849304,
-          -0.7071067690849304,
-          -0.0,
-          -0.0
+          0.70710688829422,
+          -0.7071066498756409,
+          0.0,
+          0.0
         ],
         "scale": [
           0.05000000074505806,
-          0.05000000074505806,
-          0.05000000074505806
+          0.049998555332422256,
+          0.049998555332422256
         ]
       },
       "uuid": 6231463051401644240
@@ -657,6 +690,82 @@
         ]
       },
       "uuid": 8889269308631855748
+    },
+    {
+      "collider": {
+        "halfExtents": [
+          0.5,
+          0.5,
+          0.5
+        ],
+        "halfHeight": 0.5,
+        "isTrigger": false,
+        "localOffset": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "localRotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "meshPath": "",
+        "radius": 0.5,
+        "shapeType": 3
+      },
+      "mesh": {
+        "albedoPath": "C:/Dev/DiamondEngine\\Assets\\Models\\cut-fish\\textures\\Fish_Albedo.png",
+        "aoPath": "C:/Dev/DiamondEngine\\Assets\\Models\\cut-fish\\textures\\Fish_Height.png",
+        "castsShadow": true,
+        "emissivePath": "",
+        "emissiveStrength": 0.0,
+        "materialPath": "",
+        "meshPath": "C:/Dev/DiamondEngine\\Assets\\Models\\cut-fish\\source\\Fish_LP_combined\\Fish_LP_combined.obj",
+        "meshSubIndex": 0,
+        "metallicPath": "C:/Dev/DiamondEngine\\Assets\\Models\\cut-fish\\textures\\Fish_Metallic.png",
+        "normalPath": "C:/Dev/DiamondEngine\\Assets\\Models\\cut-fish\\textures\\Fish_Normalmap.png",
+        "receivesShadow": true,
+        "roughnessPath": "C:/Dev/DiamondEngine\\Assets\\Models\\cut-fish\\textures\\Fish_Roughness.png",
+        "uvScale": 1.0,
+        "visible": true
+      },
+      "name": "Fish",
+      "rigidbody": {
+        "angularDamping": 0.05000000074505806,
+        "bodyType": 1,
+        "gravityScale": 1.0,
+        "linearDamping": 0.05000000074505806,
+        "lockRotX": false,
+        "lockRotY": false,
+        "lockRotZ": false,
+        "mass": 1.0
+      },
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          -0.0,
+          0.0
+        ],
+        "position": [
+          -1.2807908058166504,
+          2.316082239151001,
+          0.0
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 9673117681866319689
     }
   ]
 }

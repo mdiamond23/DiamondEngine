@@ -63,8 +63,7 @@ ragdoll characters, active physics control, grabbing, local multiplayer.
 ## Milestone 3 — Physics Completion & Editor Polish
 > Goal: finish the physics surface before building on top of it
 
-- [ ] Cylinder collider shape — exposed in Inspector and scripting API
-- [ ] Convex hull collider shape — exposed in Inspector and scripting API
+- [x] Convex hull collider shape — exposed in Inspector and scripting API
 - [ ] Physics constraints / joint system — hinge, ball-socket, slider; engine-level API wrapping Jolt constraints
 - [ ] Physics materials — restitution and friction per-collider, exposed in Inspector
 - [ ] Editor — camera smooth orbit / pan (middle mouse) to complement fly mode
