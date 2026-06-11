@@ -9,6 +9,7 @@
 #include "Core/Input.h"
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
+#include <spdlog/spdlog.h>
 
 // ---- Data -------------------------------------------------------------------
 
@@ -65,6 +66,7 @@ public:
         Input::BindAxis("Horizontal", Key::D,     Key::A);
         Input::BindAxis("Forward",    Key::W,     Key::S);
         Input::BindAction("Jump", Key::Space);
+        Input::BindAction("Shoot", MouseButton::Left);
     }
 
     void OnUpdate(Scene& scene, float dt) override
@@ -72,6 +74,7 @@ public:
         float h = Input::GetAxis("Horizontal");
         float f = Input::GetAxis("Forward");
         bool  jump = Input::IsPressed("Jump");
+        bool castRay = Input::IsPressed("Shoot");
 
         for (auto [entity, comp] : scene.View<MoveComponent>().each())
         {
@@ -101,6 +104,20 @@ public:
 
             if (jump && IsGrounded(rb))
                 Physics::AddImpulse(rb, glm::vec3(0, comp.jumpForce, 0));
+
+            if (castRay)
+            {
+                auto& xf = scene.Get<TransformComponent>(entity);
+                auto hit = Physics::Raycast(xf.position, glm::vec3(0, -1, 0), 2.0f, entity);
+
+                spdlog::info("[Raycast] hit={}",         hit.hit);
+                spdlog::info("[Raycast] distance={}",    hit.distance);
+                spdlog::info("[Raycast] entity={}",      (uint32_t)hit.entity);
+                spdlog::info("[Raycast] point=({:.3f}, {:.3f}, {:.3f})",    hit.point.x,      hit.point.y,      hit.point.z);
+                spdlog::info("[Raycast] normal=({:.3f}, {:.3f}, {:.3f})",   hit.normal.x,     hit.normal.y,     hit.normal.z);
+                spdlog::info("[Raycast] traceStart=({:.3f}, {:.3f}, {:.3f})", hit.traceStart.x, hit.traceStart.y, hit.traceStart.z);
+                spdlog::info("[Raycast] traceEnd=({:.3f}, {:.3f}, {:.3f})",   hit.traceEnd.x,   hit.traceEnd.y,   hit.traceEnd.z);
+            }
         }
     }
 

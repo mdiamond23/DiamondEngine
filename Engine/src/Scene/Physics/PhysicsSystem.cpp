@@ -14,6 +14,9 @@
 #include <Jolt/Physics/Collision/Shape/ConvexHullShape.h>
 #include <Jolt/Physics/Collision/Shape/MeshShape.h>
 #include <Jolt/Physics/Collision/Shape/RotatedTranslatedShape.h>
+#include <Jolt/Physics/Collision/RayCast.h>
+#include <Jolt/Physics/Collision/CastResult.h>
+#include <Jolt/Physics/Body/BodyLockInterface.h>
 
 #include "Scene/Physics/PhysicsSystem.h"
 #include "Scene/Physics/PhysicsAPI.h"
@@ -684,6 +687,65 @@ void Deactivate(const RigidBodyComponent& rb) {
 
 void SetGravity(glm::vec3 gravity) {
     if (s_Impl) s_Impl->joltSystem->SetGravity(ToJolt(gravity));
+}
+
+class SingleBodyIgnoreFilter final : public JPH::BodyFilter {
+public:
+    explicit SingleBodyIgnoreFilter(JPH::BodyID id) : m_id(id) {}
+    bool ShouldCollide(const JPH::BodyID& id)  const override { return id != m_id; }
+    bool ShouldCollideLocked(const JPH::Body&) const override { return true; }
+private:
+    JPH::BodyID m_id;
+};
+
+HitResult Raycast(glm::vec3 origin, glm::vec3 direction, float distance,
+                  entt::entity ignore) {
+    HitResult result;
+    float len = glm::length(direction);
+    if (!s_Impl || len < 1e-6f || distance <= 0.0f) return result;
+
+    glm::vec3 normDir = direction / len;
+    result.traceStart = origin;
+    result.traceEnd   = origin + normDir * distance;
+
+    // Jolt ray: origin + direction * [0..1], so direction encodes the max distance
+    JPH::RRayCast ray {
+        JPH::RVec3(origin.x, origin.y, origin.z),
+        JPH::Vec3(normDir.x * distance, normDir.y * distance, normDir.z * distance)
+    };
+
+    // Find the Jolt BodyID for the entity to ignore (reverse lookup in bodyMap)
+    JPH::BodyID ignoreID = JPH::BodyID();
+    if (ignore != entt::null) {
+        for (auto& [id, record] : s_Impl->bodyMap) {
+            if (record.entity == ignore) { ignoreID = JPH::BodyID(id); break; }
+        }
+    }
+    SingleBodyIgnoreFilter bodyFilter(ignoreID);
+
+    JPH::BroadPhaseLayerFilter bpFilter;
+    JPH::ObjectLayerFilter     objFilter;
+    JPH::RayCastResult hit;
+    if (!s_Impl->joltSystem->GetNarrowPhaseQuery().CastRay(ray, hit, bpFilter, objFilter, bodyFilter))
+        return result;
+
+    result.hit      = true;
+    result.distance = hit.mFraction * distance;
+    result.point    = origin + normDir * result.distance;
+
+    auto it = s_Impl->bodyMap.find(hit.mBodyID.GetIndexAndSequenceNumber());
+    if (it != s_Impl->bodyMap.end())
+        result.entity = it->second.entity;
+
+    JPH::BodyLockRead lock(s_Impl->joltSystem->GetBodyLockInterface(), hit.mBodyID);
+    if (lock.Succeeded()) {
+        JPH::Vec3 n = lock.GetBody().GetWorldSpaceSurfaceNormal(
+            hit.mSubShapeID2,
+            JPH::RVec3(result.point.x, result.point.y, result.point.z));
+        result.normal = FromJolt(n);
+    }
+
+    return result;
 }
 
 void DrawColliders(Scene& scene, glm::vec3 color) {

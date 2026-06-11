@@ -64,13 +64,6 @@ struct RigidBodyComponent {
     bool     lockRotY       = false;
     bool     lockRotZ       = false;
 
-    // Collision callbacks — set by scripts, fired by PhysicsSystem
-    std::function<void(CollisionContact)> onCollisionEnter;
-    std::function<void(CollisionContact)> onCollisionStay;
-    std::function<void(CollisionContact)> onCollisionExit;
-    std::function<void(entt::entity)>     onTriggerEnter;
-    std::function<void(entt::entity)>     onTriggerExit;
-
     // Internal — managed by PhysicsSystem, do not set manually
     uint32_t _bodyId = JPH::BodyID::cInvalidBodyID;
 };
@@ -101,6 +94,14 @@ struct ColliderComponent {
     glm::quat localRotation { 1, 0, 0, 0 };  // identity
 
     bool isTrigger = false;
+
+    // Collision callbacks — set by scripts, fired by PhysicsSystem
+    std::function<void(CollisionContact)> onCollisionEnter;
+    std::function<void(CollisionContact)> onCollisionStay;
+    std::function<void(CollisionContact)> onCollisionExit;
+    std::function<void(entt::entity)>     onTriggerEnter;
+    std::function<void(entt::entity)>     onTriggerExit;
+
     std::shared_ptr<PhysicsMaterial> material;  // nullptr = engine default
 };
 ```
