@@ -43,10 +43,13 @@ private:
     float m_OldFar     = 1000.0f;
 
     // Collider drag snapshots
-    glm::vec3 m_OldColHalfExtents = { 0.5f, 0.5f, 0.5f };
-    float     m_OldColRadius      = 0.5f;
-    float     m_OldColHalfHeight  = 0.5f;
-    glm::vec3 m_OldColOffset      = {};
+    glm::vec3 m_OldColHalfExtents    = { 0.5f, 0.5f, 0.5f };
+    float     m_OldColRadius         = 0.5f;
+    float     m_OldColHalfHeight     = 0.5f;
+    glm::vec3 m_OldColOffset         = {};
+    float     m_OldStaticFriction    = 0.5f;
+    float     m_OldDynamicFriction   = 0.5f;
+    float     m_OldRestitution       = 0.3f;
 
     // Rigidbody drag snapshots
     float m_OldRbMass            = 1.0f;

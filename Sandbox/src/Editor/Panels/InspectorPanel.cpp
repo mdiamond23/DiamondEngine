@@ -1,6 +1,7 @@
 #include "InspectorPanel.h"
 #include "ContentPanel.h"
 #include "../Command.h"
+#include "../PhysicsMaterialAsset.h"
 #include <imgui.h>
 #include <glm/gtc/type_ptr.hpp>
 #include <cstring>
@@ -12,6 +13,11 @@
 #include "Renderer/MeshData.h"
 #include "Renderer/TextureData.h"
 #include <algorithm>
+#include <filesystem>
+
+#ifndef ASSETS_DIR
+#define ASSETS_DIR "Assets"
+#endif
 
 using namespace Diamond;
 
@@ -672,16 +678,172 @@ void InspectorPanel::OnImGuiRender() {
 
             ImGui::Spacing();
             ImGui::TextDisabled("Physics Material");
-            if (!col.material) {
-                ImGui::TextDisabled("None");
+
+            // --- asset slot (drag-drop target) ---
+            {
+                std::string dispName = col.physMatPath.empty()
+                    ? "None"
+                    : std::filesystem::path(col.physMatPath).filename().string();
+
+                float avail   = ImGui::GetContentRegionAvail().x;
+                float newBtnW = ImGui::CalcTextSize("New").x + ImGui::GetStyle().FramePadding.x * 2.0f;
+                float clrBtnW = col.physMatPath.empty()
+                    ? 0.0f
+                    : ImGui::CalcTextSize("×").x + ImGui::GetStyle().FramePadding.x * 2.0f;
+                float spacing = ImGui::GetStyle().ItemSpacing.x;
+                float slotW   = avail - newBtnW - spacing
+                                - (col.physMatPath.empty() ? 0.0f : clrBtnW + spacing);
+
+                ImGui::Button(dispName.c_str(), {slotW, 0});
+
+                if (ImGui::BeginDragDropTarget()) {
+                    if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload("CONTENT_ITEM_PATH")) {
+                        std::string newPath(static_cast<const char*>(p->Data));
+                        std::string ext = LowerExtOf(newPath);
+                        if (ext == ".physmat") {
+                            std::string oldPath = col.physMatPath;
+                            auto        oldMat  = col.material;
+                            col.physMatPath = NormalizePhysMatPath(newPath);
+                            col.material    = LoadPhysicsMaterial(col.physMatPath);
+                            auto newMat     = col.material;
+                            std::string normalPath = col.physMatPath;
+                            m_Context->Commands.ExecuteCommand(std::make_unique<FunctionCommand>(
+                                [scene, entity, normalPath, newMat]() {
+                                    auto& c = scene->GetRegistry().get<ColliderComponent>(entity);
+                                    c.physMatPath = normalPath; c.material = newMat;
+                                },
+                                [scene, entity, oldPath, oldMat]() {
+                                    auto& c = scene->GetRegistry().get<ColliderComponent>(entity);
+                                    c.physMatPath = oldPath; c.material = oldMat;
+                                },
+                                "Assign Physics Material"));
+                        }
+                    }
+                    ImGui::EndDragDropTarget();
+                }
+
                 ImGui::SameLine();
-                if (ImGui::SmallButton("Create"))
-                    col.material = std::make_shared<PhysicsMaterial>();
-            } else {
+                if (ImGui::Button("New")) {
+                    namespace fs = std::filesystem;
+                    fs::path dir = m_ContentPanel
+                        ? m_ContentPanel->GetCurrentPath()
+                        : fs::path(ASSETS_DIR);
+                    fs::path base = dir / "NewPhysicsMaterial";
+                    fs::path p = base; p += ".physmat";
+                    for (int n = 1; fs::exists(p); ++n) {
+                        p = base; p += " (" + std::to_string(n) + ").physmat";
+                    }
+                    std::string newPath = p.make_preferred().string();
+                    PhysicsMaterial defaultMat{};
+                    if (SavePhysicsMaterial(newPath, defaultMat)) {
+                        std::string oldPath = col.physMatPath;
+                        auto        oldMat  = col.material;
+                        col.physMatPath = newPath;
+                        col.material    = std::make_shared<PhysicsMaterial>(defaultMat);
+                        auto newMat = col.material;
+                        m_Context->Commands.ExecuteCommand(std::make_unique<FunctionCommand>(
+                            [scene, entity, newPath, newMat]() {
+                                auto& c = scene->GetRegistry().get<ColliderComponent>(entity);
+                                c.physMatPath = newPath; c.material = newMat;
+                            },
+                            [scene, entity, oldPath, oldMat]() {
+                                auto& c = scene->GetRegistry().get<ColliderComponent>(entity);
+                                c.physMatPath = oldPath; c.material = oldMat;
+                            },
+                            "New Physics Material"));
+                        if (m_ContentPanel) m_ContentPanel->Refresh();
+                    }
+                }
+
+                if (!col.physMatPath.empty()) {
+                    ImGui::SameLine();
+                    if (ImGui::Button("×")) {
+                        std::string oldPath = col.physMatPath;
+                        auto        oldMat  = col.material;
+                        col.physMatPath = "";
+                        col.material.reset();
+                        m_Context->Commands.ExecuteCommand(std::make_unique<FunctionCommand>(
+                            [scene, entity]() {
+                                auto& c = scene->GetRegistry().get<ColliderComponent>(entity);
+                                c.physMatPath = ""; c.material.reset();
+                            },
+                            [scene, entity, oldPath, oldMat]() {
+                                auto& c = scene->GetRegistry().get<ColliderComponent>(entity);
+                                c.physMatPath = oldPath; c.material = oldMat;
+                            },
+                            "Clear Physics Material"));
+                    }
+                }
+            }
+
+            // --- editable values ---
+            // Lazy-load: physMatPath set but material null means scene loaded before material
+            // was in memory (serializer path loaded correctly but shared_ptr wasn't populated).
+            if (!col.physMatPath.empty() && !col.material)
+                col.material = LoadPhysicsMaterial(col.physMatPath);
+
+            if (!col.physMatPath.empty() && col.material) {
+                std::string matPath = col.physMatPath;
+
+                ImGui::DragFloat("Static Friction", &col.material->staticFriction, 0.01f, 0.0f, 1.0f);
+                if (ImGui::IsItemActivated()) m_OldStaticFriction = col.material->staticFriction;
+                if (ImGui::IsItemDeactivatedAfterEdit()) {
+                    float nv = col.material->staticFriction, ov = m_OldStaticFriction;
+                    m_Context->Commands.ExecuteCommand(std::make_unique<FunctionCommand>(
+                        [scene, entity, nv, matPath]() {
+                            auto& c = scene->GetRegistry().get<ColliderComponent>(entity);
+                            c.material->staticFriction = nv;
+                            SavePhysicsMaterial(matPath, *c.material);
+                        },
+                        [scene, entity, ov, matPath]() {
+                            auto& c = scene->GetRegistry().get<ColliderComponent>(entity);
+                            c.material->staticFriction = ov;
+                            SavePhysicsMaterial(matPath, *c.material);
+                        },
+                        "Change Static Friction"));
+                }
+
+                ImGui::DragFloat("Dynamic Friction", &col.material->dynamicFriction, 0.01f, 0.0f, 1.0f);
+                if (ImGui::IsItemActivated()) m_OldDynamicFriction = col.material->dynamicFriction;
+                if (ImGui::IsItemDeactivatedAfterEdit()) {
+                    float nv = col.material->dynamicFriction, ov = m_OldDynamicFriction;
+                    m_Context->Commands.ExecuteCommand(std::make_unique<FunctionCommand>(
+                        [scene, entity, nv, matPath]() {
+                            auto& c = scene->GetRegistry().get<ColliderComponent>(entity);
+                            c.material->dynamicFriction = nv;
+                            SavePhysicsMaterial(matPath, *c.material);
+                        },
+                        [scene, entity, ov, matPath]() {
+                            auto& c = scene->GetRegistry().get<ColliderComponent>(entity);
+                            c.material->dynamicFriction = ov;
+                            SavePhysicsMaterial(matPath, *c.material);
+                        },
+                        "Change Dynamic Friction"));
+                }
+
+                ImGui::DragFloat("Restitution", &col.material->restitution, 0.01f, 0.0f, 1.0f);
+                if (ImGui::IsItemActivated()) m_OldRestitution = col.material->restitution;
+                if (ImGui::IsItemDeactivatedAfterEdit()) {
+                    float nv = col.material->restitution, ov = m_OldRestitution;
+                    m_Context->Commands.ExecuteCommand(std::make_unique<FunctionCommand>(
+                        [scene, entity, nv, matPath]() {
+                            auto& c = scene->GetRegistry().get<ColliderComponent>(entity);
+                            c.material->restitution = nv;
+                            SavePhysicsMaterial(matPath, *c.material);
+                        },
+                        [scene, entity, ov, matPath]() {
+                            auto& c = scene->GetRegistry().get<ColliderComponent>(entity);
+                            c.material->restitution = ov;
+                            SavePhysicsMaterial(matPath, *c.material);
+                        },
+                        "Change Restitution"));
+                }
+            } else if (col.physMatPath.empty() && col.material) {
+                ImGui::TextDisabled("(unsaved — drag a .physmat or click New)");
                 ImGui::DragFloat("Static Friction",  &col.material->staticFriction,  0.01f, 0.0f, 1.0f);
                 ImGui::DragFloat("Dynamic Friction", &col.material->dynamicFriction, 0.01f, 0.0f, 1.0f);
                 ImGui::DragFloat("Restitution",      &col.material->restitution,     0.01f, 0.0f, 1.0f);
-                if (ImGui::SmallButton("Remove Material")) col.material.reset();
+                if (ImGui::SmallButton("Remove")) col.material.reset();
             }
         }
     }

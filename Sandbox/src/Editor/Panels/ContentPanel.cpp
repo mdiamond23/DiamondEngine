@@ -1,4 +1,5 @@
 #include "ContentPanel.h"
+#include "../PhysicsMaterialAsset.h"
 #include <imgui.h>
 
 #ifndef ASSETS_DIR
@@ -144,13 +145,14 @@ void ContentPanel::Refresh() {
 
 static const char* AssetTypeName(AssetType t) {
     switch (t) {
-        case AssetType::Folder:   return "Folder";
-        case AssetType::Texture:  return "Texture";
-        case AssetType::Mesh:     return "Mesh";
-        case AssetType::Material: return "Material";
-        case AssetType::Shader:   return "Shader";
-        case AssetType::Scene:    return "Scene";
-        default:                  return "File";
+        case AssetType::Folder:      return "Folder";
+        case AssetType::Texture:     return "Texture";
+        case AssetType::Mesh:        return "Mesh";
+        case AssetType::Material:    return "Material";
+        case AssetType::Shader:      return "Shader";
+        case AssetType::Scene:       return "Scene";
+        case AssetType::PhysicsMat:  return "Physics Mat";
+        default:                     return "File";
     }
 }
 
@@ -161,9 +163,10 @@ AssetType ContentPanel::GetAssetType(const fs::path& p) {
         return AssetType::Texture;
     if (ext == ".obj" || ext == ".fbx" || ext == ".gltf" || ext == ".glb")
         return AssetType::Mesh;
-    if (ext == ".mat")  return AssetType::Material;
+    if (ext == ".mat")     return AssetType::Material;
+    if (ext == ".physmat") return AssetType::PhysicsMat;
     if (ext == ".glsl" || ext == ".vert" || ext == ".frag") return AssetType::Shader;
-    if (ext == ".scene") return AssetType::Scene;
+    if (ext == ".scene")   return AssetType::Scene;
     return AssetType::File;
 }
 
@@ -245,6 +248,8 @@ void ContentPanel::DrawFileIcon(ImVec2 tl, float size, const std::string& ext) {
         pageCol = IM_COL32(80, 195, 110, 255);
     else if (ext == ".glsl" || ext == ".vert" || ext == ".frag")
         pageCol = IM_COL32(200, 120, 70, 255);
+    else if (ext == ".physmat")
+        pageCol = IM_COL32(90, 190, 200, 255);
     else
         pageCol = IM_COL32(155, 155, 170, 255);
 
@@ -515,7 +520,8 @@ void ContentPanel::DrawItems() {
         if (ImGui::BeginDragDropSource()) {
             std::string pathStr = ToUtf8(item.path);
             bool isInspectorDraggable = (item.type == AssetType::Mesh ||
-                                         item.type == AssetType::Texture);
+                                         item.type == AssetType::Texture ||
+                                         item.type == AssetType::PhysicsMat);
             const char* payloadType = isInspectorDraggable ? "CONTENT_ITEM_PATH"
                                                             : "CONTENT_MOVE";
             ImGui::SetDragDropPayload(payloadType, pathStr.c_str(), pathStr.size() + 1);
@@ -639,6 +645,14 @@ void ContentPanel::OnImGuiRender() {
         if (ImGui::MenuItem("New Folder")) {
             std::memset(m_NewFolderName, 0, sizeof(m_NewFolderName));
             m_OpenNewFolderModal = true;
+        }
+        ImGui::Separator();
+        if (ImGui::MenuItem("New Physics Material")) {
+            fs::path base = m_CurrentPath / "NewPhysicsMaterial";
+            fs::path p = base; p += ".physmat";
+            for (int n = 1; fs::exists(p); ++n) { p = base; p += " (" + std::to_string(n) + ").physmat"; }
+            SavePhysicsMaterial(ToUtf8(p), PhysicsMaterial{});
+            Refresh();
         }
         ImGui::EndPopup();
     }

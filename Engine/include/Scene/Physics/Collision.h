@@ -35,6 +35,8 @@ struct ColliderComponent
     float halfHeight = 0.5f;
     // ConvexHull / TriangleMesh — path to mesh asset
     std::string meshPath;
+    // Path to a .physmat asset file; empty = no asset (use inline material or engine defaults)
+    std::string physMatPath;
 
     glm::vec3 localOffset   { 0.0f, 0.0f, 0.0f };
     glm::quat localRotation { 1, 0, 0, 0 };  // identity

@@ -1,30 +1,6 @@
 {
   "entities": [
     {
-      "collider": {
-        "halfExtents": [
-          0.5,
-          0.5,
-          0.5
-        ],
-        "halfHeight": 0.5,
-        "isTrigger": false,
-        "localOffset": [
-          0.0,
-          0.0,
-          0.0
-        ],
-        "localRotation": [
-          1.0,
-          0.0,
-          0.0,
-          0.0
-        ],
-        "meshPath": "",
-        "physMatPath": "C:\\Dev\\DiamondEngine\\Assets\\Physics Materials\\Friction.physmat",
-        "radius": 1.0,
-        "shapeType": 1
-      },
       "mesh": {
         "albedoPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Color.png",
         "aoPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_AmbientOcclusion.png",
@@ -42,33 +18,16 @@
         "visible": true
       },
       "name": "Sphere",
-      "rigidbody": {
-        "angularDamping": 0.05000000074505806,
-        "bodyType": 1,
-        "gravityScale": 1.0,
-        "linearDamping": 0.05000000074505806,
-        "lockRotX": false,
-        "lockRotY": false,
-        "lockRotZ": false,
-        "mass": 1.0
-      },
-      "scriptComponents": {
-        "Move": {
-          "airControl": true,
-          "jumpForce": 6.0,
-          "moveForce": 12.0
-        }
-      },
       "transform": {
         "eulerDegrees": [
           0.0,
-          -0.0,
+          0.0,
           0.0
         ],
         "position": [
-          -1.9970864057540894,
-          3.4267024993896484,
-          3.7679338455200195
+          -3.0,
+          -0.30000001192092896,
+          1.0
         ],
         "rotation": [
           1.0,
@@ -82,33 +41,9 @@
           1.0
         ]
       },
-      "uuid": 15271304117423456619
+      "uuid": 3413847079428902643
     },
     {
-      "collider": {
-        "halfExtents": [
-          20.0,
-          0.6600000262260437,
-          20.0
-        ],
-        "halfHeight": 0.5,
-        "isTrigger": false,
-        "localOffset": [
-          0.0,
-          -0.28999999165534973,
-          0.0
-        ],
-        "localRotation": [
-          1.0,
-          0.0,
-          0.0,
-          0.0
-        ],
-        "meshPath": "",
-        "physMatPath": "C:\\Dev\\DiamondEngine\\Assets\\Physics Materials\\Floor.physmat",
-        "radius": 0.5,
-        "shapeType": 0
-      },
       "mesh": {
         "albedoPath": "C:/Dev/DiamondEngine/Assets/Materials/Lava004_2K-PNG/Lava004_2K-PNG_Color.png",
         "aoPath": "",
@@ -149,7 +84,7 @@
           20.0
         ]
       },
-      "uuid": 10149724428450404255
+      "uuid": 16659186796481909957
     },
     {
       "mesh": {
@@ -192,7 +127,7 @@
           1.0
         ]
       },
-      "uuid": 12369292688291716354
+      "uuid": 18166036707595337324
     },
     {
       "mesh": {
@@ -235,7 +170,7 @@
           1.0
         ]
       },
-      "uuid": 18240644294849724104
+      "uuid": 14512069896901754533
     },
     {
       "mesh": {
@@ -278,33 +213,9 @@
           1.0
         ]
       },
-      "uuid": 5854988139800247439
+      "uuid": 15114686814829637708
     },
     {
-      "collider": {
-        "halfExtents": [
-          1.0,
-          1.0,
-          1.0
-        ],
-        "halfHeight": 0.5,
-        "isTrigger": false,
-        "localOffset": [
-          0.0,
-          0.0,
-          0.0
-        ],
-        "localRotation": [
-          1.0,
-          0.0,
-          0.0,
-          0.0
-        ],
-        "meshPath": "",
-        "physMatPath": "",
-        "radius": 0.5,
-        "shapeType": 0
-      },
       "mesh": {
         "albedoPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Color.png",
         "aoPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_AmbientOcclusion.png",
@@ -325,7 +236,7 @@
       "transform": {
         "eulerDegrees": [
           0.0,
-          -0.0,
+          0.0,
           0.0
         ],
         "position": [
@@ -345,7 +256,7 @@
           1.2000000476837158
         ]
       },
-      "uuid": 9949710434117697245
+      "uuid": 7428794700532047804
     },
     {
       "mesh": {
@@ -388,33 +299,9 @@
           1.0
         ]
       },
-      "uuid": 18329544406845670732
+      "uuid": 12906355315714417543
     },
     {
-      "collider": {
-        "halfExtents": [
-          0.5,
-          0.5,
-          0.5
-        ],
-        "halfHeight": 0.5,
-        "isTrigger": false,
-        "localOffset": [
-          0.0,
-          0.0,
-          0.0
-        ],
-        "localRotation": [
-          1.0,
-          0.0,
-          0.0,
-          0.0
-        ],
-        "meshPath": "",
-        "physMatPath": "C:\\Dev\\DiamondEngine\\Assets\\Physics Materials\\Friction.physmat",
-        "radius": 0.5,
-        "shapeType": 3
-      },
       "mesh": {
         "albedoPath": "C:/Dev/DiamondEngine/Assets/Models/Cerberus_by_Andrew_Maximov/Textures/Cerberus_A.tga",
         "aoPath": "",
@@ -422,7 +309,7 @@
         "emissivePath": "",
         "emissiveStrength": 0.0,
         "materialPath": "",
-        "meshPath": "C:/Dev/DiamondEngine\\Assets\\Models\\Cerberus_by_Andrew_Maximov\\Revolver.FBX",
+        "meshPath": "C:/Dev/DiamondEngine/Assets/Models/Cerberus_by_Andrew_Maximov/Revolver.FBX",
         "meshSubIndex": 0,
         "metallicPath": "C:/Dev/DiamondEngine/Assets/Models/Cerberus_by_Andrew_Maximov/Textures/Cerberus_M.tga",
         "normalPath": "C:/Dev/DiamondEngine/Assets/Models/Cerberus_by_Andrew_Maximov/Textures/Cerberus_N.tga",
@@ -432,40 +319,30 @@
         "visible": true
       },
       "name": "Cerberus 0",
-      "rigidbody": {
-        "angularDamping": 0.05000000074505806,
-        "bodyType": 1,
-        "gravityScale": 1.0,
-        "linearDamping": 0.05000000074505806,
-        "lockRotX": false,
-        "lockRotY": false,
-        "lockRotZ": false,
-        "mass": 1.0
-      },
       "transform": {
         "eulerDegrees": [
-          -89.99998474121094,
+          0.0,
           0.0,
           0.0
         ],
         "position": [
-          2.268566131591797,
-          2.7214553356170654,
+          1.5,
+          1.5,
           1.0
         ],
         "rotation": [
-          0.70710688829422,
-          -0.7071066498756409,
-          0.0,
-          0.0
+          0.7071067690849304,
+          -0.7071067690849304,
+          -0.0,
+          -0.0
         ],
         "scale": [
           0.05000000074505806,
-          0.049998555332422256,
-          0.049998555332422256
+          0.05000000074505806,
+          0.05000000074505806
         ]
       },
-      "uuid": 6231463051401644240
+      "uuid": 9402460875442308172
     },
     {
       "light": {
@@ -504,7 +381,7 @@
           1.0
         ]
       },
-      "uuid": 177359504211415713
+      "uuid": 1426206424118802011
     },
     {
       "light": {
@@ -543,7 +420,7 @@
           1.0
         ]
       },
-      "uuid": 8613635214028885023
+      "uuid": 4945185692025642446
     },
     {
       "light": {
@@ -582,7 +459,7 @@
           1.0
         ]
       },
-      "uuid": 490522646854448807
+      "uuid": 15620195759982433755
     },
     {
       "light": {
@@ -621,7 +498,7 @@
           1.0
         ]
       },
-      "uuid": 14059402430444729131
+      "uuid": 10464086040547055352
     },
     {
       "light": {
@@ -660,117 +537,7 @@
           1.0
         ]
       },
-      "uuid": 9950335334307344460
-    },
-    {
-      "camera": {
-        "farClip": 1000.0,
-        "fov": 60.0,
-        "isPrimary": true,
-        "nearClip": 0.10000000149011612
-      },
-      "name": "Camera",
-      "transform": {
-        "eulerDegrees": [
-          -18.438505172729492,
-          0.0,
-          0.0
-        ],
-        "position": [
-          0.0,
-          9.627641677856445,
-          14.755999565124512
-        ],
-        "rotation": [
-          0.9870824813842773,
-          -0.16021287441253662,
-          0.0,
-          0.0
-        ],
-        "scale": [
-          1.0,
-          1.0,
-          1.0
-        ]
-      },
-      "uuid": 8889269308631855748
-    },
-    {
-      "collider": {
-        "halfExtents": [
-          0.5,
-          0.5,
-          0.5
-        ],
-        "halfHeight": 0.5,
-        "isTrigger": false,
-        "localOffset": [
-          0.0,
-          0.0,
-          0.0
-        ],
-        "localRotation": [
-          1.0,
-          0.0,
-          0.0,
-          0.0
-        ],
-        "meshPath": "",
-        "physMatPath": "",
-        "radius": 0.5,
-        "shapeType": 3
-      },
-      "mesh": {
-        "albedoPath": "C:/Dev/DiamondEngine\\Assets\\Models\\cut-fish\\textures\\Fish_Albedo.png",
-        "aoPath": "C:/Dev/DiamondEngine\\Assets\\Models\\cut-fish\\textures\\Fish_Height.png",
-        "castsShadow": true,
-        "emissivePath": "",
-        "emissiveStrength": 0.0,
-        "materialPath": "",
-        "meshPath": "C:/Dev/DiamondEngine\\Assets\\Models\\cut-fish\\source\\Fish_LP_combined\\Fish_LP_combined.obj",
-        "meshSubIndex": 0,
-        "metallicPath": "C:/Dev/DiamondEngine\\Assets\\Models\\cut-fish\\textures\\Fish_Metallic.png",
-        "normalPath": "C:/Dev/DiamondEngine\\Assets\\Models\\cut-fish\\textures\\Fish_Normalmap.png",
-        "receivesShadow": true,
-        "roughnessPath": "C:/Dev/DiamondEngine\\Assets\\Models\\cut-fish\\textures\\Fish_Roughness.png",
-        "uvScale": 1.0,
-        "visible": true
-      },
-      "name": "Fish",
-      "rigidbody": {
-        "angularDamping": 0.05000000074505806,
-        "bodyType": 1,
-        "gravityScale": 1.0,
-        "linearDamping": 0.05000000074505806,
-        "lockRotX": false,
-        "lockRotY": false,
-        "lockRotZ": false,
-        "mass": 1.0
-      },
-      "transform": {
-        "eulerDegrees": [
-          0.0,
-          -0.0,
-          0.0
-        ],
-        "position": [
-          -1.2807908058166504,
-          2.316082239151001,
-          0.0
-        ],
-        "rotation": [
-          1.0,
-          0.0,
-          0.0,
-          0.0
-        ],
-        "scale": [
-          1.0,
-          1.0,
-          1.0
-        ]
-      },
-      "uuid": 9673117681866319689
+      "uuid": 16120323589580633744
     }
   ]
 }

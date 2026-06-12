@@ -11,7 +11,7 @@
 #include <unordered_set>
 #include <cstdint>
 
-enum class AssetType { Folder, Texture, Mesh, Material, Shader, Scene, File };
+enum class AssetType { Folder, Texture, Mesh, Material, Shader, Scene, PhysicsMat, File };
 
 struct ContentItem {
     std::filesystem::path path;
@@ -28,13 +28,15 @@ public:
 
     void SetOnSceneOpen(std::function<void(const std::string&)> cb) { m_OnSceneOpen = std::move(cb); }
     void QueueDroppedFiles(int count, const char** paths);
+    void Refresh();
+
+    std::filesystem::path GetCurrentPath() const { return m_CurrentPath; }
 
     // Returns the cached (or freshly generated) GL texture ID for the given asset path.
     // Returns 0 if the path is empty, the asset type has no preview, or loading fails.
     uint32_t GetThumbnail(const std::string& path, AssetType type);
 
 private:
-    void Refresh();
     void DrawToolbar();
     void DrawItems();
     void DrawFolderIcon(ImVec2 topLeft, float size, bool highlighted = false);

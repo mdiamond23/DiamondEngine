@@ -8,6 +8,7 @@
 #include "Scene/Physics/Collision.h"
 #include "Scene/Physics/Rigidbody.h"
 #include "Assets/ModelImporter.h"
+#include "PhysicsMaterialAsset.h"
 #include "Assets/ImageLoader.h"
 #include "Renderer/MeshData.h"
 #include "Renderer/TextureData.h"
@@ -124,11 +125,13 @@ static json ToJson(Scene& scene)
                 { "radius",        col.radius              },
                 { "halfHeight",    col.halfHeight          },
                 { "meshPath",      col.meshPath            },
+                { "physMatPath",   col.physMatPath         },
                 { "localOffset",   JVec3(col.localOffset)  },
                 { "localRotation", JQuat(col.localRotation) },
                 { "isTrigger",     col.isTrigger           }
             };
-            if (col.material) {
+            // Inline material block only saved when there is no asset path (legacy / manual)
+            if (col.physMatPath.empty() && col.material) {
                 cj["material"] = {
                     { "staticFriction",  col.material->staticFriction  },
                     { "dynamicFriction", col.material->dynamicFriction },
@@ -286,11 +289,15 @@ static bool FromJson(Scene& scene, const json& root)
             col.radius     = cj.value("radius",    0.5f);
             col.halfHeight = cj.value("halfHeight", 0.5f);
             col.meshPath   = cj.value("meshPath",   "");
+            col.physMatPath = cj.value("physMatPath", "");
             col.isTrigger  = cj.value("isTrigger",  false);
             if (cj.contains("halfExtents"))   col.halfExtents   = ToVec3(cj["halfExtents"]);
             if (cj.contains("localOffset"))   col.localOffset   = ToVec3(cj["localOffset"]);
             if (cj.contains("localRotation")) col.localRotation = ToQuat(cj["localRotation"]);
-            if (cj.contains("material")) {
+            if (!col.physMatPath.empty()) {
+                col.physMatPath = NormalizePhysMatPath(col.physMatPath);
+                col.material = LoadPhysicsMaterial(col.physMatPath);
+            } else if (cj.contains("material")) {
                 auto mat = std::make_shared<PhysicsMaterial>();
                 mat->staticFriction  = cj["material"].value("staticFriction",  0.5f);
                 mat->dynamicFriction = cj["material"].value("dynamicFriction", 0.5f);
