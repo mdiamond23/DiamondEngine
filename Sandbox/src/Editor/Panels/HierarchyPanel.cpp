@@ -6,18 +6,29 @@
 #include <optional>
 #include "Scene/Components.h"
 #include "Scene/Scene.h"
+#include "Scene/ComponentRegistry.h"
+#include "Scene/Physics/Rigidbody.h"
+#include "Scene/Physics/Collision.h"
 
 // ---- entity snapshot --------------------------------------------------------
 // Captures enough state to fully recreate an entity (and its subtree) after
-// deletion. Stored in delete commands so undo can restore the entity.
+// deletion or for duplication. Stored in delete commands so undo can restore
+// the entity, and in duplicate commands so redo can recreate the copy.
 
 struct EntitySnapshot {
-    std::string                    name;
-    entt::entity                   parent = entt::null;
-    TransformComponent             transform;
-    std::optional<MeshComponent>   mesh;
-    std::optional<LightComponent>  light;
-    std::vector<EntitySnapshot>    children;
+    std::string                         name;
+    entt::entity                        parent = entt::null;
+    TransformComponent                  transform;
+    std::optional<MeshComponent>        mesh;
+    std::optional<LightComponent>       light;
+    std::optional<CameraComponent>      camera;
+    std::optional<RigidBodyComponent>   rigidBody;
+    std::optional<ColliderComponent>    collider;
+    // Script components captured generically via the ComponentRegistry —
+    // (registry display name, serialized state). Any DECLARE_COMPONENT type
+    // is included automatically; fidelity matches its SerializeComponent impl.
+    std::vector<std::pair<std::string, std::string>> scriptComponents;
+    std::vector<EntitySnapshot>         children;
 };
 
 static EntitySnapshot SnapshotEntity(Scene* scene, entt::entity e)
@@ -26,8 +37,23 @@ static EntitySnapshot SnapshotEntity(Scene* scene, entt::entity e)
     EntitySnapshot s;
     s.name      = scene->GetEntityName(e);
     s.transform = reg.get<TransformComponent>(e);
-    if (reg.all_of<MeshComponent>(e))  s.mesh  = reg.get<MeshComponent>(e);
-    if (reg.all_of<LightComponent>(e)) s.light = reg.get<LightComponent>(e);
+    if (reg.all_of<MeshComponent>(e))   s.mesh   = reg.get<MeshComponent>(e);
+    if (reg.all_of<LightComponent>(e))  s.light  = reg.get<LightComponent>(e);
+    if (reg.all_of<CameraComponent>(e)) s.camera = reg.get<CameraComponent>(e);
+    if (reg.all_of<RigidBodyComponent>(e)) {
+        s.rigidBody = reg.get<RigidBodyComponent>(e);
+        s.rigidBody->_bodyId = 0xFFFFFFFFu;  // restored entity gets its own physics body
+    }
+    if (reg.all_of<ColliderComponent>(e)) {
+        s.collider = reg.get<ColliderComponent>(e);
+        s.collider->_bodyId = 0xFFFFFFFFu;
+    }
+    for (auto& desc : ComponentRegistry::Get().GetAll()) {
+        if (desc.serialize && desc.has(*scene, e)) {
+            try { s.scriptComponents.emplace_back(desc.name, desc.serialize(*scene, e)); }
+            catch (...) {}
+        }
+    }
     if (reg.all_of<HierarchyComponent>(e)) {
         s.parent = reg.get<HierarchyComponent>(e).parent;
         for (auto child : reg.get<HierarchyComponent>(e).children)
@@ -44,8 +70,24 @@ static entt::entity RestoreEntity(Scene* scene, const EntitySnapshot& s,
     auto& reg   = scene->GetRegistry();
     entt::entity e = scene->CreateEntity(s.name);
     reg.get<TransformComponent>(e) = s.transform;
-    if (s.mesh)  reg.emplace_or_replace<MeshComponent>(e,  *s.mesh);
-    if (s.light) reg.emplace_or_replace<LightComponent>(e, *s.light);
+    if (s.mesh)      reg.emplace_or_replace<MeshComponent>(e,      *s.mesh);
+    if (s.light)     reg.emplace_or_replace<LightComponent>(e,     *s.light);
+    if (s.camera)    reg.emplace_or_replace<CameraComponent>(e,    *s.camera);
+    if (s.rigidBody) reg.emplace_or_replace<RigidBodyComponent>(e, *s.rigidBody);
+    if (s.collider)  reg.emplace_or_replace<ColliderComponent>(e,  *s.collider);
+
+    for (const auto& [name, data] : s.scriptComponents) {
+        for (auto& desc : ComponentRegistry::Get().GetAll()) {
+            if (desc.name != name) continue;
+            if (desc.add && !desc.has(*scene, e))
+                desc.add(*scene, e);
+            if (desc.deserialize) {
+                try { desc.deserialize(*scene, e, data); }
+                catch (...) {}
+            }
+            break;
+        }
+    }
 
     entt::entity parent = (parentOverride != entt::null) ? parentOverride : s.parent;
     if (parent != entt::null && reg.valid(parent))
@@ -56,6 +98,19 @@ static entt::entity RestoreEntity(Scene* scene, const EntitySnapshot& s,
     return e;
 }
 
+// Deep-copies per-entity mutable state so a duplicate doesn't alias the source
+// entity. Asset-backed resources (mesh data, textures) stay shared; only the
+// material parameter blocks editable in the inspector are cloned.
+static void MakeSnapshotIndependent(EntitySnapshot& s)
+{
+    if (s.mesh && s.mesh->material)
+        s.mesh->material = std::make_shared<Diamond::PBRMaterial>(*s.mesh->material);
+    if (s.collider && s.collider->material)
+        s.collider->material = std::make_shared<PhysicsMaterial>(*s.collider->material);
+    for (auto& child : s.children)
+        MakeSnapshotIndependent(child);
+}
+
 // ---- tree node --------------------------------------------------------------
 
 struct HierarchyDrawCtx {
@@ -63,6 +118,7 @@ struct HierarchyDrawCtx {
     EditorContext*  edCtx;
     entt::entity&   toDelete;
     EntitySnapshot* toDeleteSnap;
+    entt::entity&   toDuplicate;
     entt::entity&   renamingEntity;
     char*           renameBuffer;
     bool&           renameFocusSet;
@@ -147,6 +203,9 @@ static void DrawEntityNode(entt::entity entity, const HierarchyDrawCtx& ctx)
                         scene->DestroyEntity(*sharedChild);
                 },
                 "Create Child Entity"));
+        }
+        if (ImGui::MenuItem("Duplicate", "Ctrl+D")) {
+            ctx.toDuplicate = entity;
         }
         if (ImGui::MenuItem("Rename")) {
             ctx.renamingEntity  = entity;
@@ -270,12 +329,14 @@ void HierarchyPanel::OnImGuiRender() {
 
     entt::entity   toDelete     = entt::null;
     EntitySnapshot toDeleteSnap;
+    entt::entity   toDuplicate  = entt::null;
 
     HierarchyDrawCtx ctx {
         scene,
         m_Context,
         toDelete,
         &toDeleteSnap,
+        toDuplicate,
         m_RenamingEntity,
         m_RenameBuffer,
         m_RenameFocusSet,
@@ -419,6 +480,65 @@ void HierarchyPanel::OnImGuiRender() {
                 ctx->SelectOnly(e);
             },
             "Delete Entity"));
+    }
+
+    // Duplicate — context menu target, or Ctrl+D on the selection (filtering
+    // out descendants already covered by their ancestor's subtree).
+    std::vector<entt::entity> toDuplicateAll;
+    if (toDuplicate != entt::null && reg.valid(toDuplicate)) {
+        toDuplicateAll.push_back(toDuplicate);
+    }
+    else if (ImGui::IsWindowFocused() && ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_D)
+             && !m_Context->selectedEntities.empty()
+             && m_RenamingEntity == entt::null)
+    {
+        for (auto e : m_Context->selectedEntities) {
+            if (!reg.valid(e)) continue;
+            bool hasSelectedAncestor = false;
+            for (auto other : m_Context->selectedEntities) {
+                if (other != e && reg.valid(other) && scene->IsAncestorOf(other, e)) {
+                    hasSelectedAncestor = true;
+                    break;
+                }
+            }
+            if (!hasSelectedAncestor)
+                toDuplicateAll.push_back(e);
+        }
+    }
+
+    if (!toDuplicateAll.empty()) {
+        std::vector<EntitySnapshot> snapshots;
+        for (auto e : toDuplicateAll) {
+            EntitySnapshot s = SnapshotEntity(scene, e);
+            MakeSnapshotIndependent(s);
+            s.name += " (Copy)";
+            snapshots.push_back(std::move(s));
+        }
+
+        auto sharedHandles = std::make_shared<std::vector<entt::entity>>();
+        auto* edCtx = m_Context;
+        auto doDuplicate = [scene, snapshots, sharedHandles, edCtx]() {
+            edCtx->ClearSelection();
+            sharedHandles->clear();
+            for (const auto& s : snapshots) {
+                entt::entity e = RestoreEntity(scene, s);
+                sharedHandles->push_back(e);
+                edCtx->selectedEntities.insert(e);
+            }
+        };
+        doDuplicate();
+        m_SelectionPivot = sharedHandles->empty() ? entt::null : sharedHandles->front();
+
+        m_Context->Commands.RecordCommand(std::make_unique<FunctionCommand>(
+            doDuplicate,
+            [scene, sharedHandles, edCtx]() {
+                edCtx->ClearSelection();
+                for (auto e : *sharedHandles)
+                    if (scene->GetRegistry().valid(e))
+                        scene->DestroyEntity(e);
+                sharedHandles->clear();
+            },
+            snapshots.size() == 1 ? "Duplicate Entity" : "Duplicate Entities"));
     }
 
     ImGui::End();

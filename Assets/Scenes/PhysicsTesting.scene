@@ -41,6 +41,90 @@
         "uvScale": 1.0,
         "visible": true
       },
+      "name": "Sphere (Copy)",
+      "rigidbody": {
+        "angularDamping": 0.05000000074505806,
+        "bodyType": 1,
+        "gravityScale": 1.0,
+        "linearDamping": 0.05000000074505806,
+        "lockRotX": false,
+        "lockRotY": false,
+        "lockRotZ": false,
+        "mass": 1.0
+      },
+      "scriptComponents": {
+        "Move": {
+          "airControl": true,
+          "jumpForce": 6.0,
+          "moveForce": 12.0
+        }
+      },
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          -0.0,
+          0.0
+        ],
+        "position": [
+          6.336162090301514,
+          3.4267024993896484,
+          3.7679338455200195
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 9683422670536184001
+    },
+    {
+      "collider": {
+        "halfExtents": [
+          0.5,
+          0.5,
+          0.5
+        ],
+        "halfHeight": 0.5,
+        "isTrigger": false,
+        "localOffset": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "localRotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "meshPath": "",
+        "physMatPath": "C:\\Dev\\DiamondEngine\\Assets\\Physics Materials\\Friction.physmat",
+        "radius": 1.0,
+        "shapeType": 1
+      },
+      "mesh": {
+        "albedoPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Color.png",
+        "aoPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_AmbientOcclusion.png",
+        "castsShadow": true,
+        "emissivePath": "",
+        "emissiveStrength": 0.0,
+        "materialPath": "",
+        "meshPath": "__sphere",
+        "meshSubIndex": 0,
+        "metallicPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Metalness.png",
+        "normalPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_NormalGL.png",
+        "receivesShadow": true,
+        "roughnessPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Roughness.png",
+        "uvScale": 1.0,
+        "visible": true
+      },
       "name": "Sphere",
       "rigidbody": {
         "angularDamping": 0.05000000074505806,
@@ -703,7 +787,7 @@
           0.5
         ],
         "halfHeight": 0.5,
-        "isTrigger": false,
+        "isTrigger": true,
         "localOffset": [
           0.0,
           0.0,
@@ -737,15 +821,8 @@
         "visible": true
       },
       "name": "Fish",
-      "rigidbody": {
-        "angularDamping": 0.05000000074505806,
-        "bodyType": 1,
-        "gravityScale": 1.0,
-        "linearDamping": 0.05000000074505806,
-        "lockRotX": false,
-        "lockRotY": false,
-        "lockRotZ": false,
-        "mass": 1.0
+      "scriptComponents": {
+        "TriggerTest": null
       },
       "transform": {
         "eulerDegrees": [
@@ -771,6 +848,76 @@
         ]
       },
       "uuid": 9673117681866319689
+    },
+    {
+      "collider": {
+        "halfExtents": [
+          0.5,
+          0.5,
+          0.5
+        ],
+        "halfHeight": 0.5,
+        "isTrigger": true,
+        "localOffset": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "localRotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "meshPath": "",
+        "physMatPath": "",
+        "radius": 0.5,
+        "shapeType": 3
+      },
+      "mesh": {
+        "albedoPath": "C:/Dev/DiamondEngine\\Assets\\Models\\cut-fish\\textures\\Fish_Albedo.png",
+        "aoPath": "C:/Dev/DiamondEngine\\Assets\\Models\\cut-fish\\textures\\Fish_Height.png",
+        "castsShadow": true,
+        "emissivePath": "",
+        "emissiveStrength": 0.0,
+        "materialPath": "",
+        "meshPath": "C:/Dev/DiamondEngine\\Assets\\Models\\cut-fish\\source\\Fish_LP_combined\\Fish_LP_combined.obj",
+        "meshSubIndex": 0,
+        "metallicPath": "C:/Dev/DiamondEngine\\Assets\\Models\\cut-fish\\textures\\Fish_Metallic.png",
+        "normalPath": "C:/Dev/DiamondEngine\\Assets\\Models\\cut-fish\\textures\\Fish_Normalmap.png",
+        "receivesShadow": true,
+        "roughnessPath": "C:/Dev/DiamondEngine\\Assets\\Models\\cut-fish\\textures\\Fish_Roughness.png",
+        "uvScale": 1.0,
+        "visible": true
+      },
+      "name": "Fish (Copy)",
+      "scriptComponents": {
+        "TriggerTest": null
+      },
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          -0.0,
+          0.0
+        ],
+        "position": [
+          -3.0530002117156982,
+          1.4265062808990479,
+          5.896069049835205
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 95622898260703316
     }
   ]
 }
