@@ -56,11 +56,8 @@ void ViewportPanel::OnImGuiRender() {
             float fovRad  = glm::radians(cam->Zoom);
             float distance = std::max(radius / std::tan(fovRad * 0.5f) * 1.2f, radius * 2.0f);
 
-            glm::vec3 offset = cam->Position - center;
-            float len = glm::length(offset);
-            glm::vec3 dir = (len > 0.001f) ? offset / len : -cam->Front;
-            cam->Position = center + dir * distance;
-            cam->LookAt(center);
+            // Smooth swoop: UpdateOrbit glides toward the new pivot/distance.
+            cam->Focus(center, distance);
         }
     }
 
@@ -125,81 +122,136 @@ void ViewportPanel::OnImGuiRender() {
         }
     }
 
-    // Transform gizmo — only shown when exactly one entity is selected.
-    if (m_Context && m_Context->selectedEntities.size() == 1 && vpSize.x > 0 && vpSize.y > 0) {
-        auto& reg = m_Context->ActiveScene->GetRegistry();
-        auto& ts  = m_Context->ActiveScene->GetTransformSystem();
-        entt::entity sel = m_Context->PrimarySelection();
+    // Transform gizmo — drives the whole selection. Entities with a selected
+    // ancestor are filtered out: the ancestor's matrix already carries its
+    // subtree, so including both would double-transform the descendant.
+    if (m_Context && m_Context->ActiveScene && m_Context->HasSelection()
+        && vpSize.x > 0 && vpSize.y > 0)
+    {
+        auto&  reg   = m_Context->ActiveScene->GetRegistry();
+        auto&  ts    = m_Context->ActiveScene->GetTransformSystem();
+        Scene* scene = m_Context->ActiveScene;
 
-        if (reg.all_of<TransformComponent>(sel)) {
+        std::vector<entt::entity> targets;
+        for (auto e : m_Context->selectedEntities) {
+            if (!reg.valid(e) || !reg.all_of<TransformComponent>(e)) continue;
+            bool covered = false;
+            for (auto other : m_Context->selectedEntities) {
+                if (other != e && reg.valid(other) && scene->IsAncestorOf(other, e)) {
+                    covered = true;
+                    break;
+                }
+            }
+            if (!covered) targets.push_back(e);
+        }
+
+        // Writes a world matrix back into an entity's local TransformComponent.
+        auto applyWorld = [&](entt::entity e, const glm::mat4& world) {
+            glm::mat4 parentWorld(1.0f);
+            if (reg.all_of<HierarchyComponent>(e)) {
+                entt::entity parent = reg.get<HierarchyComponent>(e).parent;
+                if (parent != entt::null)
+                    parentWorld = ts.GetWorldMatrix(parent);
+            }
+            glm::mat4 localModel = glm::inverse(parentWorld) * world;
+
+            glm::vec3 pos, scale, skew;
+            glm::vec4 persp;
+            glm::quat rot;
+            glm::decompose(localModel, scale, rot, pos, skew, persp);
+
+            auto& tc        = reg.get<TransformComponent>(e);
+            tc.position     = pos;
+            tc.rotation     = rot;
+            tc.eulerDegrees = glm::degrees(glm::eulerAngles(rot));
+            tc.scale        = scale;
+        };
+
+        if (!targets.empty()) {
             ImGuizmo::SetOrthographic(false);
             ImGuizmo::SetDrawlist();
             ImGuizmo::SetRect(vpPos.x, vpPos.y, vpSize.x, vpSize.y);
 
-            glm::mat4 worldModel = ts.GetWorldMatrix(sel);
-
             bool gizmoUsing = ImGuizmo::IsUsing();
 
-            // Snapshot the full transform on the first frame the gizmo becomes active.
+            // Snapshot every target on the first frame the gizmo is grabbed.
             if (gizmoUsing && !m_GizmoWasUsing) {
-                auto& tc      = reg.get<TransformComponent>(sel);
-                m_GizmoOldPos   = tc.position;
-                m_GizmoOldRot   = tc.rotation;
-                m_GizmoOldEuler = tc.eulerDegrees;
-                m_GizmoOldScale = tc.scale;
-            }
-
-            if (ImGuizmo::Manipulate(
-                    glm::value_ptr(m_Context->viewMatrix),
-                    glm::value_ptr(m_Context->projMatrix),
-                    m_GizmoOp,
-                    ImGuizmo::LOCAL,
-                    glm::value_ptr(worldModel)))
-            {
-                glm::mat4 parentWorld(1.0f);
-                if (reg.all_of<HierarchyComponent>(sel)) {
-                    entt::entity parent = reg.get<HierarchyComponent>(sel).parent;
-                    if (parent != entt::null)
-                        parentWorld = ts.GetWorldMatrix(parent);
+                m_GizmoOldXf.clear();
+                for (auto e : targets) {
+                    auto& tc = reg.get<TransformComponent>(e);
+                    m_GizmoOldXf.push_back({e, {tc.position, tc.eulerDegrees, tc.scale, tc.rotation}});
                 }
-                glm::mat4 localModel = glm::inverse(parentWorld) * worldModel;
-
-                glm::vec3 pos, scale, skew;
-                glm::vec4 persp;
-                glm::quat rot;
-                glm::decompose(localModel, scale, rot, pos, skew, persp);
-
-                auto& tc        = reg.get<TransformComponent>(sel);
-                tc.position     = pos;
-                tc.rotation     = rot;
-                tc.eulerDegrees = glm::degrees(glm::eulerAngles(rot));
-                tc.scale        = scale;
             }
 
-            // Submit one command when the drag ends.
-            if (!gizmoUsing && m_GizmoWasUsing) {
-                auto& tc    = reg.get<TransformComponent>(sel);
-                Scene* scene = m_Context->ActiveScene;
+            if (targets.size() == 1) {
+                glm::mat4 worldModel = ts.GetWorldMatrix(targets[0]);
+                if (ImGuizmo::Manipulate(
+                        glm::value_ptr(m_Context->viewMatrix),
+                        glm::value_ptr(m_Context->projMatrix),
+                        m_GizmoOp,
+                        ImGuizmo::LOCAL,
+                        glm::value_ptr(worldModel)))
+                {
+                    applyWorld(targets[0], worldModel);
+                }
+            } else {
+                // Anchor a world-aligned gizmo at the selection centroid while
+                // idle. During the drag, replay the gizmo's per-frame delta on
+                // every target's world matrix — translation moves them all,
+                // rotate/scale orbit them around the shared anchor.
+                if (!gizmoUsing) {
+                    glm::vec3 centroid(0.0f);
+                    for (auto e : targets)
+                        centroid += glm::vec3(ts.GetWorldMatrix(e)[3]);
+                    m_MultiGizmoMatrix = glm::translate(glm::mat4(1.0f), centroid / (float)targets.size());
+                }
 
-                struct TransformState {
-                    glm::vec3 pos, euler, scale;
-                    glm::quat rot;
-                };
-                TransformState oldState { m_GizmoOldPos, m_GizmoOldEuler, m_GizmoOldScale, m_GizmoOldRot };
-                TransformState newState { tc.position,   tc.eulerDegrees, tc.scale,         tc.rotation   };
+                glm::mat4 before = m_MultiGizmoMatrix;
+                if (ImGuizmo::Manipulate(
+                        glm::value_ptr(m_Context->viewMatrix),
+                        glm::value_ptr(m_Context->projMatrix),
+                        m_GizmoOp,
+                        ImGuizmo::WORLD,
+                        glm::value_ptr(m_MultiGizmoMatrix)))
+                {
+                    glm::mat4 delta = m_MultiGizmoMatrix * glm::inverse(before);
+                    for (auto e : targets)
+                        applyWorld(e, delta * ts.GetWorldMatrix(e));
+                }
+            }
 
-                const char* desc = m_GizmoOp == ImGuizmo::TRANSLATE ? "Move Entity" :
-                                   m_GizmoOp == ImGuizmo::ROTATE    ? "Rotate Entity" : "Scale Entity";
+            // Submit one command covering the whole selection when the drag ends.
+            if (!gizmoUsing && m_GizmoWasUsing && !m_GizmoOldXf.empty()) {
+                std::vector<std::pair<entt::entity, XfState>> oldStates, newStates;
+                for (auto& [e, s] : m_GizmoOldXf) {
+                    if (!reg.valid(e) || !reg.all_of<TransformComponent>(e)) continue;
+                    auto& tc = reg.get<TransformComponent>(e);
+                    oldStates.push_back({e, s});
+                    newStates.push_back({e, {tc.position, tc.eulerDegrees, tc.scale, tc.rotation}});
+                }
+                m_GizmoOldXf.clear();
 
-                m_Context->Commands.ExecuteCommand(std::make_unique<ValueChangeCommand<TransformState>>(
-                    [scene, sel](const TransformState& s) {
-                        auto& t     = scene->GetRegistry().get<TransformComponent>(sel);
+                auto apply = [scene](const std::vector<std::pair<entt::entity, XfState>>& states) {
+                    auto& r = scene->GetRegistry();
+                    for (auto& [e, s] : states) {
+                        if (!r.valid(e) || !r.all_of<TransformComponent>(e)) continue;
+                        auto& t        = r.get<TransformComponent>(e);
                         t.position     = s.pos;
                         t.rotation     = s.rot;
                         t.eulerDegrees = s.euler;
                         t.scale        = s.scale;
-                    },
-                    oldState, newState, desc));
+                    }
+                };
+
+                bool plural = oldStates.size() > 1;
+                const char* desc = m_GizmoOp == ImGuizmo::TRANSLATE ? (plural ? "Move Entities"   : "Move Entity") :
+                                   m_GizmoOp == ImGuizmo::ROTATE    ? (plural ? "Rotate Entities" : "Rotate Entity")
+                                                                    : (plural ? "Scale Entities"  : "Scale Entity");
+
+                m_Context->Commands.RecordCommand(std::make_unique<FunctionCommand>(
+                    [apply, newStates]() { apply(newStates); },
+                    [apply, oldStates]() { apply(oldStates); },
+                    desc));
             }
 
             m_GizmoWasUsing = gizmoUsing;
@@ -210,6 +262,30 @@ void ViewportPanel::OnImGuiRender() {
         m_IsViewportActive = true;
     if (!ImGui::IsMouseDown(ImGuiMouseButton_Right))
         m_IsViewportActive = false;
+
+    // Middle-mouse orbit (Shift = pan), scroll dolly — suspended while RMB fly
+    // mode owns the camera (main.cpp re-syncs orbit targets each fly frame).
+    if (m_Context && m_Context->EditorCamera) {
+        Diamond::Camera* cam = m_Context->EditorCamera;
+        ImGuiIO& io = ImGui::GetIO();
+
+        if (ImGui::IsWindowHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Middle))
+            m_OrbitActive = true;
+        if (!ImGui::IsMouseDown(ImGuiMouseButton_Middle))
+            m_OrbitActive = false;
+
+        if (!m_IsViewportActive) {
+            if (m_OrbitActive) {
+                if (io.KeyShift)
+                    cam->Pan(io.MouseDelta.x, io.MouseDelta.y, vpSize.y);
+                else
+                    cam->Orbit(io.MouseDelta.x, io.MouseDelta.y);
+            }
+            if (ImGui::IsWindowHovered() && io.MouseWheel != 0.0f)
+                cam->Dolly(io.MouseWheel);
+            cam->UpdateOrbit(io.DeltaTime);
+        }
+    }
 
     ImGui::End();
     ImGui::PopStyleVar();

@@ -717,6 +717,9 @@ int main()
             ImGuiIO& io = ImGui::GetIO();
             g_camera.ProcessMouseMovement(io.MouseDelta.x, -io.MouseDelta.y);
             g_camera.ProcessMouseScroll(io.MouseWheel);
+            // Fly moved the camera directly — re-anchor the orbit pivot so
+            // MMB orbit/pan resume from here instead of easing back.
+            g_camera.SyncOrbitTargets();
         }
 
         ImGui::Render();

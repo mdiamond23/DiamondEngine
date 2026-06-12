@@ -3,6 +3,7 @@
 #include "../Command.h"
 #include "../PhysicsMaterialAsset.h"
 #include <imgui.h>
+#include <imgui_internal.h>   // ImGuiItemFlags_MixedValue for tri-state checkboxes
 #include <glm/gtc/type_ptr.hpp>
 #include <cstring>
 #include "Scene/Components.h"
@@ -213,6 +214,83 @@ static TextureRowChange DrawTextureRow(
     return result;
 }
 
+// ---- multi-edit helpers -------------------------------------------------------
+// Unity-style multi-object editing: a widget shows the value when it is
+// identical across the selection and "--" when mixed; editing writes to every
+// selected entity and records a single undo command for the whole selection.
+
+// Old values captured at drag start. One active widget at a time in ImGui, so
+// a single per-type stash is safe.
+template<typename T>
+struct MultiOldVals { static inline std::vector<std::pair<entt::entity, T>> v; };
+
+// Builds get/set accessors for a component member from a pointer-to-member, so
+// call sites stay one-liners and undo lambdas can capture them by value.
+template<typename C, typename T>
+static auto FieldGet(T C::* m) {
+    return [m](Scene* s, entt::entity e) -> T { return s->GetRegistry().get<C>(e).*m; };
+}
+template<typename C, typename T>
+static auto FieldSet(T C::* m) {
+    return [m](Scene* s, entt::entity e, const T& v) { s->GetRegistry().get<C>(e).*m = v; };
+}
+
+// widget(T& value, bool mixed) draws exactly one ImGui item and returns true if
+// it edited the value. instantCommit is for click-complete widgets (checkbox,
+// combo) that have no drag cycle to bracket with activate/deactivate snapshots.
+template<typename T, typename GetFn, typename SetFn, typename WidgetFn>
+static void MultiEdit(EditorContext* ed, Scene* scene, const std::vector<entt::entity>& ents,
+                      GetFn get, SetFn set, WidgetFn widget, const char* desc,
+                      bool instantCommit = false)
+{
+    T first = get(scene, ents[0]);
+    bool mixed = false;
+    for (size_t i = 1; i < ents.size() && !mixed; ++i)
+        mixed = !(get(scene, ents[i]) == first);
+
+    T v = first;
+    bool edited = widget(v, mixed);
+
+    if (instantCommit) {
+        if (!edited) return;
+        std::vector<std::pair<entt::entity, T>> old;
+        for (auto e : ents) old.push_back({e, get(scene, e)});
+        for (auto e : ents) set(scene, e, v);
+        T nv = v;
+        ed->Commands.RecordCommand(std::make_unique<FunctionCommand>(
+            [scene, old, nv, set]() { for (auto& p : old) set(scene, p.first, nv); },
+            [scene, old, set]()     { for (auto& p : old) set(scene, p.first, p.second); },
+            desc));
+        return;
+    }
+
+    if (ImGui::IsItemActivated()) {
+        auto& old = MultiOldVals<T>::v;
+        old.clear();
+        for (auto e : ents) old.push_back({e, get(scene, e)});
+    }
+    if (edited)
+        for (auto e : ents) set(scene, e, v);
+    if (ImGui::IsItemDeactivatedAfterEdit()) {
+        auto old = MultiOldVals<T>::v;
+        T nv = v;
+        ed->Commands.RecordCommand(std::make_unique<FunctionCommand>(
+            [scene, old, nv, set]() { for (auto& p : old) set(scene, p.first, nv); },
+            [scene, old, set]()     { for (auto& p : old) set(scene, p.first, p.second); },
+            desc));
+    }
+}
+
+// Checkbox that renders the ImGui mixed-value (dash) state when the selection
+// disagrees. Clicking always commits a uniform value to every entity.
+static bool MixedCheckbox(const char* label, bool& v, bool mixed)
+{
+    if (mixed) ImGui::PushItemFlag(ImGuiItemFlags_MixedValue, true);
+    bool r = ImGui::Checkbox(label, &v);
+    if (mixed) ImGui::PopItemFlag();
+    return r;
+}
+
 // ---- panel ------------------------------------------------------------------
 
 void InspectorPanel::OnImGuiRender() {
@@ -225,9 +303,16 @@ void InspectorPanel::OnImGuiRender() {
     }
 
     if (m_Context->selectedEntities.size() > 1) {
-        ImGui::Text("%zu entities selected", m_Context->selectedEntities.size());
-        ImGui::End();
-        return;
+        auto& mreg = m_Context->ActiveScene->GetRegistry();
+        std::vector<entt::entity> ents;
+        for (auto e : m_Context->selectedEntities)
+            if (mreg.valid(e)) ents.push_back(e);
+        std::sort(ents.begin(), ents.end());   // stable display order across frames
+        if (ents.size() > 1) {
+            DrawMultiInspector(ents);
+            ImGui::End();
+            return;
+        }
     }
 
     entt::entity entity = m_Context->PrimarySelection();
@@ -1107,4 +1192,331 @@ void InspectorPanel::OnImGuiRender() {
     }
 
     ImGui::End();
+}
+
+// ---- multi-entity inspector ---------------------------------------------------
+// Shows components common to every selected entity. Fields display the shared
+// value, or "--" when the selection disagrees; editing applies to all.
+
+void InspectorPanel::DrawMultiInspector(const std::vector<entt::entity>& ents)
+{
+    Scene*         scene = m_Context->ActiveScene;
+    auto&          reg   = scene->GetRegistry();
+    EditorContext* ed    = m_Context;
+
+    ImGui::Text("%zu entities selected", ents.size());
+
+    auto allOf = [&](auto componentTag) {
+        using C = decltype(componentTag);
+        return std::all_of(ents.begin(), ents.end(),
+                           [&](entt::entity e) { return reg.template all_of<C>(e); });
+    };
+
+    // -- Transform --------------------------------------------------------------
+    if (allOf(TransformComponent{})) {
+        ImGui::Separator();
+        ImGui::Text("Transform");
+
+        MultiEdit<glm::vec3>(ed, scene, ents,
+            FieldGet(&TransformComponent::position), FieldSet(&TransformComponent::position),
+            [](glm::vec3& v, bool mixed) {
+                return ImGui::DragFloat3("Position", glm::value_ptr(v), 0.1f, 0.0f, 0.0f, mixed ? "--" : "%.3f");
+            },
+            "Move Entities");
+
+        MultiEdit<glm::vec3>(ed, scene, ents,
+            FieldGet(&TransformComponent::eulerDegrees),
+            [](Scene* s, entt::entity e, const glm::vec3& v) {
+                auto& t        = s->GetRegistry().get<TransformComponent>(e);
+                t.eulerDegrees = v;
+                t.rotation     = glm::quat(glm::radians(v));
+            },
+            [](glm::vec3& v, bool mixed) {
+                return ImGui::DragFloat3("Rotation", glm::value_ptr(v), 0.5f, 0.0f, 0.0f, mixed ? "--" : "%.3f");
+            },
+            "Rotate Entities");
+
+        MultiEdit<glm::vec3>(ed, scene, ents,
+            FieldGet(&TransformComponent::scale), FieldSet(&TransformComponent::scale),
+            [](glm::vec3& v, bool mixed) {
+                return ImGui::DragFloat3("Scale", glm::value_ptr(v), 0.1f, 0.001f, 0.0f, mixed ? "--" : "%.3f");
+            },
+            "Scale Entities");
+    }
+
+    // -- Mesh Renderer ------------------------------------------------------------
+    if (allOf(MeshComponent{})) {
+        ImGui::Separator();
+        ImGui::Text("Mesh Renderer");
+
+        MultiEdit<bool>(ed, scene, ents,
+            FieldGet(&MeshComponent::visible), FieldSet(&MeshComponent::visible),
+            [](bool& v, bool mixed) { return MixedCheckbox("Visible", v, mixed); },
+            "Toggle Visibility", true);
+        ImGui::SameLine();
+        MultiEdit<bool>(ed, scene, ents,
+            FieldGet(&MeshComponent::castsShadow), FieldSet(&MeshComponent::castsShadow),
+            [](bool& v, bool mixed) { return MixedCheckbox("Cast Shadows", v, mixed); },
+            "Toggle Cast Shadows", true);
+        ImGui::SameLine();
+        MultiEdit<bool>(ed, scene, ents,
+            FieldGet(&MeshComponent::receivesShadow), FieldSet(&MeshComponent::receivesShadow),
+            [](bool& v, bool mixed) { return MixedCheckbox("Recv Shadows", v, mixed); },
+            "Toggle Receive Shadows", true);
+
+        ImGui::TextDisabled("(mesh & material: select a single entity)");
+    }
+
+    // -- Light --------------------------------------------------------------------
+    if (allOf(LightComponent{})) {
+        ImGui::Separator();
+        ImGui::Text("Light");
+
+        MultiEdit<LightType>(ed, scene, ents,
+            FieldGet(&LightComponent::type), FieldSet(&LightComponent::type),
+            [](LightType& v, bool mixed) {
+                const char* items[] = { "Sun", "Point", "Spot" };
+                bool changed = false;
+                if (ImGui::BeginCombo("Type", mixed ? "--" : items[(int)v])) {
+                    for (int i = 0; i < 3; ++i)
+                        if (ImGui::Selectable(items[i], !mixed && (int)v == i)) {
+                            v = (LightType)i;
+                            changed = true;
+                        }
+                    ImGui::EndCombo();
+                }
+                return changed;
+            },
+            "Change Light Type", true);
+
+        MultiEdit<glm::vec3>(ed, scene, ents,
+            FieldGet(&LightComponent::color), FieldSet(&LightComponent::color),
+            [](glm::vec3& v, bool) { return ImGui::ColorEdit3("Color", glm::value_ptr(v)); },
+            "Change Light Color");
+
+        MultiEdit<float>(ed, scene, ents,
+            FieldGet(&LightComponent::intensity), FieldSet(&LightComponent::intensity),
+            [](float& v, bool mixed) {
+                return ImGui::DragFloat("Intensity", &v, 1.0f, 0.0f, 10000.0f, mixed ? "--" : "%.1f");
+            },
+            "Change Light Intensity");
+
+        // Type-dependent fields only make sense when the type is uniform.
+        LightType t0 = reg.get<LightComponent>(ents[0]).type;
+        bool typeUniform = std::all_of(ents.begin(), ents.end(),
+            [&](entt::entity e) { return reg.get<LightComponent>(e).type == t0; });
+
+        if (typeUniform && (t0 == LightType::Point || t0 == LightType::Spot)) {
+            MultiEdit<float>(ed, scene, ents,
+                FieldGet(&LightComponent::radius), FieldSet(&LightComponent::radius),
+                [](float& v, bool mixed) {
+                    return ImGui::DragFloat("Radius", &v, 0.1f, 0.1f, 1000.0f, mixed ? "--" : "%.1f");
+                },
+                "Change Light Radius");
+        }
+        if (typeUniform && t0 == LightType::Spot) {
+            MultiEdit<float>(ed, scene, ents,
+                FieldGet(&LightComponent::innerConeAngle), FieldSet(&LightComponent::innerConeAngle),
+                [](float& v, bool mixed) {
+                    return ImGui::DragFloat("Inner Cone", &v, 0.5f, 0.5f, 89.0f, mixed ? "--" : "%.1f deg");
+                },
+                "Change Inner Cone");
+            MultiEdit<float>(ed, scene, ents,
+                FieldGet(&LightComponent::outerConeAngle), FieldSet(&LightComponent::outerConeAngle),
+                [](float& v, bool mixed) {
+                    return ImGui::DragFloat("Outer Cone", &v, 0.5f, 1.0f, 90.0f, mixed ? "--" : "%.1f deg");
+                },
+                "Change Outer Cone");
+        }
+    }
+
+    // -- Camera ---------------------------------------------------------------------
+    if (allOf(CameraComponent{})) {
+        ImGui::Separator();
+        ImGui::Text("Camera");
+
+        MultiEdit<bool>(ed, scene, ents,
+            FieldGet(&CameraComponent::isPrimary), FieldSet(&CameraComponent::isPrimary),
+            [](bool& v, bool mixed) { return MixedCheckbox("Primary Camera", v, mixed); },
+            "Toggle Primary Camera", true);
+
+        MultiEdit<float>(ed, scene, ents,
+            FieldGet(&CameraComponent::fov), FieldSet(&CameraComponent::fov),
+            [](float& v, bool mixed) {
+                return ImGui::DragFloat("FOV", &v, 0.5f, 1.0f, 179.0f, mixed ? "--" : "%.1f deg");
+            },
+            "Change Camera FOV");
+
+        MultiEdit<float>(ed, scene, ents,
+            FieldGet(&CameraComponent::nearClip), FieldSet(&CameraComponent::nearClip),
+            [](float& v, bool mixed) {
+                return ImGui::DragFloat("Near Clip", &v, 0.01f, 0.001f, 10000.0f, mixed ? "--" : "%.3f");
+            },
+            "Change Near Clip");
+
+        MultiEdit<float>(ed, scene, ents,
+            FieldGet(&CameraComponent::farClip), FieldSet(&CameraComponent::farClip),
+            [](float& v, bool mixed) {
+                return ImGui::DragFloat("Far Clip", &v, 1.0f, 0.01f, 100000.0f, mixed ? "--" : "%.1f");
+            },
+            "Change Far Clip");
+    }
+
+    // -- Collider ---------------------------------------------------------------------
+    if (allOf(ColliderComponent{})) {
+        ImGui::Separator();
+        ImGui::Text("Collider");
+
+        MultiEdit<CollisionShape>(ed, scene, ents,
+            FieldGet(&ColliderComponent::shapeType), FieldSet(&ColliderComponent::shapeType),
+            [](CollisionShape& v, bool mixed) {
+                const char* items[] = { "Box", "Sphere", "Capsule", "Convex Hull", "Triangle Mesh" };
+                bool changed = false;
+                if (ImGui::BeginCombo("Shape", mixed ? "--" : items[(int)v])) {
+                    for (int i = 0; i < 5; ++i)
+                        if (ImGui::Selectable(items[i], !mixed && (int)v == i)) {
+                            v = (CollisionShape)i;
+                            changed = true;
+                        }
+                    ImGui::EndCombo();
+                }
+                return changed;
+            },
+            "Change Collision Shape", true);
+
+        CollisionShape s0 = reg.get<ColliderComponent>(ents[0]).shapeType;
+        bool shapeUniform = std::all_of(ents.begin(), ents.end(),
+            [&](entt::entity e) { return reg.get<ColliderComponent>(e).shapeType == s0; });
+
+        if (shapeUniform) {
+            switch (s0) {
+                case CollisionShape::Box:
+                    MultiEdit<glm::vec3>(ed, scene, ents,
+                        FieldGet(&ColliderComponent::halfExtents), FieldSet(&ColliderComponent::halfExtents),
+                        [](glm::vec3& v, bool mixed) {
+                            return ImGui::DragFloat3("Half Extents", glm::value_ptr(v), 0.01f, 0.001f, 1000.0f, mixed ? "--" : "%.3f");
+                        },
+                        "Change Half Extents");
+                    break;
+                case CollisionShape::Capsule:
+                    MultiEdit<float>(ed, scene, ents,
+                        FieldGet(&ColliderComponent::halfHeight), FieldSet(&ColliderComponent::halfHeight),
+                        [](float& v, bool mixed) {
+                            return ImGui::DragFloat("Half Height", &v, 0.01f, 0.001f, 1000.0f, mixed ? "--" : "%.3f");
+                        },
+                        "Change Half Height");
+                    [[fallthrough]];
+                case CollisionShape::Sphere:
+                    MultiEdit<float>(ed, scene, ents,
+                        FieldGet(&ColliderComponent::radius), FieldSet(&ColliderComponent::radius),
+                        [](float& v, bool mixed) {
+                            return ImGui::DragFloat("Radius", &v, 0.01f, 0.001f, 1000.0f, mixed ? "--" : "%.3f");
+                        },
+                        "Change Radius");
+                    break;
+                default:
+                    ImGui::TextDisabled("(mesh shapes require asset pipeline — not yet editable)");
+                    break;
+            }
+        }
+
+        MultiEdit<glm::vec3>(ed, scene, ents,
+            FieldGet(&ColliderComponent::localOffset), FieldSet(&ColliderComponent::localOffset),
+            [](glm::vec3& v, bool mixed) {
+                return ImGui::DragFloat3("Local Offset", glm::value_ptr(v), 0.01f, 0.0f, 0.0f, mixed ? "--" : "%.3f");
+            },
+            "Change Collider Offset");
+
+        MultiEdit<bool>(ed, scene, ents,
+            FieldGet(&ColliderComponent::isTrigger), FieldSet(&ColliderComponent::isTrigger),
+            [](bool& v, bool mixed) { return MixedCheckbox("Is Trigger", v, mixed); },
+            "Toggle Is Trigger", true);
+
+        ImGui::TextDisabled("(physics material: select a single entity)");
+    }
+
+    // -- Rigidbody ----------------------------------------------------------------------
+    if (allOf(RigidBodyComponent{})) {
+        ImGui::Separator();
+        ImGui::Text("Rigidbody");
+
+        MultiEdit<BodyType>(ed, scene, ents,
+            FieldGet(&RigidBodyComponent::bodyType), FieldSet(&RigidBodyComponent::bodyType),
+            [](BodyType& v, bool mixed) {
+                const char* items[] = { "Static", "Dynamic", "Kinematic" };
+                bool changed = false;
+                if (ImGui::BeginCombo("Body Type", mixed ? "--" : items[(int)v])) {
+                    for (int i = 0; i < 3; ++i)
+                        if (ImGui::Selectable(items[i], !mixed && (int)v == i)) {
+                            v = (BodyType)i;
+                            changed = true;
+                        }
+                    ImGui::EndCombo();
+                }
+                return changed;
+            },
+            "Change Body Type", true);
+
+        BodyType b0 = reg.get<RigidBodyComponent>(ents[0]).bodyType;
+        bool typeUniform = std::all_of(ents.begin(), ents.end(),
+            [&](entt::entity e) { return reg.get<RigidBodyComponent>(e).bodyType == b0; });
+
+        if (typeUniform && b0 == BodyType::Dynamic) {
+            MultiEdit<float>(ed, scene, ents,
+                FieldGet(&RigidBodyComponent::mass), FieldSet(&RigidBodyComponent::mass),
+                [](float& v, bool mixed) {
+                    return ImGui::DragFloat("Mass", &v, 0.1f, 0.001f, 100000.0f, mixed ? "--" : "%.3f");
+                },
+                "Change Mass");
+            MultiEdit<float>(ed, scene, ents,
+                FieldGet(&RigidBodyComponent::gravityScale), FieldSet(&RigidBodyComponent::gravityScale),
+                [](float& v, bool mixed) {
+                    return ImGui::DragFloat("Gravity Scale", &v, 0.01f, 0.0f, 10.0f, mixed ? "--" : "%.3f");
+                },
+                "Change Gravity Scale");
+        }
+
+        if (typeUniform && b0 != BodyType::Static) {
+            MultiEdit<float>(ed, scene, ents,
+                FieldGet(&RigidBodyComponent::linearDamping), FieldSet(&RigidBodyComponent::linearDamping),
+                [](float& v, bool mixed) {
+                    return ImGui::DragFloat("Linear Damping", &v, 0.001f, 0.0f, 1.0f, mixed ? "--" : "%.3f");
+                },
+                "Change Linear Damping");
+            MultiEdit<float>(ed, scene, ents,
+                FieldGet(&RigidBodyComponent::angularDamping), FieldSet(&RigidBodyComponent::angularDamping),
+                [](float& v, bool mixed) {
+                    return ImGui::DragFloat("Angular Damping", &v, 0.001f, 0.0f, 1.0f, mixed ? "--" : "%.3f");
+                },
+                "Change Angular Damping");
+
+            ImGui::Spacing();
+            ImGui::TextDisabled("Freeze Rotation");
+            MultiEdit<bool>(ed, scene, ents,
+                FieldGet(&RigidBodyComponent::lockRotX), FieldSet(&RigidBodyComponent::lockRotX),
+                [](bool& v, bool mixed) { return MixedCheckbox("X##lockRotX", v, mixed); },
+                "Toggle Rotation Lock X", true);
+            ImGui::SameLine();
+            MultiEdit<bool>(ed, scene, ents,
+                FieldGet(&RigidBodyComponent::lockRotY), FieldSet(&RigidBodyComponent::lockRotY),
+                [](bool& v, bool mixed) { return MixedCheckbox("Y##lockRotY", v, mixed); },
+                "Toggle Rotation Lock Y", true);
+            ImGui::SameLine();
+            MultiEdit<bool>(ed, scene, ents,
+                FieldGet(&RigidBodyComponent::lockRotZ), FieldSet(&RigidBodyComponent::lockRotZ),
+                [](bool& v, bool mixed) { return MixedCheckbox("Z##lockRotZ", v, mixed); },
+                "Toggle Rotation Lock Z", true);
+        }
+    }
+
+    // -- Script components — listed when shared; editing needs single selection ----
+    for (const auto& desc : ComponentRegistry::Get().GetAll()) {
+        bool common = std::all_of(ents.begin(), ents.end(),
+            [&](entt::entity e) { return desc.has(*scene, e); });
+        if (!common) continue;
+
+        ImGui::Separator();
+        ImGui::Text("%s", desc.name.c_str());
+        ImGui::TextDisabled("(multi-edit not supported for script components)");
+    }
 }

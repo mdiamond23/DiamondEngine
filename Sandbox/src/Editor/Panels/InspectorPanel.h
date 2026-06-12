@@ -3,6 +3,7 @@
 #include "../EditorContext.h"
 #include <glm/glm.hpp>
 #include <optional>
+#include <vector>
 #include "Scene/Physics/Collision.h"
 #include "Scene/Physics/Rigidbody.h"
 
@@ -14,6 +15,9 @@ public:
     void SetContext(EditorContext* context) { m_Context = context; }
     void SetContentPanel(ContentPanel* cp)  { m_ContentPanel = cp; }
 private:
+    // Unity-style multi-object editing — common components, mixed-value fields.
+    void DrawMultiInspector(const std::vector<entt::entity>& entities);
+
     EditorContext* m_Context      = nullptr;
     ContentPanel*  m_ContentPanel = nullptr;
 

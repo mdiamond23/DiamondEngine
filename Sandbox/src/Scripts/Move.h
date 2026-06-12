@@ -68,7 +68,7 @@ public:
         Input::BindAction("Jump",   GamepadButton::South);
         Input::BindAxis("Ray",    GamepadAxis::RightTrigger);
         Input::BindAxis("Sphere", GamepadAxis::LeftTrigger);
-    }
+     }
 
     void OnUpdate(Scene& scene, float dt) override
     {

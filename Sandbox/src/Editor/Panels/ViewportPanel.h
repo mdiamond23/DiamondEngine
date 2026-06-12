@@ -6,6 +6,8 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <cstdint>
+#include <vector>
+#include <utility>
 
 class ViewportPanel : public Panel {
 public:
@@ -17,13 +19,16 @@ public:
 private:
     uint32_t            m_TextureID        = 0;
     bool                m_IsViewportActive = false;
+    bool                m_OrbitActive      = false;  // middle-mouse orbit/pan drag
     EditorContext*       m_Context         = nullptr;
     ImGuizmo::OPERATION m_GizmoOp         = ImGuizmo::TRANSLATE;
 
-    // Gizmo undo/redo state
-    bool      m_GizmoWasUsing = false;
-    glm::vec3 m_GizmoOldPos   = {};
-    glm::quat m_GizmoOldRot   = { 1, 0, 0, 0 };
-    glm::vec3 m_GizmoOldEuler = {};
-    glm::vec3 m_GizmoOldScale = { 1, 1, 1 };
+    // Gizmo undo/redo state — snapshot of every dragged entity's transform,
+    // taken when the gizmo is grabbed and submitted as one command on release.
+    struct XfState { glm::vec3 pos, euler, scale; glm::quat rot; };
+    bool m_GizmoWasUsing = false;
+    std::vector<std::pair<entt::entity, XfState>> m_GizmoOldXf;
+
+    // Multi-select gizmo anchor — world-aligned, at the selection centroid.
+    glm::mat4 m_MultiGizmoMatrix { 1.0f };
 };

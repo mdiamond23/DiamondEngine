@@ -65,10 +65,10 @@ ragdoll characters, active physics control, grabbing, local multiplayer.
 
 - [x] Convex hull collider shape — exposed in Inspector and scripting API
 - [ ] Physics constraints / joint system — hinge, ball-socket, slider; engine-level API wrapping Jolt constraints
-- [ ] Physics materials — restitution and friction per-collider, exposed in Inspector
-- [ ] Editor — camera smooth orbit / pan (middle mouse) to complement fly mode
-- [ ] Editor — duplicate entity (Ctrl+D)
-- [ ] Editor — multi-select transform gizmo
+- [x] Physics materials — restitution and friction per-collider, exposed in Inspector
+- [x] Editor — camera smooth orbit / pan (middle mouse) to complement fly mode
+- [x] Editor — duplicate entity (Ctrl+D)
+- [x] Editor — multi-select transform gizmo
 
 ---
 
