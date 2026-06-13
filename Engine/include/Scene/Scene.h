@@ -86,6 +86,11 @@ public:
 
     entt::entity GetPrimaryCamera() const;
 
+    // Resolves a persistent IDComponent UUID to a live entity handle, or
+    // entt::null if none matches (uuid 0 is treated as "none"). Used to follow
+    // cross-entity references (constraint targets, etc.) that survive save/load.
+    entt::entity FindByUuid(uint64_t uuid) const;
+
     const std::unordered_map<entt::entity, std::string>& GetEntityNames() const { return m_EntityNames; }
 private:
     entt::registry   m_Registry;

@@ -7,6 +7,7 @@
 #include "Scene/ComponentRegistry.h"
 #include "Scene/Physics/Collision.h"
 #include "Scene/Physics/Rigidbody.h"
+#include "Scene/Physics/Constraint.h"
 #include "Assets/ModelImporter.h"
 #include "PhysicsMaterialAsset.h"
 #include "Assets/ImageLoader.h"
@@ -152,6 +153,19 @@ static json ToJson(Scene& scene)
                 { "lockRotX",       rb.lockRotX            },
                 { "lockRotY",       rb.lockRotY            },
                 { "lockRotZ",       rb.lockRotZ            }
+            };
+        }
+
+        if (reg.all_of<ConstraintComponent>(entity)) {
+            auto& cc = reg.get<ConstraintComponent>(entity);
+            ej["constraint"] = {
+                { "type",       (int)cc.type   },
+                { "targetUuid", cc.targetUuid  },
+                { "anchor",     JVec3(cc.anchor) },
+                { "axis",       JVec3(cc.axis)   },
+                { "hasLimits",  cc.hasLimits   },
+                { "limitMin",   cc.limitMin    },
+                { "limitMax",   cc.limitMax    }
             };
         }
 
@@ -317,6 +331,18 @@ static bool FromJson(Scene& scene, const json& root)
             rb.lockRotX       = rj.value("lockRotX",       false);
             rb.lockRotY       = rj.value("lockRotY",       false);
             rb.lockRotZ       = rj.value("lockRotZ",       false);
+        }
+
+        if (ej.contains("constraint")) {
+            const auto& cj = ej["constraint"];
+            auto& cc = reg.emplace<ConstraintComponent>(e);
+            cc.type       = (ConstraintType)cj.value("type", 0);
+            cc.targetUuid = cj.value("targetUuid", (uint64_t)0);
+            if (cj.contains("anchor")) cc.anchor = ToVec3(cj["anchor"]);
+            if (cj.contains("axis"))   cc.axis   = ToVec3(cj["axis"]);
+            cc.hasLimits = cj.value("hasLimits", false);
+            cc.limitMin  = cj.value("limitMin", -90.0f);
+            cc.limitMax  = cj.value("limitMax",  90.0f);
         }
 
         // Script components registered via DECLARE_COMPONENT

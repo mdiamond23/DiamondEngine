@@ -6,6 +6,7 @@
 #include <vector>
 #include "Scene/Physics/Collision.h"
 #include "Scene/Physics/Rigidbody.h"
+#include "Scene/Physics/Constraint.h"
 
 class ContentPanel;
 
@@ -67,4 +68,5 @@ private:
     std::optional<CameraComponent>     m_PendingRemovedCamera;
     std::optional<ColliderComponent>   m_PendingRemovedCollider;
     std::optional<RigidBodyComponent>  m_PendingRemovedRigidbody;
+    std::optional<ConstraintComponent> m_PendingRemovedConstraint;
 };

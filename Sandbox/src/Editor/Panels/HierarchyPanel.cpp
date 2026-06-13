@@ -9,6 +9,7 @@
 #include "Scene/ComponentRegistry.h"
 #include "Scene/Physics/Rigidbody.h"
 #include "Scene/Physics/Collision.h"
+#include "Scene/Physics/Constraint.h"
 
 // ---- entity snapshot --------------------------------------------------------
 // Captures enough state to fully recreate an entity (and its subtree) after
@@ -24,6 +25,7 @@ struct EntitySnapshot {
     std::optional<CameraComponent>      camera;
     std::optional<RigidBodyComponent>   rigidBody;
     std::optional<ColliderComponent>    collider;
+    std::optional<ConstraintComponent>  constraint;
     // Script components captured generically via the ComponentRegistry —
     // (registry display name, serialized state). Any DECLARE_COMPONENT type
     // is included automatically; fidelity matches its SerializeComponent impl.
@@ -47,6 +49,10 @@ static EntitySnapshot SnapshotEntity(Scene* scene, entt::entity e)
     if (reg.all_of<ColliderComponent>(e)) {
         s.collider = reg.get<ColliderComponent>(e);
         s.collider->_bodyId = 0xFFFFFFFFu;
+    }
+    if (reg.all_of<ConstraintComponent>(e)) {
+        s.constraint = reg.get<ConstraintComponent>(e);
+        s.constraint->_constraintId = 0xFFFFFFFFu;  // restored entity builds its own joint
     }
     for (auto& desc : ComponentRegistry::Get().GetAll()) {
         if (desc.serialize && desc.has(*scene, e)) {
@@ -73,8 +79,9 @@ static entt::entity RestoreEntity(Scene* scene, const EntitySnapshot& s,
     if (s.mesh)      reg.emplace_or_replace<MeshComponent>(e,      *s.mesh);
     if (s.light)     reg.emplace_or_replace<LightComponent>(e,     *s.light);
     if (s.camera)    reg.emplace_or_replace<CameraComponent>(e,    *s.camera);
-    if (s.rigidBody) reg.emplace_or_replace<RigidBodyComponent>(e, *s.rigidBody);
-    if (s.collider)  reg.emplace_or_replace<ColliderComponent>(e,  *s.collider);
+    if (s.rigidBody)  reg.emplace_or_replace<RigidBodyComponent>(e, *s.rigidBody);
+    if (s.collider)   reg.emplace_or_replace<ColliderComponent>(e,  *s.collider);
+    if (s.constraint) reg.emplace_or_replace<ConstraintComponent>(e, *s.constraint);
 
     for (const auto& [name, data] : s.scriptComponents) {
         for (auto& desc : ComponentRegistry::Get().GetAll()) {

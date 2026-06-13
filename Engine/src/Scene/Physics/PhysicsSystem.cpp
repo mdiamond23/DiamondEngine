@@ -19,11 +19,18 @@
 #include <Jolt/Physics/Collision/ShapeCast.h>
 #include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
 #include <Jolt/Physics/Body/BodyLockInterface.h>
+#include <Jolt/Physics/Body/BodyLock.h>
+#include <Jolt/Physics/Body/BodyLockMulti.h>
+#include <Jolt/Physics/Body/Body.h>
+#include <Jolt/Physics/Constraints/Constraint.h>
+#include <Jolt/Physics/Constraints/TwoBodyConstraint.h>
+#include <Jolt/Physics/Constraints/HingeConstraint.h>
 
 #include "Scene/Physics/PhysicsSystem.h"
 #include "Scene/Physics/PhysicsAPI.h"
 #include "Scene/Physics/Rigidbody.h"
 #include "Scene/Physics/Collision.h"
+#include "Scene/Physics/Constraint.h"
 #include "Scene/Components.h"
 #include "Scene/Scene.h"
 #include "DebugDraw.h"
@@ -222,6 +229,16 @@ struct PhysicsSystem::Impl {
     std::unordered_map<uint32_t, BodyRecord> bodyMap; // BodyID → entity info
     std::vector<entt::entity>                pendingCreate; // deferred from signal callbacks
 
+    // Constraint tables — the joint analog of bodyMap. constraintMap owns the
+    // live Jolt joints; bodyToConstraints is the reverse index that lets body
+    // teardown find and remove the joints touching it (a constraint may live on
+    // a different entity than the body being destroyed). pendingConstraints is
+    // the deferred-creation queue, mirroring pendingCreate.
+    std::unordered_map<uint32_t, JPH::Ref<JPH::Constraint>> constraintMap;
+    std::unordered_map<uint32_t, std::vector<uint32_t>>     bodyToConstraints;
+    std::vector<entt::entity>                               pendingConstraints;
+    uint32_t                                               nextConstraintId = 0;
+
     std::unique_ptr<JPH::TempAllocatorImpl>       tempAllocator;
     std::unique_ptr<JPH::JobSystemSingleThreaded>  jobSystem;     // swap for JobSystemThreadPool to enable MT
     std::unique_ptr<JPH::PhysicsSystem>            joltSystem;
@@ -236,6 +253,25 @@ static PhysicsSystem::Impl* s_Impl = nullptr;
 
 static std::unordered_map<std::string, JPH::ShapeRefC> s_convexHullCache;
 static std::unordered_map<std::string, JPH::ShapeRefC> s_triangleMeshCache;
+
+// Removes every constraint referencing the given body from the Jolt system.
+// Called before a body is destroyed — Jolt requires joints be removed before
+// the bodies they reference. Because a constraint is indexed under BOTH of its
+// bodies, destroying either endpoint (even one that doesn't own the
+// ConstraintComponent) finds and tears down the joint, preventing a dangling
+// reference crash on the next solve.
+static void RemoveConstraintsTouching(uint32_t bodyId) {
+    if (!s_Impl) return;
+    auto it = s_Impl->bodyToConstraints.find(bodyId);
+    if (it == s_Impl->bodyToConstraints.end()) return;
+    for (uint32_t cid : it->second) {
+        auto cit = s_Impl->constraintMap.find(cid);
+        if (cit == s_Impl->constraintMap.end()) continue; // already removed via other endpoint
+        s_Impl->joltSystem->RemoveConstraint(cit->second);
+        s_Impl->constraintMap.erase(cit);
+    }
+    s_Impl->bodyToConstraints.erase(it);
+}
 
 // ---------------------------------------------------------------------------
 // Runtime lifecycle signal callbacks
@@ -255,6 +291,7 @@ static void OnRbDestroyed(entt::registry& reg, entt::entity entity) {
     if (!s_Impl) return;
     auto& rb = reg.get<RigidBodyComponent>(entity);
     if (rb._bodyId == 0xFFFFFFFFu) return;
+    RemoveConstraintsTouching(rb._bodyId); // joints must go before the body they reference
     JPH::BodyInterface& bi = s_Impl->joltSystem->GetBodyInterface();
     JPH::BodyID bodyID(rb._bodyId);
     bi.RemoveBody(bodyID);
@@ -268,11 +305,122 @@ static void OnColDestroyed(entt::registry& reg, entt::entity entity) {
     if (!s_Impl) return;
     auto& col = reg.get<ColliderComponent>(entity);
     if (col._bodyId == 0xFFFFFFFFu) return; // not a collider-only body, already handled by OnRbDestroyed
+    RemoveConstraintsTouching(col._bodyId); // joints must go before the body they reference
     JPH::BodyInterface& bi = s_Impl->joltSystem->GetBodyInterface();
     JPH::BodyID bodyID(col._bodyId);
     bi.RemoveBody(bodyID);
     bi.DestroyBody(bodyID);
     s_Impl->bodyMap.erase(col._bodyId);
+}
+
+// ---------------------------------------------------------------------------
+// Constraint lifecycle
+// ---------------------------------------------------------------------------
+
+// Resolve an entity to the Jolt body ID it owns (full-physics or collider-only),
+// or the invalid sentinel if it has no body yet.
+static uint32_t BodyIdOf(entt::registry& reg, entt::entity e) {
+    if (!reg.valid(e)) return 0xFFFFFFFFu;
+    if (reg.all_of<RigidBodyComponent>(e)) return reg.get<RigidBodyComponent>(e)._bodyId;
+    if (reg.all_of<ColliderComponent>(e))  return reg.get<ColliderComponent>(e)._bodyId;
+    return 0xFFFFFFFFu;
+}
+
+// Any unit vector perpendicular to a — used as the hinge's reference (normal)
+// axis, which Jolt requires to be perpendicular to the rotation axis.
+static glm::vec3 AnyPerpendicular(const glm::vec3& a) {
+    glm::vec3 n = glm::normalize(a);
+    glm::vec3 ref = (std::abs(n.y) < 0.99f) ? glm::vec3(0, 1, 0) : glm::vec3(1, 0, 0);
+    return glm::normalize(glm::cross(n, ref));
+}
+
+// Called when a ConstraintComponent is added during play — defer creation to the
+// next OnUpdate, by which point the referenced bodies are guaranteed to exist.
+static void OnConstraintAdded(entt::registry&, entt::entity entity) {
+    if (!s_Impl) return;
+    auto& pending = s_Impl->pendingConstraints;
+    if (std::find(pending.begin(), pending.end(), entity) == pending.end())
+        pending.push_back(entity);
+}
+
+// Called just before a ConstraintComponent is removed (without its entity being
+// destroyed). Tears the single joint out of Jolt. Body-driven teardown goes
+// through RemoveConstraintsTouching instead.
+static void OnConstraintDestroyed(entt::registry& reg, entt::entity entity) {
+    if (!s_Impl) return;
+    auto& cc = reg.get<ConstraintComponent>(entity);
+    if (cc._constraintId == 0xFFFFFFFFu) return;
+    auto it = s_Impl->constraintMap.find(cc._constraintId);
+    if (it != s_Impl->constraintMap.end()) {
+        s_Impl->joltSystem->RemoveConstraint(it->second);
+        s_Impl->constraintMap.erase(it);
+    }
+}
+
+// Builds a Jolt joint of the component's type from its world-space anchor/axis.
+// body1 is the anchor/parent body, body2 is the entity's own body.
+static JPH::Ref<JPH::TwoBodyConstraint> BuildConstraint(const ConstraintComponent& cc,
+                                                        JPH::Body& body1, JPH::Body& body2)
+{
+    switch (cc.type) {
+        case ConstraintType::Hinge:
+        default: {
+            glm::vec3 hingeAxis  = glm::normalize(cc.axis);
+            glm::vec3 normalAxis = AnyPerpendicular(hingeAxis);
+
+            JPH::HingeConstraintSettings s;
+            s.mSpace       = JPH::EConstraintSpace::WorldSpace;
+            s.mPoint1      = s.mPoint2      = JPH::RVec3(cc.anchor.x, cc.anchor.y, cc.anchor.z);
+            s.mHingeAxis1  = s.mHingeAxis2  = ToJolt(hingeAxis);
+            s.mNormalAxis1 = s.mNormalAxis2 = ToJolt(normalAxis);
+            if (cc.hasLimits) {
+                // Jolt wants radians, with min in [-pi, 0] and max in [0, pi].
+                s.mLimitsMin = glm::radians(glm::clamp(cc.limitMin, -180.0f, 0.0f));
+                s.mLimitsMax = glm::radians(glm::clamp(cc.limitMax,    0.0f, 180.0f));
+            }
+            return s.Create(body1, body2);
+        }
+    }
+}
+
+// Adds the joint to Jolt and registers it under both bodies so destroying either
+// endpoint tears it down. bodyB == sentinel means the world (no reverse index).
+static void RegisterConstraint(PhysicsSystem::Impl& impl, ConstraintComponent& cc,
+                               JPH::Ref<JPH::TwoBodyConstraint> constraint,
+                               uint32_t bodyA, uint32_t bodyB)
+{
+    if (!constraint) return;
+    impl.joltSystem->AddConstraint(constraint);
+    uint32_t cid = impl.nextConstraintId++;
+    cc._constraintId        = cid;
+    impl.constraintMap[cid] = constraint;
+    impl.bodyToConstraints[bodyA].push_back(cid);
+    if (bodyB != 0xFFFFFFFFu)
+        impl.bodyToConstraints[bodyB].push_back(cid);
+}
+
+// Builds the live joint. bodyA is the entity's own body; bodyB is the target
+// body, or the invalid sentinel to attach to the immovable world. The Jolt
+// joint must be created while the bodies are locked, so all work happens inside
+// the lock scope. body1 = target/world (parent), body2 = self.
+static void CreateConstraint(PhysicsSystem::Impl& impl, entt::entity /*entity*/,
+                             ConstraintComponent& cc, uint32_t bodyA, uint32_t bodyB)
+{
+    if (bodyB == 0xFFFFFFFFu) {
+        JPH::BodyLockWrite lock(impl.joltSystem->GetBodyLockInterface(), JPH::BodyID(bodyA));
+        if (!lock.Succeeded()) return;
+        auto c = BuildConstraint(cc, JPH::Body::sFixedToWorld, lock.GetBody());
+        RegisterConstraint(impl, cc, c, bodyA, bodyB);
+    } else {
+        // Lock both bodies together (sorted internally) to avoid lock-order issues.
+        JPH::BodyID ids[2] = { JPH::BodyID(bodyB), JPH::BodyID(bodyA) };
+        JPH::BodyLockMultiWrite lock(impl.joltSystem->GetBodyLockInterface(), ids, 2);
+        JPH::Body* target = lock.GetBody(0); // bodyB
+        JPH::Body* self   = lock.GetBody(1); // bodyA
+        if (!target || !self) return;
+        auto c = BuildConstraint(cc, *target, *self);
+        RegisterConstraint(impl, cc, c, bodyA, bodyB);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -540,6 +688,12 @@ void PhysicsSystem::OnStart(Scene& scene) {
         CreateStaticCollider(bi, m_impl->bodyMap, entity, col, xform);
     }
 
+    // Queue pre-existing constraints (from the loaded scene). Their bodies were
+    // just created above, so the first OnUpdate drain will build them. on_construct
+    // doesn't fire for components that existed before we connect the signal below.
+    for (auto [entity, cc] : scene.View<ConstraintComponent>().each())
+        m_impl->pendingConstraints.push_back(entity);
+
     // Expose the active impl and connect EnTT signals for runtime body lifecycle.
     // OnBodyComponentAdded defers creation; OnRb/ColDestroyed tear down immediately.
     s_Impl = m_impl.get();
@@ -548,7 +702,8 @@ void PhysicsSystem::OnStart(Scene& scene) {
     reg.on_construct<ColliderComponent>().connect<&OnBodyComponentAdded>();
     reg.on_destroy<RigidBodyComponent>().connect<&OnRbDestroyed>();
     reg.on_destroy<ColliderComponent>().connect<&OnColDestroyed>();
-
+    reg.on_construct<ConstraintComponent>().connect<&OnConstraintAdded>();
+    reg.on_destroy<ConstraintComponent>().connect<&OnConstraintDestroyed>();
 }
 
 // ---------------------------------------------------------------------------
@@ -681,6 +836,32 @@ void PhysicsSystem::OnUpdate(Scene& scene, float dt) {
         m_impl->pendingCreate.clear();
     }
 
+    // Drain deferred constraints. An entry waits (stays queued) until BOTH bodies
+    // it needs are live: this entity's own body, and — for entity-to-entity
+    // joints — the target entity's body (which may be created later in the frame
+    // or a later frame). targetUuid 0 attaches to the static world (no wait).
+    if (!m_impl->pendingConstraints.empty()) {
+        auto& reg = scene.GetRegistry();
+        std::vector<entt::entity> stillPending;
+        for (entt::entity e : m_impl->pendingConstraints) {
+            if (!reg.valid(e) || !reg.all_of<ConstraintComponent>(e)) continue;
+            auto& cc = reg.get<ConstraintComponent>(e);
+            if (cc._constraintId != 0xFFFFFFFFu) continue; // already built
+            uint32_t bodyA = BodyIdOf(reg, e);
+            if (bodyA == 0xFFFFFFFFu) { stillPending.push_back(e); continue; } // own body not ready
+
+            uint32_t bodyB = 0xFFFFFFFFu; // world
+            if (cc.targetUuid != 0) {
+                entt::entity target = scene.FindByUuid(cc.targetUuid);
+                if (!reg.valid(target)) { stillPending.push_back(e); continue; } // target entity not created yet
+                bodyB = BodyIdOf(reg, target);
+                if (bodyB == 0xFFFFFFFFu) { stillPending.push_back(e); continue; } // target body not ready
+            }
+            CreateConstraint(*m_impl, e, cc, bodyA, bodyB);
+        }
+        m_impl->pendingConstraints.swap(stillPending);
+    }
+
     // Clamp dt contribution — prevents death spiral when fps drops below 60.
     m_accumulator += std::min(dt, FIXED_DT);
 
@@ -706,6 +887,15 @@ void PhysicsSystem::OnDestroy(Scene& scene) {
     reg.on_construct<ColliderComponent>().disconnect<&OnBodyComponentAdded>();
     reg.on_destroy<RigidBodyComponent>().disconnect<&OnRbDestroyed>();
     reg.on_destroy<ColliderComponent>().disconnect<&OnColDestroyed>();
+    reg.on_construct<ConstraintComponent>().disconnect<&OnConstraintAdded>();
+    reg.on_destroy<ConstraintComponent>().disconnect<&OnConstraintDestroyed>();
+
+    // Constraints must be removed before the bodies they reference.
+    for (auto& [id, constraint] : m_impl->constraintMap)
+        m_impl->joltSystem->RemoveConstraint(constraint);
+    m_impl->constraintMap.clear();
+    m_impl->bodyToConstraints.clear();
+    m_impl->pendingConstraints.clear();
 
     JPH::BodyInterface& bi = m_impl->joltSystem->GetBodyInterface();
     for (auto& [id, record] : m_impl->bodyMap) {

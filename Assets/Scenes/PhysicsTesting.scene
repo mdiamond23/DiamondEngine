@@ -8,76 +8,6 @@
           0.5
         ],
         "halfHeight": 0.5,
-        "isTrigger": true,
-        "localOffset": [
-          0.0,
-          0.0,
-          0.0
-        ],
-        "localRotation": [
-          1.0,
-          0.0,
-          0.0,
-          0.0
-        ],
-        "meshPath": "",
-        "physMatPath": "",
-        "radius": 0.5,
-        "shapeType": 3
-      },
-      "mesh": {
-        "albedoPath": "C:/Dev/DiamondEngine\\Assets\\Models\\cut-fish\\textures\\Fish_Albedo.png",
-        "aoPath": "C:/Dev/DiamondEngine\\Assets\\Models\\cut-fish\\textures\\Fish_Height.png",
-        "castsShadow": true,
-        "emissivePath": "",
-        "emissiveStrength": 0.0,
-        "materialPath": "",
-        "meshPath": "C:/Dev/DiamondEngine\\Assets\\Models\\cut-fish\\source\\Fish_LP_combined\\Fish_LP_combined.obj",
-        "meshSubIndex": 0,
-        "metallicPath": "C:/Dev/DiamondEngine\\Assets\\Models\\cut-fish\\textures\\Fish_Metallic.png",
-        "normalPath": "C:/Dev/DiamondEngine\\Assets\\Models\\cut-fish\\textures\\Fish_Normalmap.png",
-        "receivesShadow": true,
-        "roughnessPath": "C:/Dev/DiamondEngine\\Assets\\Models\\cut-fish\\textures\\Fish_Roughness.png",
-        "uvScale": 1.0,
-        "visible": true
-      },
-      "name": "Fish (Copy)",
-      "scriptComponents": {
-        "TriggerTest": null
-      },
-      "transform": {
-        "eulerDegrees": [
-          0.0,
-          -0.0,
-          0.0
-        ],
-        "position": [
-          -3.0530002117156982,
-          1.4265062808990479,
-          5.896069049835205
-        ],
-        "rotation": [
-          1.0,
-          0.0,
-          0.0,
-          0.0
-        ],
-        "scale": [
-          1.0,
-          1.0,
-          1.0
-        ]
-      },
-      "uuid": 95622898260703316
-    },
-    {
-      "collider": {
-        "halfExtents": [
-          0.5,
-          0.5,
-          0.5
-        ],
-        "halfHeight": 0.5,
         "isTrigger": false,
         "localOffset": [
           0.0,
@@ -91,7 +21,7 @@
           0.0
         ],
         "meshPath": "",
-        "physMatPath": "C:\\Dev\\DiamondEngine\\Assets\\Physics Materials\\Friction.physmat",
+        "physMatPath": "",
         "radius": 1.0,
         "shapeType": 1
       },
@@ -136,9 +66,9 @@
           0.0
         ],
         "position": [
-          -1.4183067083358765,
+          14.38493537902832,
           3.4267024993896484,
-          3.7679338455200195
+          -4.55759334564209
         ],
         "rotation": [
           1.0,
@@ -199,12 +129,12 @@
       "transform": {
         "eulerDegrees": [
           0.0,
-          0.0,
+          -0.0,
           0.0
         ],
         "position": [
           0.0,
-          -1.7000000476837158,
+          -11.070334434509277,
           0.0
         ],
         "rotation": [
@@ -220,245 +150,6 @@
         ]
       },
       "uuid": 10149724428450404255
-    },
-    {
-      "mesh": {
-        "albedoPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Color.png",
-        "aoPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_AmbientOcclusion.png",
-        "castsShadow": true,
-        "emissivePath": "",
-        "emissiveStrength": 0.0,
-        "materialPath": "",
-        "meshPath": "__cube",
-        "meshSubIndex": 0,
-        "metallicPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Metalness.png",
-        "normalPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_NormalGL.png",
-        "receivesShadow": true,
-        "roughnessPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Roughness.png",
-        "uvScale": 1.0,
-        "visible": true
-      },
-      "name": "Cube 1",
-      "transform": {
-        "eulerDegrees": [
-          0.0,
-          0.0,
-          0.0
-        ],
-        "position": [
-          0.5,
-          -0.30000001192092896,
-          -3.5
-        ],
-        "rotation": [
-          1.0,
-          0.0,
-          0.0,
-          0.0
-        ],
-        "scale": [
-          1.0,
-          1.0,
-          1.0
-        ]
-      },
-      "uuid": 12369292688291716354
-    },
-    {
-      "mesh": {
-        "albedoPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Color.png",
-        "aoPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_AmbientOcclusion.png",
-        "castsShadow": true,
-        "emissivePath": "",
-        "emissiveStrength": 0.0,
-        "materialPath": "",
-        "meshPath": "__cube",
-        "meshSubIndex": 0,
-        "metallicPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Metalness.png",
-        "normalPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_NormalGL.png",
-        "receivesShadow": true,
-        "roughnessPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Roughness.png",
-        "uvScale": 1.0,
-        "visible": true
-      },
-      "name": "Cube 2",
-      "transform": {
-        "eulerDegrees": [
-          0.0,
-          0.0,
-          0.0
-        ],
-        "position": [
-          3.5,
-          0.699999988079071,
-          1.0
-        ],
-        "rotation": [
-          1.0,
-          0.0,
-          0.0,
-          0.0
-        ],
-        "scale": [
-          1.0,
-          2.0,
-          1.0
-        ]
-      },
-      "uuid": 18240644294849724104
-    },
-    {
-      "mesh": {
-        "albedoPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Color.png",
-        "aoPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_AmbientOcclusion.png",
-        "castsShadow": true,
-        "emissivePath": "",
-        "emissiveStrength": 0.0,
-        "materialPath": "",
-        "meshPath": "__cube",
-        "meshSubIndex": 0,
-        "metallicPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Metalness.png",
-        "normalPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_NormalGL.png",
-        "receivesShadow": true,
-        "roughnessPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Roughness.png",
-        "uvScale": 1.0,
-        "visible": true
-      },
-      "name": "Cube 3",
-      "transform": {
-        "eulerDegrees": [
-          0.0,
-          0.0,
-          0.0
-        ],
-        "position": [
-          -4.5,
-          1.7000000476837158,
-          -2.0
-        ],
-        "rotation": [
-          1.0,
-          0.0,
-          0.0,
-          0.0
-        ],
-        "scale": [
-          1.0,
-          3.0,
-          1.0
-        ]
-      },
-      "uuid": 5854988139800247439
-    },
-    {
-      "collider": {
-        "halfExtents": [
-          1.0,
-          1.0,
-          1.0
-        ],
-        "halfHeight": 0.5,
-        "isTrigger": false,
-        "localOffset": [
-          0.0,
-          0.0,
-          0.0
-        ],
-        "localRotation": [
-          1.0,
-          0.0,
-          0.0,
-          0.0
-        ],
-        "meshPath": "",
-        "physMatPath": "",
-        "radius": 0.5,
-        "shapeType": 0
-      },
-      "mesh": {
-        "albedoPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Color.png",
-        "aoPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_AmbientOcclusion.png",
-        "castsShadow": true,
-        "emissivePath": "",
-        "emissiveStrength": 0.0,
-        "materialPath": "",
-        "meshPath": "__cube",
-        "meshSubIndex": 0,
-        "metallicPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Metalness.png",
-        "normalPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_NormalGL.png",
-        "receivesShadow": true,
-        "roughnessPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Roughness.png",
-        "uvScale": 1.0,
-        "visible": true
-      },
-      "name": "Cube 4",
-      "transform": {
-        "eulerDegrees": [
-          0.0,
-          -0.0,
-          0.0
-        ],
-        "position": [
-          -1.5,
-          -0.30000001192092896,
-          3.5
-        ],
-        "rotation": [
-          1.0,
-          0.0,
-          0.0,
-          0.0
-        ],
-        "scale": [
-          1.2000000476837158,
-          1.2000000476837158,
-          1.2000000476837158
-        ]
-      },
-      "uuid": 9949710434117697245
-    },
-    {
-      "mesh": {
-        "albedoPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Color.png",
-        "aoPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_AmbientOcclusion.png",
-        "castsShadow": true,
-        "emissivePath": "",
-        "emissiveStrength": 0.0,
-        "materialPath": "",
-        "meshPath": "__cube",
-        "meshSubIndex": 0,
-        "metallicPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Metalness.png",
-        "normalPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_NormalGL.png",
-        "receivesShadow": true,
-        "roughnessPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Roughness.png",
-        "uvScale": 1.0,
-        "visible": true
-      },
-      "name": "Cube 5",
-      "transform": {
-        "eulerDegrees": [
-          0.0,
-          0.0,
-          0.0
-        ],
-        "position": [
-          5.5,
-          -0.30000001192092896,
-          -3.0
-        ],
-        "rotation": [
-          1.0,
-          0.0,
-          0.0,
-          0.0
-        ],
-        "scale": [
-          1.0,
-          1.0,
-          1.0
-        ]
-      },
-      "uuid": 18329544406845670732
     },
     {
       "collider": {
@@ -481,9 +172,26 @@
           0.0
         ],
         "meshPath": "",
-        "physMatPath": "C:\\Dev\\DiamondEngine\\Assets\\Physics Materials\\Friction.physmat",
+        "physMatPath": "",
         "radius": 0.5,
         "shapeType": 3
+      },
+      "constraint": {
+        "anchor": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "axis": [
+          0.0,
+          0.0,
+          1.0
+        ],
+        "hasLimits": false,
+        "limitMax": 90.0,
+        "limitMin": -90.0,
+        "targetUuid": 15271304117423456619,
+        "type": 0
       },
       "mesh": {
         "albedoPath": "C:/Dev/DiamondEngine/Assets/Models/Cerberus_by_Andrew_Maximov/Textures/Cerberus_A.tga",
@@ -519,9 +227,9 @@
           0.0
         ],
         "position": [
-          2.268566131591797,
+          9.0,
           2.7214553356170654,
-          1.0
+          10.662113189697266
         ],
         "rotation": [
           0.70710688829422,
@@ -531,8 +239,8 @@
         ],
         "scale": [
           0.05000000074505806,
-          0.049998555332422256,
-          0.049998555332422256
+          0.04999612271785736,
+          0.04999612271785736
         ]
       },
       "uuid": 6231463051401644240
@@ -747,9 +455,9 @@
           0.0
         ],
         "position": [
-          0.0,
-          9.627641677856445,
-          14.755999565124512
+          2.0,
+          8.780609130859375,
+          12.215431213378906
         ],
         "rotation": [
           0.9870824813842773,
@@ -773,7 +481,7 @@
           0.5
         ],
         "halfHeight": 0.5,
-        "isTrigger": true,
+        "isTrigger": false,
         "localOffset": [
           0.0,
           0.0,
@@ -789,6 +497,23 @@
         "physMatPath": "",
         "radius": 0.5,
         "shapeType": 3
+      },
+      "constraint": {
+        "anchor": [
+          0.75,
+          4.0,
+          0.0
+        ],
+        "axis": [
+          0.0,
+          0.0,
+          1.0
+        ],
+        "hasLimits": false,
+        "limitMax": 110.0,
+        "limitMin": 0.0,
+        "targetUuid": 0,
+        "type": 0
       },
       "mesh": {
         "albedoPath": "C:/Dev/DiamondEngine\\Assets\\Models\\cut-fish\\textures\\Fish_Albedo.png",
@@ -807,8 +532,15 @@
         "visible": true
       },
       "name": "Fish",
-      "scriptComponents": {
-        "TriggerTest": null
+      "rigidbody": {
+        "angularDamping": 0.05000000074505806,
+        "bodyType": 1,
+        "gravityScale": 1.0,
+        "linearDamping": 0.05000000074505806,
+        "lockRotX": false,
+        "lockRotY": false,
+        "lockRotZ": false,
+        "mass": 15.0
       },
       "transform": {
         "eulerDegrees": [
@@ -817,8 +549,8 @@
           0.0
         ],
         "position": [
-          -1.2807908058166504,
-          2.316082239151001,
+          2.0,
+          4.0,
           0.0
         ],
         "rotation": [
@@ -834,6 +566,194 @@
         ]
       },
       "uuid": 9673117681866319689
+    },
+    {
+      "collider": {
+        "halfExtents": [
+          0.5,
+          0.5,
+          0.5
+        ],
+        "halfHeight": 0.5,
+        "isTrigger": false,
+        "localOffset": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "localRotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "meshPath": "",
+        "physMatPath": "",
+        "radius": 1.0,
+        "shapeType": 1
+      },
+      "constraint": {
+        "anchor": [
+          0.44999998807907104,
+          3.0,
+          0.0
+        ],
+        "axis": [
+          0.0,
+          0.0,
+          1.0
+        ],
+        "hasLimits": false,
+        "limitMax": 45.0,
+        "limitMin": -45.0,
+        "targetUuid": 9673117681866319689,
+        "type": 0
+      },
+      "mesh": {
+        "albedoPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Color.png",
+        "aoPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_AmbientOcclusion.png",
+        "castsShadow": true,
+        "emissivePath": "",
+        "emissiveStrength": 0.0,
+        "materialPath": "",
+        "meshPath": "__sphere",
+        "meshSubIndex": 0,
+        "metallicPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Metalness.png",
+        "normalPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_NormalGL.png",
+        "receivesShadow": true,
+        "roughnessPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Roughness.png",
+        "uvScale": 1.0,
+        "visible": true
+      },
+      "name": "Link B",
+      "rigidbody": {
+        "angularDamping": 0.05000000074505806,
+        "bodyType": 1,
+        "gravityScale": 1.0,
+        "linearDamping": 0.05000000074505806,
+        "lockRotX": false,
+        "lockRotY": false,
+        "lockRotZ": false,
+        "mass": 1.0
+      },
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          -0.0,
+          0.0
+        ],
+        "position": [
+          1.5,
+          3.5,
+          -2.9802322387695313e-08
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 9392744117049427369
+    },
+    {
+      "collider": {
+        "halfExtents": [
+          0.5,
+          0.5,
+          0.5
+        ],
+        "halfHeight": 0.5,
+        "isTrigger": false,
+        "localOffset": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "localRotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "meshPath": "",
+        "physMatPath": "",
+        "radius": 0.5,
+        "shapeType": 3
+      },
+      "constraint": {
+        "anchor": [
+          9.0,
+          10.0,
+          0.0
+        ],
+        "axis": [
+          1.0,
+          0.0,
+          0.0
+        ],
+        "hasLimits": true,
+        "limitMax": 80.0,
+        "limitMin": 0.0,
+        "targetUuid": 0,
+        "type": 0
+      },
+      "mesh": {
+        "albedoPath": "C:/Dev/DiamondEngine\\Assets\\Models\\cut-fish\\textures\\Fish_Albedo.png",
+        "aoPath": "C:/Dev/DiamondEngine\\Assets\\Models\\cut-fish\\textures\\Fish_Height.png",
+        "castsShadow": true,
+        "emissivePath": "",
+        "emissiveStrength": 0.0,
+        "materialPath": "",
+        "meshPath": "C:/Dev/DiamondEngine\\Assets\\Models\\cut-fish\\source\\Fish_LP_combined\\Fish_LP_combined.obj",
+        "meshSubIndex": 0,
+        "metallicPath": "C:/Dev/DiamondEngine\\Assets\\Models\\cut-fish\\textures\\Fish_Metallic.png",
+        "normalPath": "C:/Dev/DiamondEngine\\Assets\\Models\\cut-fish\\textures\\Fish_Normalmap.png",
+        "receivesShadow": true,
+        "roughnessPath": "C:/Dev/DiamondEngine\\Assets\\Models\\cut-fish\\textures\\Fish_Roughness.png",
+        "uvScale": 1.0,
+        "visible": true
+      },
+      "name": "Fish (Copy)",
+      "rigidbody": {
+        "angularDamping": 0.05000000074505806,
+        "bodyType": 1,
+        "gravityScale": 1.0,
+        "linearDamping": 0.05000000074505806,
+        "lockRotX": false,
+        "lockRotY": false,
+        "lockRotZ": false,
+        "mass": 15.0
+      },
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          -0.0,
+          0.0
+        ],
+        "position": [
+          9.0,
+          10.0,
+          4.0
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 73284031071759417
     }
   ]
 }

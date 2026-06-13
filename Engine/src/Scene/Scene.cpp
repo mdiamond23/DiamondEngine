@@ -168,3 +168,11 @@ entt::entity Scene::GetPrimaryCamera() const
         if (cam.isPrimary) return entity;
     return entt::null;
 }
+
+entt::entity Scene::FindByUuid(uint64_t uuid) const
+{
+    if (uuid == 0) return entt::null;
+    for (auto [entity, id] : m_Registry.view<IDComponent>().each())
+        if (id.uuid == uuid) return entity;
+    return entt::null;
+}

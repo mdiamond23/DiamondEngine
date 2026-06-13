@@ -10,6 +10,7 @@
 #include "Scene/ComponentRegistry.h"
 #include "Scene/Physics/Collision.h"
 #include "Scene/Physics/Rigidbody.h"
+#include "Scene/Physics/Constraint.h"
 #include "Assets/ModelImporter.h"
 #include "Renderer/MeshData.h"
 #include "Renderer/TextureData.h"
@@ -417,11 +418,12 @@ void InspectorPanel::OnImGuiRender() {
         }
     }
 
-    bool removeMesh      = false;
-    bool removeLight     = false;
-    bool removeCamera    = false;
-    bool removeCollider  = false;
-    bool removeRigidbody = false;
+    bool removeMesh       = false;
+    bool removeLight      = false;
+    bool removeCamera     = false;
+    bool removeCollider   = false;
+    bool removeRigidbody  = false;
+    bool removeConstraint = false;
 
     // Mesh Component
     if (registry.all_of<MeshComponent>(entity)) {
@@ -1009,6 +1011,61 @@ void InspectorPanel::OnImGuiRender() {
         }
     }
 
+    // Constraint Component
+    if (registry.all_of<ConstraintComponent>(entity)) {
+        ImGui::Separator();
+        auto& cc = registry.get<ConstraintComponent>(entity);
+
+        ImGui::Text("Constraint");
+        if (ImGui::BeginPopupContextItem("##ConstraintCompCtx")) {
+            if (ImGui::MenuItem("Remove Component")) {
+                m_PendingRemovedConstraint = cc;
+                removeConstraint = true;
+            }
+            ImGui::EndPopup();
+        }
+
+        if (!removeConstraint) {
+            const char* types[] = { "Hinge" };
+            int typeIdx = (int)cc.type;
+            ImGui::Combo("Type", &typeIdx, types, IM_ARRAYSIZE(types));
+            cc.type = (ConstraintType)typeIdx;
+
+            // Target body — "World" (uuid 0) or another entity, stored by UUID so
+            // the reference survives save/load. Self is excluded.
+            entt::entity curTarget = scene->FindByUuid(cc.targetUuid);
+            std::string  curLabel  = (cc.targetUuid == 0)
+                ? "World"
+                : (registry.valid(curTarget) ? scene->GetEntityName(curTarget) : "(missing)");
+            if (ImGui::BeginCombo("Target", curLabel.c_str())) {
+                if (ImGui::Selectable("World", cc.targetUuid == 0))
+                    cc.targetUuid = 0;
+                for (auto& [e, nm] : scene->GetEntityNames()) {
+                    if (e == entity || !registry.all_of<IDComponent>(e)) continue;
+                    uint64_t uuid = registry.get<IDComponent>(e).uuid;
+                    if (ImGui::Selectable(nm.c_str(), cc.targetUuid == uuid))
+                        cc.targetUuid = uuid;
+                }
+                ImGui::EndCombo();
+            }
+
+            // World-space anchor + axis. Read once when play starts, so plain
+            // edits here are fine — undo/redo wiring comes in a later step.
+            ImGui::DragFloat3("Anchor (world)", glm::value_ptr(cc.anchor), 0.05f);
+            ImGui::DragFloat3("Axis",           glm::value_ptr(cc.axis),   0.01f);
+
+            ImGui::Checkbox("Limits", &cc.hasLimits);
+            if (cc.hasLimits) {
+                ImGui::DragFloat("Min Angle", &cc.limitMin, 1.0f, -180.0f, 0.0f, "%.0f deg");
+                ImGui::DragFloat("Max Angle", &cc.limitMax, 1.0f,    0.0f, 180.0f, "%.0f deg");
+            }
+
+            ImGui::TextDisabled(cc.targetUuid == 0
+                ? "Attached to world. Press Play."
+                : "Connected to target entity. Press Play.");
+        }
+    }
+
     // Registered game components
     const ComponentDescriptor* removeUserComp = nullptr;
 
@@ -1077,6 +1134,15 @@ void InspectorPanel::OnImGuiRender() {
             [scene, entity, saved]() { scene->GetRegistry().emplace_or_replace<RigidBodyComponent>(entity, saved); },
             "Remove Rigidbody Component"));
     }
+    if (removeConstraint && m_PendingRemovedConstraint) {
+        ConstraintComponent saved = *m_PendingRemovedConstraint;
+        m_PendingRemovedConstraint.reset();
+        registry.remove<ConstraintComponent>(entity);
+        m_Context->Commands.RecordCommand(std::make_unique<FunctionCommand>(
+            [scene, entity]()        { scene->GetRegistry().remove<ConstraintComponent>(entity); },
+            [scene, entity, saved]() { scene->GetRegistry().emplace_or_replace<ConstraintComponent>(entity, saved); },
+            "Remove Constraint Component"));
+    }
     if (removeUserComp)
     {
         auto removeFn  = removeUserComp->remove;
@@ -1102,12 +1168,13 @@ void InspectorPanel::OnImGuiRender() {
         ImGui::TextDisabled("Components");
         ImGui::Separator();
 
-        bool hasMesh      = registry.all_of<MeshComponent>(entity);
-        bool hasLight     = registry.all_of<LightComponent>(entity);
-        bool hasCamera    = registry.all_of<CameraComponent>(entity);
-        bool hasCollider  = registry.all_of<ColliderComponent>(entity);
-        bool hasRigidbody = registry.all_of<RigidBodyComponent>(entity);
-        bool anyShown     = !hasMesh || !hasLight || !hasCamera || !hasCollider || !hasRigidbody;
+        bool hasMesh       = registry.all_of<MeshComponent>(entity);
+        bool hasLight      = registry.all_of<LightComponent>(entity);
+        bool hasCamera     = registry.all_of<CameraComponent>(entity);
+        bool hasCollider   = registry.all_of<ColliderComponent>(entity);
+        bool hasRigidbody  = registry.all_of<RigidBodyComponent>(entity);
+        bool hasConstraint = registry.all_of<ConstraintComponent>(entity);
+        bool anyShown      = !hasMesh || !hasLight || !hasCamera || !hasCollider || !hasRigidbody || !hasConstraint;
 
         constexpr ImGuiSelectableFlags kCompFlags =
             ImGuiSelectableFlags_AllowDoubleClick | ImGuiSelectableFlags_DontClosePopups;
@@ -1163,6 +1230,17 @@ void InspectorPanel::OnImGuiRender() {
                         [scene, entity]() { scene->GetRegistry().emplace<RigidBodyComponent>(entity); },
                         [scene, entity]() { scene->GetRegistry().remove<RigidBodyComponent>(entity); },
                         "Add Rigidbody Component"));
+                    ImGui::CloseCurrentPopup();
+                }
+        }
+
+        if (!hasConstraint) {
+            if (ImGui::Selectable("Constraint", false, kCompFlags))
+                if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                    m_Context->Commands.ExecuteCommand(std::make_unique<FunctionCommand>(
+                        [scene, entity]() { scene->GetRegistry().emplace<ConstraintComponent>(entity); },
+                        [scene, entity]() { scene->GetRegistry().remove<ConstraintComponent>(entity); },
+                        "Add Constraint Component"));
                     ImGui::CloseCurrentPopup();
                 }
         }
