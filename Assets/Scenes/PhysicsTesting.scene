@@ -193,6 +193,16 @@
         "hasLimits": false,
         "limitMax": 90.0,
         "limitMin": -90.0,
+        "motorDamping": 1.0,
+        "motorFrequency": 2.0,
+        "motorMaxTorque": 50.0,
+        "motorMode": 0,
+        "motorTarget": 0.0,
+        "motorTargetEuler": [
+          0.0,
+          0.0,
+          0.0
+        ],
         "swingNormalDeg": 45.0,
         "swingPlaneDeg": 45.0,
         "targetUuid": 15271304117423456619,
@@ -520,6 +530,16 @@
         "hasLimits": false,
         "limitMax": 110.0,
         "limitMin": 0.0,
+        "motorDamping": 1.0,
+        "motorFrequency": 2.0,
+        "motorMaxTorque": 50.0,
+        "motorMode": 0,
+        "motorTarget": 0.0,
+        "motorTargetEuler": [
+          0.0,
+          0.0,
+          0.0
+        ],
         "swingNormalDeg": 45.0,
         "swingPlaneDeg": 45.0,
         "targetUuid": 0,
@@ -619,6 +639,16 @@
         "hasLimits": false,
         "limitMax": 45.0,
         "limitMin": -45.0,
+        "motorDamping": 1.0,
+        "motorFrequency": 2.0,
+        "motorMaxTorque": 50.0,
+        "motorMode": 0,
+        "motorTarget": 0.0,
+        "motorTargetEuler": [
+          0.0,
+          0.0,
+          0.0
+        ],
         "swingNormalDeg": 45.0,
         "swingPlaneDeg": 45.0,
         "targetUuid": 9673117681866319689,
@@ -718,6 +748,16 @@
         "hasLimits": true,
         "limitMax": 80.0,
         "limitMin": 0.0,
+        "motorDamping": 1.0,
+        "motorFrequency": 2.0,
+        "motorMaxTorque": 50.0,
+        "motorMode": 0,
+        "motorTarget": 0.0,
+        "motorTargetEuler": [
+          0.0,
+          0.0,
+          0.0
+        ],
         "swingNormalDeg": 45.0,
         "swingPlaneDeg": 45.0,
         "targetUuid": 0,
@@ -817,6 +857,16 @@
         "hasLimits": false,
         "limitMax": 90.0,
         "limitMin": -90.0,
+        "motorDamping": 1.0,
+        "motorFrequency": 2.0,
+        "motorMaxTorque": 50.0,
+        "motorMode": 0,
+        "motorTarget": 0.0,
+        "motorTargetEuler": [
+          0.0,
+          0.0,
+          0.0
+        ],
         "swingNormalDeg": 40.0,
         "swingPlaneDeg": 40.0,
         "targetUuid": 0,
@@ -853,6 +903,7 @@
       },
       "scriptComponents": {
         "ArmControl": {
+          "motorRange": 60.0,
           "torqueStrength": 10.0
         }
       },
@@ -921,6 +972,16 @@
         "hasLimits": false,
         "limitMax": 90.0,
         "limitMin": -90.0,
+        "motorDamping": 1.0,
+        "motorFrequency": 2.0,
+        "motorMaxTorque": 50.0,
+        "motorMode": 0,
+        "motorTarget": 0.0,
+        "motorTargetEuler": [
+          0.0,
+          0.0,
+          0.0
+        ],
         "swingNormalDeg": 40.0,
         "swingPlaneDeg": 45.0,
         "targetUuid": 16456613340169470746,
@@ -945,6 +1006,7 @@
         "visible": true
       },
       "name": "Forearm",
+      "parentUuid": 16456613340169470746,
       "rigidbody": {
         "angularDamping": 0.05000000074505806,
         "bodyType": 1,
@@ -963,8 +1025,8 @@
         ],
         "position": [
           0.0,
-          5.996363162994385,
-          3.029784679412842
+          0.0,
+          2.930000066757202
         ],
         "rotation": [
           0.70710688829422,
@@ -974,8 +1036,8 @@
         ],
         "scale": [
           0.6264479756355286,
-          2.362536668777466,
-          0.5087953209877014
+          2.3625364303588867,
+          0.5087952613830566
         ]
       },
       "uuid": 6366412477898720403

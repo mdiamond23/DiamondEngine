@@ -1097,6 +1097,21 @@ void InspectorPanel::OnImGuiRender() {
                     ImGui::DragFloat("Min Angle", &cc.limitMin, 1.0f, -180.0f, 0.0f, "%.0f deg");
                     ImGui::DragFloat("Max Angle", &cc.limitMax, 1.0f,    0.0f, 180.0f, "%.0f deg");
                 }
+
+                ImGui::Spacing();
+                const char* motorModes[] = { "Off", "Velocity", "Position" };
+                int mIdx = (int)cc.motorMode;
+                if (ImGui::Combo("Motor", &mIdx, motorModes, IM_ARRAYSIZE(motorModes)))
+                    cc.motorMode = (MotorMode)mIdx;
+                if (cc.motorMode != MotorMode::Off) {
+                    ImGui::DragFloat(cc.motorMode == MotorMode::Position ? "Target (deg)" : "Target (deg/s)",
+                                     &cc.motorTarget, 1.0f, -100000.0f, 100000.0f, "%.0f");
+                    ImGui::DragFloat("Max Torque", &cc.motorMaxTorque, 1.0f, 0.0f, 100000.0f, "%.0f");
+                    if (cc.motorMode == MotorMode::Position) {
+                        ImGui::DragFloat("Frequency", &cc.motorFrequency, 0.1f, 0.0f, 60.0f, "%.1f Hz");
+                        ImGui::DragFloat("Damping",   &cc.motorDamping,   0.05f, 0.0f, 10.0f, "%.2f");
+                    }
+                }
             } else { // SwingTwist
                 ImGui::TextDisabled("Swing cone (half-angles)");
                 ImGui::DragFloat("Swing Normal", &cc.swingNormalDeg, 1.0f, 0.0f, 180.0f, "%.0f deg");
@@ -1104,6 +1119,22 @@ void InspectorPanel::OnImGuiRender() {
                 ImGui::TextDisabled("Twist range");
                 ImGui::DragFloat("Twist Min", &cc.twistMinDeg, 1.0f, -180.0f, 0.0f, "%.0f deg");
                 ImGui::DragFloat("Twist Max", &cc.twistMaxDeg, 1.0f,    0.0f, 180.0f, "%.0f deg");
+
+                ImGui::Spacing();
+                const char* motorModes[] = { "Off", "Velocity", "Position" };
+                int mIdx = (int)cc.motorMode;
+                if (ImGui::Combo("Motor", &mIdx, motorModes, IM_ARRAYSIZE(motorModes)))
+                    cc.motorMode = (MotorMode)mIdx;
+                if (cc.motorMode != MotorMode::Off) {
+                    // Target pose as euler degrees (pitch/yaw/roll), or deg/s in Velocity mode.
+                    ImGui::DragFloat3(cc.motorMode == MotorMode::Position ? "Target (deg)" : "Target (deg/s)",
+                                      glm::value_ptr(cc.motorTargetEuler), 1.0f);
+                    ImGui::DragFloat("Max Torque", &cc.motorMaxTorque, 1.0f, 0.0f, 100000.0f, "%.0f");
+                    if (cc.motorMode == MotorMode::Position) {
+                        ImGui::DragFloat("Frequency", &cc.motorFrequency, 0.1f, 0.0f, 60.0f, "%.1f Hz");
+                        ImGui::DragFloat("Damping",   &cc.motorDamping,   0.05f, 0.0f, 10.0f, "%.2f");
+                    }
+                }
             }
 
             ImGui::TextDisabled(cc.targetUuid == 0

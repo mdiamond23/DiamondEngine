@@ -170,7 +170,13 @@ static json ToJson(Scene& scene)
                 { "swingNormalDeg", cc.swingNormalDeg },
                 { "swingPlaneDeg",  cc.swingPlaneDeg  },
                 { "twistMinDeg",    cc.twistMinDeg    },
-                { "twistMaxDeg",    cc.twistMaxDeg    }
+                { "twistMaxDeg",    cc.twistMaxDeg    },
+                { "motorMode",      (int)cc.motorMode },
+                { "motorTarget",    cc.motorTarget    },
+                { "motorMaxTorque", cc.motorMaxTorque },
+                { "motorFrequency", cc.motorFrequency },
+                { "motorDamping",   cc.motorDamping   },
+                { "motorTargetEuler", JVec3(cc.motorTargetEuler) }
             };
         }
 
@@ -353,6 +359,12 @@ static bool FromJson(Scene& scene, const json& root)
             cc.swingPlaneDeg  = cj.value("swingPlaneDeg",  45.0f);
             cc.twistMinDeg    = cj.value("twistMinDeg",   -45.0f);
             cc.twistMaxDeg    = cj.value("twistMaxDeg",    45.0f);
+            cc.motorMode      = (MotorMode)cj.value("motorMode", 0);
+            cc.motorTarget    = cj.value("motorTarget",    0.0f);
+            cc.motorMaxTorque = cj.value("motorMaxTorque", 50.0f);
+            cc.motorFrequency = cj.value("motorFrequency", 2.0f);
+            cc.motorDamping   = cj.value("motorDamping",   1.0f);
+            if (cj.contains("motorTargetEuler")) cc.motorTargetEuler = ToVec3(cj["motorTargetEuler"]);
         }
 
         // Script components registered via DECLARE_COMPONENT

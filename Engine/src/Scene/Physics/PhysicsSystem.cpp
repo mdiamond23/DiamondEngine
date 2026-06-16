@@ -394,7 +394,24 @@ static JPH::Ref<JPH::TwoBodyConstraint> BuildConstraint(const ConstraintComponen
                 s.mLimitsMin = glm::radians(glm::clamp(cc.limitMin, -180.0f, 0.0f));
                 s.mLimitsMax = glm::radians(glm::clamp(cc.limitMax,    0.0f, 180.0f));
             }
-            return s.Create(body1, body2);
+            // Motor capability goes in the settings; mode + target are applied to
+            // the live constraint below (they aren't part of the settings).
+            if (cc.motorMode != MotorMode::Off) {
+                s.mMotorSettings = JPH::MotorSettings(cc.motorFrequency, cc.motorDamping);
+                s.mMotorSettings.SetTorqueLimit(glm::max(cc.motorMaxTorque, 0.0f));
+            }
+            JPH::Ref<JPH::TwoBodyConstraint> c = s.Create(body1, body2);
+            if (cc.motorMode != MotorMode::Off) {
+                auto* hinge = static_cast<JPH::HingeConstraint*>(c.GetPtr());
+                if (cc.motorMode == MotorMode::Velocity) {
+                    hinge->SetMotorState(JPH::EMotorState::Velocity);
+                    hinge->SetTargetAngularVelocity(glm::radians(cc.motorTarget)); // deg/s -> rad/s
+                } else {
+                    hinge->SetMotorState(JPH::EMotorState::Position);
+                    hinge->SetTargetAngle(glm::radians(cc.motorTarget));           // deg -> rad
+                }
+            }
+            return c;
         }
         case ConstraintType::SwingTwist: {
             // `axis` is the twist axis (along the bone); plane axis is any
@@ -412,7 +429,37 @@ static JPH::Ref<JPH::TwoBodyConstraint> BuildConstraint(const ConstraintComponen
             s.mPlaneHalfConeAngle  = glm::radians(glm::clamp(cc.swingPlaneDeg,  0.0f, 180.0f));
             s.mTwistMinAngle       = glm::radians(glm::clamp(cc.twistMinDeg, -180.0f, 0.0f));
             s.mTwistMaxAngle       = glm::radians(glm::clamp(cc.twistMaxDeg,    0.0f, 180.0f));
-            return s.Create(body1, body2);
+
+            if (cc.motorMode != MotorMode::Off) {
+                JPH::MotorSettings m(cc.motorFrequency, cc.motorDamping);
+                m.SetTorqueLimit(glm::max(cc.motorMaxTorque, 0.0f));
+                s.mSwingMotorSettings = m;
+                s.mTwistMotorSettings = m;
+            }
+            // Motor capability goes in the settings; mode + target are applied to
+            // the live constraint below (they aren't part of the settings).
+            JPH::Ref<JPH::TwoBodyConstraint> c = s.Create(body1, body2);
+            if (cc.motorMode != MotorMode::Off) {
+                auto* st = static_cast<JPH::SwingTwistConstraint*>(c.GetPtr());
+                JPH::EMotorState state = (cc.motorMode == MotorMode::Velocity)
+                    ? JPH::EMotorState::Velocity : JPH::EMotorState::Position;
+                st->SetSwingMotorState(state);
+                st->SetTwistMotorState(state);
+                if (cc.motorMode == MotorMode::Velocity) {
+                    st->SetTargetAngularVelocityCS(ToJolt(glm::radians(cc.motorTargetEuler))); // deg/s -> rad/s
+                } else {
+                    // Position target relative to the rest pose. SetTargetOrientationBS
+                    // drives R2 = R1 * q, so identity would mean "align body2 to body1",
+                    // not rest. Capture the rest relative rotation and apply the euler
+                    // target on top (in the bone's local frame), so Target (0,0,0) holds
+                    // the authored pose and the euler nudges it from there. For a world
+                    // anchor, body1 is sFixedToWorld (identity), so restBS = body2's pose.
+                    JPH::Quat restBS = body1.GetRotation().Conjugated() * body2.GetRotation();
+                    JPH::Quat offset = ToJolt(glm::quat(glm::radians(cc.motorTargetEuler)));
+                    st->SetTargetOrientationBS(restBS * offset);
+                }
+            }
+            return c;
         }
     }
 }
@@ -1033,6 +1080,48 @@ void Deactivate(const RigidBodyComponent& rb) {
 
 void SetGravity(glm::vec3 gravity) {
     if (s_Impl) s_Impl->joltSystem->SetGravity(ToJolt(gravity));
+}
+
+void SetMotorTarget(const ConstraintComponent& cc, float target) {
+    if (!s_Impl || cc._constraintId == 0xFFFFFFFFu) return;
+    auto it = s_Impl->constraintMap.find(cc._constraintId);
+    if (it == s_Impl->constraintMap.end()) return;
+
+    JPH::Constraint* c = it->second;
+    if (c->GetSubType() != JPH::EConstraintSubType::Hinge) return; // hinge motors only for now
+    auto* hinge = static_cast<JPH::HingeConstraint*>(c);
+
+    switch (hinge->GetMotorState()) {
+        case JPH::EMotorState::Position: hinge->SetTargetAngle(glm::radians(target)); break;            // deg -> rad
+        case JPH::EMotorState::Velocity: hinge->SetTargetAngularVelocity(glm::radians(target)); break;  // deg/s -> rad/s
+        default: return; // motor off — nothing to drive
+    }
+
+    // Wake the driven bodies so a settled joint responds to the new target.
+    if (auto* bi = BI()) {
+        if (JPH::Body* b1 = hinge->GetBody1(); b1 && !b1->IsStatic()) bi->ActivateBody(b1->GetID());
+        if (JPH::Body* b2 = hinge->GetBody2(); b2 && !b2->IsStatic()) bi->ActivateBody(b2->GetID());
+    }
+}
+
+void SetMotorTargetOrientation(const ConstraintComponent& cc, glm::quat targetBS) {
+    if (!s_Impl || cc._constraintId == 0xFFFFFFFFu) return;
+    auto it = s_Impl->constraintMap.find(cc._constraintId);
+    if (it == s_Impl->constraintMap.end()) return;
+
+    JPH::Constraint* c = it->second;
+    if (c->GetSubType() != JPH::EConstraintSubType::SwingTwist) return; // swing-twist only
+    auto* st = static_cast<JPH::SwingTwistConstraint*>(c);
+    if (st->GetSwingMotorState() == JPH::EMotorState::Off &&
+        st->GetTwistMotorState() == JPH::EMotorState::Off) return; // no motor to drive
+
+    st->SetTargetOrientationBS(ToJolt(targetBS));
+
+    // Wake the driven bodies so a settled joint responds to the new target.
+    if (auto* bi = BI()) {
+        if (JPH::Body* b1 = st->GetBody1(); b1 && !b1->IsStatic()) bi->ActivateBody(b1->GetID());
+        if (JPH::Body* b2 = st->GetBody2(); b2 && !b2->IsStatic()) bi->ActivateBody(b2->GetID());
+    }
 }
 
 class SingleBodyIgnoreFilter final : public JPH::BodyFilter {

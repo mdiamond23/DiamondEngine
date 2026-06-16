@@ -1,8 +1,10 @@
 #pragma once
 #include <glm/glm.hpp>
+#include <glm/gtc/quaternion.hpp>
 #include <entt/entt.hpp>
 #include <vector>
 #include "Rigidbody.h"
+#include "Constraint.h"
 
 class Scene;
 
@@ -44,6 +46,20 @@ namespace Physics {
     // ---- World settings ----
     // Default: (0, -9.81, 0). No-op if physics session is not active.
     void SetGravity(glm::vec3 gravity);
+
+    // ---- Constraint motors ----
+    // Drives a hinge motor's live target each frame. The motor's mode (Velocity
+    // or Position) is configured on the ConstraintComponent; this sets the target
+    // in that mode's units — degrees (Position) or deg/s (Velocity). Silent no-op
+    // if the constraint isn't built yet, isn't a hinge, or has no motor enabled.
+    void SetMotorTarget(const ConstraintComponent& cc, float target);
+
+    // Drives a swing-twist motor's live target orientation each frame. targetBS is
+    // the desired orientation of body 2 relative to body 1 (the bone's local
+    // rotation) — the form an animation pose provides; identity = aligned to the
+    // parent's frame. Silent no-op if the constraint isn't built, isn't a
+    // swing-twist, or has no motor enabled.
+    void SetMotorTargetOrientation(const ConstraintComponent& cc, glm::quat targetBS);
 
     // ---- Raycasting ----
     // Casts a ray from origin along direction for up to distance units.

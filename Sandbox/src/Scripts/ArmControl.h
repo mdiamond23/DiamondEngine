@@ -4,10 +4,12 @@
 #include "Scene/ComponentRegistry.h"
 #include "Scene/Physics/PhysicsAPI.h"
 #include "Scene/Physics/Rigidbody.h"
+#include "Scene/Physics/Constraint.h"
 #include <imgui.h>
 #include <nlohmann/json.hpp>
 #include "Core/Input.h"
 #include <glm/glm.hpp>
+#include <glm/gtc/quaternion.hpp>
 
 // ---- Data -------------------------------------------------------------------
 // Tag a bone with this to drive it by keyboard torque — a hands-on way to feel
@@ -16,7 +18,9 @@
 
 struct ArmControlComponent
 {
-    float torqueStrength = 10.0f;   // N·m applied per axis at full input
+    float torqueStrength = 10.0f;   // N·m applied per axis at full input (no motor)
+    float motorRange     = 60.0f;   // if the bone has a motor: Left/Right drives the
+                                    // target across +/- this (deg for Position, deg/s for Velocity)
 };
 
 // ---- Inspector UI -----------------------------------------------------------
@@ -25,7 +29,9 @@ template<>
 inline void DrawComponentInspector<ArmControlComponent>(ArmControlComponent& c)
 {
     ImGui::DragFloat("Torque Strength", &c.torqueStrength, 0.5f, 0.0f, 1000.0f);
+    ImGui::DragFloat("Motor Range",     &c.motorRange,     1.0f, 0.0f, 100000.0f);
     ImGui::TextDisabled("Arrows = swing, Q/E = twist (play mode)");
+    ImGui::TextDisabled("With a motor: Left/Right drives the target");
 }
 
 // ---- Serialization ----------------------------------------------------------
@@ -35,6 +41,7 @@ inline std::string SerializeComponent<ArmControlComponent>(const ArmControlCompo
 {
     nlohmann::json j;
     j["torqueStrength"] = c.torqueStrength;
+    j["motorRange"]     = c.motorRange;
     return j.dump();
 }
 
@@ -43,6 +50,7 @@ inline void DeserializeComponent<ArmControlComponent>(ArmControlComponent& c, co
 {
     auto j = nlohmann::json::parse(data);
     c.torqueStrength = j.value("torqueStrength", 10.0f);
+    c.motorRange     = j.value("motorRange",     60.0f);
 }
 
 // ---- Registration -----------------------------------------------------------
@@ -67,15 +75,30 @@ public:
 
     void OnUpdate(Scene& scene, float dt) override
     {
-        glm::vec3 torque {
-            Input::GetAxis("ArmPitch"),
-            Input::GetAxis("ArmYaw"),
-            Input::GetAxis("ArmTwist")
-        };
-        if (glm::length(torque) < 1e-4f) return;
+        float yaw = Input::GetAxis("ArmYaw");
+        glm::vec3 torque { Input::GetAxis("ArmPitch"), yaw, Input::GetAxis("ArmTwist") };
 
         for (auto [entity, ctrl] : scene.View<ArmControlComponent>().each())
         {
+            // Motorized joint → steer its target live (release returns to rest).
+            if (scene.Has<ConstraintComponent>(entity)) {
+                auto& cc = scene.Get<ConstraintComponent>(entity);
+                if (cc.motorMode != MotorMode::Off) {
+                    if (cc.type == ConstraintType::SwingTwist) {
+                        // Build an orientation from all three axes (pitch/yaw/twist)
+                        // and drive the swing-twist motor (Physics::SetMotorTargetOrientation).
+                        glm::vec3 euler = glm::radians(torque * ctrl.motorRange);
+                        Physics::SetMotorTargetOrientation(cc, glm::quat(euler));
+                    } else {
+                        // Hinge: Left/Right maps to +/- motorRange (Physics::SetMotorTarget).
+                        Physics::SetMotorTarget(cc, yaw * ctrl.motorRange);
+                    }
+                    continue;
+                }
+            }
+
+            // Otherwise push the bone with raw torque.
+            if (glm::length(torque) < 1e-4f) continue;
             if (!scene.Has<RigidBodyComponent>(entity)) continue;
             auto& rb = scene.Get<RigidBodyComponent>(entity);
             if (rb.bodyType != BodyType::Dynamic) continue;

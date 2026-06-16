@@ -13,6 +13,12 @@
 
 enum class ConstraintType { Hinge, SwingTwist };
 
+// Motor drive mode. Off = passive joint. Velocity = spin toward a target angular
+// velocity (powered wheel). Position = drive toward a target angle like a
+// servo/spring (self-closing door, muscle). Applied to the LIVE constraint after
+// creation — unlike limits, which are creation-time only.
+enum class MotorMode { Off, Velocity, Position };
+
 struct ConstraintComponent {
     ConstraintType type = ConstraintType::Hinge;
 
@@ -43,6 +49,18 @@ struct ConstraintComponent {
     float swingPlaneDeg  = 45.0f;  // swing half-angle around the plane axis
     float twistMinDeg    = -45.0f;
     float twistMaxDeg    =  45.0f;
+
+    // --- Motor (hinge only for now) ----------------------------------------
+    // motorMaxTorque (N·m) is the budget — if the load needs more, the motor
+    // stalls. Target is degrees (Position) or deg/s (Velocity). Frequency/damping
+    // shape the position-mode spring.
+    MotorMode motorMode      = MotorMode::Off;
+    float     motorTarget    = 0.0f;
+    float     motorMaxTorque = 50.0f;
+    float     motorFrequency = 2.0f;   // position-mode spring stiffness (Hz)
+    float     motorDamping   = 1.0f;   // position-mode spring damping ratio
+
+    glm::vec3 motorTargetEuler { 0.0f, 0.0f, 0.0f }; // For swing and twist motor only
 
     // Runtime handle into PhysicsSystem's constraint table; invalid sentinel
     // mirrors RigidBodyComponent::_bodyId. Set by PhysicsSystem, never serialized.

@@ -64,7 +64,7 @@ ragdoll characters, active physics control, grabbing, local multiplayer.
 > Goal: finish the physics surface before building on top of it
 
 - [x] Convex hull collider shape — exposed in Inspector and scripting API
-- [ ] Physics constraints / joint system — hinge, ball-socket, slider; engine-level API wrapping Jolt constraints
+- [x] Physics constraints / joint system — hinge + swing-twist (ball-socket) with angular limits and motors (velocity/position, runtime-drivable via `Physics::SetMotorTarget` / `SetMotorTargetOrientation`); entity-to-entity targeting by UUID; collision groups so connected bones don't self-collide; deferred creation + cross-entity destruction safety; engine-level API wrapping Jolt. (Slider/fixed/point/distance types not built yet — trivial additions to the same `BuildConstraint` framework.)
 - [x] Physics materials — restitution and friction per-collider, exposed in Inspector
 - [x] Editor — camera smooth orbit / pan (middle mouse) to complement fly mode
 - [x] Editor — duplicate entity (Ctrl+D)
