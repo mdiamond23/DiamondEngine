@@ -2,6 +2,7 @@
   "entities": [
     {
       "collider": {
+        "collisionGroup": 0,
         "halfExtents": [
           0.5,
           0.5,
@@ -86,6 +87,7 @@
     },
     {
       "collider": {
+        "collisionGroup": 0,
         "halfExtents": [
           20.0,
           0.6600000262260437,
@@ -153,6 +155,7 @@
     },
     {
       "collider": {
+        "collisionGroup": 0,
         "halfExtents": [
           0.5,
           0.5,
@@ -190,7 +193,11 @@
         "hasLimits": false,
         "limitMax": 90.0,
         "limitMin": -90.0,
+        "swingNormalDeg": 45.0,
+        "swingPlaneDeg": 45.0,
         "targetUuid": 15271304117423456619,
+        "twistMaxDeg": 45.0,
+        "twistMinDeg": -45.0,
         "type": 0
       },
       "mesh": {
@@ -227,9 +234,9 @@
           0.0
         ],
         "position": [
-          9.0,
-          2.7214553356170654,
-          10.662113189697266
+          0.08896541595458984,
+          10.312146186828613,
+          -1.5940165519714355
         ],
         "rotation": [
           0.70710688829422,
@@ -239,8 +246,8 @@
         ],
         "scale": [
           0.05000000074505806,
-          0.04999612271785736,
-          0.04999612271785736
+          0.049995165318250656,
+          0.049995165318250656
         ]
       },
       "uuid": 6231463051401644240
@@ -475,6 +482,7 @@
     },
     {
       "collider": {
+        "collisionGroup": 0,
         "halfExtents": [
           0.5,
           0.5,
@@ -512,7 +520,11 @@
         "hasLimits": false,
         "limitMax": 110.0,
         "limitMin": 0.0,
+        "swingNormalDeg": 45.0,
+        "swingPlaneDeg": 45.0,
         "targetUuid": 0,
+        "twistMaxDeg": 45.0,
+        "twistMinDeg": -45.0,
         "type": 0
       },
       "mesh": {
@@ -549,7 +561,7 @@
           0.0
         ],
         "position": [
-          2.0,
+          -11.835012435913086,
           4.0,
           0.0
         ],
@@ -569,6 +581,7 @@
     },
     {
       "collider": {
+        "collisionGroup": 0,
         "halfExtents": [
           0.5,
           0.5,
@@ -606,7 +619,11 @@
         "hasLimits": false,
         "limitMax": 45.0,
         "limitMin": -45.0,
+        "swingNormalDeg": 45.0,
+        "swingPlaneDeg": 45.0,
         "targetUuid": 9673117681866319689,
+        "twistMaxDeg": 45.0,
+        "twistMinDeg": -45.0,
         "type": 0
       },
       "mesh": {
@@ -643,7 +660,7 @@
           0.0
         ],
         "position": [
-          1.5,
+          -12.335012435913086,
           3.5,
           -2.9802322387695313e-08
         ],
@@ -663,6 +680,7 @@
     },
     {
       "collider": {
+        "collisionGroup": 0,
         "halfExtents": [
           0.5,
           0.5,
@@ -700,7 +718,11 @@
         "hasLimits": true,
         "limitMax": 80.0,
         "limitMin": 0.0,
+        "swingNormalDeg": 45.0,
+        "swingPlaneDeg": 45.0,
         "targetUuid": 0,
+        "twistMaxDeg": 45.0,
+        "twistMinDeg": -45.0,
         "type": 0
       },
       "mesh": {
@@ -754,6 +776,209 @@
         ]
       },
       "uuid": 73284031071759417
+    },
+    {
+      "collider": {
+        "collisionGroup": 1,
+        "halfExtents": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "halfHeight": 0.5,
+        "isTrigger": false,
+        "localOffset": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "localRotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "meshPath": "",
+        "physMatPath": "",
+        "radius": 0.5,
+        "shapeType": 0
+      },
+      "constraint": {
+        "anchor": [
+          0.0,
+          6.0,
+          0.0
+        ],
+        "axis": [
+          0.0,
+          0.0,
+          1.0
+        ],
+        "hasLimits": false,
+        "limitMax": 90.0,
+        "limitMin": -90.0,
+        "swingNormalDeg": 40.0,
+        "swingPlaneDeg": 40.0,
+        "targetUuid": 0,
+        "twistMaxDeg": 30.0,
+        "twistMinDeg": -30.0,
+        "type": 1
+      },
+      "mesh": {
+        "albedoPath": "C:/Dev/DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\DiamondPlate006C_2K-PNG_Color.png",
+        "aoPath": "C:/Dev/DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\DiamondPlate006C_2K-PNG_AmbientOcclusion.png",
+        "castsShadow": true,
+        "emissivePath": "",
+        "emissiveStrength": 0.0,
+        "materialPath": "",
+        "meshPath": "__cube",
+        "meshSubIndex": 0,
+        "metallicPath": "C:/Dev/DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\DiamondPlate006C_2K-PNG_Metalness.png",
+        "normalPath": "C:/Dev/DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\DiamondPlate006C_2K-PNG_NormalDX.png",
+        "receivesShadow": true,
+        "roughnessPath": "C:/Dev/DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\DiamondPlate006C_2K-PNG_Roughness.png",
+        "uvScale": 0.5,
+        "visible": true
+      },
+      "name": "Shoulder",
+      "rigidbody": {
+        "angularDamping": 0.05000000074505806,
+        "bodyType": 1,
+        "gravityScale": 1.0,
+        "linearDamping": 0.05000000074505806,
+        "lockRotX": false,
+        "lockRotY": false,
+        "lockRotZ": false,
+        "mass": 1.0
+      },
+      "scriptComponents": {
+        "ArmControl": {
+          "torqueStrength": 10.0
+        }
+      },
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          -0.0,
+          0.0
+        ],
+        "position": [
+          0.0,
+          6.0,
+          1.0
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 16456613340169470746
+    },
+    {
+      "collider": {
+        "collisionGroup": 1,
+        "halfExtents": [
+          0.6259999871253967,
+          1.0,
+          0.5090000033378601
+        ],
+        "halfHeight": 0.5,
+        "isTrigger": false,
+        "localOffset": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "localRotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "meshPath": "",
+        "physMatPath": "",
+        "radius": 0.5,
+        "shapeType": 0
+      },
+      "constraint": {
+        "anchor": [
+          0.0,
+          6.0,
+          1.5
+        ],
+        "axis": [
+          1.0,
+          0.0,
+          0.0
+        ],
+        "hasLimits": false,
+        "limitMax": 90.0,
+        "limitMin": -90.0,
+        "swingNormalDeg": 40.0,
+        "swingPlaneDeg": 45.0,
+        "targetUuid": 16456613340169470746,
+        "twistMaxDeg": 30.0,
+        "twistMinDeg": -30.0,
+        "type": 0
+      },
+      "mesh": {
+        "albedoPath": "C:/Dev/DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\DiamondPlate006C_2K-PNG_Color.png",
+        "aoPath": "C:/Dev/DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\DiamondPlate006C_2K-PNG_AmbientOcclusion.png",
+        "castsShadow": true,
+        "emissivePath": "",
+        "emissiveStrength": 0.0,
+        "materialPath": "",
+        "meshPath": "__cube",
+        "meshSubIndex": 0,
+        "metallicPath": "C:/Dev/DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\DiamondPlate006C_2K-PNG_Metalness.png",
+        "normalPath": "C:/Dev/DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\DiamondPlate006C_2K-PNG_NormalDX.png",
+        "receivesShadow": true,
+        "roughnessPath": "C:/Dev/DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\DiamondPlate006C_2K-PNG_Roughness.png",
+        "uvScale": 0.550000011920929,
+        "visible": true
+      },
+      "name": "Forearm",
+      "rigidbody": {
+        "angularDamping": 0.05000000074505806,
+        "bodyType": 1,
+        "gravityScale": 1.0,
+        "linearDamping": 0.05000000074505806,
+        "lockRotX": false,
+        "lockRotY": false,
+        "lockRotZ": false,
+        "mass": 1.0
+      },
+      "transform": {
+        "eulerDegrees": [
+          -89.99998474121094,
+          0.0,
+          0.0
+        ],
+        "position": [
+          0.0,
+          5.996363162994385,
+          3.029784679412842
+        ],
+        "rotation": [
+          0.70710688829422,
+          -0.7071066498756409,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          0.6264479756355286,
+          2.362536668777466,
+          0.5087953209877014
+        ]
+      },
+      "uuid": 6366412477898720403
     }
   ]
 }

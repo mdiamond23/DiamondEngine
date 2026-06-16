@@ -302,6 +302,168 @@ class DoorSystem : public GameSystem {
 
 ---
 
+## Constraints (Joints)
+
+Constraints connect two bodies (or one body and the immovable world) and remove
+some of the 6 relative degrees of freedom between them. Each joint type fixes a
+different subset: a hinge leaves one rotational DOF, a slider one translational,
+a point joint three rotational, a fixed joint none.
+
+**Status:** the hinge is implemented end to end (component, deferred creation,
+destruction safety, entity-to-entity targeting, angular limits, serialization,
+duplication). The remaining joint types and behaviours below are designed-for
+but not yet built — see *Roadmap*.
+
+### ConstraintComponent
+
+Plain data only — no Jolt types — so `Engine/include/` consumers never need the
+Jolt include path, exactly like `RigidBodyComponent`. The live `JPH::Constraint`
+is owned by `PhysicsSystem` and referenced here by an opaque id.
+
+```cpp
+enum class ConstraintType { Hinge /*, Point, Fixed, Slider, Distance (future) */ };
+
+struct ConstraintComponent {
+    ConstraintType type = ConstraintType::Hinge;
+
+    // The other body. 0 = attach to the immovable world (Body::sFixedToWorld).
+    // Non-zero = another entity, referenced by its persistent IDComponent UUID
+    // so the link survives save/load (a raw entt::entity handle would not).
+    uint64_t targetUuid = 0;
+
+    // Anchor point and rotation axis in WORLD space, as authored in the editor.
+    // PhysicsSystem converts these to per-body local frames at creation time via
+    // Jolt's EConstraintSpace::WorldSpace mode.
+    glm::vec3 anchor { 0.0f, 0.0f, 0.0f };
+    glm::vec3 axis   { 0.0f, 0.0f, 1.0f };
+
+    // Optional angular limits, in DEGREES (converted to radians at creation).
+    bool  hasLimits = false;
+    float limitMin  = -90.0f;
+    float limitMax  =  90.0f;
+
+    // Internal — managed by PhysicsSystem, do not set manually. Invalid sentinel
+    // mirrors RigidBodyComponent::_bodyId. Never serialized.
+    uint32_t _constraintId = 0xFFFFFFFF;
+};
+```
+
+**Anchor frames.** A joint must stay valid as both bodies move, so the anchor is
+not stored as a frozen world point — Jolt converts the single authored world
+anchor into a local frame on *each* body. Every step it transforms both back to
+world space and applies impulses to keep them coincident. The drift between the
+two frames is exactly what the solver corrects.
+
+### Why constraints are different from every other component
+
+A `MeshComponent` or `RigidBodyComponent` describes one entity and dies with it.
+A constraint is the first thing in the engine that **spans two entities** and must
+stay valid as both independently spawn, move, and die. Three of the lifecycle
+mechanisms below exist solely because of this.
+
+### Creation — deferred, like bodies
+
+A body needs only its own entity to be set up. A constraint needs **two live Jolt
+bodies**, and at scene-load time the target entity (or its body) may not exist yet.
+So constraint creation reuses the body system's deferred queue pattern:
+
+- `on_construct<ConstraintComponent>` pushes the entity to `pendingConstraints`.
+- `OnStart` scans pre-existing constraints into the same queue (signals don't fire
+  for components that existed before the connection).
+- `OnUpdate` drains the queue *after* the body-creation drain. An entry stays
+  queued until its readiness condition holds: **this entity's body is live, and —
+  for entity-to-entity joints — the target entity exists (`Scene::FindByUuid`) and
+  its body is live too.** Missing prerequisites just mean "wait one more frame,"
+  never a crash.
+
+```cpp
+// readiness check, per queued entity
+uint32_t bodyA = BodyIdOf(reg, e);                 // own body
+if (bodyA == invalid) { stillPending.push_back(e); continue; }
+uint32_t bodyB = invalid;                          // world
+if (cc.targetUuid != 0) {
+    entt::entity target = scene.FindByUuid(cc.targetUuid);
+    if (!reg.valid(target)) { stillPending.push_back(e); continue; }
+    bodyB = BodyIdOf(reg, target);
+    if (bodyB == invalid) { stillPending.push_back(e); continue; }
+}
+CreateConstraint(impl, e, cc, bodyA, bodyB);
+```
+
+Building the joint requires `JPH::Body&` references, obtained by locking. World
+joints lock one body (`BodyLockWrite`) and use `Body::sFixedToWorld` as body1.
+Entity-to-entity joints lock both with `BodyLockMultiWrite` (which sorts the IDs
+internally, so it stays deadlock-safe if the job system is later made
+multi-threaded). Convention: **body1 = target/world (parent), body2 = self.**
+
+### Destruction — the cross-entity cleanup
+
+Jolt requires a joint be removed before either body it references is destroyed.
+The trap: a constraint stored on entity A may reference entity B, and deleting B
+never fires A's `on_destroy` hook. So `PhysicsSystem` keeps a reverse index,
+`bodyToConstraints` (bodyID → constraint ids), populated under **both** bodies at
+creation. Body teardown (`OnRbDestroyed` / `OnColDestroyed`) calls
+`RemoveConstraintsTouching(bodyId)` *before* removing the body, so destroying
+either endpoint tears the joint out first.
+
+```cpp
+struct Impl {
+    std::unordered_map<uint32_t, JPH::Ref<JPH::Constraint>> constraintMap;     // id → live joint
+    std::unordered_map<uint32_t, std::vector<uint32_t>>     bodyToConstraints; // bodyID → ids
+    std::vector<entt::entity>                               pendingConstraints;
+    uint32_t                                               nextConstraintId = 0;
+};
+```
+
+This `bodyToConstraints` index is the one piece of machinery with no body-era
+equivalent — bodies never needed to know "who refers to me."
+
+### Limits
+
+When `hasLimits` is set, the hinge swing is clamped to `[limitMin, limitMax]`.
+Authored in degrees; converted to radians and clamped to Jolt's required ranges
+(`mLimitsMin ∈ [-π, 0]`, `mLimitsMax ∈ [0, π]`) at creation. The zero angle is the
+bodies' relative orientation at creation time, *not* world vertical. Limits are
+currently **hard** stops (a sharp halt); soft spring limits are on the roadmap.
+
+### Authoring notes
+
+- The body must start **offset from the anchor** for a hinge to do anything — an
+  anchor on the centre of mass gives zero lever arm. For a *gravity-driven* swing
+  the offset must also be **perpendicular to gravity** (the axis horizontal);
+  an anchor directly above or below the COM is the stable equilibrium and will not
+  move. A vertical-axis "door" needs a **motor** (roadmap), not gravity.
+- The offset must be perpendicular to the hinge axis; an offset *along* the axis
+  has no lever arm.
+
+### Editor + persistence
+
+The inspector exposes type, target (a dropdown of "World" + scene entities),
+anchor, axis, and limits. The serializer round-trips every field except the
+runtime `_constraintId`, resolving `targetUuid` lazily during the deferred
+creation pass. Entity duplication copies the component (resetting `_constraintId`
+so the copy builds its own joint); a duplicated entity-to-entity joint keeps the
+original `targetUuid`, so the copy connects to the same target.
+
+### Roadmap
+
+| Feature | Notes |
+|---|---|
+| **Motors** | Drive a joint toward a target velocity or angle with a capped torque/force (`JPH::MotorSettings`). Unlocks powered wheels, servos, and the gravity-independent swinging door. The cap is *why* a motor can stall under load. |
+| **Soft limits** | `mLimitsSpringSettings` — the joint overshoots and springs back instead of a hard stop. Smoother and gentler on the solver. |
+| **More types** | Point (ball-socket), Fixed (weld), Slider (piston), Distance (rope/rod). Each is a new branch in `BuildConstraint` plus the matching authoring fields; Point/Fixed need no axis. |
+| **Joint visualization** | Draw the anchor, axis, and limit wedge with `DebugDraw`. Authoring is currently "blind"; this is the highest-value workflow add. |
+| **Duplicate target-remapping** | When a *connected pair* is duplicated together, remap the copy's `targetUuid` to the copied target (build an old→new UUID map across the selection) so the copies wire to each other, not the originals. |
+| **Breakable joints** | Remove the constraint when its applied impulse exceeds a threshold this step. |
+
+Each new behaviour slots into the same groove the hinge established: an optional
+data field on `ConstraintComponent`, applied in `BuildConstraint`, surfaced in the
+inspector, round-tripped by the serializer. The cross-entity lifecycle (deferred
+creation, `bodyToConstraints` cleanup, UUID targeting) is type-agnostic and is
+reused as-is.
+
+---
+
 ## Collision Layers
 
 Defined in the private header `PhysicsLayers.h`:
@@ -383,9 +545,9 @@ Engine/
 
 ## What Is Out of Scope (For Now)
 
-- **Debug visualization** — Jolt's `DebugRenderer` interface can draw wireframe shapes in the editor viewport. Deferred.
+- **Debug visualization** — Jolt's `DebugRenderer` interface can draw wireframe shapes in the editor viewport. Collider wireframes are now drawn via the engine's own `DebugDraw`; constraint anchor/axis/limit visualization is still deferred (see Constraints → Roadmap).
 - **Compound shapes** — multiple colliders per entity (Jolt `CompoundShape`). Deferred.
-- **Joints and constraints** — hinges, springs, fixed joints. Deferred.
+- **Joints and constraints** — see the [Constraints (Joints)](#constraints-joints) section. The hinge is implemented (with entity-to-entity targeting and angular limits); motors, soft springs, and the other joint types are on the roadmap there.
 - **Character controller** — Jolt has `CharacterVirtual`; a natural follow-on after rigid bodies work.
 - **Custom collision layers** — the two-layer setup covers all use cases for now.
 - **ConvexHull / TriangleMesh building** — requires feeding vertex data from the mesh asset pipeline; depends on Milestone 3 asset registry.

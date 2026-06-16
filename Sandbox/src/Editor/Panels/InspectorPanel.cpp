@@ -483,6 +483,33 @@ void InspectorPanel::OnImGuiRender() {
                     "Change Mesh"));
             }
 
+            // -- Primitive shapes -- assign a built-in cube/sphere (the "__cube"
+            // / "__sphere" meshes the serializer rebuilds on load). Material is
+            // left untouched. One undo command captures the swap.
+            auto assignPrimitive = [&](const std::string& primPath, MeshData md) {
+                auto om = mc.mesh;       auto ob = mc.localBounds;
+                auto op = mc.meshPath;   auto oi = mc.meshSubIndex;
+                auto nm = Mesh::Create(md);
+                auto nb = md.ComputeAABB();
+                mc.mesh = nm; mc.localBounds = nb; mc.meshPath = primPath; mc.meshSubIndex = 0;
+                m_Context->Commands.RecordCommand(std::make_unique<FunctionCommand>(
+                    [scene, entity, nm, nb, primPath]() {
+                        auto& c = scene->GetRegistry().get<MeshComponent>(entity);
+                        c.mesh = nm; c.localBounds = nb; c.meshPath = primPath; c.meshSubIndex = 0;
+                    },
+                    [scene, entity, om, ob, op, oi]() {
+                        auto& c = scene->GetRegistry().get<MeshComponent>(entity);
+                        c.mesh = om; c.localBounds = ob; c.meshPath = op; c.meshSubIndex = oi;
+                    },
+                    "Assign Primitive Mesh"));
+            };
+            ImGui::Spacing();
+            ImGui::TextDisabled("Primitive:");
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Cube"))   assignPrimitive("__cube",   MeshData::UnitCube());
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Sphere")) assignPrimitive("__sphere", MeshData::UVSphere());
+
             // -- Material --
             ImGui::Spacing();
             ImGui::TextDisabled("Material");
@@ -763,6 +790,15 @@ void InspectorPanel::OnImGuiRender() {
             ImGui::Spacing();
             ImGui::Checkbox("Is Trigger", &col.isTrigger);
 
+            // Collision group: bodies sharing the same non-zero group ignore each
+            // other (0 = collide normally). Give every bone of one ragdoll the
+            // same group so they don't explode at their joints.
+            int grp = (int)col.collisionGroup;
+            if (ImGui::InputInt("Collision Group", &grp)) {
+                if (grp < 0) grp = 0;
+                col.collisionGroup = (uint32_t)grp;
+            }
+
             ImGui::Spacing();
             ImGui::TextDisabled("Physics Material");
 
@@ -1026,7 +1062,7 @@ void InspectorPanel::OnImGuiRender() {
         }
 
         if (!removeConstraint) {
-            const char* types[] = { "Hinge" };
+            const char* types[] = { "Hinge", "Swing Twist" };
             int typeIdx = (int)cc.type;
             ImGui::Combo("Type", &typeIdx, types, IM_ARRAYSIZE(types));
             cc.type = (ConstraintType)typeIdx;
@@ -1052,12 +1088,22 @@ void InspectorPanel::OnImGuiRender() {
             // World-space anchor + axis. Read once when play starts, so plain
             // edits here are fine — undo/redo wiring comes in a later step.
             ImGui::DragFloat3("Anchor (world)", glm::value_ptr(cc.anchor), 0.05f);
-            ImGui::DragFloat3("Axis",           glm::value_ptr(cc.axis),   0.01f);
+            ImGui::DragFloat3(cc.type == ConstraintType::SwingTwist ? "Twist Axis" : "Axis",
+                              glm::value_ptr(cc.axis), 0.01f);
 
-            ImGui::Checkbox("Limits", &cc.hasLimits);
-            if (cc.hasLimits) {
-                ImGui::DragFloat("Min Angle", &cc.limitMin, 1.0f, -180.0f, 0.0f, "%.0f deg");
-                ImGui::DragFloat("Max Angle", &cc.limitMax, 1.0f,    0.0f, 180.0f, "%.0f deg");
+            if (cc.type == ConstraintType::Hinge) {
+                ImGui::Checkbox("Limits", &cc.hasLimits);
+                if (cc.hasLimits) {
+                    ImGui::DragFloat("Min Angle", &cc.limitMin, 1.0f, -180.0f, 0.0f, "%.0f deg");
+                    ImGui::DragFloat("Max Angle", &cc.limitMax, 1.0f,    0.0f, 180.0f, "%.0f deg");
+                }
+            } else { // SwingTwist
+                ImGui::TextDisabled("Swing cone (half-angles)");
+                ImGui::DragFloat("Swing Normal", &cc.swingNormalDeg, 1.0f, 0.0f, 180.0f, "%.0f deg");
+                ImGui::DragFloat("Swing Plane",  &cc.swingPlaneDeg,  1.0f, 0.0f, 180.0f, "%.0f deg");
+                ImGui::TextDisabled("Twist range");
+                ImGui::DragFloat("Twist Min", &cc.twistMinDeg, 1.0f, -180.0f, 0.0f, "%.0f deg");
+                ImGui::DragFloat("Twist Max", &cc.twistMaxDeg, 1.0f,    0.0f, 180.0f, "%.0f deg");
             }
 
             ImGui::TextDisabled(cc.targetUuid == 0

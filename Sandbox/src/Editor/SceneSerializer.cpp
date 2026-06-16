@@ -129,7 +129,8 @@ static json ToJson(Scene& scene)
                 { "physMatPath",   col.physMatPath         },
                 { "localOffset",   JVec3(col.localOffset)  },
                 { "localRotation", JQuat(col.localRotation) },
-                { "isTrigger",     col.isTrigger           }
+                { "isTrigger",     col.isTrigger           },
+                { "collisionGroup", col.collisionGroup     }
             };
             // Inline material block only saved when there is no asset path (legacy / manual)
             if (col.physMatPath.empty() && col.material) {
@@ -165,7 +166,11 @@ static json ToJson(Scene& scene)
                 { "axis",       JVec3(cc.axis)   },
                 { "hasLimits",  cc.hasLimits   },
                 { "limitMin",   cc.limitMin    },
-                { "limitMax",   cc.limitMax    }
+                { "limitMax",   cc.limitMax    },
+                { "swingNormalDeg", cc.swingNormalDeg },
+                { "swingPlaneDeg",  cc.swingPlaneDeg  },
+                { "twistMinDeg",    cc.twistMinDeg    },
+                { "twistMaxDeg",    cc.twistMaxDeg    }
             };
         }
 
@@ -305,6 +310,7 @@ static bool FromJson(Scene& scene, const json& root)
             col.meshPath   = cj.value("meshPath",   "");
             col.physMatPath = cj.value("physMatPath", "");
             col.isTrigger  = cj.value("isTrigger",  false);
+            col.collisionGroup = cj.value("collisionGroup", 0u);
             if (cj.contains("halfExtents"))   col.halfExtents   = ToVec3(cj["halfExtents"]);
             if (cj.contains("localOffset"))   col.localOffset   = ToVec3(cj["localOffset"]);
             if (cj.contains("localRotation")) col.localRotation = ToQuat(cj["localRotation"]);
@@ -343,6 +349,10 @@ static bool FromJson(Scene& scene, const json& root)
             cc.hasLimits = cj.value("hasLimits", false);
             cc.limitMin  = cj.value("limitMin", -90.0f);
             cc.limitMax  = cj.value("limitMax",  90.0f);
+            cc.swingNormalDeg = cj.value("swingNormalDeg", 45.0f);
+            cc.swingPlaneDeg  = cj.value("swingPlaneDeg",  45.0f);
+            cc.twistMinDeg    = cj.value("twistMinDeg",   -45.0f);
+            cc.twistMaxDeg    = cj.value("twistMaxDeg",    45.0f);
         }
 
         // Script components registered via DECLARE_COMPONENT

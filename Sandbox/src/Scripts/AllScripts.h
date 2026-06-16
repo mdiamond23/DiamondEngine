@@ -5,3 +5,4 @@
 #include "TestHealth.h"
 #include "Move.h"
 #include "TriggerTest.h"
+#include "ArmControl.h"

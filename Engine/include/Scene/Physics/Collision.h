@@ -42,6 +42,14 @@ struct ColliderComponent
     glm::quat localRotation { 1, 0, 0, 0 };  // identity
 
     bool isTrigger = false;
+
+    // Collision group. Bodies sharing the same NON-ZERO group never collide with
+    // each other (group 0 = ungrouped, collides normally). Used to stop the
+    // connected, overlapping bones of a ragdoll from exploding at their joints —
+    // give every bone of one ragdoll the same group number; different ragdolls
+    // use different numbers so they still collide with each other.
+    uint32_t collisionGroup = 0;
+
     std::shared_ptr<PhysicsMaterial> material;  // null = engine default
 
     // Collision callbacks — set by scripts, fired by PhysicsSystem

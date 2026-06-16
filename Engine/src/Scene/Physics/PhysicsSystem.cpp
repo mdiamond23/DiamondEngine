@@ -18,6 +18,8 @@
 #include <Jolt/Physics/Collision/CastResult.h>
 #include <Jolt/Physics/Collision/ShapeCast.h>
 #include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
+#include <Jolt/Physics/Collision/CollisionGroup.h>
+#include <Jolt/Physics/Collision/GroupFilter.h>
 #include <Jolt/Physics/Body/BodyLockInterface.h>
 #include <Jolt/Physics/Body/BodyLock.h>
 #include <Jolt/Physics/Body/BodyLockMulti.h>
@@ -25,6 +27,7 @@
 #include <Jolt/Physics/Constraints/Constraint.h>
 #include <Jolt/Physics/Constraints/TwoBodyConstraint.h>
 #include <Jolt/Physics/Constraints/HingeConstraint.h>
+#include <Jolt/Physics/Constraints/SwingTwistConstraint.h>
 
 #include "Scene/Physics/PhysicsSystem.h"
 #include "Scene/Physics/PhysicsAPI.h"
@@ -116,6 +119,18 @@ public:
             case PhysicsLayers::DYNAMIC: return true;
             default:                     return false;
         }
+    }
+};
+
+// Group filter: two bodies in the same non-zero collision group never collide.
+// One shared instance is attached to every grouped body's CollisionGroup, so the
+// overlapping bones of a ragdoll (same group) ignore each other while different
+// ragdolls (different group numbers) and ungrouped geometry still collide.
+class GroupExcludeFilter final : public JPH::GroupFilter {
+public:
+    bool CanCollide(const JPH::CollisionGroup& a, const JPH::CollisionGroup& b) const override {
+        JPH::CollisionGroup::GroupID ga = a.GetGroupID();
+        return !(ga != 0 && ga == b.GetGroupID());
     }
 };
 
@@ -243,6 +258,7 @@ struct PhysicsSystem::Impl {
     std::unique_ptr<JPH::JobSystemSingleThreaded>  jobSystem;     // swap for JobSystemThreadPool to enable MT
     std::unique_ptr<JPH::PhysicsSystem>            joltSystem;
     std::unique_ptr<ContactListener>               contactListener;
+    JPH::Ref<JPH::GroupFilter>                     groupFilter;   // shared by all grouped bodies
 };
 
 // ---------------------------------------------------------------------------
@@ -378,6 +394,24 @@ static JPH::Ref<JPH::TwoBodyConstraint> BuildConstraint(const ConstraintComponen
                 s.mLimitsMin = glm::radians(glm::clamp(cc.limitMin, -180.0f, 0.0f));
                 s.mLimitsMax = glm::radians(glm::clamp(cc.limitMax,    0.0f, 180.0f));
             }
+            return s.Create(body1, body2);
+        }
+        case ConstraintType::SwingTwist: {
+            // `axis` is the twist axis (along the bone); plane axis is any
+            // perpendicular. Swing is an elliptical cone (two half-angles);
+            // twist is rotation about the twist axis, limited to [min, max].
+            glm::vec3 twistAxis = glm::normalize(cc.axis);
+            glm::vec3 planeAxis = AnyPerpendicular(twistAxis);
+
+            JPH::SwingTwistConstraintSettings s;
+            s.mSpace       = JPH::EConstraintSpace::WorldSpace;
+            s.mPosition1   = s.mPosition2   = JPH::RVec3(cc.anchor.x, cc.anchor.y, cc.anchor.z);
+            s.mTwistAxis1  = s.mTwistAxis2  = ToJolt(twistAxis);
+            s.mPlaneAxis1  = s.mPlaneAxis2  = ToJolt(planeAxis);
+            s.mNormalHalfConeAngle = glm::radians(glm::clamp(cc.swingNormalDeg, 0.0f, 180.0f));
+            s.mPlaneHalfConeAngle  = glm::radians(glm::clamp(cc.swingPlaneDeg,  0.0f, 180.0f));
+            s.mTwistMinAngle       = glm::radians(glm::clamp(cc.twistMinDeg, -180.0f, 0.0f));
+            s.mTwistMaxAngle       = glm::radians(glm::clamp(cc.twistMaxDeg,    0.0f, 180.0f));
             return s.Create(body1, body2);
         }
     }
@@ -568,7 +602,8 @@ static void InheritMeshPath(ColliderComponent& col, entt::entity entity, entt::r
 static void CreateBody(JPH::BodyInterface& bi,
     std::unordered_map<uint32_t, BodyRecord>& bodyMap,
     entt::entity entity, RigidBodyComponent& rb,
-    const ColliderComponent& col, const TransformComponent& xform)
+    const ColliderComponent& col, const TransformComponent& xform,
+    const JPH::GroupFilter* groupFilter)
 {
     if (col.shapeType == CollisionShape::TriangleMesh && rb.bodyType != BodyType::Static) {
         spdlog::warn("CreateBody: TriangleMesh collider requires a Static body; skipping.");
@@ -637,6 +672,13 @@ static void CreateBody(JPH::BodyInterface& bi,
         settings.mRestitution = col.material->restitution;
     }
 
+    if (col.collisionGroup != 0 && groupFilter) {
+        settings.mCollisionGroup = JPH::CollisionGroup(
+            groupFilter,
+            (JPH::CollisionGroup::GroupID)col.collisionGroup,
+            (JPH::CollisionGroup::SubGroupID)entt::to_integral(entity));
+    }
+
     // create body id with final body settings
     JPH::BodyID bodyID = bi.CreateAndAddBody(settings, JPH::EActivation::Activate);
     if (bodyID.IsInvalid()) return; // hit cMaxBodies limit
@@ -649,7 +691,8 @@ static void CreateBody(JPH::BodyInterface& bi,
 // Forward declaration — definition follows OnStart below.
 static void CreateStaticCollider(JPH::BodyInterface&,
     std::unordered_map<uint32_t, BodyRecord>&,
-    entt::entity, ColliderComponent&, const TransformComponent&);
+    entt::entity, ColliderComponent&, const TransformComponent&,
+    const JPH::GroupFilter*);
 
 // ---------------------------------------------------------------------------
 // PhysicsSystem — OnStart / OnUpdate / OnDestroy
@@ -673,19 +716,22 @@ void PhysicsSystem::OnStart(Scene& scene) {
     m_impl->contactListener = std::make_unique<ContactListener>(m_impl->bodyMap);
     m_impl->joltSystem->SetContactListener(m_impl->contactListener.get());
 
+    m_impl->groupFilter = new GroupExcludeFilter();
+
     JPH::BodyInterface& bi = m_impl->joltSystem->GetBodyInterface();
+    const JPH::GroupFilter* gf = m_impl->groupFilter;
 
     // Entities with RigidBodyComponent + ColliderComponent → full physics body
     for (auto [entity, rb, col, xform] : scene.View<RigidBodyComponent, ColliderComponent, TransformComponent>().each()) {
         InheritMeshPath(col, entity, scene.GetRegistry());
-        CreateBody(bi, m_impl->bodyMap, entity, rb, col, xform);
+        CreateBody(bi, m_impl->bodyMap, entity, rb, col, xform, gf);
     }
 
     // Entities with only ColliderComponent → static collision geometry
     for (auto [entity, col, xform] : scene.View<ColliderComponent, TransformComponent>().each()) {
         if (scene.Has<RigidBodyComponent>(entity)) continue;
         InheritMeshPath(col, entity, scene.GetRegistry());
-        CreateStaticCollider(bi, m_impl->bodyMap, entity, col, xform);
+        CreateStaticCollider(bi, m_impl->bodyMap, entity, col, xform, gf);
     }
 
     // Queue pre-existing constraints (from the loaded scene). Their bodies were
@@ -714,7 +760,8 @@ void PhysicsSystem::OnStart(Scene& scene) {
 // ---------------------------------------------------------------------------
 static void CreateStaticCollider(JPH::BodyInterface& bi,
     std::unordered_map<uint32_t, BodyRecord>& bodyMap,
-    entt::entity entity, ColliderComponent& col, const TransformComponent& xform)
+    entt::entity entity, ColliderComponent& col, const TransformComponent& xform,
+    const JPH::GroupFilter* groupFilter)
 {
     JPH::ShapeRefC shapeRef = CreateShape(col, xform.scale);
     if (!shapeRef) return;
@@ -732,6 +779,13 @@ static void CreateStaticCollider(JPH::BodyInterface& bi,
     if (col.material) {
         settings.mFriction    = col.material->dynamicFriction;
         settings.mRestitution = col.material->restitution;
+    }
+
+    if (col.collisionGroup != 0 && groupFilter) {
+        settings.mCollisionGroup = JPH::CollisionGroup(
+            groupFilter,
+            (JPH::CollisionGroup::GroupID)col.collisionGroup,
+            (JPH::CollisionGroup::SubGroupID)entt::to_integral(entity));
     }
 
     JPH::BodyID bodyID = bi.CreateAndAddBody(settings, JPH::EActivation::DontActivate);
@@ -824,13 +878,13 @@ void PhysicsSystem::OnUpdate(Scene& scene, float dt) {
                 auto& xform = reg.get<TransformComponent>(entity);
                 if (rb._bodyId != 0xFFFFFFFFu) continue; // already created
                 InheritMeshPath(col, entity, reg);
-                CreateBody(pbi, m_impl->bodyMap, entity, rb, col, xform);
+                CreateBody(pbi, m_impl->bodyMap, entity, rb, col, xform, m_impl->groupFilter);
             } else {
                 auto& col   = reg.get<ColliderComponent>(entity);
                 auto& xform = reg.get<TransformComponent>(entity);
                 if (col._bodyId != 0xFFFFFFFFu) continue; // already created
                 InheritMeshPath(col, entity, reg);
-                CreateStaticCollider(pbi, m_impl->bodyMap, entity, col, xform);
+                CreateStaticCollider(pbi, m_impl->bodyMap, entity, col, xform, m_impl->groupFilter);
             }
         }
         m_impl->pendingCreate.clear();
