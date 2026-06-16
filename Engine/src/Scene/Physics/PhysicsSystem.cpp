@@ -28,6 +28,7 @@
 #include <Jolt/Physics/Constraints/TwoBodyConstraint.h>
 #include <Jolt/Physics/Constraints/HingeConstraint.h>
 #include <Jolt/Physics/Constraints/SwingTwistConstraint.h>
+#include <Jolt/Physics/Constraints/FixedConstraint.h>
 
 #include "Scene/Physics/PhysicsSystem.h"
 #include "Scene/Physics/PhysicsAPI.h"
@@ -460,6 +461,12 @@ static JPH::Ref<JPH::TwoBodyConstraint> BuildConstraint(const ConstraintComponen
                 }
             }
             return c;
+        }
+        case ConstraintType::Fixed: {
+            JPH::FixedConstraintSettings s;
+            s.mSpace       = JPH::EConstraintSpace::WorldSpace;
+            s.mPoint1      = s.mPoint2 =    JPH::RVec3(cc.anchor.x, cc.anchor.y, cc.anchor.z);
+            return s.Create(body1, body2);
         }
     }
 }

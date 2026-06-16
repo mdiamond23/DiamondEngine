@@ -1062,7 +1062,7 @@ void InspectorPanel::OnImGuiRender() {
         }
 
         if (!removeConstraint) {
-            const char* types[] = { "Hinge", "Swing Twist" };
+            const char* types[] = { "Hinge", "Swing Twist", "Fixed" };
             int typeIdx = (int)cc.type;
             ImGui::Combo("Type", &typeIdx, types, IM_ARRAYSIZE(types));
             cc.type = (ConstraintType)typeIdx;
@@ -1112,7 +1112,7 @@ void InspectorPanel::OnImGuiRender() {
                         ImGui::DragFloat("Damping",   &cc.motorDamping,   0.05f, 0.0f, 10.0f, "%.2f");
                     }
                 }
-            } else { // SwingTwist
+            } else if (cc.type == ConstraintType::SwingTwist) { // SwingTwist
                 ImGui::TextDisabled("Swing cone (half-angles)");
                 ImGui::DragFloat("Swing Normal", &cc.swingNormalDeg, 1.0f, 0.0f, 180.0f, "%.0f deg");
                 ImGui::DragFloat("Swing Plane",  &cc.swingPlaneDeg,  1.0f, 0.0f, 180.0f, "%.0f deg");
@@ -1135,6 +1135,9 @@ void InspectorPanel::OnImGuiRender() {
                         ImGui::DragFloat("Damping",   &cc.motorDamping,   0.05f, 0.0f, 10.0f, "%.2f");
                     }
                 }
+            } else if (cc.type == ConstraintType::Fixed) {
+                ImGui::TextDisabled("Fixed constraint locks all linear and angular motion.");
+                ImGui::TextDisabled("Only Target and Anchor are used.");
             }
 
             ImGui::TextDisabled(cc.targetUuid == 0

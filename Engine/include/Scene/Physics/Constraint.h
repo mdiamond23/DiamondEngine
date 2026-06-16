@@ -11,7 +11,7 @@
 // joint with an elliptical swing cone + twist limit (shoulders, hips, neck) —
 // the workhorse joint for ragdolls. More types arrive in later steps.
 
-enum class ConstraintType { Hinge, SwingTwist };
+enum class ConstraintType { Hinge, SwingTwist, Fixed };
 
 // Motor drive mode. Off = passive joint. Velocity = spin toward a target angular
 // velocity (powered wheel). Position = drive toward a target angle like a
