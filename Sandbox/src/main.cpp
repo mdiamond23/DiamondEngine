@@ -648,7 +648,9 @@ int main()
         scene.GetTransformSystem().Update(scene.GetRegistry());
 
         // Advance skinned-mesh animators and rebuild their bone palettes for this frame.
-        Diamond::UpdateAnimators(scene.GetRegistry(), deltaTime);
+        // Time only moves in play mode (paused/editor holds the current pose).
+        Diamond::UpdateAnimators(scene.GetRegistry(), deltaTime,
+                                 scene.IsPlaying() && !scene.IsPaused());
 
         // Build draw calls from scene — uses world matrices so parented entities render correctly.
         allDraws.clear();

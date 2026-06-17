@@ -7,7 +7,7 @@
 
 namespace Diamond {
 
-void UpdateAnimators(entt::registry& reg, float dt)
+void UpdateAnimators(entt::registry& reg, float dt, bool advance)
 {
     auto view = reg.view<SkinnedMeshComponent, AnimatorComponent>();
     for (auto entity : view) {
@@ -22,7 +22,7 @@ void UpdateAnimators(entt::registry& reg, float dt)
         }
 
         const AnimationClip& clip = smc.clips[anim.clip];
-        if (anim.playing) {
+        if (anim.playing && advance) {
             anim.time += dt * anim.speed;
             if (clip.duration > 0.0f) {
                 anim.time = anim.loop ? std::fmod(anim.time, clip.duration)
