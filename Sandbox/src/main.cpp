@@ -28,6 +28,7 @@
 #include "Renderer/RenderGraph.h"
 #include "Platform/OpenGL/Resources/OpenGLRenderTypes.h"
 #include "Platform/OpenGL/Resources/OpenGLShader.h"
+#include "Platform/OpenGL/Resources/ShaderLibrary.h"
 #include "Platform/OpenGL/Resources/OpenGLTexture.h"
 #include "Platform/OpenGL/Passes/IBL/OpenGLIBLPass.h"
 #include "Platform/OpenGL/Passes/Shadows/OpenGLShadowPass.h"
@@ -56,6 +57,7 @@ float deltaTime = 0.0f;
 float lastFrame = 0.0f;
 float fpsTimer = 0.0f;
 int frameCount = 0;
+float shaderReloadTimer = 0.0f;   // throttles the shader hot-reload mtime poll
 
 static void framebufferSizeCallback(GLFWwindow*, int w, int h) { glViewport(0, 0, w, h); }
 
@@ -130,63 +132,29 @@ int main()
     glEnable(GL_TEXTURE_CUBE_MAP_SEAMLESS);
 
     // --- Shaders ---
-    OpenGLShader gbufferShader(
-        ENGINE_SHADERS_DIR "/Deferred/gbuffer.vert",
-        ENGINE_SHADERS_DIR "/Deferred/gbuffer.frag");
-    // Skinned variant — same fragment stage, GPU vertex skinning.
-    OpenGLShader gbufferSkinnedShader(
-        ENGINE_SHADERS_DIR "/Deferred/gbuffer_skinned.vert",
-        ENGINE_SHADERS_DIR "/Deferred/gbuffer.frag");
-    OpenGLShader ssaoShader(
-        ENGINE_SHADERS_DIR "/Deferred/quad.vert",
-        ENGINE_SHADERS_DIR "/Deferred/ssao.frag");
-    OpenGLShader ssaoBlurShader(
-        ENGINE_SHADERS_DIR "/Deferred/quad.vert",
-        ENGINE_SHADERS_DIR "/Deferred/ssao_blur.frag");
-    OpenGLShader lightingShader(
-        ENGINE_SHADERS_DIR "/Deferred/quad.vert",
-        ENGINE_SHADERS_DIR "/Deferred/lighting.frag");
-    OpenGLShader equirectShader(
-        ENGINE_SHADERS_DIR "/IBL/cubemap.vert",
-        ENGINE_SHADERS_DIR "/IBL/equirect_to_cubemap.frag");
-    OpenGLShader irradianceShader(
-        ENGINE_SHADERS_DIR "/IBL/cubemap.vert",
-        ENGINE_SHADERS_DIR "/IBL/irradiance.frag");
-    OpenGLShader prefilterShader(
-        ENGINE_SHADERS_DIR "/IBL/cubemap.vert",
-        ENGINE_SHADERS_DIR "/IBL/prefilter.frag");
-    OpenGLShader brdfShader(
-        ENGINE_SHADERS_DIR "/IBL/brdf.vert",
-        ENGINE_SHADERS_DIR "/IBL/brdf.frag");
-    OpenGLShader backgroundShader(
-        ENGINE_SHADERS_DIR "/IBL/background.vert",
-        ENGINE_SHADERS_DIR "/IBL/background.frag");
-    OpenGLShader blurShader(
-        ENGINE_SHADERS_DIR "/Bloom/blur.vert",
-        ENGINE_SHADERS_DIR "/Bloom/blur.frag");
-    OpenGLShader bloomFinalShader(
-        ENGINE_SHADERS_DIR "/Bloom/bloomfinal.vert",
-        ENGINE_SHADERS_DIR "/Bloom/bloomfinal.frag");
-    OpenGLShader fxaaShader(
-        ENGINE_SHADERS_DIR "/PostProcess/tonemap.vert",
-        ENGINE_SHADERS_DIR "/PostProcess/fxaa.frag");
-    OpenGLShader depthShader(
-        ENGINE_SHADERS_DIR "/Shadows/depth.vert",
-        ENGINE_SHADERS_DIR "/Shadows/depth.frag");
-    OpenGLShader depthSkinnedShader(
-        ENGINE_SHADERS_DIR "/Shadows/depth_skinned.vert",
-        ENGINE_SHADERS_DIR "/Shadows/depth.frag");
-    OpenGLShader pointDepthShader(
-        ENGINE_SHADERS_DIR "/Shadows/point_depth.vert",
-        ENGINE_SHADERS_DIR "/Shadows/point_depth.geom",
-        ENGINE_SHADERS_DIR "/Shadows/point_depth.frag");
-    OpenGLShader pointDepthSkinnedShader(
-        ENGINE_SHADERS_DIR "/Shadows/point_depth_skinned.vert",
-        ENGINE_SHADERS_DIR "/Shadows/point_depth.geom",
-        ENGINE_SHADERS_DIR "/Shadows/point_depth.frag");
-    OpenGLShader transparencyShader(
-        ENGINE_SHADERS_DIR "/Forward/transparent.vert",
-        ENGINE_SHADERS_DIR "/Forward/transparent.frag");
+    // Registered by name in a library that owns them and supports hot-reload.
+    // Each alias below is a reference into the library, so the rest of the frame
+    // code is unchanged and a reload (which swaps the program in place) is picked
+    // up automatically. Skinned variants share a fragment stage with GPU skinning.
+    Diamond::ShaderLibrary shaders;
+    auto& gbufferShader            = shaders.Load("gbuffer",             ENGINE_SHADERS_DIR "/Deferred/gbuffer.vert",            ENGINE_SHADERS_DIR "/Deferred/gbuffer.frag");
+    auto& gbufferSkinnedShader     = shaders.Load("gbufferSkinned",      ENGINE_SHADERS_DIR "/Deferred/gbuffer_skinned.vert",    ENGINE_SHADERS_DIR "/Deferred/gbuffer.frag");
+    auto& ssaoShader               = shaders.Load("ssao",                ENGINE_SHADERS_DIR "/Deferred/quad.vert",               ENGINE_SHADERS_DIR "/Deferred/ssao.frag");
+    auto& ssaoBlurShader           = shaders.Load("ssaoBlur",            ENGINE_SHADERS_DIR "/Deferred/quad.vert",               ENGINE_SHADERS_DIR "/Deferred/ssao_blur.frag");
+    auto& lightingShader           = shaders.Load("lighting",            ENGINE_SHADERS_DIR "/Deferred/quad.vert",               ENGINE_SHADERS_DIR "/Deferred/lighting.frag");
+    auto& equirectShader           = shaders.Load("equirect",            ENGINE_SHADERS_DIR "/IBL/cubemap.vert",                 ENGINE_SHADERS_DIR "/IBL/equirect_to_cubemap.frag");
+    auto& irradianceShader         = shaders.Load("irradiance",          ENGINE_SHADERS_DIR "/IBL/cubemap.vert",                 ENGINE_SHADERS_DIR "/IBL/irradiance.frag");
+    auto& prefilterShader          = shaders.Load("prefilter",           ENGINE_SHADERS_DIR "/IBL/cubemap.vert",                 ENGINE_SHADERS_DIR "/IBL/prefilter.frag");
+    auto& brdfShader               = shaders.Load("brdf",                ENGINE_SHADERS_DIR "/IBL/brdf.vert",                    ENGINE_SHADERS_DIR "/IBL/brdf.frag");
+    auto& backgroundShader         = shaders.Load("background",          ENGINE_SHADERS_DIR "/IBL/background.vert",              ENGINE_SHADERS_DIR "/IBL/background.frag");
+    auto& blurShader               = shaders.Load("blur",                ENGINE_SHADERS_DIR "/Bloom/blur.vert",                  ENGINE_SHADERS_DIR "/Bloom/blur.frag");
+    auto& bloomFinalShader         = shaders.Load("bloomFinal",          ENGINE_SHADERS_DIR "/Bloom/bloomfinal.vert",            ENGINE_SHADERS_DIR "/Bloom/bloomfinal.frag");
+    auto& fxaaShader               = shaders.Load("fxaa",                ENGINE_SHADERS_DIR "/PostProcess/tonemap.vert",         ENGINE_SHADERS_DIR "/PostProcess/fxaa.frag");
+    auto& depthShader              = shaders.Load("depth",               ENGINE_SHADERS_DIR "/Shadows/depth.vert",               ENGINE_SHADERS_DIR "/Shadows/depth.frag");
+    auto& depthSkinnedShader       = shaders.Load("depthSkinned",        ENGINE_SHADERS_DIR "/Shadows/depth_skinned.vert",       ENGINE_SHADERS_DIR "/Shadows/depth.frag");
+    auto& pointDepthShader         = shaders.Load("pointDepth",          ENGINE_SHADERS_DIR "/Shadows/point_depth.vert",         ENGINE_SHADERS_DIR "/Shadows/point_depth.geom", ENGINE_SHADERS_DIR "/Shadows/point_depth.frag");
+    auto& pointDepthSkinnedShader  = shaders.Load("pointDepthSkinned",   ENGINE_SHADERS_DIR "/Shadows/point_depth_skinned.vert", ENGINE_SHADERS_DIR "/Shadows/point_depth.geom", ENGINE_SHADERS_DIR "/Shadows/point_depth.frag");
+    auto& transparencyShader       = shaders.Load("transparency",        ENGINE_SHADERS_DIR "/Forward/transparent.vert",         ENGINE_SHADERS_DIR "/Forward/transparent.frag");
 
     // --- Pass objects ---
     OpenGLIBLPass              iblPass;
@@ -629,6 +597,18 @@ int main()
         float now   = static_cast<float>(glfwGetTime());
         g_deltaTime = now - g_lastFrame;
         g_lastFrame = now;
+
+        // Shader hot-reload: F5 force-recompiles everything; otherwise poll source
+        // file mtimes a couple times a second and reload whatever changed on disk.
+        if (Input::IsKeyPressed(Key::F5)) {
+            shaders.ReloadAll();
+        } else {
+            shaderReloadTimer += deltaTime;
+            if (shaderReloadTimer >= 0.5f) {
+                shaders.ReloadChanged();
+                shaderReloadTimer = 0.0f;
+            }
+        }
 
         processInput(window);
 
