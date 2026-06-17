@@ -1,0 +1,10 @@
+{
+    "albedoPath": "C:/Dev/DiamondEngine\\Assets\\Models\\cut-fish\\textures\\Fish_Albedo.png",
+    "aoPath": "C:/Dev/DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\DiamondPlate006C_2K-PNG_AmbientOcclusion.png",
+    "emissivePath": "",
+    "emissiveStrength": 0.0,
+    "metallicPath": "C:/Dev/DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\DiamondPlate006C_2K-PNG_Metalness.png",
+    "normalPath": "C:/Dev/DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\DiamondPlate006C_2K-PNG_NormalDX.png",
+    "roughnessPath": "C:/Dev/DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\DiamondPlate006C_2K-PNG_Roughness.png",
+    "uvScale": 1.0
+}

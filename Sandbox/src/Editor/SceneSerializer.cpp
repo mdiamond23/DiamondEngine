@@ -13,6 +13,7 @@
 #include "Animation/AnimationComponents.h"
 #include "PhysicsMaterialAsset.h"
 #include "AnimStateMachineAsset.h"
+#include "MaterialAsset.h"
 #include "Assets/ImageLoader.h"
 #include "Renderer/MeshData.h"
 #include "Renderer/TextureData.h"
@@ -98,7 +99,9 @@ static json ToJson(Scene& scene)
                 { "castsShadow",     mc.castsShadow     },
                 { "receivesShadow",  mc.receivesShadow  }
             };
-            if (mc.material) {
+            // Inline material is only serialized when the mesh has no .mat asset;
+            // an asset-backed material lives in its own file, referenced by path.
+            if (mc.materialPath.empty() && mc.material) {
                 mj["albedoPath"]       = mc.material->AlbedoPath;
                 mj["normalPath"]       = mc.material->NormalPath;
                 mj["metallicPath"]     = mc.material->MetallicPath;
@@ -326,27 +329,39 @@ static bool FromJson(Scene& scene, const json& root)
                 }
             }
 
-            auto mat = std::make_shared<PBRMaterial>();
-            mat->AlbedoPath       = mj.value("albedoPath",       "");
-            mat->NormalPath       = mj.value("normalPath",       "");
-            mat->MetallicPath     = mj.value("metallicPath",     "");
-            mat->RoughnessPath    = mj.value("roughnessPath",    "");
-            mat->AOPath           = mj.value("aoPath",           "");
-            mat->EmissivePath     = mj.value("emissivePath",     "");
-            mat->EmissiveStrength = mj.value("emissiveStrength", 0.0f);
-            mat->UVScale          = mj.value("uvScale",          1.0f);
+            std::string materialPath = mj.value("materialPath", "");
 
-            mat->Albedo    = LoadCached(mat->AlbedoPath,    texCache);
-            mat->Normal    = LoadCached(mat->NormalPath,    texCache);
-            mat->Metallic  = LoadCached(mat->MetallicPath,  texCache);
-            mat->Roughness = LoadCached(mat->RoughnessPath, texCache);
-            mat->AO        = LoadCached(mat->AOPath,        texCache);
-            mat->Emissive  = LoadCached(mat->EmissivePath,  texCache);
+            std::shared_ptr<PBRMaterial> mat;
+            if (!materialPath.empty()) {
+                // Asset-backed: shared instance from the material library. Falls back
+                // to an empty material if the .mat is missing so the mesh still draws.
+                materialPath = NormalizeMaterialPath(materialPath);
+                mat = MaterialLibrary::Get(materialPath);
+                if (!mat) mat = std::make_shared<PBRMaterial>();
+            } else {
+                // Inline: material stored directly in the scene (legacy / default).
+                mat = std::make_shared<PBRMaterial>();
+                mat->AlbedoPath       = mj.value("albedoPath",       "");
+                mat->NormalPath       = mj.value("normalPath",       "");
+                mat->MetallicPath     = mj.value("metallicPath",     "");
+                mat->RoughnessPath    = mj.value("roughnessPath",    "");
+                mat->AOPath           = mj.value("aoPath",           "");
+                mat->EmissivePath     = mj.value("emissivePath",     "");
+                mat->EmissiveStrength = mj.value("emissiveStrength", 0.0f);
+                mat->UVScale          = mj.value("uvScale",          1.0f);
+
+                mat->Albedo    = LoadCached(mat->AlbedoPath,    texCache);
+                mat->Normal    = LoadCached(mat->NormalPath,    texCache);
+                mat->Metallic  = LoadCached(mat->MetallicPath,  texCache);
+                mat->Roughness = LoadCached(mat->RoughnessPath, texCache);
+                mat->AO        = LoadCached(mat->AOPath,        texCache);
+                mat->Emissive  = LoadCached(mat->EmissivePath,  texCache);
+            }
 
             auto& mc          = reg.emplace<MeshComponent>(e, mesh, mat, bounds);
             mc.meshPath       = mpath;
             mc.meshSubIndex   = subIdx;
-            mc.materialPath   = mj.value("materialPath",   "");
+            mc.materialPath   = materialPath;
             mc.visible        = mj.value("visible",        true);
             mc.castsShadow    = mj.value("castsShadow",    true);
             mc.receivesShadow = mj.value("receivesShadow", true);

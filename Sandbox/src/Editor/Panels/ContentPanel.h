@@ -36,6 +36,10 @@ public:
     // Returns 0 if the path is empty, the asset type has no preview, or loading fails.
     uint32_t GetThumbnail(const std::string& path, AssetType type);
 
+    // Drops the cached thumbnail for an asset so it re-renders next frame — used
+    // when a material is edited so its preview ball reflects the change.
+    void InvalidateThumbnail(const std::string& path);
+
 private:
     void DrawToolbar();
     void DrawItems();

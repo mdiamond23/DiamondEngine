@@ -1,6 +1,7 @@
 #include "ContentPanel.h"
 #include "../PhysicsMaterialAsset.h"
 #include "../AnimStateMachineAsset.h"
+#include "../MaterialAsset.h"
 #include <imgui.h>
 
 #ifndef ASSETS_DIR
@@ -222,6 +223,10 @@ uint32_t ContentPanel::LoadThumbnail(const fs::path& p, AssetType type) {
         auto meshes = Diamond::ModelImporter::Load(key);
         if (meshes.empty()) { m_FailedPaths.insert(key); return 0; }
         texID = m_MeshRenderer.Render(meshes);
+    } else if (type == AssetType::Material) {
+        auto mat = LoadMaterialAsset(key);
+        if (!mat) { m_FailedPaths.insert(key); return 0; }
+        texID = m_MeshRenderer.RenderMaterial(*mat);
     }
 
     if (!texID) { m_FailedPaths.insert(key); return 0; }
@@ -232,6 +237,21 @@ uint32_t ContentPanel::LoadThumbnail(const fs::path& p, AssetType type) {
 uint32_t ContentPanel::GetThumbnail(const std::string& path, AssetType type) {
     if (path.empty()) return 0;
     return LoadThumbnail(fs::path(path), type);
+}
+
+void ContentPanel::InvalidateThumbnail(const std::string& path) {
+    // Match tolerantly on the normalized path (slash direction may differ between
+    // the cache key and the caller's stored path).
+    std::string target = fs::path(path).make_preferred().string();
+    for (auto it = m_ThumbnailCache.begin(); it != m_ThumbnailCache.end(); ) {
+        if (fs::path(it->first).make_preferred().string() == target) {
+            glDeleteTextures(1, &it->second);
+            it = m_ThumbnailCache.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    m_FailedPaths.erase(target);
 }
 
 void ContentPanel::DrawFolderIcon(ImVec2 tl, float size, bool highlighted) {
@@ -462,7 +482,7 @@ void ContentPanel::DrawItems() {
 
         uint32_t thumbID = 0;
         if (item.type == AssetType::Texture || item.type == AssetType::Mesh ||
-            item.type == AssetType::SkinnedMesh) {
+            item.type == AssetType::SkinnedMesh || item.type == AssetType::Material) {
             std::string key = ToUtf8(item.path);
             auto cit = m_ThumbnailCache.find(key);
             if (cit != m_ThumbnailCache.end())
@@ -550,7 +570,8 @@ void ContentPanel::DrawItems() {
                                          item.type == AssetType::SkinnedMesh ||
                                          item.type == AssetType::Texture ||
                                          item.type == AssetType::PhysicsMat ||
-                                         item.type == AssetType::AnimSM);
+                                         item.type == AssetType::AnimSM ||
+                                         item.type == AssetType::Material);
             const char* payloadType = isInspectorDraggable ? "CONTENT_ITEM_PATH"
                                                             : "CONTENT_MOVE";
             ImGui::SetDragDropPayload(payloadType, pathStr.c_str(), pathStr.size() + 1);
@@ -681,6 +702,13 @@ void ContentPanel::OnImGuiRender() {
             fs::path p = base; p += ".physmat";
             for (int n = 1; fs::exists(p); ++n) { p = base; p += " (" + std::to_string(n) + ").physmat"; }
             SavePhysicsMaterial(ToUtf8(p), PhysicsMaterial{});
+            Refresh();
+        }
+        if (ImGui::MenuItem("New Material")) {
+            fs::path base = m_CurrentPath / "NewMaterial";
+            fs::path p = base; p += ".mat";
+            for (int n = 1; fs::exists(p); ++n) { p = base; p += " (" + std::to_string(n) + ").mat"; }
+            SaveMaterialAsset(ToUtf8(p), Diamond::PBRMaterial{});
             Refresh();
         }
         if (ImGui::MenuItem("New Animation State Machine")) {

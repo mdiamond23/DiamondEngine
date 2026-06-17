@@ -3,6 +3,7 @@
 #include "../Command.h"
 #include "../PhysicsMaterialAsset.h"
 #include "../AnimStateMachineAsset.h"
+#include "../MaterialAsset.h"
 #include <imgui.h>
 #include <imgui_internal.h>   // ImGuiItemFlags_MixedValue for tri-state checkboxes
 #include <glm/gtc/type_ptr.hpp>
@@ -610,32 +611,92 @@ void InspectorPanel::OnImGuiRender() {
             if (!mc.material)
                 mc.material = std::make_shared<PBRMaterial>();
 
+            // Asset slot: drag a .mat to share a reusable material across meshes
+            // (edits write through + save to the file). "Save as .mat" bottles the
+            // current inline material; "Detach" makes a private inline copy again.
+            bool assetBacked = !mc.materialPath.empty();
+            {
+                std::string disp = assetBacked
+                    ? std::filesystem::path(mc.materialPath).filename().string()
+                    : "None (inline)";
+                ImGui::Button(disp.c_str(), { ImGui::GetContentRegionAvail().x, 0 });
+                if (ImGui::BeginDragDropTarget()) {
+                    if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload("CONTENT_ITEM_PATH")) {
+                        std::string path((const char*)p->Data);
+                        if (LowerExtOf(path) == ".mat") {
+                            std::string norm = NormalizeMaterialPath(path);
+                            if (auto shared = MaterialLibrary::Get(norm)) {
+                                mc.materialPath = norm;
+                                mc.material     = shared;   // asset replaces the inline material
+                                assetBacked     = true;
+                            }
+                        }
+                    }
+                    ImGui::EndDragDropTarget();
+                }
+
+                if (assetBacked) {
+                    if (ImGui::SmallButton("Detach to inline")) {
+                        mc.material = std::make_shared<PBRMaterial>(*mc.material); // private copy
+                        mc.materialPath.clear();
+                        assetBacked = false;
+                    }
+                } else if (ImGui::SmallButton("Save as .mat")) {
+                    namespace fs = std::filesystem;
+                    fs::path dir  = m_ContentPanel ? m_ContentPanel->GetCurrentPath() : fs::path(ASSETS_DIR);
+                    fs::path base = dir / "NewMaterial";
+                    fs::path p = base; p += ".mat";
+                    for (int n = 1; fs::exists(p); ++n) { p = base; p += " (" + std::to_string(n) + ").mat"; }
+                    std::string np = p.make_preferred().string();
+                    if (SaveMaterialAsset(np, *mc.material)) {
+                        mc.materialPath = np;
+                        mc.material     = MaterialLibrary::Get(np);   // share the new asset
+                        assetBacked     = true;
+                        if (m_ContentPanel) m_ContentPanel->Refresh();
+                    }
+                }
+            }
+
+            // For asset-backed materials, edits write through to the shared instance
+            // (updating every mesh using it) and we re-save the .mat once on release.
+            // Inline materials keep the undo-tracked, saved-with-scene behavior.
+            bool matDirty = false;
+
             ImGui::DragFloat("UV Scale", &mc.material->UVScale, 0.01f, 0.01f, 64.0f);
-            if (ImGui::IsItemActivated())   m_OldUVScale = mc.material->UVScale;
-            if (ImGui::IsItemDeactivatedAfterEdit()) {
-                float newVal = mc.material->UVScale, oldVal = m_OldUVScale;
-                m_Context->Commands.ExecuteCommand(std::make_unique<FunctionCommand>(
-                    [scene, entity, newVal]() { scene->GetRegistry().get<MeshComponent>(entity).material->UVScale = newVal; },
-                    [scene, entity, oldVal]() { scene->GetRegistry().get<MeshComponent>(entity).material->UVScale = oldVal; },
-                    "Change UV Scale"));
+            if (assetBacked) {
+                if (ImGui::IsItemDeactivatedAfterEdit()) matDirty = true;
+            } else {
+                if (ImGui::IsItemActivated())   m_OldUVScale = mc.material->UVScale;
+                if (ImGui::IsItemDeactivatedAfterEdit()) {
+                    float newVal = mc.material->UVScale, oldVal = m_OldUVScale;
+                    m_Context->Commands.ExecuteCommand(std::make_unique<FunctionCommand>(
+                        [scene, entity, newVal]() { scene->GetRegistry().get<MeshComponent>(entity).material->UVScale = newVal; },
+                        [scene, entity, oldVal]() { scene->GetRegistry().get<MeshComponent>(entity).material->UVScale = oldVal; },
+                        "Change UV Scale"));
+                }
             }
 
             ImGui::DragFloat("Emissive Strength", &mc.material->EmissiveStrength, 0.01f, 0.0f, 100.0f);
-            if (ImGui::IsItemActivated())   m_OldEmissiveStrength = mc.material->EmissiveStrength;
-            if (ImGui::IsItemDeactivatedAfterEdit()) {
-                float newVal = mc.material->EmissiveStrength, oldVal = m_OldEmissiveStrength;
-                m_Context->Commands.ExecuteCommand(std::make_unique<FunctionCommand>(
-                    [scene, entity, newVal]() { scene->GetRegistry().get<MeshComponent>(entity).material->EmissiveStrength = newVal; },
-                    [scene, entity, oldVal]() { scene->GetRegistry().get<MeshComponent>(entity).material->EmissiveStrength = oldVal; },
-                    "Change Emissive Strength"));
+            if (assetBacked) {
+                if (ImGui::IsItemDeactivatedAfterEdit()) matDirty = true;
+            } else {
+                if (ImGui::IsItemActivated())   m_OldEmissiveStrength = mc.material->EmissiveStrength;
+                if (ImGui::IsItemDeactivatedAfterEdit()) {
+                    float newVal = mc.material->EmissiveStrength, oldVal = m_OldEmissiveStrength;
+                    m_Context->Commands.ExecuteCommand(std::make_unique<FunctionCommand>(
+                        [scene, entity, newVal]() { scene->GetRegistry().get<MeshComponent>(entity).material->EmissiveStrength = newVal; },
+                        [scene, entity, oldVal]() { scene->GetRegistry().get<MeshComponent>(entity).material->EmissiveStrength = oldVal; },
+                        "Change Emissive Strength"));
+                }
             }
 
             ImGui::Spacing();
             ImGui::TextDisabled("Textures");
             ImGui::Separator();
 
-            // Helper: draw a texture row and submit an undo command if it changed.
-            // Uses pointer-to-member so all 6 slots share one lambda body.
+            // Helper: draw a texture row. For asset materials the swap is already
+            // applied to the shared instance (just mark dirty); for inline materials
+            // record an undo command. Pointer-to-member keeps all 6 slots one body.
             using TexMem  = std::shared_ptr<Texture> PBRMaterial::*;
             using PathMem = std::string              PBRMaterial::*;
             auto texRow = [&](const char* label,
@@ -643,6 +704,7 @@ void InspectorPanel::OnImGuiRender() {
                                TexMem tm, PathMem pm, const char* desc) {
                 auto r = DrawTextureRow(label, texPtr, texPath, m_ContentPanel);
                 if (!r.changed) return;
+                if (assetBacked) { matDirty = true; return; }
                 auto ot = r.oldTex, nt = texPtr;
                 auto op = r.oldPath, np = texPath;
                 m_Context->Commands.RecordCommand(std::make_unique<FunctionCommand>(
@@ -663,6 +725,13 @@ void InspectorPanel::OnImGuiRender() {
             texRow("Roughness", mc.material->Roughness, mc.material->RoughnessPath, &PBRMaterial::Roughness, &PBRMaterial::RoughnessPath, "Change Roughness Texture");
             texRow("AO",        mc.material->AO,        mc.material->AOPath,        &PBRMaterial::AO,        &PBRMaterial::AOPath,        "Change AO Texture");
             texRow("Emissive",  mc.material->Emissive,  mc.material->EmissivePath,  &PBRMaterial::Emissive,  &PBRMaterial::EmissivePath,  "Change Emissive Texture");
+
+            // Persist edits to the .mat once per release (asset-backed only) and
+            // refresh its content-browser preview.
+            if (assetBacked && matDirty) {
+                SaveMaterialAsset(mc.materialPath, *mc.material);
+                if (m_ContentPanel) m_ContentPanel->InvalidateThumbnail(mc.materialPath);
+            }
         }
     }
 

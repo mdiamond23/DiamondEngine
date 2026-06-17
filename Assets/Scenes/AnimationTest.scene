@@ -2,19 +2,11 @@
   "entities": [
     {
       "mesh": {
-        "albedoPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Color.png",
-        "aoPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_AmbientOcclusion.png",
         "castsShadow": true,
-        "emissivePath": "",
-        "emissiveStrength": 0.0,
-        "materialPath": "",
+        "materialPath": "C:\\Dev\\DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\Diamond.mat",
         "meshPath": "__sphere",
         "meshSubIndex": 0,
-        "metallicPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Metalness.png",
-        "normalPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_NormalGL.png",
         "receivesShadow": true,
-        "roughnessPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Roughness.png",
-        "uvScale": 1.0,
         "visible": true
       },
       "name": "Sphere",
@@ -45,19 +37,11 @@
     },
     {
       "mesh": {
-        "albedoPath": "C:/Dev/DiamondEngine/Assets/Materials/Lava004_2K-PNG/Lava004_2K-PNG_Color.png",
-        "aoPath": "",
         "castsShadow": true,
-        "emissivePath": "C:/Dev/DiamondEngine/Assets/Materials/Lava004_2K-PNG/Lava004_2K-PNG_Emission.png",
-        "emissiveStrength": 2.5,
-        "materialPath": "",
+        "materialPath": "C:\\Dev\\DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\Lava.mat",
         "meshPath": "__cube",
         "meshSubIndex": 0,
-        "metallicPath": "",
-        "normalPath": "C:/Dev/DiamondEngine/Assets/Materials/Lava004_2K-PNG/Lava004_2K-PNG_NormalGL.png",
         "receivesShadow": true,
-        "roughnessPath": "C:/Dev/DiamondEngine/Assets/Materials/Lava004_2K-PNG/Lava004_2K-PNG_Roughness.png",
-        "uvScale": 5.0,
         "visible": true
       },
       "name": "Floor",
@@ -88,19 +72,11 @@
     },
     {
       "mesh": {
-        "albedoPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Color.png",
-        "aoPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_AmbientOcclusion.png",
         "castsShadow": true,
-        "emissivePath": "",
-        "emissiveStrength": 0.0,
-        "materialPath": "",
+        "materialPath": "C:\\Dev\\DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\Diamond.mat",
         "meshPath": "__cube",
         "meshSubIndex": 0,
-        "metallicPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Metalness.png",
-        "normalPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_NormalGL.png",
         "receivesShadow": true,
-        "roughnessPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Roughness.png",
-        "uvScale": 1.0,
         "visible": true
       },
       "name": "Cube 1",
@@ -131,19 +107,11 @@
     },
     {
       "mesh": {
-        "albedoPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Color.png",
-        "aoPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_AmbientOcclusion.png",
         "castsShadow": true,
-        "emissivePath": "",
-        "emissiveStrength": 0.0,
-        "materialPath": "",
+        "materialPath": "C:\\Dev\\DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\Diamond.mat",
         "meshPath": "__cube",
         "meshSubIndex": 0,
-        "metallicPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Metalness.png",
-        "normalPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_NormalGL.png",
         "receivesShadow": true,
-        "roughnessPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Roughness.png",
-        "uvScale": 1.0,
         "visible": true
       },
       "name": "Cube 2",
@@ -174,19 +142,11 @@
     },
     {
       "mesh": {
-        "albedoPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Color.png",
-        "aoPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_AmbientOcclusion.png",
         "castsShadow": true,
-        "emissivePath": "",
-        "emissiveStrength": 0.0,
-        "materialPath": "",
+        "materialPath": "C:\\Dev\\DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\Diamond.mat",
         "meshPath": "__cube",
         "meshSubIndex": 0,
-        "metallicPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Metalness.png",
-        "normalPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_NormalGL.png",
         "receivesShadow": true,
-        "roughnessPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Roughness.png",
-        "uvScale": 1.0,
         "visible": true
       },
       "name": "Cube 3",
@@ -217,19 +177,11 @@
     },
     {
       "mesh": {
-        "albedoPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Color.png",
-        "aoPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_AmbientOcclusion.png",
         "castsShadow": true,
-        "emissivePath": "",
-        "emissiveStrength": 0.0,
-        "materialPath": "",
+        "materialPath": "C:\\Dev\\DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\Diamond.mat",
         "meshPath": "__cube",
         "meshSubIndex": 0,
-        "metallicPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Metalness.png",
-        "normalPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_NormalGL.png",
         "receivesShadow": true,
-        "roughnessPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Roughness.png",
-        "uvScale": 1.0,
         "visible": true
       },
       "name": "Cube 4",
@@ -260,19 +212,11 @@
     },
     {
       "mesh": {
-        "albedoPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Color.png",
-        "aoPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_AmbientOcclusion.png",
         "castsShadow": true,
-        "emissivePath": "",
-        "emissiveStrength": 0.0,
-        "materialPath": "",
+        "materialPath": "C:\\Dev\\DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\Diamond.mat",
         "meshPath": "__cube",
         "meshSubIndex": 0,
-        "metallicPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Metalness.png",
-        "normalPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_NormalGL.png",
         "receivesShadow": true,
-        "roughnessPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Roughness.png",
-        "uvScale": 1.0,
         "visible": true
       },
       "name": "Cube 5",
@@ -303,19 +247,11 @@
     },
     {
       "mesh": {
-        "albedoPath": "C:/Dev/DiamondEngine/Assets/Models/Cerberus_by_Andrew_Maximov/Textures/Cerberus_A.tga",
-        "aoPath": "",
         "castsShadow": true,
-        "emissivePath": "",
-        "emissiveStrength": 0.0,
-        "materialPath": "",
+        "materialPath": "C:\\Dev\\DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\Diamond.mat",
         "meshPath": "C:/Dev/DiamondEngine/Assets/Models/Cerberus_by_Andrew_Maximov/Revolver.FBX",
         "meshSubIndex": 0,
-        "metallicPath": "C:/Dev/DiamondEngine/Assets/Models/Cerberus_by_Andrew_Maximov/Textures/Cerberus_M.tga",
-        "normalPath": "C:/Dev/DiamondEngine/Assets/Models/Cerberus_by_Andrew_Maximov/Textures/Cerberus_N.tga",
         "receivesShadow": true,
-        "roughnessPath": "C:/Dev/DiamondEngine/Assets/Models/Cerberus_by_Andrew_Maximov/Textures/Cerberus_R.tga",
-        "uvScale": 1.0,
         "visible": true
       },
       "name": "Cerberus 0",
@@ -585,6 +521,41 @@
         ]
       },
       "uuid": 15291859468091810879
+    },
+    {
+      "mesh": {
+        "castsShadow": true,
+        "materialPath": "C:\\Dev\\DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\Diamond.mat",
+        "meshPath": "__cube",
+        "meshSubIndex": 0,
+        "receivesShadow": true,
+        "visible": true
+      },
+      "name": "Empty Entity",
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          -0.0,
+          0.0
+        ],
+        "position": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 10785194871769030952
     }
   ]
 }
