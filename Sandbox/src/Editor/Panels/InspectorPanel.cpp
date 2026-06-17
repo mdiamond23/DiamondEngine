@@ -12,6 +12,7 @@
 #include "Scene/Physics/Rigidbody.h"
 #include "Scene/Physics/Constraint.h"
 #include "Assets/ModelImporter.h"
+#include "Assets/GltfImporter.h"
 #include "Renderer/MeshData.h"
 #include "Renderer/TextureData.h"
 #include <algorithm>
@@ -41,6 +42,11 @@ static std::string LowerExtOf(const std::string& path) {
 static bool IsMeshPath(const std::string& p) {
     std::string e = LowerExtOf(p);
     return e == ".obj" || e == ".fbx" || e == ".gltf" || e == ".glb";
+}
+
+static bool IsSkinnedMeshPath(const std::string& p) {
+    std::string e = LowerExtOf(p);
+    return e == ".gltf" || e == ".glb";   // rigged-character format (cgltf path)
 }
 
 static bool IsTexturePath(const std::string& p) {
@@ -124,6 +130,89 @@ static MeshSlotChange DrawMeshSlot(MeshComponent& mc, ContentPanel* cp) {
                     mc.meshSubIndex = 0;
                     if (!mc.material)
                         mc.material = std::make_shared<PBRMaterial>();
+
+                    result.changed = true;
+                }
+            }
+        }
+        ImGui::EndDragDropTarget();
+    }
+
+    return result;
+}
+
+// ---- skinned mesh slot ------------------------------------------------------
+// Same bordered box as the mesh slot, but accepts only rigged glTF/GLB. On a
+// valid drop it runs the full cgltf import (geometry + skeleton + clips) and
+// repopulates `smc`. Returns a copy of the pre-drop component so the caller can
+// bracket the change in one undo command (the component is heavyweight but
+// trivially copyable — vectors of shared_ptr, the skeleton, and the clips).
+
+struct SkinnedSlotChange {
+    bool                 changed = false;
+    SkinnedMeshComponent oldComp;
+};
+
+static SkinnedSlotChange DrawSkinnedMeshSlot(SkinnedMeshComponent& smc, ContentPanel* cp) {
+    SkinnedSlotChange result;
+
+    float   avail  = ImGui::GetContentRegionAvail().x;
+    float   slotH  = 54.0f;
+    ImVec2  origin = ImGui::GetCursorScreenPos();
+
+    ImGui::InvisibleButton("##skinnedslot", {avail, slotH});
+    bool hov = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
+
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->AddRect(origin, {origin.x + avail, origin.y + slotH},
+                hov ? IM_COL32(80, 215, 205, 200) : IM_COL32(65, 65, 65, 255), 4.0f);
+
+    float   thumbSz = slotH - 6.0f;
+    ImVec2  tMin    = {origin.x + 3.0f, origin.y + 3.0f};
+    ImVec2  tMax    = {tMin.x + thumbSz, tMin.y + thumbSz};
+
+    uint32_t thumbID = (cp && !smc.meshPath.empty())
+                       ? cp->GetThumbnail(smc.meshPath, AssetType::SkinnedMesh)
+                       : 0;
+    if (thumbID)
+        dl->AddImage((ImTextureID)(uintptr_t)thumbID, tMin, tMax);
+    else
+        dl->AddRectFilled(tMin, tMax, IM_COL32(40, 40, 40, 220), 3.0f);
+
+    float lineH = ImGui::GetTextLineHeight();
+    float tx    = tMax.x + 6.0f;
+    float ty    = origin.y + (slotH * 0.5f) - lineH - 1.0f;
+
+    std::string meshName = smc.meshPath.empty() ? "None" : Basename(smc.meshPath);
+    dl->AddText({tx, ty},
+                smc.meshPath.empty() ? IM_COL32(100, 100, 100, 255) : IM_COL32(220, 220, 220, 255),
+                meshName.c_str());
+    dl->AddText({tx, ty + lineH + 2.0f},
+                smc.meshPath.empty() ? IM_COL32(70, 70, 70, 255) : IM_COL32(95, 95, 95, 255),
+                smc.meshPath.empty() ? "Drop a rigged .gltf / .glb here" : smc.meshPath.c_str());
+
+    if (ImGui::BeginDragDropTarget()) {
+        if (auto* payload = ImGui::AcceptDragDropPayload("CONTENT_ITEM_PATH")) {
+            std::string path((const char*)payload->Data);
+            if (IsSkinnedMeshPath(path)) {
+                ImportedModel model = GltfImporter::LoadModel(path);
+                if (!model.skeleton.bones.empty() && !model.meshes.empty()) {
+                    result.oldComp = smc;   // snapshot for undo
+
+                    smc.meshes.clear();
+                    AABB bounds;
+                    for (auto& md : model.meshes) {
+                        smc.meshes.push_back(Mesh::Create(md));
+                        AABB b     = md.ComputeAABB();
+                        bounds.min = glm::min(bounds.min, b.min);
+                        bounds.max = glm::max(bounds.max, b.max);
+                    }
+                    smc.skeleton    = std::move(model.skeleton);
+                    smc.clips       = std::move(model.animations);
+                    smc.localBounds = bounds;
+                    smc.meshPath    = path;
+                    smc.material    = model.material ? model.material
+                                    : (smc.material ? smc.material : std::make_shared<PBRMaterial>());
 
                     result.changed = true;
                 }
@@ -418,12 +507,14 @@ void InspectorPanel::OnImGuiRender() {
         }
     }
 
-    bool removeMesh       = false;
-    bool removeLight      = false;
-    bool removeCamera     = false;
-    bool removeCollider   = false;
-    bool removeRigidbody  = false;
-    bool removeConstraint = false;
+    bool removeMesh        = false;
+    bool removeLight       = false;
+    bool removeCamera      = false;
+    bool removeCollider    = false;
+    bool removeRigidbody   = false;
+    bool removeConstraint  = false;
+    bool removeSkinnedMesh = false;
+    bool removeAnimator    = false;
 
     // Mesh Component
     if (registry.all_of<MeshComponent>(entity)) {
@@ -1149,6 +1240,134 @@ void InspectorPanel::OnImGuiRender() {
         }
     }
 
+    // Skinned Mesh Component
+    if (registry.all_of<SkinnedMeshComponent>(entity)) {
+        ImGui::Separator();
+        auto& smc = registry.get<SkinnedMeshComponent>(entity);
+
+        ImGui::Text("Skinned Mesh");
+        if (ImGui::BeginPopupContextItem("##SkinnedMeshCompCtx")) {
+            if (ImGui::MenuItem("Remove Component")) {
+                m_PendingRemovedSkinnedMesh = smc;
+                removeSkinnedMesh = true;
+            }
+            ImGui::EndPopup();
+        }
+
+        if (!removeSkinnedMesh) {
+            if (ImGui::Checkbox("Visible", &smc.visible)) {
+                bool v = smc.visible;
+                m_Context->Commands.ExecuteCommand(std::make_unique<ValueChangeCommand<bool>>(
+                    [scene, entity](const bool& x) { scene->GetRegistry().get<SkinnedMeshComponent>(entity).visible = x; },
+                    !v, v, "Toggle Visibility"));
+            }
+            ImGui::SameLine();
+            if (ImGui::Checkbox("Cast Shadows", &smc.castsShadow)) {
+                bool v = smc.castsShadow;
+                m_Context->Commands.ExecuteCommand(std::make_unique<ValueChangeCommand<bool>>(
+                    [scene, entity](const bool& x) { scene->GetRegistry().get<SkinnedMeshComponent>(entity).castsShadow = x; },
+                    !v, v, "Toggle Cast Shadows"));
+            }
+
+            ImGui::Spacing();
+            ImGui::TextDisabled("Source");
+            ImGui::Spacing();
+            if (auto r = DrawSkinnedMeshSlot(smc, m_ContentPanel); r.changed) {
+                SkinnedMeshComponent oldComp = r.oldComp;
+                SkinnedMeshComponent newComp = smc;   // post-drop state
+                m_Context->Commands.RecordCommand(std::make_unique<FunctionCommand>(
+                    [scene, entity, newComp]() { scene->GetRegistry().emplace_or_replace<SkinnedMeshComponent>(entity, newComp); },
+                    [scene, entity, oldComp]() { scene->GetRegistry().emplace_or_replace<SkinnedMeshComponent>(entity, oldComp); },
+                    "Change Skinned Mesh"));
+            }
+            ImGui::Spacing();
+            ImGui::Text("%zu bones, %zu submeshes, %zu clips",
+                        smc.skeleton.bones.size(), smc.meshes.size(), smc.clips.size());
+
+            if (!smc.clips.empty()) {
+                ImGui::Spacing();
+                ImGui::TextDisabled("Clips");
+                for (size_t i = 0; i < smc.clips.size(); ++i)
+                    ImGui::BulletText("%zu: %s (%.2fs)", i,
+                                      smc.clips[i].name.empty() ? "(unnamed)" : smc.clips[i].name.c_str(),
+                                      smc.clips[i].duration);
+            }
+        }
+    }
+
+    // Animator Component
+    if (registry.all_of<AnimatorComponent>(entity)) {
+        ImGui::Separator();
+        auto& anim = registry.get<AnimatorComponent>(entity);
+
+        ImGui::Text("Animator");
+        if (ImGui::BeginPopupContextItem("##AnimatorCompCtx")) {
+            if (ImGui::MenuItem("Remove Component")) {
+                m_PendingRemovedAnimator = anim;
+                removeAnimator = true;
+            }
+            ImGui::EndPopup();
+        }
+
+        if (!removeAnimator) {
+            // Clip list comes from the sibling SkinnedMeshComponent when present.
+            auto* smc = registry.try_get<SkinnedMeshComponent>(entity);
+            int   clipCount = smc ? (int)smc->clips.size() : 0;
+
+            auto clipLabel = [&](int idx) -> std::string {
+                if (idx < 0) return "(bind pose)";
+                if (smc && idx < clipCount && !smc->clips[idx].name.empty())
+                    return std::to_string(idx) + ": " + smc->clips[idx].name;
+                return std::to_string(idx);
+            };
+
+            if (ImGui::BeginCombo("Clip", clipLabel(anim.clip).c_str())) {
+                if (ImGui::Selectable("(bind pose)", anim.clip < 0)) {
+                    int oldClip = anim.clip;
+                    anim.clip   = -1;
+                    m_Context->Commands.ExecuteCommand(std::make_unique<ValueChangeCommand<int>>(
+                        [scene, entity](const int& v) { scene->GetRegistry().get<AnimatorComponent>(entity).clip = v; },
+                        oldClip, -1, "Change Clip"));
+                }
+                for (int i = 0; i < clipCount; ++i) {
+                    if (ImGui::Selectable(clipLabel(i).c_str(), anim.clip == i)) {
+                        int oldClip = anim.clip;
+                        anim.clip   = i;
+                        m_Context->Commands.ExecuteCommand(std::make_unique<ValueChangeCommand<int>>(
+                            [scene, entity](const int& v) { scene->GetRegistry().get<AnimatorComponent>(entity).clip = v; },
+                            oldClip, i, "Change Clip"));
+                    }
+                }
+                ImGui::EndCombo();
+            }
+
+            // Playback state — direct edits (transient, not undo-tracked).
+            if (ImGui::Button(anim.playing ? "Pause" : "Play"))
+                anim.playing = !anim.playing;
+            ImGui::SameLine();
+            if (ImGui::Button("Restart"))
+                anim.time = 0.0f;
+            ImGui::SameLine();
+            ImGui::Checkbox("Loop", &anim.loop);
+
+            float duration = (smc && anim.clip >= 0 && anim.clip < clipCount)
+                             ? smc->clips[anim.clip].duration : 0.0f;
+            ImGui::SliderFloat("Time", &anim.time, 0.0f, duration > 0.0f ? duration : 1.0f, "%.2fs");
+
+            ImGui::DragFloat("Speed", &anim.speed, 0.01f, -10.0f, 10.0f, "%.2fx");
+            if (ImGui::IsItemActivated())          m_OldAnimSpeed = anim.speed;
+            if (ImGui::IsItemDeactivatedAfterEdit()) {
+                float n = anim.speed, o = m_OldAnimSpeed;
+                m_Context->Commands.ExecuteCommand(std::make_unique<ValueChangeCommand<float>>(
+                    [scene, entity](const float& v) { scene->GetRegistry().get<AnimatorComponent>(entity).speed = v; },
+                    o, n, "Change Animation Speed"));
+            }
+
+            if (!smc)
+                ImGui::TextDisabled("(no Skinned Mesh on this entity)");
+        }
+    }
+
     // Registered game components
     const ComponentDescriptor* removeUserComp = nullptr;
 
@@ -1226,6 +1445,24 @@ void InspectorPanel::OnImGuiRender() {
             [scene, entity, saved]() { scene->GetRegistry().emplace_or_replace<ConstraintComponent>(entity, saved); },
             "Remove Constraint Component"));
     }
+    if (removeSkinnedMesh && m_PendingRemovedSkinnedMesh) {
+        SkinnedMeshComponent saved = *m_PendingRemovedSkinnedMesh;
+        m_PendingRemovedSkinnedMesh.reset();
+        registry.remove<SkinnedMeshComponent>(entity);
+        m_Context->Commands.RecordCommand(std::make_unique<FunctionCommand>(
+            [scene, entity]()        { scene->GetRegistry().remove<SkinnedMeshComponent>(entity); },
+            [scene, entity, saved]() { scene->GetRegistry().emplace_or_replace<SkinnedMeshComponent>(entity, saved); },
+            "Remove Skinned Mesh Component"));
+    }
+    if (removeAnimator && m_PendingRemovedAnimator) {
+        AnimatorComponent saved = *m_PendingRemovedAnimator;
+        m_PendingRemovedAnimator.reset();
+        registry.remove<AnimatorComponent>(entity);
+        m_Context->Commands.RecordCommand(std::make_unique<FunctionCommand>(
+            [scene, entity]()        { scene->GetRegistry().remove<AnimatorComponent>(entity); },
+            [scene, entity, saved]() { scene->GetRegistry().emplace_or_replace<AnimatorComponent>(entity, saved); },
+            "Remove Animator Component"));
+    }
     if (removeUserComp)
     {
         auto removeFn  = removeUserComp->remove;
@@ -1251,13 +1488,19 @@ void InspectorPanel::OnImGuiRender() {
         ImGui::TextDisabled("Components");
         ImGui::Separator();
 
-        bool hasMesh       = registry.all_of<MeshComponent>(entity);
-        bool hasLight      = registry.all_of<LightComponent>(entity);
-        bool hasCamera     = registry.all_of<CameraComponent>(entity);
-        bool hasCollider   = registry.all_of<ColliderComponent>(entity);
-        bool hasRigidbody  = registry.all_of<RigidBodyComponent>(entity);
-        bool hasConstraint = registry.all_of<ConstraintComponent>(entity);
-        bool anyShown      = !hasMesh || !hasLight || !hasCamera || !hasCollider || !hasRigidbody || !hasConstraint;
+        bool hasMesh        = registry.all_of<MeshComponent>(entity);
+        bool hasLight       = registry.all_of<LightComponent>(entity);
+        bool hasCamera      = registry.all_of<CameraComponent>(entity);
+        bool hasCollider    = registry.all_of<ColliderComponent>(entity);
+        bool hasRigidbody   = registry.all_of<RigidBodyComponent>(entity);
+        bool hasConstraint  = registry.all_of<ConstraintComponent>(entity);
+        // Animator only makes sense alongside a skinned mesh (it indexes its clips).
+        bool hasSkinnedMesh = registry.all_of<SkinnedMeshComponent>(entity);
+        bool hasAnimator    = registry.all_of<AnimatorComponent>(entity);
+        bool canAddAnimator = hasSkinnedMesh && !hasAnimator;
+        bool anyShown       = !hasMesh || !hasLight || !hasCamera || !hasCollider
+                              || !hasRigidbody || !hasConstraint || !hasSkinnedMesh
+                              || canAddAnimator;
 
         constexpr ImGuiSelectableFlags kCompFlags =
             ImGuiSelectableFlags_AllowDoubleClick | ImGuiSelectableFlags_DontClosePopups;
@@ -1324,6 +1567,29 @@ void InspectorPanel::OnImGuiRender() {
                         [scene, entity]() { scene->GetRegistry().emplace<ConstraintComponent>(entity); },
                         [scene, entity]() { scene->GetRegistry().remove<ConstraintComponent>(entity); },
                         "Add Constraint Component"));
+                    ImGui::CloseCurrentPopup();
+                }
+        }
+
+        if (!hasSkinnedMesh) {
+            // Added empty; the inspector shows a drop slot to assign a rigged glTF.
+            if (ImGui::Selectable("Skinned Mesh", false, kCompFlags))
+                if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                    m_Context->Commands.ExecuteCommand(std::make_unique<FunctionCommand>(
+                        [scene, entity]() { scene->GetRegistry().emplace<SkinnedMeshComponent>(entity); },
+                        [scene, entity]() { scene->GetRegistry().remove<SkinnedMeshComponent>(entity); },
+                        "Add Skinned Mesh Component"));
+                    ImGui::CloseCurrentPopup();
+                }
+        }
+
+        if (canAddAnimator) {
+            if (ImGui::Selectable("Animator", false, kCompFlags))
+                if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                    m_Context->Commands.ExecuteCommand(std::make_unique<FunctionCommand>(
+                        [scene, entity]() { scene->GetRegistry().emplace<AnimatorComponent>(entity); },
+                        [scene, entity]() { scene->GetRegistry().remove<AnimatorComponent>(entity); },
+                        "Add Animator Component"));
                     ImGui::CloseCurrentPopup();
                 }
         }
@@ -1668,6 +1934,18 @@ void InspectorPanel::DrawMultiInspector(const std::vector<entt::entity>& ents)
                 [](bool& v, bool mixed) { return MixedCheckbox("Z##lockRotZ", v, mixed); },
                 "Toggle Rotation Lock Z", true);
         }
+    }
+
+    // -- Skinned Mesh / Animator — playback state is per-entity, edit one at a time ----
+    if (allOf(SkinnedMeshComponent{})) {
+        ImGui::Separator();
+        ImGui::Text("Skinned Mesh");
+        ImGui::TextDisabled("(select a single entity to edit)");
+    }
+    if (allOf(AnimatorComponent{})) {
+        ImGui::Separator();
+        ImGui::Text("Animator");
+        ImGui::TextDisabled("(select a single entity to edit)");
     }
 
     // -- Script components — listed when shared; editing needs single selection ----

@@ -31,6 +31,11 @@ public:
 
     // Geometry + skeleton + animations + per-vertex skinning weights.
     static ImportedModel LoadModel(const std::string& path);
+
+    // Cheap rigged-vs-static check: parses only the glTF JSON structure (no
+    // buffers/images loaded) and reports whether the file declares a skin. Used
+    // by the editor to badge rigged characters distinctly in the content browser.
+    static bool HasSkeleton(const std::string& path);
 };
 
 } // namespace Diamond

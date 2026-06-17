@@ -9,6 +9,8 @@
 #include "Scene/Physics/Rigidbody.h"
 #include "Scene/Physics/Constraint.h"
 #include "Assets/ModelImporter.h"
+#include "Assets/GltfImporter.h"
+#include "Animation/AnimationComponents.h"
 #include "PhysicsMaterialAsset.h"
 #include "Assets/ImageLoader.h"
 #include "Renderer/MeshData.h"
@@ -40,6 +42,18 @@ static const std::vector<MeshData>& LoadMeshCached(
 {
     auto [it, inserted] = cache.emplace(path, std::vector<MeshData>{});
     if (inserted) it->second = ModelImporter::Load(path);
+    return it->second;
+}
+
+// Skinned models are reloaded through cgltf (geometry + skeleton + clips), unlike
+// the static path which only needs MeshData. Cached so multiple skinned entities
+// sharing one .glb don't re-parse it on load.
+static const ImportedModel& LoadSkinnedCached(
+    const std::string& path,
+    std::unordered_map<std::string, ImportedModel>& cache)
+{
+    auto [it, inserted] = cache.emplace(path, ImportedModel{});
+    if (inserted) it->second = GltfImporter::LoadModel(path);
     return it->second;
 }
 
@@ -180,6 +194,40 @@ static json ToJson(Scene& scene)
             };
         }
 
+        if (reg.all_of<SkinnedMeshComponent>(entity)) {
+            auto& smc = reg.get<SkinnedMeshComponent>(entity);
+            json sj = {
+                { "meshPath",    smc.meshPath    },
+                { "visible",     smc.visible     },
+                { "castsShadow", smc.castsShadow }
+            };
+            // Material overrides. glTF embeds its textures (no file paths), so an
+            // empty path here means "keep what the .glb ships with" on reload; only
+            // a non-empty path is a user-assigned external texture.
+            if (smc.material) {
+                sj["albedoPath"]       = smc.material->AlbedoPath;
+                sj["normalPath"]       = smc.material->NormalPath;
+                sj["metallicPath"]     = smc.material->MetallicPath;
+                sj["roughnessPath"]    = smc.material->RoughnessPath;
+                sj["aoPath"]           = smc.material->AOPath;
+                sj["emissivePath"]     = smc.material->EmissivePath;
+                sj["emissiveStrength"] = smc.material->EmissiveStrength;
+                sj["uvScale"]          = smc.material->UVScale;
+            }
+            ej["skinnedMesh"] = sj;
+        }
+
+        if (reg.all_of<AnimatorComponent>(entity)) {
+            auto& anim = reg.get<AnimatorComponent>(entity);
+            ej["animator"] = {
+                { "clip",    anim.clip    },
+                { "time",    anim.time    },
+                { "speed",   anim.speed   },
+                { "loop",    anim.loop    },
+                { "playing", anim.playing }
+            };
+        }
+
         // Script components registered via DECLARE_COMPONENT
         json sc = json::object();
         for (auto& desc : ComponentRegistry::Get().GetAll()) {
@@ -203,6 +251,7 @@ static bool FromJson(Scene& scene, const json& root)
 
     std::unordered_map<std::string, std::shared_ptr<Texture>>  texCache;
     std::unordered_map<std::string, std::vector<MeshData>>     meshCache;
+    std::unordered_map<std::string, ImportedModel>             skinnedCache;
 
     std::unordered_map<uint64_t, entt::entity> uuidToEntity;
     for (const auto& ej : root.at("entities")) {
@@ -365,6 +414,59 @@ static bool FromJson(Scene& scene, const json& root)
             cc.motorFrequency = cj.value("motorFrequency", 2.0f);
             cc.motorDamping   = cj.value("motorDamping",   1.0f);
             if (cj.contains("motorTargetEuler")) cc.motorTargetEuler = ToVec3(cj["motorTargetEuler"]);
+        }
+
+        if (ej.contains("skinnedMesh")) {
+            const auto& sj    = ej["skinnedMesh"];
+            std::string mpath = sj.value("meshPath", "");
+            if (!mpath.empty()) {
+                const ImportedModel& model = LoadSkinnedCached(mpath, skinnedCache);
+                if (!model.skeleton.bones.empty() && !model.meshes.empty()) {
+                    auto& smc       = reg.emplace<SkinnedMeshComponent>(e);
+                    smc.skeleton    = model.skeleton;
+                    smc.clips       = model.animations;
+                    smc.meshPath    = mpath;
+                    smc.visible     = sj.value("visible",     true);
+                    smc.castsShadow = sj.value("castsShadow", true);
+
+                    AABB bounds;
+                    for (const auto& md : model.meshes) {
+                        smc.meshes.push_back(Mesh::Create(md));
+                        AABB b      = md.ComputeAABB();
+                        bounds.min  = glm::min(bounds.min, b.min);
+                        bounds.max  = glm::max(bounds.max, b.max);
+                    }
+                    smc.localBounds = bounds;
+
+                    // Material: start from what the .glb shipped, then apply only the
+                    // overrides the user set (non-empty external texture paths).
+                    smc.material = model.material
+                        ? std::make_shared<PBRMaterial>(*model.material)
+                        : std::make_shared<PBRMaterial>();
+                    auto applyTex = [&](const char* key, std::shared_ptr<Texture>& tex, std::string& path) {
+                        std::string p = sj.value(key, std::string{});
+                        if (!p.empty()) { path = p; tex = LoadCached(p, texCache); }
+                    };
+                    applyTex("albedoPath",    smc.material->Albedo,    smc.material->AlbedoPath);
+                    applyTex("normalPath",    smc.material->Normal,    smc.material->NormalPath);
+                    applyTex("metallicPath",  smc.material->Metallic,  smc.material->MetallicPath);
+                    applyTex("roughnessPath", smc.material->Roughness, smc.material->RoughnessPath);
+                    applyTex("aoPath",        smc.material->AO,        smc.material->AOPath);
+                    applyTex("emissivePath",  smc.material->Emissive,  smc.material->EmissivePath);
+                    smc.material->EmissiveStrength = sj.value("emissiveStrength", smc.material->EmissiveStrength);
+                    smc.material->UVScale          = sj.value("uvScale",          smc.material->UVScale);
+                }
+            }
+        }
+
+        if (ej.contains("animator")) {
+            const auto& aj = ej["animator"];
+            auto& anim   = reg.emplace<AnimatorComponent>(e);
+            anim.clip    = aj.value("clip",    0);
+            anim.time    = aj.value("time",    0.0f);
+            anim.speed   = aj.value("speed",   1.0f);
+            anim.loop    = aj.value("loop",    true);
+            anim.playing = aj.value("playing", true);
         }
 
         // Script components registered via DECLARE_COMPONENT

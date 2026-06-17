@@ -482,4 +482,17 @@ ImportedModel GltfImporter::LoadModel(const std::string& path)
     return model;
 }
 
+bool GltfImporter::HasSkeleton(const std::string& path)
+{
+    // JSON-structure parse only — no cgltf_load_buffers, so this stays cheap
+    // enough for the content browser to call per glTF file.
+    cgltf_options options = {};
+    cgltf_data*   data    = nullptr;
+    if (cgltf_parse_file(&options, path.c_str(), &data) != cgltf_result_success)
+        return false;
+    bool skinned = data->skins_count > 0;
+    cgltf_free(data);
+    return skinned;
+}
+
 } // namespace Diamond

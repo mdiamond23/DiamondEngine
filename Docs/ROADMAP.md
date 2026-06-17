@@ -76,9 +76,9 @@ ragdoll characters, active physics control, grabbing, local multiplayer.
 > Goal: lay the foundation for physics-based characters (prerequisite for the game)
 > Dependency order matters: GLTF importer → Skeletal animation → Constraints → Ragdoll → IK
 
-- [ ] GLTF / GLB importer — skinned meshes + embedded animation clips (via [cgltf](https://github.com/jkuhlmann/cgltf) or [fastgltf](https://github.com/spnda/fastgltf))
-- [ ] Skeletal animation system — bone hierarchy, skinning weights, GPU skinning shader
-- [ ] Animation clips + blending — keyframe playback, cross-fade, animation state machine
+- [x] GLTF / GLB importer — skinned meshes + embedded animation clips (via [cgltf](https://github.com/jkuhlmann/cgltf) or [fastgltf](https://github.com/spnda/fastgltf))
+- [x] Skeletal animation system — bone hierarchy, skinning weights, GPU skinning shader
+- [x] Animation clips + blending — keyframe playback, cross-fade, animation state machine
 - [ ] Material / shader system — formal registration and hot-swap instead of ad-hoc shader handles
 - [ ] Ragdoll system — skeleton mapped to rigid body chains; passive (limp) and active (joint motors fight toward an animation pose) modes
 - [ ] Procedural animation / IK — foot placement, hand reach, secondary motion on loose parts

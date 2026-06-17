@@ -11,7 +11,7 @@
 #include <unordered_set>
 #include <cstdint>
 
-enum class AssetType { Folder, Texture, Mesh, Material, Shader, Scene, PhysicsMat, File };
+enum class AssetType { Folder, Texture, Mesh, SkinnedMesh, Material, Shader, Scene, PhysicsMat, File };
 
 struct ContentItem {
     std::filesystem::path path;
@@ -51,6 +51,10 @@ private:
     std::unordered_map<std::string, uint32_t> m_ThumbnailCache;
     std::unordered_set<std::string>           m_FailedPaths;
     MeshThumbnailRenderer                     m_MeshRenderer;
+
+    // glTF skinned-vs-static results, cached so GetAssetType doesn't re-parse a
+    // file on every Refresh(). Keyed by UTF-8 path.
+    std::unordered_map<std::string, bool>     m_SkinnedCache;
 
     std::function<void(const std::string&)> m_OnSceneOpen;
     std::vector<std::filesystem::path>      m_PendingDropFiles;

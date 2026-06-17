@@ -17,6 +17,7 @@
 #include <glad/gl.h>
 #include <Assets/ImageLoader.h>
 #include <Assets/ModelImporter.h>
+#include <Assets/GltfImporter.h>
 
 #include <miniz.h>
 #include <filesystem>
@@ -148,6 +149,7 @@ static const char* AssetTypeName(AssetType t) {
         case AssetType::Folder:      return "Folder";
         case AssetType::Texture:     return "Texture";
         case AssetType::Mesh:        return "Mesh";
+        case AssetType::SkinnedMesh: return "Skinned Mesh";
         case AssetType::Material:    return "Material";
         case AssetType::Shader:      return "Shader";
         case AssetType::Scene:       return "Scene";
@@ -161,7 +163,17 @@ AssetType ContentPanel::GetAssetType(const fs::path& p) {
     std::string ext = LowerExt(p);
     if (ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".bmp" || ext == ".tga")
         return AssetType::Texture;
-    if (ext == ".obj" || ext == ".fbx" || ext == ".gltf" || ext == ".glb")
+    if (ext == ".gltf" || ext == ".glb") {
+        // glTF is the rigged-character format here — a file that declares a skin
+        // is a Skinned Mesh, otherwise a plain static Mesh. Cached so we only
+        // parse each file once per session.
+        std::string key = ToUtf8(p);
+        auto it = m_SkinnedCache.find(key);
+        if (it == m_SkinnedCache.end())
+            it = m_SkinnedCache.emplace(key, Diamond::GltfImporter::HasSkeleton(key)).first;
+        return it->second ? AssetType::SkinnedMesh : AssetType::Mesh;
+    }
+    if (ext == ".obj" || ext == ".fbx")
         return AssetType::Mesh;
     if (ext == ".mat")     return AssetType::Material;
     if (ext == ".physmat") return AssetType::PhysicsMat;
@@ -201,7 +213,9 @@ uint32_t ContentPanel::LoadThumbnail(const fs::path& p, AssetType type) {
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
         glBindTexture(GL_TEXTURE_2D, 0);
-    } else if (type == AssetType::Mesh) {
+    } else if (type == AssetType::Mesh || type == AssetType::SkinnedMesh) {
+        // ModelImporter::Load routes glTF through the cgltf geometry path, so the
+        // bind-pose mesh renders the same AABB-framed thumbnail as a static mesh.
         auto meshes = Diamond::ModelImporter::Load(key);
         if (meshes.empty()) { m_FailedPaths.insert(key); return 0; }
         texID = m_MeshRenderer.Render(meshes);
@@ -442,7 +456,8 @@ void ContentPanel::DrawItems() {
         ImVec2 iPos = {cellOrigin.x + pad, cellOrigin.y + pad};
 
         uint32_t thumbID = 0;
-        if (item.type == AssetType::Texture || item.type == AssetType::Mesh) {
+        if (item.type == AssetType::Texture || item.type == AssetType::Mesh ||
+            item.type == AssetType::SkinnedMesh) {
             std::string key = ToUtf8(item.path);
             auto cit = m_ThumbnailCache.find(key);
             if (cit != m_ThumbnailCache.end())
@@ -460,6 +475,13 @@ void ContentPanel::DrawItems() {
             DrawFolderIcon(iPos, iSz, isValidFolderDrop);
         } else {
             DrawFileIcon(iPos, iSz, LowerExt(item.path));
+        }
+
+        // Rigged characters get a teal frame around the icon so they read as
+        // distinct from static meshes at a glance.
+        if (item.type == AssetType::SkinnedMesh) {
+            dl->AddRect(iPos, {iPos.x + iSz, iPos.y + iSz},
+                        IM_COL32(80, 215, 205, 255), 4.0f, 0, 2.0f);
         }
 
         // Name + type label drawn directly via DrawList so we don't disturb the cursor
@@ -520,6 +542,7 @@ void ContentPanel::DrawItems() {
         if (ImGui::BeginDragDropSource()) {
             std::string pathStr = ToUtf8(item.path);
             bool isInspectorDraggable = (item.type == AssetType::Mesh ||
+                                         item.type == AssetType::SkinnedMesh ||
                                          item.type == AssetType::Texture ||
                                          item.type == AssetType::PhysicsMat);
             const char* payloadType = isInspectorDraggable ? "CONTENT_ITEM_PATH"

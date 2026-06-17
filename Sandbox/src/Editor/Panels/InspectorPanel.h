@@ -7,6 +7,7 @@
 #include "Scene/Physics/Collision.h"
 #include "Scene/Physics/Rigidbody.h"
 #include "Scene/Physics/Constraint.h"
+#include "Animation/AnimationComponents.h"
 
 class ContentPanel;
 
@@ -62,11 +63,16 @@ private:
     float m_OldRbAngularDamping  = 0.05f;
     float m_OldRbGravityScale    = 1.0f;
 
+    // Animator drag snapshots
+    float m_OldAnimSpeed = 1.0f;
+
     // Saved component state for deferred remove commands
-    std::optional<MeshComponent>       m_PendingRemovedMesh;
-    std::optional<LightComponent>      m_PendingRemovedLight;
-    std::optional<CameraComponent>     m_PendingRemovedCamera;
-    std::optional<ColliderComponent>   m_PendingRemovedCollider;
-    std::optional<RigidBodyComponent>  m_PendingRemovedRigidbody;
-    std::optional<ConstraintComponent> m_PendingRemovedConstraint;
+    std::optional<MeshComponent>         m_PendingRemovedMesh;
+    std::optional<LightComponent>        m_PendingRemovedLight;
+    std::optional<CameraComponent>       m_PendingRemovedCamera;
+    std::optional<ColliderComponent>     m_PendingRemovedCollider;
+    std::optional<RigidBodyComponent>    m_PendingRemovedRigidbody;
+    std::optional<ConstraintComponent>   m_PendingRemovedConstraint;
+    std::optional<SkinnedMeshComponent>  m_PendingRemovedSkinnedMesh;
+    std::optional<AnimatorComponent>     m_PendingRemovedAnimator;
 };
