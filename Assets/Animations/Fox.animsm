@@ -1,0 +1,79 @@
+{
+    "entryState": 0,
+    "name": "Fox",
+    "parameters": [],
+    "states": [
+        {
+            "clipName": "Survey",
+            "loop": true,
+            "name": "Survey",
+            "nodePos": [
+                37.0,
+                69.0
+            ],
+            "speed": 1.0
+        },
+        {
+            "clipName": "Walk",
+            "loop": true,
+            "name": "Walk",
+            "nodePos": [
+                284.0,
+                71.0
+            ],
+            "speed": 1.0
+        },
+        {
+            "clipName": "Run",
+            "loop": true,
+            "name": "Run",
+            "nodePos": [
+                531.0,
+                70.0
+            ],
+            "speed": 1.0
+        },
+        {
+            "clipName": "Run",
+            "loop": true,
+            "name": "State 3",
+            "nodePos": [
+                161.0,
+                273.0
+            ],
+            "speed": 1.0
+        }
+    ],
+    "transitions": [
+        {
+            "blendDuration": 0.20000000298023224,
+            "conditions": [],
+            "fromState": 0,
+            "toState": 1
+        },
+        {
+            "blendDuration": 0.25,
+            "conditions": [],
+            "fromState": 1,
+            "toState": 0
+        },
+        {
+            "blendDuration": 0.20000000298023224,
+            "conditions": [],
+            "fromState": 1,
+            "toState": 2
+        },
+        {
+            "blendDuration": 0.20000000298023224,
+            "conditions": [],
+            "fromState": 2,
+            "toState": 1
+        },
+        {
+            "blendDuration": 0.20000000298023224,
+            "conditions": [],
+            "fromState": 2,
+            "toState": 3
+        }
+    ]
+}

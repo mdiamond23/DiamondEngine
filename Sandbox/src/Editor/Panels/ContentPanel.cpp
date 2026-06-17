@@ -1,5 +1,6 @@
 #include "ContentPanel.h"
 #include "../PhysicsMaterialAsset.h"
+#include "../AnimStateMachineAsset.h"
 #include <imgui.h>
 
 #ifndef ASSETS_DIR
@@ -154,6 +155,7 @@ static const char* AssetTypeName(AssetType t) {
         case AssetType::Shader:      return "Shader";
         case AssetType::Scene:       return "Scene";
         case AssetType::PhysicsMat:  return "Physics Mat";
+        case AssetType::AnimSM:      return "State Machine";
         default:                     return "File";
     }
 }
@@ -177,6 +179,7 @@ AssetType ContentPanel::GetAssetType(const fs::path& p) {
         return AssetType::Mesh;
     if (ext == ".mat")     return AssetType::Material;
     if (ext == ".physmat") return AssetType::PhysicsMat;
+    if (ext == ".animsm")  return AssetType::AnimSM;
     if (ext == ".glsl" || ext == ".vert" || ext == ".frag") return AssetType::Shader;
     if (ext == ".scene")   return AssetType::Scene;
     return AssetType::File;
@@ -264,6 +267,8 @@ void ContentPanel::DrawFileIcon(ImVec2 tl, float size, const std::string& ext) {
         pageCol = IM_COL32(200, 120, 70, 255);
     else if (ext == ".physmat")
         pageCol = IM_COL32(90, 190, 200, 255);
+    else if (ext == ".animsm")
+        pageCol = IM_COL32(180, 120, 210, 255);
     else
         pageCol = IM_COL32(155, 155, 170, 255);
 
@@ -544,7 +549,8 @@ void ContentPanel::DrawItems() {
             bool isInspectorDraggable = (item.type == AssetType::Mesh ||
                                          item.type == AssetType::SkinnedMesh ||
                                          item.type == AssetType::Texture ||
-                                         item.type == AssetType::PhysicsMat);
+                                         item.type == AssetType::PhysicsMat ||
+                                         item.type == AssetType::AnimSM);
             const char* payloadType = isInspectorDraggable ? "CONTENT_ITEM_PATH"
                                                             : "CONTENT_MOVE";
             ImGui::SetDragDropPayload(payloadType, pathStr.c_str(), pathStr.size() + 1);
@@ -675,6 +681,15 @@ void ContentPanel::OnImGuiRender() {
             fs::path p = base; p += ".physmat";
             for (int n = 1; fs::exists(p); ++n) { p = base; p += " (" + std::to_string(n) + ").physmat"; }
             SavePhysicsMaterial(ToUtf8(p), PhysicsMaterial{});
+            Refresh();
+        }
+        if (ImGui::MenuItem("New Animation State Machine")) {
+            fs::path base = m_CurrentPath / "NewStateMachine";
+            fs::path p = base; p += ".animsm";
+            for (int n = 1; fs::exists(p); ++n) { p = base; p += " (" + std::to_string(n) + ").animsm"; }
+            Diamond::AnimStateMachine sm;
+            sm.name = ToUtf8(p.stem());
+            SaveAnimStateMachine(ToUtf8(p), sm);   // empty graph — author states in the inspector
             Refresh();
         }
         ImGui::EndPopup();

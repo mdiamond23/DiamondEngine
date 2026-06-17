@@ -9,6 +9,7 @@
 #include "Panels/InspectorPanel.h"
 #include "Panels/ContentPanel.h"
 #include "Panels/ConsolePanel.h"
+#include "Panels/AnimatorPanel.h"
 
 class EditorLayer {
 public:
@@ -43,5 +44,6 @@ private:
     InspectorPanel    m_Inspector;
     ContentPanel      m_Content;
     ConsolePanel      m_Console;
+    AnimatorPanel     m_Animator;
     EditorContext     m_Context;
 };

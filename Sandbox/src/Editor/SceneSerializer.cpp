@@ -12,6 +12,7 @@
 #include "Assets/GltfImporter.h"
 #include "Animation/AnimationComponents.h"
 #include "PhysicsMaterialAsset.h"
+#include "AnimStateMachineAsset.h"
 #include "Assets/ImageLoader.h"
 #include "Renderer/MeshData.h"
 #include "Renderer/TextureData.h"
@@ -226,6 +227,21 @@ static json ToJson(Scene& scene)
                 { "loop",    anim.loop    },
                 { "playing", anim.playing }
             };
+        }
+
+        if (reg.all_of<AnimStateMachineComponent>(entity)) {
+            auto& sm = reg.get<AnimStateMachineComponent>(entity);
+            json smj;
+            smj["assetPath"] = sm.assetPath;
+            // Live parameter values (current overrides, not the asset defaults).
+            // Triggers are transient and never serialized.
+            json fj = json::object();
+            for (auto& [k, v] : sm.floats) fj[k] = v;
+            json bj = json::object();
+            for (auto& [k, v] : sm.bools)  bj[k] = v;
+            smj["floats"] = fj;
+            smj["bools"]  = bj;
+            ej["animStateMachine"] = smj;
         }
 
         // Script components registered via DECLARE_COMPONENT
@@ -467,6 +483,22 @@ static bool FromJson(Scene& scene, const json& root)
             anim.speed   = aj.value("speed",   1.0f);
             anim.loop    = aj.value("loop",    true);
             anim.playing = aj.value("playing", true);
+        }
+
+        if (ej.contains("animStateMachine")) {
+            const auto& smj = ej["animStateMachine"];
+            auto& sm = reg.emplace<AnimStateMachineComponent>(e);
+            sm.assetPath = smj.value("assetPath", "");
+            if (!sm.assetPath.empty()) {
+                sm.assetPath = NormalizeAnimSmPath(sm.assetPath);
+                sm.machine   = LoadAnimStateMachine(sm.assetPath);
+            }
+            // Seed defaults from the asset, then apply the saved overrides.
+            sm.SyncParams();
+            if (smj.contains("floats"))
+                for (auto& [k, v] : smj["floats"].items()) sm.floats[k] = v.get<float>();
+            if (smj.contains("bools"))
+                for (auto& [k, v] : smj["bools"].items())  sm.bools[k]  = v.get<bool>();
         }
 
         // Script components registered via DECLARE_COMPONENT

@@ -2,6 +2,7 @@
 #include "ContentPanel.h"
 #include "../Command.h"
 #include "../PhysicsMaterialAsset.h"
+#include "../AnimStateMachineAsset.h"
 #include <imgui.h>
 #include <imgui_internal.h>   // ImGuiItemFlags_MixedValue for tri-state checkboxes
 #include <glm/gtc/type_ptr.hpp>
@@ -515,6 +516,7 @@ void InspectorPanel::OnImGuiRender() {
     bool removeConstraint  = false;
     bool removeSkinnedMesh = false;
     bool removeAnimator    = false;
+    bool removeAnimSM      = false;
 
     // Mesh Component
     if (registry.all_of<MeshComponent>(entity)) {
@@ -1321,25 +1323,38 @@ void InspectorPanel::OnImGuiRender() {
                 return std::to_string(idx);
             };
 
+            // Picking a clip cross-fades to it over the Blend time. The fade is
+            // applied live via CrossFade(), so we RecordCommand (not Execute) — an
+            // Execute would re-apply the setter and wipe the in-progress fade. Undo
+            // snaps instantly (no fade).
+            auto selectClip = [&](int newClip) {
+                int oldClip = anim.clip;
+                if (newClip == oldClip) return;
+                anim.CrossFade(newClip, m_AnimBlendTime);
+                m_Context->Commands.RecordCommand(std::make_unique<FunctionCommand>(
+                    [scene, entity, newClip]() {
+                        auto& a = scene->GetRegistry().get<AnimatorComponent>(entity);
+                        a.clip = newClip; a.prevClip = -1; a.time = 0.0f;
+                    },
+                    [scene, entity, oldClip]() {
+                        auto& a = scene->GetRegistry().get<AnimatorComponent>(entity);
+                        a.clip = oldClip; a.prevClip = -1; a.time = 0.0f;
+                    },
+                    "Change Clip"));
+            };
+
             if (ImGui::BeginCombo("Clip", clipLabel(anim.clip).c_str())) {
-                if (ImGui::Selectable("(bind pose)", anim.clip < 0)) {
-                    int oldClip = anim.clip;
-                    anim.clip   = -1;
-                    m_Context->Commands.ExecuteCommand(std::make_unique<ValueChangeCommand<int>>(
-                        [scene, entity](const int& v) { scene->GetRegistry().get<AnimatorComponent>(entity).clip = v; },
-                        oldClip, -1, "Change Clip"));
-                }
-                for (int i = 0; i < clipCount; ++i) {
-                    if (ImGui::Selectable(clipLabel(i).c_str(), anim.clip == i)) {
-                        int oldClip = anim.clip;
-                        anim.clip   = i;
-                        m_Context->Commands.ExecuteCommand(std::make_unique<ValueChangeCommand<int>>(
-                            [scene, entity](const int& v) { scene->GetRegistry().get<AnimatorComponent>(entity).clip = v; },
-                            oldClip, i, "Change Clip"));
-                    }
-                }
+                if (ImGui::Selectable("(bind pose)", anim.clip < 0))
+                    selectClip(-1);
+                for (int i = 0; i < clipCount; ++i)
+                    if (ImGui::Selectable(clipLabel(i).c_str(), anim.clip == i))
+                        selectClip(i);
                 ImGui::EndCombo();
             }
+
+            // Cross-fade duration used when switching clips (and, later, the
+            // default for state-machine transitions). Editor-only; not serialized.
+            ImGui::DragFloat("Blend (s)", &m_AnimBlendTime, 0.01f, 0.0f, 2.0f, "%.2f");
 
             // Playback state — direct edits (transient, not undo-tracked).
             if (ImGui::Button(anim.playing ? "Pause" : "Play"))
@@ -1365,6 +1380,98 @@ void InspectorPanel::OnImGuiRender() {
 
             if (!smc)
                 ImGui::TextDisabled("(no Skinned Mesh on this entity)");
+        }
+    }
+
+    // Animator State Machine Component
+    if (registry.all_of<AnimStateMachineComponent>(entity)) {
+        ImGui::Separator();
+        auto& sm = registry.get<AnimStateMachineComponent>(entity);
+
+        ImGui::Text("Animator State Machine");
+        if (ImGui::BeginPopupContextItem("##AnimSMCompCtx")) {
+            if (ImGui::MenuItem("Remove Component")) {
+                m_PendingRemovedAnimSM = sm;
+                removeAnimSM = true;
+            }
+            ImGui::EndPopup();
+        }
+
+        if (!removeAnimSM) {
+            // -- Asset slot (drag a .animsm here) --
+            ImGui::TextDisabled("Asset");
+            std::string dispName = sm.assetPath.empty()
+                ? "None"
+                : std::filesystem::path(sm.assetPath).filename().string();
+            ImGui::Button(dispName.c_str(), {ImGui::GetContentRegionAvail().x, 0});
+            if (ImGui::BeginDragDropTarget()) {
+                if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload("CONTENT_ITEM_PATH")) {
+                    std::string path((const char*)p->Data);
+                    if (LowerExtOf(path) == ".animsm") {
+                        sm.assetPath = NormalizeAnimSmPath(path);
+                        sm.machine   = LoadAnimStateMachine(sm.assetPath);
+                        sm.floats.clear(); sm.bools.clear(); sm.triggers.clear();
+                        sm.currentState = -1;   // re-enter entry state
+                        sm.SyncParams();
+                    }
+                }
+                ImGui::EndDragDropTarget();
+            }
+            if (!sm.assetPath.empty() && !sm.machine)
+                ImGui::TextDisabled("(failed to load asset)");
+
+            if (sm.machine) {
+                const auto& M = *sm.machine;
+                ImGui::Text("%zu states, %zu transitions, %zu params",
+                            M.states.size(), M.transitions.size(), M.parameters.size());
+
+                // Current state (runtime). -1 until play begins and the entry state
+                // is entered.
+                const char* cur = (sm.currentState >= 0 && sm.currentState < (int)M.states.size())
+                                  ? M.states[sm.currentState].name.c_str()
+                                  : "(entry on play)";
+                ImGui::Text("Current: %s", cur);
+
+                if (M.states.empty())
+                    ImGui::TextDisabled("(empty graph — author states in the Animator window)");
+
+                // -- Live parameters: drag/toggle/fire to drive transitions in play mode --
+                if (!M.parameters.empty()) {
+                    ImGui::Spacing();
+                    ImGui::TextDisabled("Parameters");
+                    for (const auto& p : M.parameters) {
+                        ImGui::PushID(p.name.c_str());
+                        switch (p.type) {
+                            case Diamond::AnimParamType::Float: {
+                                float f = sm.GetFloat(p.name);
+                                if (ImGui::DragFloat(p.name.c_str(), &f, 0.01f))
+                                    sm.SetFloat(p.name, f);
+                                break;
+                            }
+                            case Diamond::AnimParamType::Bool: {
+                                bool b = sm.GetBool(p.name);
+                                if (ImGui::Checkbox(p.name.c_str(), &b))
+                                    sm.SetBool(p.name, b);
+                                break;
+                            }
+                            case Diamond::AnimParamType::Trigger: {
+                                bool pending = sm.triggers.count(p.name) > 0;
+                                if (pending) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.70f, 0.55f, 0.05f, 1.0f));
+                                if (ImGui::Button(p.name.c_str()))
+                                    sm.SetTrigger(p.name);
+                                if (pending) ImGui::PopStyleColor();
+                                ImGui::SameLine();
+                                ImGui::TextDisabled(pending ? "(set)" : "trigger");
+                                break;
+                            }
+                        }
+                        ImGui::PopID();
+                    }
+                }
+
+                if (!registry.all_of<SkinnedMeshComponent>(entity))
+                    ImGui::TextDisabled("(needs a Skinned Mesh to resolve clips)");
+            }
         }
     }
 
@@ -1463,6 +1570,15 @@ void InspectorPanel::OnImGuiRender() {
             [scene, entity, saved]() { scene->GetRegistry().emplace_or_replace<AnimatorComponent>(entity, saved); },
             "Remove Animator Component"));
     }
+    if (removeAnimSM && m_PendingRemovedAnimSM) {
+        AnimStateMachineComponent saved = *m_PendingRemovedAnimSM;
+        m_PendingRemovedAnimSM.reset();
+        registry.remove<AnimStateMachineComponent>(entity);
+        m_Context->Commands.RecordCommand(std::make_unique<FunctionCommand>(
+            [scene, entity]()        { scene->GetRegistry().remove<AnimStateMachineComponent>(entity); },
+            [scene, entity, saved]() { scene->GetRegistry().emplace_or_replace<AnimStateMachineComponent>(entity, saved); },
+            "Remove Animator State Machine Component"));
+    }
     if (removeUserComp)
     {
         auto removeFn  = removeUserComp->remove;
@@ -1494,13 +1610,16 @@ void InspectorPanel::OnImGuiRender() {
         bool hasCollider    = registry.all_of<ColliderComponent>(entity);
         bool hasRigidbody   = registry.all_of<RigidBodyComponent>(entity);
         bool hasConstraint  = registry.all_of<ConstraintComponent>(entity);
-        // Animator only makes sense alongside a skinned mesh (it indexes its clips).
+        // Animator + state machine only make sense alongside a skinned mesh (they
+        // index / resolve its clips).
         bool hasSkinnedMesh = registry.all_of<SkinnedMeshComponent>(entity);
         bool hasAnimator    = registry.all_of<AnimatorComponent>(entity);
+        bool hasAnimSM      = registry.all_of<AnimStateMachineComponent>(entity);
         bool canAddAnimator = hasSkinnedMesh && !hasAnimator;
+        bool canAddAnimSM   = hasSkinnedMesh && !hasAnimSM;
         bool anyShown       = !hasMesh || !hasLight || !hasCamera || !hasCollider
                               || !hasRigidbody || !hasConstraint || !hasSkinnedMesh
-                              || canAddAnimator;
+                              || canAddAnimator || canAddAnimSM;
 
         constexpr ImGuiSelectableFlags kCompFlags =
             ImGuiSelectableFlags_AllowDoubleClick | ImGuiSelectableFlags_DontClosePopups;
@@ -1590,6 +1709,22 @@ void InspectorPanel::OnImGuiRender() {
                         [scene, entity]() { scene->GetRegistry().emplace<AnimatorComponent>(entity); },
                         [scene, entity]() { scene->GetRegistry().remove<AnimatorComponent>(entity); },
                         "Add Animator Component"));
+                    ImGui::CloseCurrentPopup();
+                }
+        }
+
+        if (canAddAnimSM) {
+            // Drives the Animator from a .animsm asset (auto-adds an Animator too).
+            if (ImGui::Selectable("Animator State Machine", false, kCompFlags))
+                if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                    m_Context->Commands.ExecuteCommand(std::make_unique<FunctionCommand>(
+                        [scene, entity]() {
+                            auto& r = scene->GetRegistry();
+                            r.emplace<AnimStateMachineComponent>(entity);
+                            if (!r.all_of<AnimatorComponent>(entity)) r.emplace<AnimatorComponent>(entity);
+                        },
+                        [scene, entity]() { scene->GetRegistry().remove<AnimStateMachineComponent>(entity); },
+                        "Add Animator State Machine Component"));
                     ImGui::CloseCurrentPopup();
                 }
         }
@@ -1945,6 +2080,11 @@ void InspectorPanel::DrawMultiInspector(const std::vector<entt::entity>& ents)
     if (allOf(AnimatorComponent{})) {
         ImGui::Separator();
         ImGui::Text("Animator");
+        ImGui::TextDisabled("(select a single entity to edit)");
+    }
+    if (allOf(AnimStateMachineComponent{})) {
+        ImGui::Separator();
+        ImGui::Text("Animator State Machine");
         ImGui::TextDisabled("(select a single entity to edit)");
     }
 

@@ -65,6 +65,8 @@ private:
 
     // Animator drag snapshots
     float m_OldAnimSpeed = 1.0f;
+    // Cross-fade duration applied when switching clips in the inspector (editor-only).
+    float m_AnimBlendTime = 0.2f;
 
     // Saved component state for deferred remove commands
     std::optional<MeshComponent>         m_PendingRemovedMesh;
@@ -75,4 +77,5 @@ private:
     std::optional<ConstraintComponent>   m_PendingRemovedConstraint;
     std::optional<SkinnedMeshComponent>  m_PendingRemovedSkinnedMesh;
     std::optional<AnimatorComponent>     m_PendingRemovedAnimator;
+    std::optional<AnimStateMachineComponent> m_PendingRemovedAnimSM;
 };

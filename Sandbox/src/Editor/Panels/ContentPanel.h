@@ -11,7 +11,7 @@
 #include <unordered_set>
 #include <cstdint>
 
-enum class AssetType { Folder, Texture, Mesh, SkinnedMesh, Material, Shader, Scene, PhysicsMat, File };
+enum class AssetType { Folder, Texture, Mesh, SkinnedMesh, Material, Shader, Scene, PhysicsMat, AnimSM, File };
 
 struct ContentItem {
     std::filesystem::path path;

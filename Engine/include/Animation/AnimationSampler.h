@@ -4,23 +4,47 @@
 #include <vector>
 #include "Animation/Skeleton.h"
 #include "Animation/AnimationClip.h"
+#include "Animation/Pose.h"
 
 namespace Diamond {
 
-// Produces the bone-matrix palette uploaded to the GPU skinning shader:
+// The animation pipeline is three stages so poses can be blended:
+//   sample (clip -> Pose)  ->  blend (Pose,Pose -> Pose)  ->  compose (Pose -> palette)
+// The palette is what the GPU skinning shader consumes:
 //   palette[i] = worldTransform(bone i) * bone[i].inverseBind
-// `out` is sized to skel.bones.size(). Both functions rely on the skeleton being
-// topologically sorted (parent before child) so world transforms resolve in one
-// forward pass.
+// All compose steps rely on the skeleton being topologically sorted (parent
+// before child) so world transforms resolve in one forward pass.
 
-// Rest/bind pose with no clip applied. When the model's rest pose matches its
-// bind pose (the normal case) every matrix comes out ~identity — a handy sanity
-// check on the skeleton/inverse-bind data.
+// ---- stage 1: sample --------------------------------------------------------
+
+// The skeleton's rest pose as local transforms (no clip applied).
+void BindPose(const Skeleton& skel, Pose& out);
+
+// Samples `clip` at `time` seconds into local transforms (clamped to each track's
+// range). Bones the clip does not animate keep their rest pose. Interpolation is
+// LINEAR (lerp T/S, shortest-arc slerp R).
+void SampleLocalPose(const Skeleton& skel, const AnimationClip& clip, float time,
+                     Pose& out);
+
+// ---- stage 2: blend ---------------------------------------------------------
+
+// Per-bone blend of two equally-sized poses: out = lerp(a, b, w) for T/S and
+// shortest-arc slerp for R. w=0 yields `a`, w=1 yields `b`. Used for cross-fades
+// and (later) state-machine transitions.
+void BlendPoses(const Pose& a, const Pose& b, float w, Pose& out);
+
+// ---- stage 3: compose -------------------------------------------------------
+
+// Composes a local-space pose into the skinning palette (out sized to bone count).
+void ComputePalette(const Skeleton& skel, const Pose& pose, std::vector<glm::mat4>& out);
+
+// ---- convenience wrappers (sample + compose in one call) --------------------
+
+// Equivalent to BindPose + ComputePalette. When rest pose matches bind pose (the
+// normal case) every matrix comes out ~identity — a handy skeleton sanity check.
 void ComputeBindPose(const Skeleton& skel, std::vector<glm::mat4>& out);
 
-// Samples `clip` at `time` seconds (clamped to each track's range). Bones the
-// clip does not animate keep their rest pose. Interpolation is LINEAR (lerp T/S,
-// shortest-arc slerp R).
+// Equivalent to SampleLocalPose + ComputePalette.
 void SamplePose(const Skeleton& skel, const AnimationClip& clip, float time,
                 std::vector<glm::mat4>& out);
 

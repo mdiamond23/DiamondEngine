@@ -647,10 +647,13 @@ int main()
         // Update world transforms — rebuilds sorted arrays if hierarchy changed, then linear pass.
         scene.GetTransformSystem().Update(scene.GetRegistry());
 
-        // Advance skinned-mesh animators and rebuild their bone palettes for this frame.
-        // Time only moves in play mode (paused/editor holds the current pose).
-        Diamond::UpdateAnimators(scene.GetRegistry(), deltaTime,
-                                 scene.IsPlaying() && !scene.IsPaused());
+        // Drive animation state machines, then advance the animators they control
+        // and rebuild bone palettes. Both gated on play mode (paused/editor holds
+        // the current pose); the SM must run first so the animator advances the
+        // clip the SM selected this frame.
+        const bool animAdvance = scene.IsPlaying() && !scene.IsPaused();
+        Diamond::UpdateStateMachines(scene.GetRegistry(), deltaTime, animAdvance);
+        Diamond::UpdateAnimators(scene.GetRegistry(), deltaTime, animAdvance);
 
         // Build draw calls from scene — uses world matrices so parented entities render correctly.
         allDraws.clear();
