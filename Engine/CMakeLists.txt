@@ -166,6 +166,7 @@ add_library(MyEngine STATIC
     src/Assets/cgltf_impl.c
     src/Animation/AnimationSampler.cpp
     src/Animation/AnimationSystem.cpp
+    src/Animation/AnimatorAPI.cpp
     src/Platform/OpenGL/Resources/OpenGLMesh.cpp
     src/Platform/OpenGL/Resources/OpenGLRendererAPI.cpp
     src/Platform/OpenGL/Resources/OpenGLShader.cpp
