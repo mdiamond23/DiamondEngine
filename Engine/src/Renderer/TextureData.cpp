@@ -12,4 +12,13 @@ std::shared_ptr<Texture> Texture::Create(const std::string& path, bool flipVerti
     }
 }
 
+std::shared_ptr<Texture> Texture::CreateFromPixels(const uint8_t* pixels,
+                                                   int width, int height, int channels)
+{
+    switch (RendererAPI::GetAPI()) {
+        case RendererAPI::API::OpenGL: return std::make_shared<OpenGLTexture>(pixels, width, height, channels);
+        default:                       return nullptr;
+    }
+}
+
 } // namespace Diamond

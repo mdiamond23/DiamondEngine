@@ -1062,7 +1062,7 @@ void InspectorPanel::OnImGuiRender() {
         }
 
         if (!removeConstraint) {
-            const char* types[] = { "Hinge", "Swing Twist", "Fixed" };
+            const char* types[] = { "Hinge", "Swing Twist", "Fixed", "Point" };
             int typeIdx = (int)cc.type;
             ImGui::Combo("Type", &typeIdx, types, IM_ARRAYSIZE(types));
             cc.type = (ConstraintType)typeIdx;
@@ -1088,10 +1088,9 @@ void InspectorPanel::OnImGuiRender() {
             // World-space anchor + axis. Read once when play starts, so plain
             // edits here are fine — undo/redo wiring comes in a later step.
             ImGui::DragFloat3("Anchor (world)", glm::value_ptr(cc.anchor), 0.05f);
-            ImGui::DragFloat3(cc.type == ConstraintType::SwingTwist ? "Twist Axis" : "Axis",
-                              glm::value_ptr(cc.axis), 0.01f);
 
             if (cc.type == ConstraintType::Hinge) {
+                ImGui::DragFloat3("Axis", glm::value_ptr(cc.axis), 0.01f);
                 ImGui::Checkbox("Limits", &cc.hasLimits);
                 if (cc.hasLimits) {
                     ImGui::DragFloat("Min Angle", &cc.limitMin, 1.0f, -180.0f, 0.0f, "%.0f deg");
@@ -1113,6 +1112,7 @@ void InspectorPanel::OnImGuiRender() {
                     }
                 }
             } else if (cc.type == ConstraintType::SwingTwist) { // SwingTwist
+                ImGui::DragFloat3("Twist Axis", glm::value_ptr(cc.axis), 0.01f);
                 ImGui::TextDisabled("Swing cone (half-angles)");
                 ImGui::DragFloat("Swing Normal", &cc.swingNormalDeg, 1.0f, 0.0f, 180.0f, "%.0f deg");
                 ImGui::DragFloat("Swing Plane",  &cc.swingPlaneDeg,  1.0f, 0.0f, 180.0f, "%.0f deg");
@@ -1137,6 +1137,9 @@ void InspectorPanel::OnImGuiRender() {
                 }
             } else if (cc.type == ConstraintType::Fixed) {
                 ImGui::TextDisabled("Fixed constraint locks all linear and angular motion.");
+                ImGui::TextDisabled("Only Target and Anchor are used.");
+            } else if (cc.type == ConstraintType::Point) {
+                ImGui::TextDisabled("Point constraint pins the anchor; rotation stays free.");
                 ImGui::TextDisabled("Only Target and Anchor are used.");
             }
 

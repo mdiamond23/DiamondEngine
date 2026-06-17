@@ -24,6 +24,11 @@ class ImageLoader {
 public:
     static ImageData      Load     (const std::string& path, bool flipVertically = true);
     static FloatImageData LoadFloat(const std::string& path, bool flipVertically = true);
+
+    // Decodes an encoded image (PNG/JPEG/...) held in memory — used for textures
+    // embedded inside a GLB's binary buffer.
+    static ImageData      LoadFromMemory(const uint8_t* bytes, size_t size,
+                                         bool flipVertically = true);
 };
 
 } // namespace Diamond

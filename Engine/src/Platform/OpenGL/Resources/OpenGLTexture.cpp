@@ -39,6 +39,35 @@ OpenGLTexture::OpenGLTexture(const std::string& path, bool flipVertically)
     spdlog::info("OpenGLTexture: loaded '{}' ({}x{}, {} ch)", path, img.Width, img.Height, img.Channels);
 }
 
+OpenGLTexture::OpenGLTexture(const uint8_t* pixels, int width, int height, int channels)
+{
+    if (!pixels || width <= 0 || height <= 0) {
+        spdlog::error("OpenGLTexture: invalid pixel data ({}x{}, {} ch)", width, height, channels);
+        return;
+    }
+
+    m_Width  = static_cast<uint32_t>(width);
+    m_Height = static_cast<uint32_t>(height);
+
+    GLenum internalFormat = GL_RGB8;
+    GLenum dataFormat     = GL_RGB;
+    if (channels == 1) { internalFormat = GL_R8;    dataFormat = GL_RED;  }
+    if (channels == 4) { internalFormat = GL_RGBA8; dataFormat = GL_RGBA; }
+
+    glGenTextures(1, &m_RendererID);
+    glBindTexture(GL_TEXTURE_2D, m_RendererID);
+    glTexImage2D(GL_TEXTURE_2D, 0, internalFormat, width, height, 0,
+                 dataFormat, GL_UNSIGNED_BYTE, pixels);
+    glGenerateMipmap(GL_TEXTURE_2D);
+
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S,     GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T,     GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+    glBindTexture(GL_TEXTURE_2D, 0);
+}
+
 OpenGLTexture::OpenGLTexture(const std::string& path, bool flipVertically, bool /*isHDR*/)
 {
     FloatImageData img = ImageLoader::LoadFloat(path, flipVertically);

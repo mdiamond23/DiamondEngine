@@ -19,7 +19,9 @@ public:
     void Setup(int resolution = 2048);
 
     // Each frame: recomputes cascade splits + light-space matrices, then renders all cascades.
+    // Draws with a bone palette use `skinnedShader`, the rest `depthShader`.
     void Render(const OpenGLShader&          depthShader,
+                const OpenGLShader&          skinnedShader,
                 const std::vector<DrawCall>& draws,
                 const SunLight&              sun,
                 const glm::mat4&             cameraView,

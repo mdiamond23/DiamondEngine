@@ -21,6 +21,7 @@ public:
     void SetVec3 (const std::string& name, const glm::vec3& v)   const override;
     void SetMat3 (const std::string& name, const glm::mat3& mat) const override;
     void SetMat4 (const std::string& name, const glm::mat4& mat) const override;
+    void SetMat4Array(const std::string& name, const glm::mat4* mats, int count) const override;
 
 private:
     uint32_t m_RendererID = 0;

@@ -23,3 +23,7 @@ FetchContent_MakeAvailable(fontawesome)
 
 add_subdirectory(Engine)
 add_subdirectory(Sandbox)
+
+# Headless validation tool for the glTF importer (no window / OpenGL needed).
+add_executable(GltfDump Tools/GltfDump.cpp)
+target_link_libraries(GltfDump PRIVATE MyEngine)

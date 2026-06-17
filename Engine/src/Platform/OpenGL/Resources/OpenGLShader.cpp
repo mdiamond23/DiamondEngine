@@ -122,6 +122,9 @@ void OpenGLShader::SetMat3(const std::string& name, const glm::mat3& mat) const
 void OpenGLShader::SetMat4(const std::string& name, const glm::mat4& mat) const
     { glUniformMatrix4fv(GetLocation(m_RendererID, name), 1, GL_FALSE, &mat[0][0]); }
 
+void OpenGLShader::SetMat4Array(const std::string& name, const glm::mat4* mats, int count) const
+    { glUniformMatrix4fv(GetLocation(m_RendererID, name), count, GL_FALSE, &mats[0][0][0]); }
+
 void OpenGLShader::CheckCompileErrors(uint32_t shader, const std::string& type)
 {
     int  success;

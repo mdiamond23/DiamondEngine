@@ -27,6 +27,26 @@ ImageData ImageLoader::Load(const std::string& path, bool flipVertically)
 }
 
 
+ImageData ImageLoader::LoadFromMemory(const uint8_t* bytes, size_t size, bool flipVertically)
+{
+    stbi_set_flip_vertically_on_load(flipVertically ? 1 : 0);
+
+    ImageData result;
+    uint8_t* data = stbi_load_from_memory(bytes, (int)size,
+                                          &result.Width, &result.Height, &result.Channels, 0);
+    if (!data) {
+        spdlog::error("ImageLoader: failed to decode in-memory image ({} bytes)", size);
+        return result;
+    }
+
+    size_t byteCount = static_cast<size_t>(result.Width) *
+                       static_cast<size_t>(result.Height) *
+                       static_cast<size_t>(result.Channels);
+    result.Pixels.assign(data, data + byteCount);
+    stbi_image_free(data);
+    return result;
+}
+
 FloatImageData ImageLoader::LoadFloat(const std::string& path, bool flipVertically)
 {
     stbi_set_flip_vertically_on_load(flipVertically ? 1 : 0);

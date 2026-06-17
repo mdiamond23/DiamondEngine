@@ -858,9 +858,9 @@
         "limitMax": 90.0,
         "limitMin": -90.0,
         "motorDamping": 1.0,
-        "motorFrequency": 2.0,
-        "motorMaxTorque": 50.0,
-        "motorMode": 0,
+        "motorFrequency": 4.0,
+        "motorMaxTorque": 150.0,
+        "motorMode": 2,
         "motorTarget": 0.0,
         "motorTargetEuler": [
           0.0,
@@ -973,10 +973,10 @@
         "limitMax": 90.0,
         "limitMin": -90.0,
         "motorDamping": 1.0,
-        "motorFrequency": 2.0,
+        "motorFrequency": 3.0,
         "motorMaxTorque": 50.0,
-        "motorMode": 0,
-        "motorTarget": 0.0,
+        "motorMode": 2,
+        "motorTarget": 45.0,
         "motorTargetEuler": [
           0.0,
           0.0,
@@ -1006,7 +1006,6 @@
         "visible": true
       },
       "name": "Forearm",
-      "parentUuid": 16456613340169470746,
       "rigidbody": {
         "angularDamping": 0.05000000074505806,
         "bodyType": 1,
@@ -1025,8 +1024,8 @@
         ],
         "position": [
           0.0,
-          0.0,
-          2.930000066757202
+          6.0,
+          3.930000066757202
         ],
         "rotation": [
           0.70710688829422,
@@ -1036,8 +1035,8 @@
         ],
         "scale": [
           0.6264479756355286,
-          2.3625364303588867,
-          0.5087952613830566
+          2.3625361919403076,
+          0.5087952017784119
         ]
       },
       "uuid": 6366412477898720403

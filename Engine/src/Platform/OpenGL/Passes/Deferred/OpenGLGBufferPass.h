@@ -13,7 +13,10 @@ public:
     // Renders all draw calls into the G-buffer FBO.
     // fbo must already have gViewPos/gViewNormal/gAlbedo/gMaterial attached
     // (COLOR_ATTACHMENT 0-3) and a depth renderbuffer.
-    void Render(const OpenGLShader&          shader,
+    // Each draw picks `skinnedShader` (and uploads its bone palette) when it has
+    // one, otherwise `staticShader`; both share the same gbuffer fragment stage.
+    void Render(const OpenGLShader&          staticShader,
+                const OpenGLShader&          skinnedShader,
                 const std::vector<DrawCall>& draws,
                 const PBRMaterial&           material,
                 const glm::mat4&             view,

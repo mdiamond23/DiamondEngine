@@ -138,6 +138,7 @@ void OpenGLCSMPass::ComputeCascades(
 
 void OpenGLCSMPass::Render(
             const OpenGLShader&          depthShader,
+            const OpenGLShader&          skinnedShader,
             const std::vector<DrawCall>& draws,
             const SunLight&              sun,
             const glm::mat4&             cameraView,
@@ -148,18 +149,28 @@ void OpenGLCSMPass::Render(
     ComputeCascades(sun, cameraView, cameraProj, cameraNear, cameraFar);
 
     glViewport(0, 0, m_Resolution, m_Resolution);
-    depthShader.Bind();
     glEnable(GL_DEPTH_TEST);
     glCullFace(GL_FRONT); // eliminates peter-panning
 
     for (int i = 0; i < NUM_CASCADES; ++i) {
         glBindFramebuffer(GL_FRAMEBUFFER, m_FBOs[i]);
         glClear(GL_DEPTH_BUFFER_BIT);
-        depthShader.SetMat4("lightSpaceMatrix", m_LightMatrices[i]);
 
+        // lightSpaceMatrix is per-cascade, so (re)set it whenever a shader is
+        // bound within this cascade.
+        const OpenGLShader* bound = nullptr;
         for (const auto& draw : draws) {
-            depthShader.SetMat4("model", draw.modelMatrix);
-            draw.mesh->Draw(depthShader);
+            const bool          skinned = (draw.bonePalette != nullptr && draw.boneCount > 0);
+            const OpenGLShader& shader  = skinned ? skinnedShader : depthShader;
+            if (bound != &shader) {
+                shader.Bind();
+                shader.SetMat4("lightSpaceMatrix", m_LightMatrices[i]);
+                bound = &shader;
+            }
+            shader.SetMat4("model", draw.modelMatrix);
+            if (skinned)
+                shader.SetMat4Array("uBones", draw.bonePalette, draw.boneCount);
+            draw.mesh->Draw(shader);
         }
     }
 

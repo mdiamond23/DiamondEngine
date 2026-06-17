@@ -9,9 +9,12 @@
 //
 // Hinge = 1-DOF rotation (doors, elbows, knees). SwingTwist = a humanoid ball
 // joint with an elliptical swing cone + twist limit (shoulders, hips, neck) —
-// the workhorse joint for ragdolls. More types arrive in later steps.
+// the workhorse joint for ragdolls. Fixed = locks all 6 DOF (attachments).
+// Point = a ball joint that removes the 3 translational DOF only, leaving
+// rotation completely free (grabbing). Point uses only `anchor`; it has no
+// axis, no limits, and no motor (nothing angular is constrained to drive).
 
-enum class ConstraintType { Hinge, SwingTwist, Fixed };
+enum class ConstraintType { Hinge, SwingTwist, Fixed, Point };
 
 // Motor drive mode. Off = passive joint. Velocity = spin toward a target angular
 // velocity (powered wheel). Position = drive toward a target angle like a

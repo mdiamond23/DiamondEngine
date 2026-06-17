@@ -1,11 +1,26 @@
 #include "Assets/ModelImporter.h"
+#include "Assets/GltfImporter.h"
 
 #include <assimp/Importer.hpp>
 #include <assimp/scene.h>
 #include <assimp/postprocess.h>
 #include <spdlog/spdlog.h>
 
+#include <algorithm>
+#include <cctype>
+
 namespace Diamond {
+
+// True if `path` ends with `.gltf` or `.glb` (case-insensitive).
+static bool IsGltf(const std::string& path)
+{
+    auto dot = path.find_last_of('.');
+    if (dot == std::string::npos) return false;
+    std::string ext = path.substr(dot + 1);
+    std::transform(ext.begin(), ext.end(), ext.begin(),
+                   [](unsigned char c) { return (char)std::tolower(c); });
+    return ext == "gltf" || ext == "glb";
+}
 
 static MeshData ProcessMesh(aiMesh* mesh)
 {
@@ -50,6 +65,11 @@ static void ProcessNode(aiNode* node, const aiScene* scene, std::vector<MeshData
 
 std::vector<MeshData> ModelImporter::Load(const std::string& path)
 {
+    // glTF goes through the dedicated cgltf path; everything else (OBJ, FBX, …)
+    // stays on Assimp.
+    if (IsGltf(path))
+        return GltfImporter::Load(path);
+
     Assimp::Importer importer;
     const aiScene* scene = importer.ReadFile(
         path,

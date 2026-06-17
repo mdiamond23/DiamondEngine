@@ -58,13 +58,12 @@ void OpenGLShadowPass::SetupPointShadowMaps(int count, int resolution, float far
 
 void OpenGLShadowPass::RenderPointShadowPass(
     const OpenGLShader&          depthShader,
+    const OpenGLShader&          skinnedShader,
     const std::vector<DrawCall>& draws,
     const glm::vec3              lightPositions[],
     int                          lightCount)
 {
     glViewport(0, 0, m_PointShadowRes, m_PointShadowRes);
-    depthShader.Bind();
-    depthShader.SetFloat("farPlane", m_PointShadowFarPlane);
 
     glm::mat4 shadowProj = glm::perspective(
         glm::radians(90.0f), 1.0f, 0.1f, m_PointShadowFarPlane);
@@ -79,16 +78,31 @@ void OpenGLShadowPass::RenderPointShadowPass(
             shadowProj * glm::lookAt(lp, lp + glm::vec3( 0, 0, 1), glm::vec3(0,-1, 0)),
             shadowProj * glm::lookAt(lp, lp + glm::vec3( 0, 0,-1), glm::vec3(0,-1, 0)),
         };
-        for (int f = 0; f < 6; ++f)
-            depthShader.SetMat4("shadowMatrices[" + std::to_string(f) + "]", views[f]);
-        depthShader.SetVec3("lightPos", lp);
 
         glBindFramebuffer(GL_FRAMEBUFFER, m_PointShadowFBOs[i]);
         glClear(GL_DEPTH_BUFFER_BIT);
         glEnable(GL_DEPTH_TEST);
+
+        // The per-light cube matrices + lightPos must be set on whichever shader
+        // is bound, so push them again on each shader switch.
+        const OpenGLShader* bound = nullptr;
+        auto bindShader = [&](const OpenGLShader& s) {
+            s.Bind();
+            s.SetFloat("farPlane", m_PointShadowFarPlane);
+            for (int f = 0; f < 6; ++f)
+                s.SetMat4("shadowMatrices[" + std::to_string(f) + "]", views[f]);
+            s.SetVec3("lightPos", lp);
+            bound = &s;
+        };
+
         for (const auto& draw : draws) {
-            depthShader.SetMat4("model", draw.modelMatrix);
-            draw.mesh->Draw(depthShader);
+            const bool          skinned = (draw.bonePalette != nullptr && draw.boneCount > 0);
+            const OpenGLShader& shader  = skinned ? skinnedShader : depthShader;
+            if (bound != &shader) bindShader(shader);
+            shader.SetMat4("model", draw.modelMatrix);
+            if (skinned)
+                shader.SetMat4Array("uBones", draw.bonePalette, draw.boneCount);
+            draw.mesh->Draw(shader);
         }
     }
     glBindFramebuffer(GL_FRAMEBUFFER, 0);

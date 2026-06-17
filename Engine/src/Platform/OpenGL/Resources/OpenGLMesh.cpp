@@ -58,6 +58,15 @@ void OpenGLMesh::Upload(const MeshData& data)
     glEnableVertexAttribArray(4);
     glVertexAttribPointer(4, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex),
                           (void*)offsetof(Vertex, Bitangent));
+    // layout (location = 5) BoneIDs — integer attribute, so glVertexAttribIPointer
+    // (not the float variant) to keep the bone indices exact in the shader.
+    glEnableVertexAttribArray(5);
+    glVertexAttribIPointer(5, 4, GL_INT, sizeof(Vertex),
+                           (void*)offsetof(Vertex, BoneIDs));
+    // layout (location = 6) BoneWeights
+    glEnableVertexAttribArray(6);
+    glVertexAttribPointer(6, 4, GL_FLOAT, GL_FALSE, sizeof(Vertex),
+                          (void*)offsetof(Vertex, BoneWeights));
 
     glBindVertexArray(0);
 }

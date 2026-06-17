@@ -21,6 +21,7 @@ public:
     virtual void SetVec3 (const std::string& name, const glm::vec3& v)    const = 0;
     virtual void SetMat3 (const std::string& name, const glm::mat3& mat)  const = 0;
     virtual void SetMat4 (const std::string& name, const glm::mat4& mat)  const = 0;
+    virtual void SetMat4Array(const std::string& name, const glm::mat4* mats, int count) const = 0;
 
     static std::shared_ptr<Shader> Create(const std::string& vsPath, const std::string& fsPath);
 };

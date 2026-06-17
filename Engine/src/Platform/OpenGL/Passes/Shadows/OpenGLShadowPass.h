@@ -13,6 +13,7 @@ public:
 
     void SetupPointShadowMaps(int count = 4, int resolution = 512, float farPlane = 25.0f);
     void RenderPointShadowPass(const OpenGLShader&          depthShader,
+                               const OpenGLShader&          skinnedShader,
                                const std::vector<DrawCall>& draws,
                                const glm::vec3              lightPositions[],
                                int                          lightCount);

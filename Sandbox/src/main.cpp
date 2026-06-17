@@ -41,6 +41,9 @@
 #include "Renderer/Frustum.h"
 #include "Platform/OpenGL/Passes/Forward/OpenGLTransparencyPass.h"
 #include "Assets/ModelImporter.h"
+#include "Assets/GltfImporter.h"
+#include "Animation/AnimationComponents.h"
+#include "Animation/AnimationSystem.h"
 
 using namespace Diamond;
 
@@ -130,6 +133,10 @@ int main()
     OpenGLShader gbufferShader(
         ENGINE_SHADERS_DIR "/Deferred/gbuffer.vert",
         ENGINE_SHADERS_DIR "/Deferred/gbuffer.frag");
+    // Skinned variant — same fragment stage, GPU vertex skinning.
+    OpenGLShader gbufferSkinnedShader(
+        ENGINE_SHADERS_DIR "/Deferred/gbuffer_skinned.vert",
+        ENGINE_SHADERS_DIR "/Deferred/gbuffer.frag");
     OpenGLShader ssaoShader(
         ENGINE_SHADERS_DIR "/Deferred/quad.vert",
         ENGINE_SHADERS_DIR "/Deferred/ssao.frag");
@@ -166,8 +173,15 @@ int main()
     OpenGLShader depthShader(
         ENGINE_SHADERS_DIR "/Shadows/depth.vert",
         ENGINE_SHADERS_DIR "/Shadows/depth.frag");
+    OpenGLShader depthSkinnedShader(
+        ENGINE_SHADERS_DIR "/Shadows/depth_skinned.vert",
+        ENGINE_SHADERS_DIR "/Shadows/depth.frag");
     OpenGLShader pointDepthShader(
         ENGINE_SHADERS_DIR "/Shadows/point_depth.vert",
+        ENGINE_SHADERS_DIR "/Shadows/point_depth.geom",
+        ENGINE_SHADERS_DIR "/Shadows/point_depth.frag");
+    OpenGLShader pointDepthSkinnedShader(
+        ENGINE_SHADERS_DIR "/Shadows/point_depth_skinned.vert",
         ENGINE_SHADERS_DIR "/Shadows/point_depth.geom",
         ENGINE_SHADERS_DIR "/Shadows/point_depth.frag");
     OpenGLShader transparencyShader(
@@ -294,6 +308,35 @@ int main()
                 cerberusMeshData[i].ComputeAABB());
             mc.meshPath     = ASSETS_DIR "/Models/Cerberus_by_Andrew_Maximov/Revolver.FBX";
             mc.meshSubIndex = i;
+        }
+    }
+    {
+        // Skinned-character test: CesiumMan walks via GPU skinning.
+        const char* path = ASSETS_DIR "/Models/CesiumMan.glb";
+        ImportedModel model = GltfImporter::LoadModel(path);
+        if (!model.skeleton.bones.empty() && !model.meshes.empty()) {
+            auto e = scene.CreateEntity("CesiumMan");
+            auto& tc = scene.GetRegistry().get<TransformComponent>(e);
+            tc.position = glm::vec3(-1.5f, 0.0f, 1.0f);
+
+            auto& smc    = scene.GetRegistry().emplace<SkinnedMeshComponent>(e);
+            smc.material = model.material ? model.material : diamondMaterial;
+            smc.skeleton = std::move(model.skeleton);
+            smc.clips    = std::move(model.animations);
+            smc.meshPath = path;
+            Diamond::AABB bounds;
+            for (auto& md : model.meshes) {
+                smc.meshes.push_back(Mesh::Create(md));
+                Diamond::AABB b = md.ComputeAABB();
+                bounds.min = glm::min(bounds.min, b.min);
+                bounds.max = glm::max(bounds.max, b.max);
+            }
+            smc.localBounds = bounds;
+
+            auto& anim = scene.GetRegistry().emplace<AnimatorComponent>(e);
+            anim.clip  = 0;   // CesiumMan's single walk clip
+            spdlog::info("CesiumMan loaded: {} bones, {} clips, {} submeshes",
+                         smc.skeleton.bones.size(), smc.clips.size(), smc.meshes.size());
         }
     }
 
@@ -431,12 +474,12 @@ int main()
         // Shadow passes — sinks (no graph writes), always alive
         graph.AddPass("DirectionalShadow")
             .SetExecute([&]{
-                csmPass.Render(depthShader, shadowDraws, sun, view, proj, 0.1f, 100.0f);
+                csmPass.Render(depthShader, depthSkinnedShader, shadowDraws, sun, view, proj, 0.1f, 100.0f);
             });
 
         graph.AddPass("PointShadow")
             .SetExecute([&]{
-                shadowPass.RenderPointShadowPass(pointDepthShader, shadowDraws,
+                shadowPass.RenderPointShadowPass(pointDepthShader, pointDepthSkinnedShader, shadowDraws,
                     pointPositions.data(), (int)pointPositions.size());
             });
 
@@ -451,7 +494,7 @@ int main()
 
                 for (auto& [mat, batch] : culledBatches)
                     if (!batch.empty())
-                        gbufferPass.Render(gbufferShader, batch, *mat, view, proj, graph.GetFBO(gViewPos), fbW, fbH);
+                        gbufferPass.Render(gbufferShader, gbufferSkinnedShader, batch, *mat, view, proj, graph.GetFBO(gViewPos), fbW, fbH);
             });
 
         // SSAO — raw occlusion
@@ -604,6 +647,9 @@ int main()
         // Update world transforms — rebuilds sorted arrays if hierarchy changed, then linear pass.
         scene.GetTransformSystem().Update(scene.GetRegistry());
 
+        // Advance skinned-mesh animators and rebuild their bone palettes for this frame.
+        Diamond::UpdateAnimators(scene.GetRegistry(), deltaTime);
+
         // Build draw calls from scene — uses world matrices so parented entities render correctly.
         allDraws.clear();
         std::unordered_map<PBRMaterial*, std::vector<DrawCall>> materialBatches;
@@ -612,6 +658,30 @@ int main()
             DrawCall dc{ mc.mesh.get(), scene.GetTransformSystem().GetWorldMatrix(entity), mc.localBounds, mc.castsShadow };
             materialBatches[mc.material.get()].push_back(dc);
             allDraws.push_back(dc);
+        }
+
+        // Skinned meshes — each draw carries the animator's bone palette so both
+        // the G-buffer and shadow passes select the skinning shader. Added to
+        // allDraws too so the shadowDraws filter below picks up casters.
+        for (auto [entity, smc] : scene.GetRegistry().view<SkinnedMeshComponent>().each()) {
+            if (!smc.visible || !smc.material || smc.meshes.empty()) continue;
+
+            const glm::mat4* palette   = nullptr;
+            int              boneCount = 0;
+            if (auto* anim = scene.GetRegistry().try_get<AnimatorComponent>(entity);
+                anim && !anim->palette.empty()) {
+                palette   = anim->palette.data();
+                boneCount = std::min((int)anim->palette.size(), 100); // matches shader MAX_BONES
+            }
+
+            glm::mat4 world = scene.GetTransformSystem().GetWorldMatrix(entity);
+            for (auto& mesh : smc.meshes) {
+                DrawCall dc{ mesh.get(), world, smc.localBounds, smc.castsShadow };
+                dc.bonePalette = palette;
+                dc.boneCount   = boneCount;
+                materialBatches[smc.material.get()].push_back(dc);
+                allDraws.push_back(dc);
+            }
         }
 
         // Shadow draws are a subset — only casters

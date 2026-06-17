@@ -8,12 +8,22 @@
 
 namespace Diamond {
 
+// Up to this many bones can influence a single vertex (glTF's standard limit;
+// also the width of the ivec4/vec4 skinning attributes below).
+inline constexpr int kMaxBoneInfluence = 4;
+
 struct Vertex {
     glm::vec3 Position;
     glm::vec3 Normal;
     glm::vec2 TexCoords;
     glm::vec3 Tangent;
     glm::vec3 Bitangent;
+
+    // Skinning: which bones move this vertex and how much. Zero-weighted by
+    // default so non-skinned meshes (loaded through the static path) are inert
+    // here — the skinning shader weights resolve to no influence.
+    glm::ivec4 BoneIDs     { 0, 0, 0, 0 };
+    glm::vec4  BoneWeights { 0.0f, 0.0f, 0.0f, 0.0f };
 };
 
 // CPU-side mesh data produced by ModelImporter. Pass to Mesh::Create() to upload to the GPU.

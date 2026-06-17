@@ -162,6 +162,10 @@ add_library(MyEngine STATIC
     src/Application.cpp
     src/Assets/ImageLoader.cpp
     src/Assets/ModelImporter.cpp
+    src/Assets/GltfImporter.cpp
+    src/Assets/cgltf_impl.c
+    src/Animation/AnimationSampler.cpp
+    src/Animation/AnimationSystem.cpp
     src/Platform/OpenGL/Resources/OpenGLMesh.cpp
     src/Platform/OpenGL/Resources/OpenGLRendererAPI.cpp
     src/Platform/OpenGL/Resources/OpenGLShader.cpp
@@ -195,6 +199,7 @@ target_include_directories(MyEngine
         ${CMAKE_SOURCE_DIR}/ThirdParty/stb
     PRIVATE
         src
+        ${CMAKE_SOURCE_DIR}/ThirdParty/cgltf
         ${joltphysics_SOURCE_DIR}
 )
 

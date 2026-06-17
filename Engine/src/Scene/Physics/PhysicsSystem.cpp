@@ -29,6 +29,7 @@
 #include <Jolt/Physics/Constraints/HingeConstraint.h>
 #include <Jolt/Physics/Constraints/SwingTwistConstraint.h>
 #include <Jolt/Physics/Constraints/FixedConstraint.h>
+#include <Jolt/Physics/Constraints/PointConstraint.h>
 
 #include "Scene/Physics/PhysicsSystem.h"
 #include "Scene/Physics/PhysicsAPI.h"
@@ -466,6 +467,14 @@ static JPH::Ref<JPH::TwoBodyConstraint> BuildConstraint(const ConstraintComponen
             JPH::FixedConstraintSettings s;
             s.mSpace       = JPH::EConstraintSpace::WorldSpace;
             s.mPoint1      = s.mPoint2 =    JPH::RVec3(cc.anchor.x, cc.anchor.y, cc.anchor.z);
+            return s.Create(body1, body2);
+        }
+        case ConstraintType::Point: {
+            // Removes the 3 translational DOF at the anchor; rotation stays free.
+            // Only the anchor is used — no axis, limits, or motor.
+            JPH::PointConstraintSettings s;
+            s.mSpace  = JPH::EConstraintSpace::WorldSpace;
+            s.mPoint1 = s.mPoint2 = JPH::RVec3(cc.anchor.x, cc.anchor.y, cc.anchor.z);
             return s.Create(body1, body2);
         }
     }

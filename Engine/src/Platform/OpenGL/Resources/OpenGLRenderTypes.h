@@ -10,6 +10,12 @@ struct DrawCall {
     glm::mat4   modelMatrix;
     AABB        localBounds;
     bool        castsShadow = true;
+
+    // Skinning: a non-null palette marks this draw as skinned, so the G-buffer
+    // pass selects the skinned shader and uploads the bone matrices. The pointer
+    // must stay valid until the draw executes (owned by the animation system).
+    const glm::mat4* bonePalette = nullptr;
+    int              boneCount   = 0;
 };
 
 struct SunLight {
