@@ -635,6 +635,11 @@ int main()
         Diamond::UpdateStateMachines(scene.GetRegistry(), deltaTime, animAdvance);
         Diamond::UpdateAnimators(scene.GetRegistry(), deltaTime, animAdvance);
 
+        // Ragdoll readback: for any limp ragdoll, overwrite the palette UpdateAnimators
+        // just produced with the simulated body transforms. Must run after the physics
+        // step (in UpdateSystems above) and after UpdateAnimators, so it wins.
+        Physics::SyncRagdollPoses(scene);
+
         // Build draw calls from scene — uses world matrices so parented entities render correctly.
         allDraws.clear();
         std::unordered_map<PBRMaterial*, std::vector<DrawCall>> materialBatches;
@@ -728,6 +733,7 @@ int main()
         // Collider debug wireframes — drawn into the editor viewport after the scene pass
         glBindFramebuffer(GL_FRAMEBUFFER, viewportFBO);
         //Physics::DrawColliders(scene);
+        if (scene.IsPlaying()) Physics::DrawRagdolls(scene);
         DebugDraw::Flush(proj * view);
 
         // --- Game viewport: primary camera entity (play mode only) ---

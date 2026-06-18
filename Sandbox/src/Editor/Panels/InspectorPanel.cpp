@@ -15,6 +15,8 @@
 #include "Scene/Physics/Collision.h"
 #include "Scene/Physics/Rigidbody.h"
 #include "Scene/Physics/Constraint.h"
+#include "Scene/Physics/RagdollComponent.h"
+#include "Scene/Physics/PhysicsAPI.h"
 #include "Assets/ModelImporter.h"
 #include "Assets/GltfImporter.h"
 #include "Renderer/MeshData.h"
@@ -1366,32 +1368,56 @@ void InspectorPanel::OnImGuiRender() {
                                       smc.clips[i].duration);
             }
 
-            // --- TEMP (ragdoll PR1 verification) -------------------------------
-            // Auto-generate a default ragdoll from this skeleton, save a .ragdoll
-            // next to the model, and log the result. Evolves into the PR4 ragdoll
-            // inspector panel; for now it just exercises BuildDefaultRagdoll on the
-            // real loaded skeleton.
+            // --- Ragdoll -------------------------------------------------------
+            // Auto-generate (or load) a .ragdoll for this skeleton and attach a
+            // RagdollComponent. At play start PhysicsSystem builds kinematic bodies
+            // that follow the animation; "Go Limp" flips them to dynamic and the
+            // character flops (Docs/ragdoll-design.md).
             if (!smc.skeleton.bones.empty()) {
                 ImGui::Spacing();
-                if (ImGui::Button("Generate Ragdoll (.ragdoll)")) {
-                    RagdollConfig cfg = BuildDefaultRagdoll(smc.skeleton);
-                    std::string path = smc.meshPath.empty()
-                        ? std::string("Assets/ragdoll.ragdoll")
-                        : std::filesystem::path(smc.meshPath).replace_extension(".ragdoll").string();
-                    bool ok = SaveRagdoll(path, cfg);
-                    spdlog::info("Ragdoll: {} bodies from {} bones -> {} ({})",
-                                 cfg.bodies.size(), smc.skeleton.bones.size(), path,
-                                 ok ? "saved" : "SAVE FAILED");
-                    for (const auto& d : cfg.bodies)
-                        spdlog::info("  {:<24} <- {:<24} [{:<7}] mass={:5.1f}  {}",
-                                     d.boneName,
-                                     d.parentBoneName.empty() ? "(root)" : d.parentBoneName,
-                                     RagdollShapeToStr(d.shape), d.mass,
-                                     RagdollJointToStr(d.jointType));
+                ImGui::TextDisabled("Ragdoll");
+
+                if (!registry.all_of<RagdollComponent>(entity)) {
+                    if (ImGui::Button("Add Ragdoll")) {
+                        std::string path = smc.meshPath.empty()
+                            ? std::string("Assets/ragdoll.ragdoll")
+                            : std::filesystem::path(smc.meshPath).replace_extension(".ragdoll").string();
+
+                        // Reuse an existing .ragdoll if present, otherwise auto-generate + save.
+                        auto cfg = std::make_shared<RagdollConfig>();
+                        if (!LoadRagdoll(path, *cfg)) {
+                            *cfg = BuildDefaultRagdoll(smc.skeleton);
+                            SaveRagdoll(path, *cfg);
+                        }
+                        auto& rag    = registry.emplace<RagdollComponent>(entity);
+                        rag.assetPath = NormalizeRagdollPath(path);
+                        rag.config    = cfg;
+                        spdlog::info("Ragdoll attached: {} bodies <- {}", cfg->bodies.size(), path);
+                    }
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("Auto-generate (or load) a .ragdoll next to the model\n"
+                                          "and attach a RagdollComponent.");
+                } else {
+                    auto& rag = registry.get<RagdollComponent>(entity);
+                    ImGui::Text("%zu bodies  (%s)",
+                                rag.config ? rag.config->bodies.size() : 0u,
+                                rag.mode == RagdollMode::Limp ? "Limp" : "Animated");
+                    ImGui::TextDisabled("%s", rag.assetPath.c_str());
+
+                    const bool playing = scene && scene->IsPlaying();
+                    ImGui::BeginDisabled(!playing);
+                    if (ImGui::Button("Go Limp"))
+                        Physics::SetRagdollMode(rag, RagdollMode::Limp);
+                    ImGui::SameLine();
+                    if (ImGui::Button("Reset to Animated"))
+                        Physics::SetRagdollMode(rag, RagdollMode::Animated);
+                    ImGui::EndDisabled();
+                    if (!playing && ImGui::IsItemHovered())
+                        ImGui::SetTooltip("Enter play mode to trigger the ragdoll.");
+
+                    if (ImGui::Button("Remove Ragdoll"))
+                        registry.remove<RagdollComponent>(entity);
                 }
-                if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("Auto-generate a ragdoll config from this skeleton and\n"
-                                      "save it next to the model. Check the console for the result.");
             }
         }
     }

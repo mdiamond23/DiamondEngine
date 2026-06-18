@@ -5,6 +5,7 @@
 #include <vector>
 #include "Rigidbody.h"
 #include "Constraint.h"
+#include "RagdollComponent.h"
 
 class Scene;
 
@@ -79,9 +80,24 @@ namespace Physics {
     std::vector<HitResult> SphereCastMulti(glm::vec3 origin, float radius, glm::vec3 direction, float distance,
                                            entt::entity ignore = entt::null, bool drawDebug = false);
 
+    // ---- Ragdoll ----
+    // Flip a built ragdoll between Animated (kinematic, shadows the animation) and
+    // Limp (dynamic, flops). v1 passive ragdoll — see Docs/ragdoll-design.md. No-op
+    // if the ragdoll hasn't been built (play start) or the session isn't active.
+    void SetRagdollMode(RagdollComponent& rag, RagdollMode mode);
+
+    // Overwrites the bone palette of every Limp ragdoll from its simulated bodies
+    // (the animation->physics readback) and re-roots the entity to the hips. MUST be
+    // called once per frame AFTER UpdateAnimators (so it isn't clobbered) and after
+    // the physics step. No-op when no ragdoll is limp.
+    void SyncRagdollPoses(Scene& scene);
+
     // ---- Debug visualization ----
     // Submits wireframe collider shapes for all entities in the scene to DebugDraw.
     // Call Physics::DrawColliders(scene) then DebugDraw::Flush(vp) each frame.
     // Works in both edit and play mode — does not require an active physics session.
     void DrawColliders(Scene& scene, glm::vec3 color = {0.0f, 1.0f, 0.0f});
+
+    // Wireframes for ragdoll bodies (which aren't ColliderComponents). Play mode only.
+    void DrawRagdolls(Scene& scene, glm::vec3 color = {1.0f, 0.4f, 0.0f});
 }

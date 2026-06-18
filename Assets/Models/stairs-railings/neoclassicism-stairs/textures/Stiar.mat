@@ -1,0 +1,10 @@
+{
+    "albedoPath": "C:/Dev/DiamondEngine\\Assets\\Models\\stairs-railings\\neoclassicism-stairs\\textures\\albedo_stairs_01.png",
+    "aoPath": "",
+    "emissivePath": "",
+    "emissiveStrength": 0.0,
+    "metallicPath": "C:/Dev/DiamondEngine\\Assets\\Models\\stairs-railings\\neoclassicism-stairs\\textures\\metallic_stairs01.png",
+    "normalPath": "C:/Dev/DiamondEngine\\Assets\\Models\\stairs-railings\\neoclassicism-stairs\\textures\\normal_02_stairs_01.png",
+    "roughnessPath": "C:/Dev/DiamondEngine\\Assets\\Models\\stairs-railings\\neoclassicism-stairs\\textures\\roughness_stairs01.png",
+    "uvScale": 1.0
+}

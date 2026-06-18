@@ -1,5 +1,6 @@
 #include "SceneSerializer.h"
 #include <nlohmann/json.hpp>
+#include <spdlog/spdlog.h>
 #include <fstream>
 #include <unordered_map>
 
@@ -8,12 +9,14 @@
 #include "Scene/Physics/Collision.h"
 #include "Scene/Physics/Rigidbody.h"
 #include "Scene/Physics/Constraint.h"
+#include "Scene/Physics/RagdollComponent.h"
 #include "Assets/ModelImporter.h"
 #include "Assets/GltfImporter.h"
 #include "Animation/AnimationComponents.h"
 #include "PhysicsMaterialAsset.h"
 #include "AnimStateMachineAsset.h"
 #include "MaterialAsset.h"
+#include "RagdollAsset.h"
 #include "Assets/ImageLoader.h"
 #include "Renderer/MeshData.h"
 #include "Renderer/TextureData.h"
@@ -195,6 +198,14 @@ static json ToJson(Scene& scene)
                 { "motorFrequency", cc.motorFrequency },
                 { "motorDamping",   cc.motorDamping   },
                 { "motorTargetEuler", JVec3(cc.motorTargetEuler) }
+            };
+        }
+
+        if (reg.all_of<RagdollComponent>(entity)) {
+            auto& rag = reg.get<RagdollComponent>(entity);
+            ej["ragdoll"] = {
+                { "assetPath", rag.assetPath },
+                { "mode",      (int)rag.mode }   // serialized initial mode (usually Animated)
             };
         }
 
@@ -445,6 +456,19 @@ static bool FromJson(Scene& scene, const json& root)
             cc.motorFrequency = cj.value("motorFrequency", 2.0f);
             cc.motorDamping   = cj.value("motorDamping",   1.0f);
             if (cj.contains("motorTargetEuler")) cc.motorTargetEuler = ToVec3(cj["motorTargetEuler"]);
+        }
+
+        if (ej.contains("ragdoll")) {
+            const auto& rj = ej["ragdoll"];
+            auto& rag     = reg.emplace<RagdollComponent>(e);
+            rag.assetPath = rj.value("assetPath", std::string{});
+            rag.mode      = (RagdollMode)rj.value("mode", 0);
+            if (!rag.assetPath.empty()) {
+                rag.assetPath = NormalizeRagdollPath(rag.assetPath);
+                auto cfg = std::make_shared<RagdollConfig>();
+                if (LoadRagdoll(rag.assetPath, *cfg)) rag.config = cfg;
+                else spdlog::warn("Scene load: failed to load ragdoll '{}'", rag.assetPath);
+            }
         }
 
         if (ej.contains("skinnedMesh")) {

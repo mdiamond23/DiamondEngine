@@ -36,13 +36,16 @@
 #include "Scene/Physics/Rigidbody.h"
 #include "Scene/Physics/Collision.h"
 #include "Scene/Physics/Constraint.h"
+#include "Scene/Physics/RagdollComponent.h"
 #include "Scene/Components.h"
 #include "Scene/Scene.h"
+#include "Animation/AnimationComponents.h"   // SkinnedMeshComponent + AnimatorComponent (ragdoll readback)
 #include "DebugDraw.h"
 #include "Assets/ModelImporter.h"
 
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 
 #include <spdlog/spdlog.h>
 
@@ -53,6 +56,7 @@
 #include <utility>
 #include <cstdint>
 #include <algorithm>
+#include <cmath>
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -236,6 +240,47 @@ private:
 };
 
 // ---------------------------------------------------------------------------
+// Ragdoll runtime instance — the internal counterpart of RagdollComponent.
+// Bodies + joints are plain physics primitives (kinematic capsules that follow
+// the animation, joints that hold them together), so they live in the same
+// bodyMap / constraintMap as everything else and are torn down by the normal
+// OnDestroy sweep. This struct only adds the per-body data the ragdoll passes
+// need: which bone each body drives, and its shape (for debug draw). See
+// Docs/ragdoll-design.md ("Internal instance").
+// ---------------------------------------------------------------------------
+struct RagdollBody {
+    JPH::BodyID           id;
+    int                   boneIndex = -1;   // skeleton bone this body drives
+    // Shape in WORLD units (model dims * entity scale), for DrawRagdolls.
+    RagdollBodyDef::Shape shape       = RagdollBodyDef::Shape::Capsule;
+    float                 radius      = 0.0f;
+    float                 halfHeight  = 0.0f;
+    glm::vec3             halfExtents { 0.0f };
+    glm::vec3             localOffset { 0.0f };           // shape offset from the bone frame
+    glm::quat             localRotation { 1, 0, 0, 0 };
+};
+
+// One ragdoll joint, with enough data to re-bake it at the live pose on the flip
+// to Limp (see RebuildRagdollJointsAtPose). The world anchor/axis aren't stored —
+// they're recomputed from the child body's current transform at rebuild time.
+struct RagdollJoint {
+    uint32_t            constraintId = 0xFFFFFFFFu; // current id in constraintMap
+    int                 parentSlot   = -1;          // index into bodies (parent)
+    int                 childSlot    = -1;          // index into bodies (self)
+    ConstraintComponent cc;                          // type + limits template
+    glm::vec3           twistAxisLocal { 0, 1, 0 };  // bone-local twist/hinge axis
+};
+
+struct RagdollInstance {
+    entt::entity             entity = entt::null;
+    std::vector<RagdollBody> bodies;
+    std::vector<RagdollJoint> joints;         // joints into constraintMap (+ rebuild data)
+    int                      rootBodySlot = -1; // index into bodies of the hips (re-root target)
+    uint32_t                 group = 0;        // per-ragdoll self-collision group
+    RagdollMode              mode  = RagdollMode::Animated;
+};
+
+// ---------------------------------------------------------------------------
 // Impl — owns all Jolt objects (kept out of the public header via PIMPL)
 // ---------------------------------------------------------------------------
 struct PhysicsSystem::Impl {
@@ -255,6 +300,12 @@ struct PhysicsSystem::Impl {
     std::unordered_map<uint32_t, std::vector<uint32_t>>     bodyToConstraints;
     std::vector<entt::entity>                               pendingConstraints;
     uint32_t                                               nextConstraintId = 0;
+
+    // Ragdoll instances, keyed by RagdollComponent::_ragdollId. Their bodies live
+    // in bodyMap and their joints in constraintMap, so OnDestroy tears them down
+    // with everything else; this map just drives the per-frame follow + readback.
+    std::unordered_map<uint32_t, RagdollInstance> ragdolls;
+    uint32_t                                      nextRagdollId = 0;
 
     std::unique_ptr<JPH::TempAllocatorImpl>       tempAllocator;
     std::unique_ptr<JPH::JobSystemSingleThreaded>  jobSystem;     // swap for JobSystemThreadPool to enable MT
@@ -350,6 +401,37 @@ static glm::vec3 AnyPerpendicular(const glm::vec3& a) {
     glm::vec3 n = glm::normalize(a);
     glm::vec3 ref = (std::abs(n.y) < 0.99f) ? glm::vec3(0, 1, 0) : glm::vec3(1, 0, 0);
     return glm::normalize(glm::cross(n, ref));
+}
+
+// Build a normalized rotation quaternion from a (possibly scaled / sheared /
+// degenerate) world matrix's basis. Columns are normalized individually; a
+// zero-length or non-finite column — e.g. an uninitialized animation-palette
+// entry for a bone the animator never wrote — would otherwise poison the
+// quaternion with NaN and trip Jolt's IsNormalized() assert deep in the
+// constraint solver (Quat::RotateAxisX). Falls back to identity so one bad bone
+// can't crash the whole step.
+static glm::quat SafeOrientation(const glm::mat4& m) {
+    auto col = [](const glm::vec3& c, const glm::vec3& fallback) {
+        float len = glm::length(c);
+        return (std::isfinite(len) && len > 1e-6f) ? c / len : fallback;
+    };
+    glm::vec3 x = col(glm::vec3(m[0]), glm::vec3(1, 0, 0));
+    glm::vec3 y = col(glm::vec3(m[1]), glm::vec3(0, 1, 0));
+    glm::vec3 z = col(glm::vec3(m[2]), glm::vec3(0, 0, 1));
+    glm::quat q  = glm::quat_cast(glm::mat3(x, y, z));
+    float     ql = glm::length(q);
+    if (!std::isfinite(ql) || ql < 1e-6f) return glm::quat(1, 0, 0, 0);
+    return q / ql;
+}
+
+// Normalize a world-space axis, falling back to the (normalized) bone-local axis
+// and finally +Y if the world axis is degenerate. Never returns a NaN/zero axis.
+static glm::vec3 SafeAxis(const glm::vec3& world, const glm::vec3& localFallback) {
+    float len = glm::length(world);
+    if (std::isfinite(len) && len > 1e-6f) return world / len;
+    float fl = glm::length(localFallback);
+    if (std::isfinite(fl) && fl > 1e-6f) return localFallback / fl;
+    return glm::vec3(0, 1, 0);
 }
 
 // Called when a ConstraintComponent is added during play — defer creation to the
@@ -758,6 +840,297 @@ static void CreateStaticCollider(JPH::BodyInterface&,
     const JPH::GroupFilter*);
 
 // ---------------------------------------------------------------------------
+// Ragdoll build (Route B — reuse existing primitives). See Docs/ragdoll-design.md.
+// ---------------------------------------------------------------------------
+
+// Shortest-arc rotation taking unit vector `from` onto unit vector `to`.
+static glm::quat RotationFromTo(const glm::vec3& from, const glm::vec3& to) {
+    glm::vec3 f = glm::normalize(from);
+    glm::vec3 t = glm::normalize(to);
+    float d = glm::dot(f, t);
+    if (d >  0.99999f) return glm::quat(1, 0, 0, 0);
+    if (d < -0.99999f) {                           // opposite: rotate 180° about any perpendicular
+        glm::vec3 axis = glm::cross(glm::vec3(1, 0, 0), f);
+        if (glm::dot(axis, axis) < 1e-6f) axis = glm::cross(glm::vec3(0, 0, 1), f);
+        return glm::angleAxis(3.14159265358979f, glm::normalize(axis));
+    }
+    glm::vec3 axis = glm::normalize(glm::cross(f, t));
+    return glm::angleAxis(std::acos(glm::clamp(d, -1.0f, 1.0f)), axis);
+}
+
+// Builds a ragdoll body's shape in WORLD units, offset off the bone frame so the
+// body's reference frame is the BONE origin (concern #3) and the capsule spans
+// along the bone toward its child. `scale` bakes in the entity/import scale
+// (concern #4). Mirrors CreateShape's RotatedTranslatedShape wrapping.
+static JPH::ShapeRefC CreateRagdollShape(const RagdollBodyDef& def, float scale,
+                                         glm::vec3& outOffset, glm::quat& outRot)
+{
+    outOffset = glm::vec3(0.0f);
+    outRot    = glm::quat(1, 0, 0, 0);
+
+    JPH::ShapeRefC shape;
+    switch (def.shape) {
+        case RagdollBodyDef::Shape::Box: {
+            // Jolt's box convex radius (default 0.05m) must not exceed the smallest
+            // half-extent, or Create() fails — and ragdoll bones are often thinner
+            // than that. Shrink the radius to fit.
+            glm::vec3 he = def.halfExtents * scale;
+            float minHE   = glm::min(he.x, glm::min(he.y, he.z));
+            float convexR = glm::clamp(minHE * 0.5f, 0.001f, 0.05f);
+            JPH::BoxShapeSettings s(ToJolt(he), convexR);
+            auto r = s.Create(); if (!r.IsValid()) return nullptr; shape = r.Get();
+            break;
+        }
+        case RagdollBodyDef::Shape::Sphere: {
+            JPH::SphereShapeSettings s(def.radius * scale);
+            auto r = s.Create(); if (!r.IsValid()) return nullptr; shape = r.Get();
+            break;
+        }
+        default: { // Capsule — aligned along the bone, pushed half its length toward the child.
+            float radius     = def.radius     * scale;
+            float halfHeight = def.halfHeight * scale;
+            JPH::CapsuleShapeSettings s(halfHeight, radius);
+            auto r = s.Create(); if (!r.IsValid()) return nullptr; shape = r.Get();
+            outRot    = RotationFromTo(glm::vec3(0, 1, 0), def.twistAxisLocal);
+            outOffset = glm::normalize(def.twistAxisLocal) * (halfHeight + radius);
+            break;
+        }
+    }
+
+    if (def.shape == RagdollBodyDef::Shape::Capsule) {
+        JPH::RotatedTranslatedShapeSettings rt(ToJolt(outOffset), ToJolt(outRot), shape);
+        auto r = rt.Create(); if (!r.IsValid()) return nullptr;
+        return r.Get();
+    }
+    return shape;
+}
+
+// Builds the kinematic body chain + joints for one RagdollComponent and records a
+// RagdollInstance. Bodies start at the bind pose; the per-frame follow then drives
+// them to the live animation. Called at play start (and never re-entered for an
+// already-built ragdoll).
+static void BuildRagdoll(PhysicsSystem::Impl& impl, Scene& scene,
+                         entt::entity entity, RagdollComponent& rag)
+{
+    if (rag._ragdollId != 0xFFFFFFFFu) return;            // already built
+    if (!rag.config || rag.config->bodies.empty()) return;
+
+    auto& reg = scene.GetRegistry();
+    if (!reg.all_of<SkinnedMeshComponent>(entity)) {
+        spdlog::warn("BuildRagdoll: entity has no SkinnedMeshComponent; skipping.");
+        return;
+    }
+    const Diamond::Skeleton& skel = reg.get<SkinnedMeshComponent>(entity).skeleton;
+
+    glm::mat4 entityWorld = scene.GetTransformSystem().GetWorldMatrix(entity);
+    glm::vec3 c0(entityWorld[0]), c1(entityWorld[1]), c2(entityWorld[2]);
+    float scale = (glm::length(c0) + glm::length(c1) + glm::length(c2)) / 3.0f; // assume ~uniform
+    if (scale < 1e-6f) scale = 1.0f;
+
+    JPH::BodyInterface& bi = impl.joltSystem->GetBodyInterface();
+    const JPH::GroupFilter* gf = impl.groupFilter;
+
+    RagdollInstance inst;
+    inst.entity = entity;
+    inst.group  = 1000u + impl.nextRagdollId;             // avoid clashing with user collisionGroups
+
+    const auto& defs = rag.config->bodies;
+    std::unordered_map<std::string, int> nameToSlot;      // boneName -> slot in inst.bodies
+    std::vector<glm::vec3> anchor(defs.size());           // each body's world bone origin
+    std::vector<glm::vec3> axisWorld(defs.size());        // each body's world twist/hinge axis
+
+    // --- pass 1: bodies -----------------------------------------------------
+    for (size_t k = 0; k < defs.size(); ++k) {
+        const RagdollBodyDef& def = defs[k];
+        int bone = skel.Find(def.boneName);
+        if (bone < 0) { spdlog::warn("BuildRagdoll: bone '{}' not in skeleton; skipping body.", def.boneName); continue; }
+
+        glm::mat4 boneModel = glm::inverse(skel.bones[bone].inverseBind); // bind model-space frame
+        glm::mat4 bw        = entityWorld * boneModel;
+        glm::vec3 pos       = glm::vec3(bw[3]);
+        glm::quat rot       = SafeOrientation(bw);
+        anchor[k]    = pos;
+        axisWorld[k] = SafeAxis(glm::mat3(bw) * def.twistAxisLocal, def.twistAxisLocal);
+
+        glm::vec3 shapeOffset; glm::quat shapeRot;
+        JPH::ShapeRefC shapeRef = CreateRagdollShape(def, scale, shapeOffset, shapeRot);
+        if (!shapeRef) continue;
+
+        JPH::BodyCreationSettings settings(shapeRef, ToJolt(pos), ToJolt(rot),
+                                           JPH::EMotionType::Kinematic, PhysicsLayers::DYNAMIC);
+        settings.mUserData = (JPH::uint64)entt::to_integral(entity);
+        // Mass set now (ignored while kinematic) so it's correct the instant we flip to Dynamic.
+        settings.mOverrideMassProperties       = JPH::EOverrideMassProperties::CalculateInertia;
+        settings.mMassPropertiesOverride.mMass = glm::max(def.mass, 0.001f);
+        if (gf) settings.mCollisionGroup = JPH::CollisionGroup(
+            gf, (JPH::CollisionGroup::GroupID)inst.group,
+            (JPH::CollisionGroup::SubGroupID)inst.bodies.size());
+
+        JPH::BodyID id = bi.CreateAndAddBody(settings, JPH::EActivation::Activate);
+        if (id.IsInvalid()) continue;
+        impl.bodyMap[id.GetIndexAndSequenceNumber()] = { entity, false };
+
+        RagdollBody rb;
+        rb.id            = id;
+        rb.boneIndex     = bone;
+        rb.shape         = def.shape;
+        rb.radius        = def.radius     * scale;
+        rb.halfHeight    = def.halfHeight * scale;
+        rb.halfExtents   = def.halfExtents * scale;
+        rb.localOffset   = shapeOffset;
+        rb.localRotation = shapeRot;
+        nameToSlot[def.boneName] = (int)inst.bodies.size();
+        if (def.parentBoneName.empty() && inst.rootBodySlot < 0)
+            inst.rootBodySlot = (int)inst.bodies.size();
+        inst.bodies.push_back(rb);
+    }
+
+    // --- pass 2: joints (skip the root) -------------------------------------
+    for (size_t k = 0; k < defs.size(); ++k) {
+        const RagdollBodyDef& def = defs[k];
+        if (def.parentBoneName.empty()) continue;
+        auto itSelf = nameToSlot.find(def.boneName);
+        auto itPar  = nameToSlot.find(def.parentBoneName);
+        if (itSelf == nameToSlot.end() || itPar == nameToSlot.end()) continue;
+
+        JPH::BodyID selfId = inst.bodies[itSelf->second].id;
+        JPH::BodyID parId  = inst.bodies[itPar->second].id;
+
+        // Feed an in-memory ConstraintComponent through the shared BuildConstraint.
+        ConstraintComponent cc;
+        cc.type   = def.jointType;
+        cc.anchor = anchor[k];          // joint sits at the child bone's origin
+        cc.axis   = axisWorld[k];       // twist (SwingTwist) or hinge axis, world space
+        cc.swingNormalDeg = def.swingNormalDeg;
+        cc.swingPlaneDeg  = def.swingPlaneDeg;
+        cc.twistMinDeg    = def.twistMinDeg;
+        cc.twistMaxDeg    = def.twistMaxDeg;
+        cc.hasLimits      = true;       // hinge: clamp; ignored by the other types
+        cc.limitMin       = def.hingeMinDeg;
+        cc.limitMax       = def.hingeMaxDeg;
+        cc.motorMode      = MotorMode::Off;  // v1 passive ragdoll
+
+        // Lock both bodies together (sorted internally), build, register. body1 =
+        // parent, body2 = self — matching CreateConstraint's convention.
+        JPH::BodyID ids[2] = { parId, selfId };
+        JPH::BodyLockMultiWrite lock(impl.joltSystem->GetBodyLockInterface(), ids, 2);
+        JPH::Body* parent = lock.GetBody(0);
+        JPH::Body* self   = lock.GetBody(1);
+        if (!parent || !self) continue;
+        JPH::Ref<JPH::TwoBodyConstraint> c = BuildConstraint(cc, *parent, *self);
+        if (!c) continue;
+
+        impl.joltSystem->AddConstraint(c);
+        uint32_t cid = impl.nextConstraintId++;
+        impl.constraintMap[cid] = c;
+        impl.bodyToConstraints[selfId.GetIndexAndSequenceNumber()].push_back(cid);
+        impl.bodyToConstraints[parId.GetIndexAndSequenceNumber()].push_back(cid);
+
+        // Keep the data needed to re-bake this joint at the live pose on the flip
+        // to Limp (RebuildRagdollJointsAtPose). cc here carries type + limits; the
+        // world anchor/axis are recomputed from the child body at that time.
+        RagdollJoint joint;
+        joint.constraintId   = cid;
+        joint.parentSlot     = itPar->second;
+        joint.childSlot      = itSelf->second;
+        joint.cc             = cc;
+        joint.twistAxisLocal = def.twistAxisLocal;
+        inst.joints.push_back(joint);
+    }
+
+    if (inst.bodies.empty()) return;
+    rag._ragdollId = impl.nextRagdollId++;
+    rag.mode       = RagdollMode::Animated;
+    inst.mode      = RagdollMode::Animated;
+    spdlog::info("BuildRagdoll: {} bodies, {} joints (group {})",
+                 inst.bodies.size(), inst.joints.size(), inst.group);
+    impl.ragdolls[rag._ragdollId] = std::move(inst);
+}
+
+// Re-bake every joint of a ragdoll at the bodies' CURRENT (live, animation-driven)
+// transforms. The kinematic follow drives the bodies to the animation pose, but the
+// joints were created at the bind pose, so each swing/twist cone (and hinge range)
+// is centered on the bind-relative orientation. Flipping to Dynamic from a pose far
+// from bind would start a limb well outside its limit, and the solver would yank it
+// back violently — the classic ragdoll "explosion." Recreating the joints here
+// re-centers every limit on the pose the ragdoll actually starts flopping from, so
+// no limb is born out of range. Call while the bodies are still kinematic (i.e. at
+// their live targets), just before flipping them Dynamic. See Docs/ragdoll-design.md.
+static void RebuildRagdollJointsAtPose(PhysicsSystem::Impl& impl, RagdollInstance& inst)
+{
+    for (RagdollJoint& j : inst.joints) {
+        if (j.parentSlot < 0 || j.childSlot < 0) continue;
+        JPH::BodyID parId  = inst.bodies[j.parentSlot].id;
+        JPH::BodyID selfId = inst.bodies[j.childSlot].id;
+
+        // Drop the stale (bind-pose) joint.
+        auto cit = impl.constraintMap.find(j.constraintId);
+        if (cit != impl.constraintMap.end()) {
+            impl.joltSystem->RemoveConstraint(cit->second);
+            impl.constraintMap.erase(cit);
+        }
+
+        JPH::BodyID ids[2] = { parId, selfId };
+        JPH::BodyLockMultiWrite lock(impl.joltSystem->GetBodyLockInterface(), ids, 2);
+        JPH::Body* parent = lock.GetBody(0);
+        JPH::Body* self   = lock.GetBody(1);
+        if (!parent || !self) continue;
+
+        // Rebuild from the live child-body frame: anchor at the bone origin (the
+        // body's reference point), twist/hinge axis = the bone-local axis rotated
+        // into the body's current world orientation.
+        ConstraintComponent cc = j.cc;
+        JPH::RVec3 p = self->GetPosition();
+        cc.anchor = glm::vec3((float)p.GetX(), (float)p.GetY(), (float)p.GetZ());
+        cc.axis   = FromJolt(self->GetRotation() * ToJolt(SafeAxis(j.twistAxisLocal, j.twistAxisLocal)));
+
+        JPH::Ref<JPH::TwoBodyConstraint> c = BuildConstraint(cc, *parent, *self);
+        if (!c) continue;
+        impl.joltSystem->AddConstraint(c);
+        uint32_t cid = impl.nextConstraintId++;
+        impl.constraintMap[cid] = c;
+        impl.bodyToConstraints[selfId.GetIndexAndSequenceNumber()].push_back(cid);
+        impl.bodyToConstraints[parId.GetIndexAndSequenceNumber()].push_back(cid);
+        j.constraintId = cid;
+    }
+}
+
+// Per sub-step (Animated mode): drive every ragdoll body to its bone's current
+// model->world transform via MoveKinematic, so a body that later goes Dynamic
+// already carries the right velocity (concern #1). The animation palette is the
+// source — reconstructing world[i] = palette[i] * inverse(inverseBind) avoids a
+// second pose evaluation.
+static void SyncRagdollKinematic(Scene& scene, PhysicsSystem::Impl& impl, JPH::BodyInterface& bi)
+{
+    if (impl.ragdolls.empty()) return;
+    auto& reg = scene.GetRegistry();
+    for (auto& [id, inst] : impl.ragdolls) {
+        if (inst.mode != RagdollMode::Animated || !reg.valid(inst.entity)) continue;
+        auto* smc = reg.try_get<SkinnedMeshComponent>(inst.entity);
+        if (!smc) continue;
+        auto* anim = reg.try_get<AnimatorComponent>(inst.entity);
+        const Diamond::Skeleton& skel = smc->skeleton;
+        const int n = (int)skel.bones.size();
+        const bool hasPalette = anim && (int)anim->palette.size() == n;
+
+        glm::mat4 entityWorld = scene.GetTransformSystem().GetWorldMatrix(inst.entity);
+        for (const RagdollBody& b : inst.bodies) {
+            if (b.boneIndex < 0 || b.boneIndex >= n) continue;
+            glm::mat4 boneModel = glm::inverse(skel.bones[b.boneIndex].inverseBind);
+            if (hasPalette) boneModel = anim->palette[b.boneIndex] * boneModel;
+            glm::mat4 bw  = entityWorld * boneModel;
+            glm::vec3 pos = glm::vec3(bw[3]);
+            glm::quat rot = SafeOrientation(bw);
+            // A non-finite pose (degenerate palette/bind matrix) would inject NaN
+            // into the kinematic body and later crash the constraint solver — skip
+            // this body for the frame rather than poison the simulation.
+            if (!std::isfinite(pos.x) || !std::isfinite(pos.y) || !std::isfinite(pos.z)) continue;
+            bi.MoveKinematic(b.id, ToJolt(pos), ToJolt(rot), FIXED_DT);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // PhysicsSystem — OnStart / OnUpdate / OnDestroy
 // ---------------------------------------------------------------------------
 void PhysicsSystem::OnStart(Scene& scene) {
@@ -802,6 +1175,12 @@ void PhysicsSystem::OnStart(Scene& scene) {
     // doesn't fire for components that existed before we connect the signal below.
     for (auto [entity, cc] : scene.View<ConstraintComponent>().each())
         m_impl->pendingConstraints.push_back(entity);
+
+    // Build ragdolls — kinematic body chains that follow the animation until flipped
+    // to Dynamic. Their bodies/joints register in bodyMap/constraintMap, so the
+    // OnDestroy sweep tears them down with everything else.
+    for (auto [entity, rag] : scene.View<RagdollComponent>().each())
+        BuildRagdoll(*m_impl, scene, entity, rag);
 
     // Expose the active impl and connect EnTT signals for runtime body lifecycle.
     // OnBodyComponentAdded defers creation; OnRb/ColDestroyed tear down immediately.
@@ -985,7 +1364,8 @@ void PhysicsSystem::OnUpdate(Scene& scene, float dt) {
     JPH::BodyInterface& bi = m_impl->joltSystem->GetBodyInterface();
     while (m_accumulator >= FIXED_DT) {
         SyncKinematicBodies(scene, bi);
-        m_impl->joltSystem->Update(FIXED_DT, 1, m_impl->tempAllocator.get(), m_impl->jobSystem.get());
+        SyncRagdollKinematic(scene, *m_impl, bi);   // Animated ragdolls follow the pose
+        m_impl->joltSystem->Update(FIXED_DT, 2, m_impl->tempAllocator.get(), m_impl->jobSystem.get());
         SyncTransforms(scene, bi);
         DispatchCallbacks(scene, m_impl->contactListener->DrainEvents());
         m_accumulator -= FIXED_DT;
@@ -1006,6 +1386,10 @@ void PhysicsSystem::OnDestroy(Scene& scene) {
     reg.on_destroy<ColliderComponent>().disconnect<&OnColDestroyed>();
     reg.on_construct<ConstraintComponent>().disconnect<&OnConstraintAdded>();
     reg.on_destroy<ConstraintComponent>().disconnect<&OnConstraintDestroyed>();
+
+    // Ragdoll bodies/joints live in bodyMap/constraintMap, so the sweeps below
+    // destroy them; just drop the instance bookkeeping.
+    m_impl->ragdolls.clear();
 
     // Constraints must be removed before the bodies they reference.
     for (auto& [id, constraint] : m_impl->constraintMap)
@@ -1137,6 +1521,121 @@ void SetMotorTargetOrientation(const ConstraintComponent& cc, glm::quat targetBS
     if (auto* bi = BI()) {
         if (JPH::Body* b1 = st->GetBody1(); b1 && !b1->IsStatic()) bi->ActivateBody(b1->GetID());
         if (JPH::Body* b2 = st->GetBody2(); b2 && !b2->IsStatic()) bi->ActivateBody(b2->GetID());
+    }
+}
+
+// ---- Ragdoll ----------------------------------------------------------------
+
+// Flip a ragdoll between Animated (kinematic, follows the pose) and Limp (dynamic,
+// flops). Velocity is inherited from the kinematic follow on the way to Limp
+// (concern #1); on the way back the next follow snaps it to the animation.
+void SetRagdollMode(RagdollComponent& rag, RagdollMode mode) {
+    if (!s_Impl || rag._ragdollId == 0xFFFFFFFFu) return;
+    auto it = s_Impl->ragdolls.find(rag._ragdollId);
+    if (it == s_Impl->ragdolls.end()) return;
+    RagdollInstance& inst = it->second;
+
+    if (inst.mode != mode) {
+        JPH::BodyInterface& bi = s_Impl->joltSystem->GetBodyInterface();
+        // Re-center the joint limits on the live pose before the bodies go Dynamic,
+        // so no limb is born outside its cone and yanked back (the explosion).
+        if (mode == RagdollMode::Limp)
+            RebuildRagdollJointsAtPose(*s_Impl, inst);
+        JPH::EMotionType mt = (mode == RagdollMode::Limp)
+            ? JPH::EMotionType::Dynamic : JPH::EMotionType::Kinematic;
+        for (const RagdollBody& b : inst.bodies)
+            bi.SetMotionType(b.id, mt, JPH::EActivation::Activate);
+        inst.mode = mode;
+    }
+    rag.mode = mode;
+}
+
+// After the physics step AND after the animation palette is built: for each Limp
+// ragdoll, overwrite the skinning palette from the simulated bodies and re-root
+// the entity transform to the hips (concern #2). Mapped bones read their body's
+// world transform; unmapped bones ride their nearest physics-driven ancestor by
+// keeping their freshly-animated local offset. Call once per frame from the main
+// loop, after UpdateAnimators.
+void SyncRagdollPoses(Scene& scene) {
+    if (!s_Impl || s_Impl->ragdolls.empty()) return;
+    auto& reg = scene.GetRegistry();
+    JPH::BodyInterface& bi = s_Impl->joltSystem->GetBodyInterface();
+
+    for (auto& [id, inst] : s_Impl->ragdolls) {
+        if (inst.mode != RagdollMode::Limp || !reg.valid(inst.entity)) continue;
+        auto* smc  = reg.try_get<SkinnedMeshComponent>(inst.entity);
+        auto* anim = reg.try_get<AnimatorComponent>(inst.entity);
+        if (!smc || !anim) continue;
+        const Diamond::Skeleton& skel = smc->skeleton;
+        const int n = (int)skel.bones.size();
+        if ((int)anim->palette.size() != n) continue;
+
+        // Decompose the entity world matrix into translation, rotation and uniform
+        // scale so model space can be reconstructed without the spurious 1/scale a
+        // naive inverse() would bake into the (scale-free) rigid body transforms.
+        glm::mat4 ew = scene.GetTransformSystem().GetWorldMatrix(inst.entity);
+        glm::vec3 te(ew[3]);
+        glm::vec3 c0(ew[0]), c1(ew[1]), c2(ew[2]);
+        float lx = glm::length(c0), ly = glm::length(c1), lz = glm::length(c2);
+        float s  = (lx + ly + lz) / 3.0f; if (s < 1e-6f) s = 1.0f;
+        glm::quat ReConj = glm::conjugate(glm::quat_cast(glm::mat3(c0 / lx, c1 / ly, c2 / lz)));
+
+        std::vector<int> boneToBody(n, -1);
+        for (int k = 0; k < (int)inst.bodies.size(); ++k) {
+            int bone = inst.bodies[k].boneIndex;
+            if (bone >= 0 && bone < n) boneToBody[bone] = k;
+        }
+
+        // Animated model-space world of every bone, from the palette just built.
+        std::vector<glm::mat4> worldAnim(n), world(n);
+        for (int i = 0; i < n; ++i)
+            worldAnim[i] = anim->palette[i] * glm::inverse(skel.bones[i].inverseBind);
+
+        for (int i = 0; i < n; ++i) {
+            int parent = skel.bones[i].parent;
+            if (boneToBody[i] >= 0) {
+                const RagdollBody& b = inst.bodies[boneToBody[i]];
+                glm::vec3 pm = (ReConj * (FromJolt(bi.GetPosition(b.id)) - te)) / s;
+                glm::quat rm =  ReConj *  FromJolt(bi.GetRotation(b.id));
+                world[i] = glm::translate(glm::mat4(1.0f), pm) * glm::mat4_cast(rm);
+            } else if (parent < 0) {
+                world[i] = worldAnim[i];
+            } else {
+                world[i] = world[parent] * (glm::inverse(worldAnim[parent]) * worldAnim[i]);
+            }
+            anim->palette[i] = world[i] * skel.bones[i].inverseBind;
+        }
+
+        // Re-root the entity origin to the hips for bounds/gameplay (skip if parented,
+        // where TransformComponent is parent-relative). The skin is unaffected — the
+        // entity matrix cancels in the readback above.
+        if (inst.rootBodySlot >= 0 && reg.all_of<TransformComponent>(inst.entity)) {
+            bool parented = reg.all_of<HierarchyComponent>(inst.entity) &&
+                            reg.get<HierarchyComponent>(inst.entity).parent != entt::null;
+            if (!parented)
+                reg.get<TransformComponent>(inst.entity).position =
+                    FromJolt(bi.GetPosition(inst.bodies[inst.rootBodySlot].id));
+        }
+    }
+}
+
+// Debug wireframes for every ragdoll body at its live simulated transform. Unlike
+// DrawColliders these bodies aren't ColliderComponents, so they need their own pass.
+void DrawRagdolls(Scene& scene, glm::vec3 color) {
+    if (!s_Impl) return;
+    JPH::BodyInterface& bi = s_Impl->joltSystem->GetBodyInterface();
+    for (auto& [id, inst] : s_Impl->ragdolls) {
+        for (const RagdollBody& b : inst.bodies) {
+            glm::vec3 wp = FromJolt(bi.GetPosition(b.id));
+            glm::quat wr = FromJolt(bi.GetRotation(b.id));
+            glm::vec3 cpos = wp + wr * b.localOffset;
+            glm::quat crot = wr * b.localRotation;
+            switch (b.shape) {
+                case RagdollBodyDef::Shape::Box:    DebugDraw::Box(cpos, crot, b.halfExtents, color); break;
+                case RagdollBodyDef::Shape::Sphere: DebugDraw::Sphere(cpos, b.radius, color);         break;
+                default:                            DebugDraw::Capsule(cpos, crot, b.halfHeight, b.radius, color); break;
+            }
+        }
     }
 }
 

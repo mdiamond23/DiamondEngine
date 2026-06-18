@@ -1,5 +1,5 @@
 {
-    "albedoPath": "C:/Dev/DiamondEngine\\Assets\\Models\\cut-fish\\textures\\Fish_Albedo.png",
+    "albedoPath": "C:/Dev/DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\DiamondPlate006C_2K-PNG_Color.png",
     "aoPath": "C:/Dev/DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\DiamondPlate006C_2K-PNG_AmbientOcclusion.png",
     "emissivePath": "",
     "emissiveStrength": 0.0,
