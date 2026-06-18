@@ -1209,6 +1209,13 @@ void InspectorPanel::OnImGuiRender() {
                 ImGui::Checkbox("Y##lockRotY", &rb.lockRotY);
                 ImGui::SameLine();
                 ImGui::Checkbox("Z##lockRotZ", &rb.lockRotZ);
+
+                ImGui::Spacing();
+                ImGui::Checkbox("Continuous Collision (CCD)", &rb.continuousCollision);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Sweep the shape along its motion so a fast/thin body\n"
+                                      "doesn't tunnel through thin geometry. Enable for\n"
+                                      "projectiles or a swung limb. Slight extra cost.");
             }
         }
     }
@@ -1414,6 +1421,91 @@ void InspectorPanel::OnImGuiRender() {
                     ImGui::EndDisabled();
                     if (!playing && ImGui::IsItemHovered())
                         ImGui::SetTooltip("Enter play mode to trigger the ragdoll.");
+
+                    // --- Editable config -------------------------------------------
+                    // Edits mutate the loaded RagdollConfig; "Save" writes it back to the
+                    // .ragdoll asset. The live ragdoll is built from a snapshot at play
+                    // start, so changes here take effect on the next play (not mid-flop).
+                    if (rag.config) {
+                        bool dirty = false;
+                        ImGui::Spacing();
+
+                        // Auto-limp threshold. 0 = disabled (manual Go Limp only).
+                        if (ImGui::DragFloat("Impact Threshold", &rag.config->impactThreshold,
+                                             0.5f, 0.0f, 100000.0f, "%.1f"))
+                            { rag.config->impactThreshold = glm::max(0.0f, rag.config->impactThreshold); dirty = true; }
+                        if (ImGui::IsItemHovered())
+                            ImGui::SetTooltip("Impact momentum (kg.m/s) needed to knock the ragdoll limp\n"
+                                              "automatically on a hit. 0 = off (manual Go Limp only).");
+
+                        if (ImGui::TreeNode("Bodies")) {
+                            const char* shapeNames[] = { "Capsule", "Box", "Sphere" };
+                            const char* jointNames[] = { "Hinge", "SwingTwist", "Fixed", "Point" };
+                            for (size_t bi = 0; bi < rag.config->bodies.size(); ++bi) {
+                                auto& d = rag.config->bodies[bi];
+                                ImGui::PushID((int)bi);
+                                if (ImGui::TreeNode(d.boneName.empty() ? "(unnamed)" : d.boneName.c_str())) {
+                                    if (ImGui::DragFloat("Mass (kg)", &d.mass, 0.05f, 0.001f, 1000.0f, "%.3f")) dirty = true;
+
+                                    int sh = (int)d.shape;
+                                    if (ImGui::Combo("Shape", &sh, shapeNames, IM_ARRAYSIZE(shapeNames)))
+                                        { d.shape = (RagdollBodyDef::Shape)sh; dirty = true; }
+                                    switch (d.shape) {
+                                        case RagdollBodyDef::Shape::Box:
+                                            if (ImGui::DragFloat3("Half Extents", glm::value_ptr(d.halfExtents), 0.005f, 0.001f, 10.0f)) dirty = true;
+                                            break;
+                                        case RagdollBodyDef::Shape::Sphere:
+                                            if (ImGui::DragFloat("Radius", &d.radius, 0.005f, 0.001f, 10.0f)) dirty = true;
+                                            break;
+                                        default: // Capsule
+                                            if (ImGui::DragFloat("Radius",      &d.radius,     0.005f, 0.001f, 10.0f)) dirty = true;
+                                            if (ImGui::DragFloat("Half Height", &d.halfHeight, 0.005f, 0.0f,   10.0f)) dirty = true;
+                                            break;
+                                    }
+
+                                    if (d.parentBoneName.empty()) {
+                                        ImGui::TextDisabled("Root body (no joint)");
+                                    } else {
+                                        ImGui::TextDisabled("Joint to %s", d.parentBoneName.c_str());
+                                        int jt = (int)d.jointType; // enum order matches jointNames
+                                        if (ImGui::Combo("Joint", &jt, jointNames, IM_ARRAYSIZE(jointNames)))
+                                            { d.jointType = (ConstraintType)jt; dirty = true; }
+                                        if (ImGui::DragFloat3("Twist Axis", glm::value_ptr(d.twistAxisLocal), 0.01f)) dirty = true;
+                                        if (d.jointType == ConstraintType::SwingTwist) {
+                                            ImGui::TextDisabled("Swing cone (half-angles)");
+                                            if (ImGui::DragFloat("Swing Normal", &d.swingNormalDeg, 1.0f, 0.0f, 180.0f, "%.0f deg")) dirty = true;
+                                            if (ImGui::DragFloat("Swing Plane",  &d.swingPlaneDeg,  1.0f, 0.0f, 180.0f, "%.0f deg")) dirty = true;
+                                            ImGui::TextDisabled("Twist range");
+                                            if (ImGui::DragFloat("Twist Min", &d.twistMinDeg, 1.0f, -180.0f, 0.0f, "%.0f deg")) dirty = true;
+                                            if (ImGui::DragFloat("Twist Max", &d.twistMaxDeg, 1.0f,    0.0f, 180.0f, "%.0f deg")) dirty = true;
+                                        } else if (d.jointType == ConstraintType::Hinge) {
+                                            if (ImGui::DragFloat("Min Angle", &d.hingeMinDeg, 1.0f, -180.0f, 0.0f, "%.0f deg")) dirty = true;
+                                            if (ImGui::DragFloat("Max Angle", &d.hingeMaxDeg, 1.0f,    0.0f, 180.0f, "%.0f deg")) dirty = true;
+                                        }
+                                    }
+                                    ImGui::TreePop();
+                                }
+                                ImGui::PopID();
+                            }
+                            ImGui::TreePop();
+                        }
+
+                        if (ImGui::Button("Save .ragdoll")) {
+                            if (SaveRagdoll(rag.assetPath, *rag.config))
+                                spdlog::info("Ragdoll saved: {}", rag.assetPath);
+                            else
+                                spdlog::error("Ragdoll save failed: {}", rag.assetPath);
+                        }
+                        ImGui::SameLine();
+                        if (ImGui::Button("Regenerate")) {
+                            *rag.config = BuildDefaultRagdoll(smc.skeleton);
+                            SaveRagdoll(rag.assetPath, *rag.config);
+                            spdlog::info("Ragdoll regenerated from skeleton: {} bodies", rag.config->bodies.size());
+                        }
+                        if (ImGui::IsItemHovered())
+                            ImGui::SetTooltip("Discard edits and rebuild the config from the skeleton, then save.");
+                        if (dirty) { ImGui::SameLine(); ImGui::TextDisabled("(unsaved)"); }
+                    }
 
                     if (ImGui::Button("Remove Ragdoll"))
                         registry.remove<RagdollComponent>(entity);
@@ -2193,6 +2285,12 @@ void InspectorPanel::DrawMultiInspector(const std::vector<entt::entity>& ents)
                 FieldGet(&RigidBodyComponent::lockRotZ), FieldSet(&RigidBodyComponent::lockRotZ),
                 [](bool& v, bool mixed) { return MixedCheckbox("Z##lockRotZ", v, mixed); },
                 "Toggle Rotation Lock Z", true);
+
+            ImGui::Spacing();
+            MultiEdit<bool>(ed, scene, ents,
+                FieldGet(&RigidBodyComponent::continuousCollision), FieldSet(&RigidBodyComponent::continuousCollision),
+                [](bool& v, bool mixed) { return MixedCheckbox("Continuous Collision (CCD)", v, mixed); },
+                "Toggle Continuous Collision", true);
         }
     }
 

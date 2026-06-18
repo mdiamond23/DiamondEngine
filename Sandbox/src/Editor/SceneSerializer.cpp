@@ -174,7 +174,8 @@ static json ToJson(Scene& scene)
                 { "gravityScale",   rb.gravityScale        },
                 { "lockRotX",       rb.lockRotX            },
                 { "lockRotY",       rb.lockRotY            },
-                { "lockRotZ",       rb.lockRotZ            }
+                { "lockRotZ",       rb.lockRotZ            },
+                { "continuousCollision", rb.continuousCollision }
             };
         }
 
@@ -434,6 +435,7 @@ static bool FromJson(Scene& scene, const json& root)
             rb.lockRotX       = rj.value("lockRotX",       false);
             rb.lockRotY       = rj.value("lockRotY",       false);
             rb.lockRotZ       = rj.value("lockRotZ",       false);
+            rb.continuousCollision = rj.value("continuousCollision", false);
         }
 
         if (ej.contains("constraint")) {

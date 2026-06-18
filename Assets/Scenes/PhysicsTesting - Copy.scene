@@ -1,0 +1,577 @@
+{
+  "entities": [
+    {
+      "collider": {
+        "collisionGroup": 0,
+        "halfExtents": [
+          20.0,
+          0.6600000262260437,
+          20.0
+        ],
+        "halfHeight": 0.5,
+        "isTrigger": false,
+        "localOffset": [
+          0.0,
+          -0.28999999165534973,
+          0.0
+        ],
+        "localRotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "meshPath": "",
+        "physMatPath": "C:\\Dev\\DiamondEngine\\Assets\\Physics Materials\\Floor.physmat",
+        "radius": 0.5,
+        "shapeType": 0
+      },
+      "mesh": {
+        "albedoPath": "C:/Dev/DiamondEngine/Assets/Materials/Lava004_2K-PNG/Lava004_2K-PNG_Color.png",
+        "aoPath": "",
+        "castsShadow": true,
+        "emissivePath": "C:/Dev/DiamondEngine/Assets/Materials/Lava004_2K-PNG/Lava004_2K-PNG_Emission.png",
+        "emissiveStrength": 2.5,
+        "materialPath": "",
+        "meshPath": "__cube",
+        "meshSubIndex": 0,
+        "metallicPath": "",
+        "normalPath": "C:/Dev/DiamondEngine/Assets/Materials/Lava004_2K-PNG/Lava004_2K-PNG_NormalGL.png",
+        "receivesShadow": true,
+        "roughnessPath": "C:/Dev/DiamondEngine/Assets/Materials/Lava004_2K-PNG/Lava004_2K-PNG_Roughness.png",
+        "uvScale": 5.0,
+        "visible": true
+      },
+      "name": "Floor",
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          -0.0,
+          0.0
+        ],
+        "position": [
+          0.0,
+          1.4579668045043945,
+          0.0
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          20.0,
+          0.4000000059604645,
+          20.0
+        ]
+      },
+      "uuid": 10149724428450404255
+    },
+    {
+      "light": {
+        "color": [
+          1.0,
+          0.3330000042915344,
+          0.16699999570846558
+        ],
+        "innerConeAngle": 15.0,
+        "intensity": 600.0,
+        "outerConeAngle": 30.0,
+        "radius": 10.0,
+        "type": 1
+      },
+      "name": "Point Light 1",
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "position": [
+          1.0,
+          3.0,
+          2.0
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 177359504211415713
+    },
+    {
+      "light": {
+        "color": [
+          0.13300000131130219,
+          0.3330000042915344,
+          1.0
+        ],
+        "innerConeAngle": 15.0,
+        "intensity": 600.0,
+        "outerConeAngle": 30.0,
+        "radius": 10.0,
+        "type": 1
+      },
+      "name": "Point Light 2",
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "position": [
+          -5.0,
+          2.0,
+          4.0
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 8613635214028885023
+    },
+    {
+      "light": {
+        "color": [
+          0.5,
+          1.0,
+          0.3330000042915344
+        ],
+        "innerConeAngle": 15.0,
+        "intensity": 600.0,
+        "outerConeAngle": 30.0,
+        "radius": 10.0,
+        "type": 1
+      },
+      "name": "Point Light 3",
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "position": [
+          8.0,
+          4.0,
+          -6.0
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 490522646854448807
+    },
+    {
+      "light": {
+        "color": [
+          1.0,
+          0.800000011920929,
+          0.10000000149011612
+        ],
+        "innerConeAngle": 15.0,
+        "intensity": 500.0,
+        "outerConeAngle": 30.0,
+        "radius": 10.0,
+        "type": 1
+      },
+      "name": "Point Light 4",
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "position": [
+          -8.0,
+          4.0,
+          -6.0
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 14059402430444729131
+    },
+    {
+      "light": {
+        "color": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "innerConeAngle": 15.0,
+        "intensity": 3.0,
+        "outerConeAngle": 30.0,
+        "radius": 10.0,
+        "type": 0
+      },
+      "name": "Sun",
+      "transform": {
+        "eulerDegrees": [
+          15.048063278198242,
+          3.4431450366973877,
+          -25.640003204345703
+        ],
+        "position": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rotation": [
+          0.9653673768043518,
+          0.13422897458076477,
+          0.0,
+          -0.2237149178981781
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 9950335334307344460
+    },
+    {
+      "camera": {
+        "farClip": 1000.0,
+        "fov": 60.0,
+        "isPrimary": true,
+        "nearClip": 0.10000000149011612
+      },
+      "name": "Camera",
+      "transform": {
+        "eulerDegrees": [
+          -18.438505172729492,
+          0.0,
+          0.0
+        ],
+        "position": [
+          2.0,
+          8.780609130859375,
+          12.215431213378906
+        ],
+        "rotation": [
+          0.9870824813842773,
+          -0.16021287441253662,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 8889269308631855748
+    },
+    {
+      "collider": {
+        "collisionGroup": 1,
+        "halfExtents": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "halfHeight": 0.5,
+        "isTrigger": false,
+        "localOffset": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "localRotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "meshPath": "",
+        "physMatPath": "",
+        "radius": 0.5,
+        "shapeType": 0
+      },
+      "constraint": {
+        "anchor": [
+          0.0,
+          6.0,
+          0.0
+        ],
+        "axis": [
+          0.0,
+          0.0,
+          1.0
+        ],
+        "hasLimits": false,
+        "limitMax": 90.0,
+        "limitMin": -90.0,
+        "motorDamping": 1.0,
+        "motorFrequency": 8.0,
+        "motorMaxTorque": 500.0,
+        "motorMode": 2,
+        "motorTarget": 0.0,
+        "motorTargetEuler": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "swingNormalDeg": 40.0,
+        "swingPlaneDeg": 40.0,
+        "targetUuid": 0,
+        "twistMaxDeg": 30.0,
+        "twistMinDeg": -30.0,
+        "type": 1
+      },
+      "mesh": {
+        "albedoPath": "C:/Dev/DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\DiamondPlate006C_2K-PNG_Color.png",
+        "aoPath": "C:/Dev/DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\DiamondPlate006C_2K-PNG_AmbientOcclusion.png",
+        "castsShadow": true,
+        "emissivePath": "",
+        "emissiveStrength": 0.0,
+        "materialPath": "",
+        "meshPath": "__cube",
+        "meshSubIndex": 0,
+        "metallicPath": "C:/Dev/DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\DiamondPlate006C_2K-PNG_Metalness.png",
+        "normalPath": "C:/Dev/DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\DiamondPlate006C_2K-PNG_NormalDX.png",
+        "receivesShadow": true,
+        "roughnessPath": "C:/Dev/DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\DiamondPlate006C_2K-PNG_Roughness.png",
+        "uvScale": 0.5,
+        "visible": true
+      },
+      "name": "Shoulder",
+      "rigidbody": {
+        "angularDamping": 0.05000000074505806,
+        "bodyType": 1,
+        "continuousCollision": false,
+        "gravityScale": 1.0,
+        "linearDamping": 0.05000000074505806,
+        "lockRotX": false,
+        "lockRotY": false,
+        "lockRotZ": false,
+        "mass": 5.0
+      },
+      "scriptComponents": {
+        "ArmControl": {
+          "motorRange": 60.0,
+          "torqueStrength": 10.0
+        }
+      },
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          -0.0,
+          0.0
+        ],
+        "position": [
+          0.0,
+          6.0,
+          1.0
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 16456613340169470746
+    },
+    {
+      "collider": {
+        "collisionGroup": 1,
+        "halfExtents": [
+          0.6259999871253967,
+          1.909999966621399,
+          0.5090000033378601
+        ],
+        "halfHeight": 0.5,
+        "isTrigger": false,
+        "localOffset": [
+          0.0,
+          -0.3799999952316284,
+          0.0
+        ],
+        "localRotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "meshPath": "",
+        "physMatPath": "",
+        "radius": 0.5,
+        "shapeType": 0
+      },
+      "constraint": {
+        "anchor": [
+          0.0,
+          6.0,
+          1.5
+        ],
+        "axis": [
+          1.0,
+          0.0,
+          0.0
+        ],
+        "hasLimits": false,
+        "limitMax": 90.0,
+        "limitMin": -90.0,
+        "motorDamping": 1.0,
+        "motorFrequency": 6.0,
+        "motorMaxTorque": 150.0,
+        "motorMode": 2,
+        "motorTarget": 45.0,
+        "motorTargetEuler": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "swingNormalDeg": 40.0,
+        "swingPlaneDeg": 45.0,
+        "targetUuid": 16456613340169470746,
+        "twistMaxDeg": 30.0,
+        "twistMinDeg": -30.0,
+        "type": 0
+      },
+      "mesh": {
+        "albedoPath": "C:/Dev/DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\DiamondPlate006C_2K-PNG_Color.png",
+        "aoPath": "C:/Dev/DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\DiamondPlate006C_2K-PNG_AmbientOcclusion.png",
+        "castsShadow": true,
+        "emissivePath": "",
+        "emissiveStrength": 0.0,
+        "materialPath": "",
+        "meshPath": "__cube",
+        "meshSubIndex": 0,
+        "metallicPath": "C:/Dev/DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\DiamondPlate006C_2K-PNG_Metalness.png",
+        "normalPath": "C:/Dev/DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\DiamondPlate006C_2K-PNG_NormalDX.png",
+        "receivesShadow": true,
+        "roughnessPath": "C:/Dev/DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\DiamondPlate006C_2K-PNG_Roughness.png",
+        "uvScale": 0.550000011920929,
+        "visible": true
+      },
+      "name": "Forearm",
+      "rigidbody": {
+        "angularDamping": 0.05000000074505806,
+        "bodyType": 1,
+        "continuousCollision": false,
+        "gravityScale": 1.0,
+        "linearDamping": 0.05000000074505806,
+        "lockRotX": false,
+        "lockRotY": false,
+        "lockRotZ": false,
+        "mass": 5.0
+      },
+      "transform": {
+        "eulerDegrees": [
+          -89.99998474121094,
+          0.0,
+          0.0
+        ],
+        "position": [
+          0.0,
+          6.0,
+          3.930000066757202
+        ],
+        "rotation": [
+          0.70710688829422,
+          -0.7071066498756409,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          0.6264479756355286,
+          2.3625361919403076,
+          0.5087952017784119
+        ]
+      },
+      "uuid": 6366412477898720403
+    },
+    {
+      "animator": {
+        "clip": 0,
+        "loop": true,
+        "playing": true,
+        "speed": 1.0,
+        "time": 0.0
+      },
+      "name": "Rag",
+      "ragdoll": {
+        "assetPath": "C:\\Dev\\DiamondEngine\\Assets\\Models\\CesiumMan.ragdoll",
+        "mode": 0
+      },
+      "skinnedMesh": {
+        "albedoPath": "",
+        "aoPath": "",
+        "castsShadow": true,
+        "emissivePath": "",
+        "emissiveStrength": 0.0,
+        "meshPath": "C:/Dev/DiamondEngine\\Assets\\Models\\CesiumMan.glb",
+        "metallicPath": "",
+        "normalPath": "",
+        "roughnessPath": "",
+        "uvScale": 1.0,
+        "visible": true
+      },
+      "transform": {
+        "eulerDegrees": [
+          -89.99998474121094,
+          -1.954132862469482e-11,
+          0.00012291790335439146
+        ],
+        "position": [
+          0.26909545063972473,
+          6.564314365386963,
+          5.689049243927002
+        ],
+        "rotation": [
+          0.70710688829422,
+          -0.7071066498756409,
+          -7.584858963127772e-07,
+          7.584858963127772e-07
+        ],
+        "scale": [
+          1.000000238418579,
+          0.9999240636825562,
+          0.9999103546142578
+        ]
+      },
+      "uuid": 6818450401873832087
+    }
+  ]
+}

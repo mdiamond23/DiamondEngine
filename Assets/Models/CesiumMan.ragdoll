@@ -538,6 +538,6 @@
             }
         }
     ],
-    "impactThreshold": 0.0,
+    "impactThreshold": 50.0,
     "version": 1
 }

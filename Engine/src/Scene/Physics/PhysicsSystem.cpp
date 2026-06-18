@@ -24,6 +24,7 @@
 #include <Jolt/Physics/Body/BodyLock.h>
 #include <Jolt/Physics/Body/BodyLockMulti.h>
 #include <Jolt/Physics/Body/Body.h>
+#include <Jolt/Physics/Body/MotionProperties.h>
 #include <Jolt/Physics/Constraints/Constraint.h>
 #include <Jolt/Physics/Constraints/TwoBodyConstraint.h>
 #include <Jolt/Physics/Constraints/HingeConstraint.h>
@@ -160,8 +161,39 @@ struct ContactEvent {
     entt::entity entityA     = entt::null;
     entt::entity entityB     = entt::null;
     glm::vec3    contactPoint  { 0.0f };
-    glm::vec3    contactNormal { 0.0f };
+    glm::vec3    contactNormal { 0.0f };       // points from body A (1) toward body B (2)
+    // Jolt BodyIDs (index+sequence) of the two bodies — needed to map a contact onto a
+    // specific ragdoll bone (a ragdoll is one entity with many bodies). Set on Enter only.
+    uint32_t     bodyA = 0xFFFFFFFFu;
+    uint32_t     bodyB = 0xFFFFFFFFu;
+    // Momentum-based impact estimate (kg·m/s); 0 unless a real moving hit. Drives ragdoll auto-limp.
+    float        impactMagnitude = 0.0f;
 };
+
+// Momentum-based impact estimate for a contact: reduced mass × closing speed along the
+// contact normal. Only a dynamic body contributes mass — a kinematic ragdoll body has
+// infinite mass, so the reduced mass collapses to the hitter's mass, and two non-dynamic
+// bodies (e.g. an animated ragdoll resting on the static floor) read ~0. This is what the
+// ragdoll auto-limp threshold compares against (see AutoTriggerRagdollImpacts).
+static float ComputeImpactMagnitude(const JPH::Body& a, const JPH::Body& b,
+                                    const JPH::ContactManifold& manifold) {
+    auto invMassOf = [](const JPH::Body& body) -> float {
+        if (body.GetMotionType() != JPH::EMotionType::Dynamic) return 0.0f;
+        const JPH::MotionProperties* mp = body.GetMotionPropertiesUnchecked();
+        return mp ? mp->GetInverseMass() : 0.0f;
+    };
+    float invSum = invMassOf(a) + invMassOf(b);
+    if (invSum <= 0.0f) return 0.0f;                       // neither side dynamic → no momentum
+    float reducedMass = 1.0f / invSum;
+    // Velocity AT the contact point (linear + angular), not the COM: a swinging limb
+    // barely translates its COM while its tip moves fast, so COM velocity would miss
+    // rotational whacks. Position read access is valid in this callback (Jolt samples
+    // read body bounds here).
+    JPH::RVec3 cp = manifold.GetWorldSpaceContactPointOn1(0);
+    JPH::Vec3 vRel = b.GetPointVelocity(cp) - a.GetPointVelocity(cp);
+    float closing = vRel.Dot(manifold.mWorldSpaceNormal); // normal points A→B
+    return reducedMass * std::abs(closing);
+}
 
 // Lookup table populated by PhysicsSystem when creating/destroying bodies.
 // ContactListener holds a const-ref so it can resolve BodyID → entity.
@@ -187,11 +219,14 @@ public:
         ev.type    = isTrigger ? ContactEvent::Type::TriggerEnter : ContactEvent::Type::Enter;
         ev.entityA = static_cast<entt::entity>(static_cast<uint32_t>(a.GetUserData()));
         ev.entityB = static_cast<entt::entity>(static_cast<uint32_t>(b.GetUserData()));
+        ev.bodyA   = a.GetID().GetIndexAndSequenceNumber();
+        ev.bodyB   = b.GetID().GetIndexAndSequenceNumber();
         if (!isTrigger) {
             JPH::RVec3 wp = manifold.GetWorldSpaceContactPointOn1(0);
             JPH::Vec3  wn = manifold.mWorldSpaceNormal;
-            ev.contactPoint  = { (float)wp.GetX(), (float)wp.GetY(), (float)wp.GetZ() };
-            ev.contactNormal = { wn.GetX(), wn.GetY(), wn.GetZ() };
+            ev.contactPoint    = { (float)wp.GetX(), (float)wp.GetY(), (float)wp.GetZ() };
+            ev.contactNormal   = { wn.GetX(), wn.GetY(), wn.GetZ() };
+            ev.impactMagnitude = ComputeImpactMagnitude(a, b, manifold);
         }
         std::lock_guard lock(m_mutex);
         m_events.push_back(ev);
@@ -792,6 +827,8 @@ static void CreateBody(JPH::BodyInterface& bi,
     settings.mAngularDamping = rb.angularDamping;
     settings.mGravityFactor  = rb.gravityScale;
     settings.mUserData       = (JPH::uint64)entt::to_integral(entity);
+    if (rb.continuousCollision)  // CCD: sweep the shape so a fast body doesn't tunnel
+        settings.mMotionQuality = JPH::EMotionQuality::LinearCast;
 
     if (rb.bodyType == BodyType::Dynamic)
     {
@@ -959,6 +996,9 @@ static void BuildRagdoll(PhysicsSystem::Impl& impl, Scene& scene,
         JPH::BodyCreationSettings settings(shapeRef, ToJolt(pos), ToJolt(rot),
                                            JPH::EMotionType::Kinematic, PhysicsLayers::DYNAMIC);
         settings.mUserData = (JPH::uint64)entt::to_integral(entity);
+        // CCD: ragdoll bones are thin, fast-moving capsules once limp — sweep them so a
+        // flung limb doesn't tunnel through the floor/stairs (or get tunnelled by a hit).
+        settings.mMotionQuality = JPH::EMotionQuality::LinearCast;
         // Mass set now (ignored while kinematic) so it's correct the instant we flip to Dynamic.
         settings.mOverrideMassProperties       = JPH::EOverrideMassProperties::CalculateInertia;
         settings.mMassPropertiesOverride.mMass = glm::max(def.mass, 0.001f);
@@ -1297,6 +1337,56 @@ static void DispatchCallbacks(Scene& scene, std::vector<ContactEvent> events)
     }
 }
 
+// After each step: scan contacts for hits hard enough to knock an Animated ragdoll
+// limp. A ragdoll is one entity owning many bodies, so we match each contact endpoint's
+// BodyID against the ragdoll's body list. A hit registers only when the rig's config
+// sets a positive impactThreshold (0 = auto-trigger disabled) and the momentum estimate
+// meets it. The struck bone then gets an impulse along the contact normal so the flop is
+// directional — it spins from where it was hit, not just a gravity drop. Manual
+// Physics::SetRagdollMode still works regardless of threshold.
+static void AutoTriggerRagdollImpacts(PhysicsSystem::Impl& impl, Scene& scene,
+                                      const std::vector<ContactEvent>& events)
+{
+    if (impl.ragdolls.empty()) return;
+    auto& reg = scene.GetRegistry();
+    JPH::BodyInterface& bi = impl.joltSystem->GetBodyInterface();
+
+    for (const auto& ev : events) {
+        if (ev.type != ContactEvent::Type::Enter) continue; // only the instant of impact
+        if (ev.impactMagnitude <= 0.0f) continue;
+
+        // The struck body may be either endpoint. The normal points A→B, so to push the
+        // ragdoll along the hit it's +normal when the ragdoll is B, -normal when it's A.
+        struct Side { uint32_t bodyId; float dirSign; };
+        const Side sides[2] = { { ev.bodyA, -1.0f }, { ev.bodyB, +1.0f } };
+
+        for (const Side& side : sides) {
+            if (side.bodyId == 0xFFFFFFFFu) continue;
+            for (auto& [rid, inst] : impl.ragdolls) {
+                if (inst.mode != RagdollMode::Animated || !reg.valid(inst.entity)) continue;
+                auto* rag = reg.try_get<RagdollComponent>(inst.entity);
+                if (!rag || !rag->config) continue;
+                float threshold = rag->config->impactThreshold;
+                if (threshold <= 0.0f || ev.impactMagnitude < threshold) continue;
+
+                int slot = -1;
+                for (int s = 0; s < (int)inst.bodies.size(); ++s)
+                    if (inst.bodies[s].id.GetIndexAndSequenceNumber() == side.bodyId) { slot = s; break; }
+                if (slot < 0) continue;
+
+                // Hard enough hit on a mapped bone → go limp (re-bakes joints at the live
+                // pose, flips Kinematic→Dynamic), then kick the struck bone directionally.
+                Physics::SetRagdollMode(*rag, RagdollMode::Limp);
+                glm::vec3 impulse = ev.contactNormal * (side.dirSign * ev.impactMagnitude);
+                bi.AddImpulse(inst.bodies[slot].id, ToJolt(impulse), ToJolt(ev.contactPoint));
+                spdlog::info("Ragdoll {} auto-limp: impact {:.1f} >= {:.1f} (bone slot {})",
+                             rid, ev.impactMagnitude, threshold, slot);
+                break; // this endpoint handled
+            }
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // PhysicsSystem methods
 // ---------------------------------------------------------------------------
@@ -1367,7 +1457,9 @@ void PhysicsSystem::OnUpdate(Scene& scene, float dt) {
         SyncRagdollKinematic(scene, *m_impl, bi);   // Animated ragdolls follow the pose
         m_impl->joltSystem->Update(FIXED_DT, 2, m_impl->tempAllocator.get(), m_impl->jobSystem.get());
         SyncTransforms(scene, bi);
-        DispatchCallbacks(scene, m_impl->contactListener->DrainEvents());
+        std::vector<ContactEvent> events = m_impl->contactListener->DrainEvents();
+        AutoTriggerRagdollImpacts(*m_impl, scene, events); // hard hits flip an Animated ragdoll to Limp
+        DispatchCallbacks(scene, std::move(events));
         m_accumulator -= FIXED_DT;
     }
 }

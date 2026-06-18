@@ -171,7 +171,7 @@
         "position": [
           -0.5061830878257751,
           2.2388269901275635,
-          -0.5414453148841858
+          4.955080032348633
         ],
         "rotation": [
           -0.49999940395355225,
@@ -710,8 +710,8 @@
       },
       "mesh": {
         "castsShadow": true,
-        "materialPath": "C:\\Dev\\DiamondEngine\\Assets\\Models\\stairs-railings\\neoclassicism-stairs\\textures\\Stiar.mat",
-        "meshPath": "C:/Dev/DiamondEngine\\Assets\\Models\\stairs-railings\\neoclassicism-stairs\\source\\plotek z kolumnami\\plotek z kolumnami.obj",
+        "materialPath": "C:\\Dev\\DiamondEngine\\Assets\\Models\\stairs-railings\\spiral-stairs-free\\textures\\NewMaterial.mat",
+        "meshPath": "C:/Dev/DiamondEngine\\Assets\\Models\\stairs-railings\\spiral-stairs-free\\source\\SpiralStairs.obj",
         "meshSubIndex": 0,
         "receivesShadow": true,
         "visible": true
@@ -725,8 +725,8 @@
         ],
         "position": [
           0.0,
-          2.633603096008301,
-          4.707640171051025
+          0.1092873215675354,
+          4.309025764465332
         ],
         "rotation": [
           1.0,
@@ -735,9 +735,9 @@
           0.0
         ],
         "scale": [
-          0.25,
-          0.25,
-          0.25
+          0.012000000104308128,
+          0.012000000104308128,
+          0.012000000104308128
         ]
       },
       "uuid": 7906604254731482450
