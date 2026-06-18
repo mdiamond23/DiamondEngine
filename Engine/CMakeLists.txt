@@ -192,6 +192,7 @@ add_library(MyEngine STATIC
     src/Scene/TransformSystem.cpp
     src/Scene/UUIDGenerator.cpp
     src/Scene/Physics/PhysicsSystem.cpp
+    src/Scene/Physics/RagdollConfig.cpp
 )
 
 target_include_directories(MyEngine

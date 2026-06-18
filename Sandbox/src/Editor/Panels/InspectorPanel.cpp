@@ -4,6 +4,8 @@
 #include "../PhysicsMaterialAsset.h"
 #include "../AnimStateMachineAsset.h"
 #include "../MaterialAsset.h"
+#include "../RagdollAsset.h"      // ragdoll auto-gen + .ragdoll I/O (BuildDefaultRagdoll, SaveRagdoll)
+#include <spdlog/spdlog.h>
 #include <imgui.h>
 #include <imgui_internal.h>   // ImGuiItemFlags_MixedValue for tri-state checkboxes
 #include <glm/gtc/type_ptr.hpp>
@@ -1362,6 +1364,34 @@ void InspectorPanel::OnImGuiRender() {
                     ImGui::BulletText("%zu: %s (%.2fs)", i,
                                       smc.clips[i].name.empty() ? "(unnamed)" : smc.clips[i].name.c_str(),
                                       smc.clips[i].duration);
+            }
+
+            // --- TEMP (ragdoll PR1 verification) -------------------------------
+            // Auto-generate a default ragdoll from this skeleton, save a .ragdoll
+            // next to the model, and log the result. Evolves into the PR4 ragdoll
+            // inspector panel; for now it just exercises BuildDefaultRagdoll on the
+            // real loaded skeleton.
+            if (!smc.skeleton.bones.empty()) {
+                ImGui::Spacing();
+                if (ImGui::Button("Generate Ragdoll (.ragdoll)")) {
+                    RagdollConfig cfg = BuildDefaultRagdoll(smc.skeleton);
+                    std::string path = smc.meshPath.empty()
+                        ? std::string("Assets/ragdoll.ragdoll")
+                        : std::filesystem::path(smc.meshPath).replace_extension(".ragdoll").string();
+                    bool ok = SaveRagdoll(path, cfg);
+                    spdlog::info("Ragdoll: {} bodies from {} bones -> {} ({})",
+                                 cfg.bodies.size(), smc.skeleton.bones.size(), path,
+                                 ok ? "saved" : "SAVE FAILED");
+                    for (const auto& d : cfg.bodies)
+                        spdlog::info("  {:<24} <- {:<24} [{:<7}] mass={:5.1f}  {}",
+                                     d.boneName,
+                                     d.parentBoneName.empty() ? "(root)" : d.parentBoneName,
+                                     RagdollShapeToStr(d.shape), d.mass,
+                                     RagdollJointToStr(d.jointType));
+                }
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Auto-generate a ragdoll config from this skeleton and\n"
+                                      "save it next to the model. Check the console for the result.");
             }
         }
     }
