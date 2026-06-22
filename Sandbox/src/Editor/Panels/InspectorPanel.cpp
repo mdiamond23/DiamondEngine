@@ -1443,13 +1443,35 @@ void InspectorPanel::OnImGuiRender() {
                         bool dirty = false;
                         ImGui::Spacing();
 
-                        // Auto-limp threshold. 0 = disabled (manual Go Limp only).
-                        if (ImGui::DragFloat("Impact Threshold", &rag.config->impactThreshold,
+                        // Two-tier auto hit-react. Knockdown (>= threshold) goes fully
+                        // Limp; the lighter flinch tier staggers in Powered mode and
+                        // recovers. 0 disables a tier (manual Go Limp/Active still work).
+                        if (ImGui::DragFloat("Knockdown Threshold", &rag.config->impactThreshold,
                                              0.5f, 0.0f, 100000.0f, "%.1f"))
                             { rag.config->impactThreshold = glm::max(0.0f, rag.config->impactThreshold); dirty = true; }
                         if (ImGui::IsItemHovered())
-                            ImGui::SetTooltip("Impact momentum (kg.m/s) needed to knock the ragdoll limp\n"
-                                              "automatically on a hit. 0 = off (manual Go Limp only).");
+                            ImGui::SetTooltip("Impact momentum (kg.m/s) needed to knock the ragdoll fully\n"
+                                              "limp automatically on a hit. 0 = off (manual Go Limp only).");
+
+                        if (ImGui::DragFloat("Flinch Threshold", &rag.config->flinchThreshold,
+                                             0.5f, 0.0f, 100000.0f, "%.1f"))
+                            { rag.config->flinchThreshold = glm::max(0.0f, rag.config->flinchThreshold); dirty = true; }
+                        if (ImGui::IsItemHovered())
+                            ImGui::SetTooltip("Lighter hit tier (kg.m/s): a hit at/above this but below the\n"
+                                              "knockdown threshold staggers the rig (Powered flinch) instead of\n"
+                                              "flooring it. Keep below Knockdown Threshold. 0 = off.");
+                        if (ImGui::DragFloat("Flinch Strength", &rag.config->flinchStrength,
+                                             0.01f, 0.0f, 1.0f, "%.2f"))
+                            { rag.config->flinchStrength = glm::clamp(rag.config->flinchStrength, 0.0f, 1.0f); dirty = true; }
+                        if (ImGui::IsItemHovered())
+                            ImGui::SetTooltip("Muscle strength at the bottom of the flinch dip (0 = goes\n"
+                                              "momentarily limp, 1 = barely flinches).");
+                        if (ImGui::DragFloat("Flinch Recovery", &rag.config->flinchRecovery,
+                                             0.01f, 0.01f, 5.0f, "%.2f s"))
+                            { rag.config->flinchRecovery = glm::max(0.01f, rag.config->flinchRecovery); dirty = true; }
+                        if (ImGui::IsItemHovered())
+                            ImGui::SetTooltip("Seconds to ramp muscle strength back to full after a flinch,\n"
+                                              "then return to animation-driven control.");
 
                         if (ImGui::TreeNode("Bodies")) {
                             const char* shapeNames[] = { "Capsule", "Box", "Sphere" };

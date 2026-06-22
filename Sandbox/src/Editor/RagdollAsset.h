@@ -72,6 +72,10 @@ inline bool LoadRagdoll(const std::string& path, RagdollConfig& out)
 
     out = RagdollConfig{};
     out.impactThreshold = j.value("impactThreshold", 0.0f);
+    // Two-tier hit-react (added after the original format; old assets default these).
+    out.flinchThreshold = j.value("flinchThreshold", 0.0f);
+    out.flinchStrength  = j.value("flinchStrength",  out.flinchStrength);
+    out.flinchRecovery  = j.value("flinchRecovery",  out.flinchRecovery);
 
     for (const auto& bj : j.value("bodies", nlohmann::json::array())) {
         RagdollBodyDef d;
@@ -117,6 +121,9 @@ inline bool SaveRagdoll(const std::string& path, const RagdollConfig& cfg)
     nlohmann::json j;
     j["version"]         = 1;
     j["impactThreshold"] = cfg.impactThreshold;
+    j["flinchThreshold"] = cfg.flinchThreshold;
+    j["flinchStrength"]  = cfg.flinchStrength;
+    j["flinchRecovery"]  = cfg.flinchRecovery;
     j["bodies"]          = nlohmann::json::array();
 
     for (const auto& d : cfg.bodies) {

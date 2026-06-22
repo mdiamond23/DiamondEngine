@@ -313,6 +313,14 @@ struct RagdollInstance {
     int                      rootBodySlot = -1; // index into bodies of the hips (re-root target)
     uint32_t                 group = 0;        // per-ragdoll self-collision group
     RagdollMode              mode  = RagdollMode::Animated;
+
+    // Hit-react flinch: a timed muscle-strength dip+recovery driving an active
+    // (Powered) stagger after a sub-knockdown impact. Started by
+    // AutoTriggerRagdollImpacts (StartRagdollFlinch), advanced by TickRagdollReactions.
+    bool  flinchActive   = false;
+    float flinchTimer    = 0.0f;   // seconds elapsed in the current flinch
+    float flinchDuration = 0.4f;   // total ramp time (snapshot of cfg->flinchRecovery)
+    float flinchFloor    = 0.3f;   // strength at t=0 (snapshot of cfg->flinchStrength)
 };
 
 // ---------------------------------------------------------------------------
@@ -1458,13 +1466,62 @@ static void DispatchCallbacks(Scene& scene, std::vector<ContactEvent> events)
     }
 }
 
-// After each step: scan contacts for hits hard enough to knock an Animated ragdoll
-// limp. A ragdoll is one entity owning many bodies, so we match each contact endpoint's
-// BodyID against the ragdoll's body list. A hit registers only when the rig's config
-// sets a positive impactThreshold (0 = auto-trigger disabled) and the momentum estimate
-// meets it. The struck bone then gets an impulse along the contact normal so the flop is
-// directional — it spins from where it was hit, not just a gravity drop. Manual
-// Physics::SetRagdollMode still works regardless of threshold.
+// ---- Hit-react (flinch) -----------------------------------------------------
+// The lighter tier of the two-tier auto reaction (the heavier tier is knockdown ->
+// Limp in AutoTriggerRagdollImpacts). A flinch switches the rig to Powered with its
+// muscle strength dropped to flinchStrength, then TickRagdollReactions ramps strength
+// back to 1 over flinchRecovery seconds so it staggers and recovers its footing
+// instead of flopping. The strength value is read each substep by SyncRagdollPowered.
+
+// Begin (or refresh) a flinch on an instance: go Powered (dynamic + motors on),
+// snapshot the timing from the config, and apply the initial strength dip. The caller
+// adds the directional impulse to the struck bone.
+static void StartRagdollFlinch(RagdollInstance& inst, RagdollComponent& rag)
+{
+    Physics::SetRagdollMode(rag, RagdollMode::Powered);   // kinematic -> dynamic, motors on
+    inst.flinchActive   = true;
+    inst.flinchTimer    = 0.0f;
+    inst.flinchDuration = glm::max(rag.config ? rag.config->flinchRecovery : 0.4f, 0.01f);
+    inst.flinchFloor    = glm::clamp(rag.config ? rag.config->flinchStrength : 0.3f, 0.0f, 1.0f);
+    rag.strength        = inst.flinchFloor;               // immediate dip; SyncRagdollPowered reads it
+}
+
+// Per frame: advance any active flinch, ramping muscle strength flinchFloor -> 1 with a
+// smooth ease, then hand back to Animated (the cheap kinematic follow) once recovered.
+// A flinch is abandoned if something else moved the rig out of Powered — a follow-up
+// knockdown to Limp, or a manual mode switch in the inspector.
+static void TickRagdollReactions(Scene& scene, PhysicsSystem::Impl& impl, float dt)
+{
+    if (impl.ragdolls.empty()) return;
+    auto& reg = scene.GetRegistry();
+    for (auto& [id, inst] : impl.ragdolls) {
+        if (!inst.flinchActive) continue;
+        if (inst.mode != RagdollMode::Powered) { inst.flinchActive = false; continue; }
+        auto* rag = reg.valid(inst.entity) ? reg.try_get<RagdollComponent>(inst.entity) : nullptr;
+        if (!rag) { inst.flinchActive = false; continue; }
+
+        inst.flinchTimer += dt;
+        const float t    = glm::clamp(inst.flinchTimer / inst.flinchDuration, 0.0f, 1.0f);
+        const float ease = t * t * (3.0f - 2.0f * t);     // smoothstep
+        rag->strength    = glm::mix(inst.flinchFloor, 1.0f, ease);
+
+        if (t >= 1.0f) {
+            // Recovered footing: full strength, back to animation-driven control.
+            inst.flinchActive = false;
+            rag->strength     = 1.0f;
+            Physics::SetRagdollMode(*rag, RagdollMode::Animated);
+        }
+    }
+}
+
+// After each step: scan contacts for hits hard enough to auto-react a ragdoll. A
+// ragdoll is one entity owning many bodies, so we match each contact endpoint's BodyID
+// against the ragdoll's body list. Two tiers, both gated on the rig's config (0 = that
+// tier off): a hit at/above impactThreshold KNOCKS DOWN (-> Limp, full flop); a lighter
+// hit at/above flinchThreshold STAGGERS (-> Powered flinch, strength dip + recover). In
+// both cases the struck bone gets an impulse along the contact normal so the reaction is
+// directional — it spins from where it was hit. Manual Physics::SetRagdollMode still
+// works regardless of thresholds.
 static void AutoTriggerRagdollImpacts(PhysicsSystem::Impl& impl, Scene& scene,
                                       const std::vector<ContactEvent>& events)
 {
@@ -1484,24 +1541,34 @@ static void AutoTriggerRagdollImpacts(PhysicsSystem::Impl& impl, Scene& scene,
         for (const Side& side : sides) {
             if (side.bodyId == 0xFFFFFFFFu) continue;
             for (auto& [rid, inst] : impl.ragdolls) {
-                if (inst.mode != RagdollMode::Animated || !reg.valid(inst.entity)) continue;
+                // Skip rigs that are already down; a flinch (Powered) can still be
+                // refreshed or escalated to a knockdown by a follow-up hit.
+                if (inst.mode == RagdollMode::Limp || !reg.valid(inst.entity)) continue;
                 auto* rag = reg.try_get<RagdollComponent>(inst.entity);
                 if (!rag || !rag->config) continue;
-                float threshold = rag->config->impactThreshold;
-                if (threshold <= 0.0f || ev.impactMagnitude < threshold) continue;
 
                 int slot = -1;
                 for (int s = 0; s < (int)inst.bodies.size(); ++s)
                     if (inst.bodies[s].id.GetIndexAndSequenceNumber() == side.bodyId) { slot = s; break; }
                 if (slot < 0) continue;
 
-                // Hard enough hit on a mapped bone → go limp (re-bakes joints at the live
-                // pose, flips Kinematic→Dynamic), then kick the struck bone directionally.
-                Physics::SetRagdollMode(*rag, RagdollMode::Limp);
+                // Two tiers: knockdown (>= impactThreshold) wins over flinch
+                // (>= flinchThreshold). 0 disables a tier.
+                const float knock  = rag->config->impactThreshold;
+                const float flinch = rag->config->flinchThreshold;
+                const bool  doKnock  = knock  > 0.0f && ev.impactMagnitude >= knock;
+                const bool  doFlinch = !doKnock && flinch > 0.0f && ev.impactMagnitude >= flinch;
+                if (!doKnock && !doFlinch) continue;
+
+                // Knockdown re-bakes joints at the live pose and flips Kinematic→Dynamic;
+                // flinch goes Powered with a strength dip that recovers. Then kick the
+                // struck bone directionally so the reaction spins from the hit.
+                if (doKnock) Physics::SetRagdollMode(*rag, RagdollMode::Limp);
+                else         StartRagdollFlinch(inst, *rag);
                 glm::vec3 impulse = ev.contactNormal * (side.dirSign * ev.impactMagnitude);
                 bi.AddImpulse(inst.bodies[slot].id, ToJolt(impulse), ToJolt(ev.contactPoint));
-                spdlog::info("Ragdoll {} auto-limp: impact {:.1f} >= {:.1f} (bone slot {})",
-                             rid, ev.impactMagnitude, threshold, slot);
+                spdlog::info("Ragdoll {} auto-{}: impact {:.1f} (knock>={:.1f}, flinch>={:.1f}) bone slot {}",
+                             rid, doKnock ? "limp" : "flinch", ev.impactMagnitude, knock, flinch, slot);
                 break; // this endpoint handled
             }
         }
@@ -1568,6 +1635,10 @@ void PhysicsSystem::OnUpdate(Scene& scene, float dt) {
         }
         m_impl->pendingConstraints.swap(stillPending);
     }
+
+    // Advance hit-react flinches once per frame (wall-clock dt) before the substeps,
+    // so the ramped muscle strength is what SyncRagdollPowered reads this frame.
+    TickRagdollReactions(scene, *m_impl, dt);
 
     // Clamp dt contribution — prevents death spiral when fps drops below 60.
     m_accumulator += std::min(dt, FIXED_DT);

@@ -20,6 +20,9 @@
             "joint": {
                 "hingeMaxDeg": 150.0,
                 "hingeMinDeg": 0.0,
+                "motorDamping": 1.0,
+                "motorFrequency": 8.0,
+                "motorMaxTorque": 50.0,
                 "swingNormalDeg": 25.0,
                 "swingPlaneDeg": 20.0,
                 "twistAxis": [
@@ -49,6 +52,9 @@
             "joint": {
                 "hingeMaxDeg": 150.0,
                 "hingeMinDeg": 0.0,
+                "motorDamping": 1.0,
+                "motorFrequency": 8.0,
+                "motorMaxTorque": 50.0,
                 "swingNormalDeg": 25.0,
                 "swingPlaneDeg": 20.0,
                 "twistAxis": [
@@ -78,6 +84,9 @@
             "joint": {
                 "hingeMaxDeg": 150.0,
                 "hingeMinDeg": 0.0,
+                "motorDamping": 1.0,
+                "motorFrequency": 8.0,
+                "motorMaxTorque": 50.0,
                 "swingNormalDeg": 25.0,
                 "swingPlaneDeg": 20.0,
                 "twistAxis": [
@@ -107,6 +116,9 @@
             "joint": {
                 "hingeMaxDeg": 150.0,
                 "hingeMinDeg": 0.0,
+                "motorDamping": 1.0,
+                "motorFrequency": 8.0,
+                "motorMaxTorque": 50.0,
                 "swingNormalDeg": 25.0,
                 "swingPlaneDeg": 20.0,
                 "twistAxis": [
@@ -136,6 +148,9 @@
             "joint": {
                 "hingeMaxDeg": 150.0,
                 "hingeMinDeg": 0.0,
+                "motorDamping": 1.0,
+                "motorFrequency": 8.0,
+                "motorMaxTorque": 50.0,
                 "swingNormalDeg": 60.0,
                 "swingPlaneDeg": 45.0,
                 "twistAxis": [
@@ -165,6 +180,9 @@
             "joint": {
                 "hingeMaxDeg": 150.0,
                 "hingeMinDeg": 0.0,
+                "motorDamping": 1.0,
+                "motorFrequency": 8.0,
+                "motorMaxTorque": 50.0,
                 "swingNormalDeg": 60.0,
                 "swingPlaneDeg": 45.0,
                 "twistAxis": [
@@ -194,6 +212,9 @@
             "joint": {
                 "hingeMaxDeg": 150.0,
                 "hingeMinDeg": 0.0,
+                "motorDamping": 1.0,
+                "motorFrequency": 8.0,
+                "motorMaxTorque": 50.0,
                 "swingNormalDeg": 30.0,
                 "swingPlaneDeg": 30.0,
                 "twistAxis": [
@@ -223,6 +244,9 @@
             "joint": {
                 "hingeMaxDeg": 150.0,
                 "hingeMinDeg": 0.0,
+                "motorDamping": 1.0,
+                "motorFrequency": 8.0,
+                "motorMaxTorque": 50.0,
                 "swingNormalDeg": 30.0,
                 "swingPlaneDeg": 30.0,
                 "twistAxis": [
@@ -252,6 +276,9 @@
             "joint": {
                 "hingeMaxDeg": 150.0,
                 "hingeMinDeg": 0.0,
+                "motorDamping": 1.0,
+                "motorFrequency": 8.0,
+                "motorMaxTorque": 50.0,
                 "swingNormalDeg": 60.0,
                 "swingPlaneDeg": 45.0,
                 "twistAxis": [
@@ -281,6 +308,9 @@
             "joint": {
                 "hingeMaxDeg": 150.0,
                 "hingeMinDeg": 0.0,
+                "motorDamping": 1.0,
+                "motorFrequency": 8.0,
+                "motorMaxTorque": 50.0,
                 "swingNormalDeg": 60.0,
                 "swingPlaneDeg": 45.0,
                 "twistAxis": [
@@ -310,6 +340,9 @@
             "joint": {
                 "hingeMaxDeg": 150.0,
                 "hingeMinDeg": 0.0,
+                "motorDamping": 1.0,
+                "motorFrequency": 8.0,
+                "motorMaxTorque": 50.0,
                 "swingNormalDeg": 60.0,
                 "swingPlaneDeg": 45.0,
                 "twistAxis": [
@@ -339,6 +372,9 @@
             "joint": {
                 "hingeMaxDeg": 150.0,
                 "hingeMinDeg": 0.0,
+                "motorDamping": 1.0,
+                "motorFrequency": 8.0,
+                "motorMaxTorque": 50.0,
                 "swingNormalDeg": 60.0,
                 "swingPlaneDeg": 45.0,
                 "twistAxis": [
@@ -368,6 +404,9 @@
             "joint": {
                 "hingeMaxDeg": 150.0,
                 "hingeMinDeg": 0.0,
+                "motorDamping": 1.0,
+                "motorFrequency": 8.0,
+                "motorMaxTorque": 50.0,
                 "swingNormalDeg": 30.0,
                 "swingPlaneDeg": 30.0,
                 "twistAxis": [
@@ -397,6 +436,9 @@
             "joint": {
                 "hingeMaxDeg": 150.0,
                 "hingeMinDeg": 0.0,
+                "motorDamping": 1.0,
+                "motorFrequency": 8.0,
+                "motorMaxTorque": 50.0,
                 "swingNormalDeg": 30.0,
                 "swingPlaneDeg": 30.0,
                 "twistAxis": [
@@ -426,6 +468,9 @@
             "joint": {
                 "hingeMaxDeg": 150.0,
                 "hingeMinDeg": 0.0,
+                "motorDamping": 1.0,
+                "motorFrequency": 8.0,
+                "motorMaxTorque": 50.0,
                 "swingNormalDeg": 60.0,
                 "swingPlaneDeg": 45.0,
                 "twistAxis": [
@@ -455,6 +500,9 @@
             "joint": {
                 "hingeMaxDeg": 150.0,
                 "hingeMinDeg": 0.0,
+                "motorDamping": 1.0,
+                "motorFrequency": 8.0,
+                "motorMaxTorque": 50.0,
                 "swingNormalDeg": 60.0,
                 "swingPlaneDeg": 45.0,
                 "twistAxis": [
@@ -484,6 +532,9 @@
             "joint": {
                 "hingeMaxDeg": 150.0,
                 "hingeMinDeg": 0.0,
+                "motorDamping": 1.0,
+                "motorFrequency": 8.0,
+                "motorMaxTorque": 50.0,
                 "swingNormalDeg": 60.0,
                 "swingPlaneDeg": 45.0,
                 "twistAxis": [
@@ -513,6 +564,9 @@
             "joint": {
                 "hingeMaxDeg": 150.0,
                 "hingeMinDeg": 0.0,
+                "motorDamping": 1.0,
+                "motorFrequency": 8.0,
+                "motorMaxTorque": 50.0,
                 "swingNormalDeg": 60.0,
                 "swingPlaneDeg": 45.0,
                 "twistAxis": [
@@ -538,6 +592,9 @@
             }
         }
     ],
+    "flinchRecovery": 0.4000000059604645,
+    "flinchStrength": 0.30000001192092896,
+    "flinchThreshold": 10.0,
     "impactThreshold": 50.0,
     "version": 1
 }

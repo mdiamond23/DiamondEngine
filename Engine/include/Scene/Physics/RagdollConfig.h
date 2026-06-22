@@ -64,7 +64,19 @@ struct RagdollBodyDef {
 // required — PhysicsSystem resolves parents by name) plus tuning shared by the rig.
 struct RagdollConfig {
     std::vector<RagdollBodyDef> bodies;
-    float impactThreshold = 0.0f;   // reserved for auto-on-impact (fast-follow, not v1)
+
+    // --- two-tier auto hit-react (impact momentum in kg·m/s) -------------------
+    // See AutoTriggerRagdollImpacts. impactThreshold is the KNOCKDOWN tier: a hit
+    // at/above it flips the rig fully Limp (true flop). flinchThreshold is the
+    // lighter STAGGER tier: a hit in [flinchThreshold, impactThreshold) doesn't
+    // floor the character — it switches to Powered, drops muscle strength to
+    // flinchStrength (plus a directional impulse on the struck bone), then ramps
+    // strength back to 1 over flinchRecovery seconds and settles back to Animated.
+    // 0 disables that tier; flinchThreshold should be < impactThreshold to matter.
+    float impactThreshold = 0.0f;   // knockdown -> Limp           (0 = off)
+    float flinchThreshold = 0.0f;   // stagger   -> Powered flinch (0 = off)
+    float flinchStrength  = 0.3f;   // [0,1] muscle strength at the bottom of the dip
+    float flinchRecovery  = 0.4f;   // seconds to ramp strength back to 1
 };
 
 // Best-effort auto-generation from a skeleton: classifies bones by topology + role
