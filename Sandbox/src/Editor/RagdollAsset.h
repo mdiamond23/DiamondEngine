@@ -76,6 +76,14 @@ inline bool LoadRagdoll(const std::string& path, RagdollConfig& out)
     out.flinchThreshold = j.value("flinchThreshold", 0.0f);
     out.flinchStrength  = j.value("flinchStrength",  out.flinchStrength);
     out.flinchRecovery  = j.value("flinchRecovery",  out.flinchRecovery);
+    // Procedural get-up (likewise optional / defaulted for older assets).
+    out.getupStrength   = j.value("getupStrength", out.getupStrength);
+    out.getupDuration   = j.value("getupDuration", out.getupDuration);
+    out.getupWobble     = j.value("getupWobble",   out.getupWobble);
+    out.getupDelay      = j.value("getupDelay",    out.getupDelay);
+    out.getupBalance    = j.value("getupBalance",  out.getupBalance);
+    out.getupHold       = j.value("getupHold",     out.getupHold);
+    out.getupBlend      = j.value("getupBlend",    out.getupBlend);
 
     for (const auto& bj : j.value("bodies", nlohmann::json::array())) {
         RagdollBodyDef d;
@@ -124,6 +132,13 @@ inline bool SaveRagdoll(const std::string& path, const RagdollConfig& cfg)
     j["flinchThreshold"] = cfg.flinchThreshold;
     j["flinchStrength"]  = cfg.flinchStrength;
     j["flinchRecovery"]  = cfg.flinchRecovery;
+    j["getupStrength"]   = cfg.getupStrength;
+    j["getupDuration"]   = cfg.getupDuration;
+    j["getupWobble"]     = cfg.getupWobble;
+    j["getupDelay"]      = cfg.getupDelay;
+    j["getupBalance"]    = cfg.getupBalance;
+    j["getupHold"]       = cfg.getupHold;
+    j["getupBlend"]      = cfg.getupBlend;
     j["bodies"]          = nlohmann::json::array();
 
     for (const auto& d : cfg.bodies) {

@@ -293,6 +293,11 @@ struct RagdollBody {
     glm::vec3             halfExtents { 0.0f };
     glm::vec3             localOffset { 0.0f };           // shape offset from the bone frame
     glm::quat             localRotation { 1, 0, 0, 0 };
+    float                 mass = 1.0f;                     // kg (for the get-up root lift force)
+    // World transform captured when the get-up->animation cross-blend begins; the body is
+    // driven kinematically from here toward its live animation transform over the blend.
+    glm::vec3             blendStartPos { 0.0f };
+    glm::quat             blendStartRot { 1, 0, 0, 0 };
 };
 
 // One ragdoll joint, with enough data to re-bake it at the live pose on the flip
@@ -304,6 +309,35 @@ struct RagdollJoint {
     int                 childSlot    = -1;          // index into bodies (self)
     ConstraintComponent cc;                          // type + limits template
     glm::vec3           twistAxisLocal { 0, 1, 0 };  // bone-local twist/hinge axis
+    // Child-relative-to-parent body orientation captured the last time this joint was
+    // (re)built — i.e. the constraint's actual zero. Equals the bind-relative pose for
+    // the initial build, but the sprawled pose after a Limp rebuild. The get-up motor
+    // path references hinge targets to this so they drive the right way regardless of
+    // where the joint was last anchored. See SyncRagdollPowered / RebuildRagdollJointsAtPose.
+    glm::quat           buildRel { 1, 0, 0, 0 };
+    // Child-relative-to-parent orientation captured at get-up START (the sprawled pose).
+    // The get-up motor target sweeps startRel -> bind over the heave so the limbs travel
+    // smoothly instead of the stiff motors springing straight to the final pose.
+    glm::quat           startRel { 1, 0, 0, 0 };
+};
+
+// A timed procedural "move" layered on the Powered ragdoll: it drives the joint motors
+// toward a target pose while ramping muscle strength over a window, then ends. Both the
+// hit-react flinch and the get-up are instances of this — the seed of a fuller
+// procedural-move system (punch/kick/grab) later. Strength is read each substep by
+// SyncRagdollPowered; the target pose + wobble shape what the motors chase.
+struct RagReaction {
+    // GetUpBlend is the tail of a get-up: after the stand is held, the bodies cross-blend
+    // (kinematically) from the held stand pose into the live animation pose, then hand off
+    // to Animated — so resuming the clip eases in instead of popping.
+    enum class Kind { None, Flinch, GetUp, GetUpBlend };
+    Kind  kind          = Kind::None;
+    float timer         = 0.0f;    // seconds elapsed
+    float duration      = 0.4f;    // total ramp window
+    float startStrength = 0.3f;    // muscle strength at t=0
+    float endStrength   = 1.0f;    // muscle strength at t=duration
+    bool  targetStand   = false;   // true = drive motors to the bind/stand pose; false = the animation
+    float wobble        = 0.0f;    // per-joint torque noise amplitude (drunk flail); 0 = clean
 };
 
 struct RagdollInstance {
@@ -314,13 +348,30 @@ struct RagdollInstance {
     uint32_t                 group = 0;        // per-ragdoll self-collision group
     RagdollMode              mode  = RagdollMode::Animated;
 
-    // Hit-react flinch: a timed muscle-strength dip+recovery driving an active
-    // (Powered) stagger after a sub-knockdown impact. Started by
-    // AutoTriggerRagdollImpacts (StartRagdollFlinch), advanced by TickRagdollReactions.
-    bool  flinchActive   = false;
-    float flinchTimer    = 0.0f;   // seconds elapsed in the current flinch
-    float flinchDuration = 0.4f;   // total ramp time (snapshot of cfg->flinchRecovery)
-    float flinchFloor    = 0.3f;   // strength at t=0 (snapshot of cfg->flinchStrength)
+    // Bind-pose reference for the get-up root assist (DriveRagdollGetUpRoot): the hips
+    // body's world orientation at build (= "upright"), and the hips' height above the
+    // lowest body at bind (≈ standing hip clearance over the feet — the lift target).
+    glm::quat                rootBindRot { 1, 0, 0, 0 };
+    float                    standHipClearance = 0.0f;
+    // Total mass of every body in the rig. The get-up lift acts on the pelvis alone,
+    // but the pelvis is the suspension point for the whole chain hanging off it via
+    // joints — holding it static needs ≈ totalMass·g, not just the pelvis's own weight.
+    float                    totalMass = 1.0f;
+    // Absolute world height the hips servo toward during a get-up, captured ONCE at
+    // get-up start (ground-under-the-feet + standHipClearance). Fixed, not chased off the
+    // rig's own lowest body — otherwise dangling feet rise with the hips and it levitates.
+    float                    getupTargetY = 0.0f;
+    // Root transform at get-up start. During the heave the hips are driven KINEMATICALLY
+    // (MoveKinematic) from here to the standing transform — a velocity/force on one dynamic
+    // body can't drag the 18-body chain up through the joints; a kinematic root always wins.
+    glm::vec3                getupStartPos { 0, 0, 0 };
+    glm::quat                getupStartRot { 1, 0, 0, 0 };
+
+    // Active procedural move (flinch / get-up); Kind::None when idle. Advanced by
+    // TickRagdollReactions, started by StartRagdollFlinch / StartRagdollGetUp.
+    RagReaction reaction;
+    // Auto get-up: how long the limp rig has been ~at rest, vs cfg->getupDelay.
+    float       restTimer = 0.0f;
 };
 
 // ---------------------------------------------------------------------------
@@ -349,6 +400,7 @@ struct PhysicsSystem::Impl {
     // with everything else; this map just drives the per-frame follow + readback.
     std::unordered_map<uint32_t, RagdollInstance> ragdolls;
     uint32_t                                      nextRagdollId = 0;
+    double                                        simTime = 0.0;   // running physics clock (for get-up wobble noise)
 
     std::unique_ptr<JPH::TempAllocatorImpl>       tempAllocator;
     std::unique_ptr<JPH::JobSystemSingleThreaded>  jobSystem;     // swap for JobSystemThreadPool to enable MT
@@ -984,6 +1036,11 @@ static void BuildRagdoll(PhysicsSystem::Impl& impl, Scene& scene,
     std::vector<glm::vec3> anchor(defs.size());           // each body's world bone origin
     std::vector<glm::vec3> axisWorld(defs.size());        // each body's world twist/hinge axis
 
+    // Bind-pose root reference for the get-up assist, gathered during pass 1.
+    float     minBindY    = 1e30f;
+    float     rootBindY   = 0.0f;
+    glm::quat rootBindRot { 1, 0, 0, 0 };
+
     // --- pass 1: bodies -----------------------------------------------------
     for (size_t k = 0; k < defs.size(); ++k) {
         const RagdollBodyDef& def = defs[k];
@@ -1027,11 +1084,22 @@ static void BuildRagdoll(PhysicsSystem::Impl& impl, Scene& scene,
         rb.halfExtents   = def.halfExtents * scale;
         rb.localOffset   = shapeOffset;
         rb.localRotation = shapeRot;
+        rb.mass          = glm::max(def.mass, 0.001f);
+        minBindY = glm::min(minBindY, pos.y);
         nameToSlot[def.boneName] = (int)inst.bodies.size();
-        if (def.parentBoneName.empty() && inst.rootBodySlot < 0)
+        if (def.parentBoneName.empty() && inst.rootBodySlot < 0) {
             inst.rootBodySlot = (int)inst.bodies.size();
+            rootBindY   = pos.y;     // hips height at bind
+            rootBindRot = rot;       // hips "upright" orientation at bind
+        }
         inst.bodies.push_back(rb);
     }
+
+    inst.rootBindRot       = rootBindRot;
+    inst.standHipClearance = (minBindY < 1e29f) ? glm::max(rootBindY - minBindY, 0.0f) : 0.0f;
+    inst.totalMass = 0.0f;
+    for (const RagdollBody& b : inst.bodies) inst.totalMass += b.mass;
+    inst.totalMass = glm::max(inst.totalMass, 0.001f);
 
     // --- pass 2: joints (skip the root) -------------------------------------
     for (size_t k = 0; k < defs.size(); ++k) {
@@ -1091,6 +1159,10 @@ static void BuildRagdoll(PhysicsSystem::Impl& impl, Scene& scene,
         joint.childSlot      = itSelf->second;
         joint.cc             = cc;
         joint.twistAxisLocal = def.twistAxisLocal;
+        // The constraint's zero = the child-relative-to-parent body orientation now (the
+        // bind pose). Get-up hinge targets reference this. (See RagdollJoint::buildRel.)
+        joint.buildRel       = glm::normalize(glm::conjugate(FromJolt(parent->GetRotation())) *
+                                              FromJolt(self->GetRotation()));
         inst.joints.push_back(joint);
     }
 
@@ -1148,6 +1220,10 @@ static void RebuildRagdollJointsAtPose(PhysicsSystem::Impl& impl, RagdollInstanc
         impl.bodyToConstraints[selfId.GetIndexAndSequenceNumber()].push_back(cid);
         impl.bodyToConstraints[parId.GetIndexAndSequenceNumber()].push_back(cid);
         j.constraintId = cid;
+        // New zero: the joint is now anchored at the live (sprawled) pose, so update
+        // buildRel for the get-up hinge math that references it.
+        j.buildRel = glm::normalize(glm::conjugate(FromJolt(parent->GetRotation())) *
+                                    FromJolt(self->GetRotation()));
     }
 }
 
@@ -1186,6 +1262,54 @@ static void SyncRagdollKinematic(Scene& scene, PhysicsSystem::Impl& impl, JPH::B
     }
 }
 
+// The live animation world transform for one ragdoll body (same reconstruction as
+// SyncRagdollKinematic). Returns false for a degenerate/non-finite pose.
+static bool RagdollBodyAnimTransform(Scene& scene, RagdollInstance& inst,
+                                     const SkinnedMeshComponent& smc, const AnimatorComponent* anim,
+                                     const RagdollBody& b, glm::vec3& outPos, glm::quat& outRot)
+{
+    const Diamond::Skeleton& skel = smc.skeleton;
+    const int n = (int)skel.bones.size();
+    if (b.boneIndex < 0 || b.boneIndex >= n) return false;
+    const bool hasPalette = anim && (int)anim->palette.size() == n;
+    glm::mat4 entityWorld = scene.GetTransformSystem().GetWorldMatrix(inst.entity);
+    glm::mat4 boneModel = glm::inverse(skel.bones[b.boneIndex].inverseBind);
+    if (hasPalette) boneModel = anim->palette[b.boneIndex] * boneModel;
+    glm::mat4 bw  = entityWorld * boneModel;
+    glm::vec3 pos = glm::vec3(bw[3]);
+    glm::quat rot = SafeOrientation(bw);
+    if (!std::isfinite(pos.x) || !std::isfinite(pos.y) || !std::isfinite(pos.z)) return false;
+    outPos = pos; outRot = rot;
+    return true;
+}
+
+// Per sub-step (get-up cross-blend): ease every body kinematically from its captured held-
+// stand transform toward its live animation transform, so handing back to Animated doesn't
+// pop. When the window elapses TickRagdollReactions finalizes the switch to Animated.
+static void SyncRagdollGetUpBlend(Scene& scene, PhysicsSystem::Impl& impl, JPH::BodyInterface& bi)
+{
+    if (impl.ragdolls.empty()) return;
+    auto& reg = scene.GetRegistry();
+    for (auto& [id, inst] : impl.ragdolls) {
+        if (inst.reaction.kind != RagReaction::Kind::GetUpBlend || !reg.valid(inst.entity)) continue;
+        auto* smc = reg.try_get<SkinnedMeshComponent>(inst.entity);
+        if (!smc) continue;
+        auto* anim = reg.try_get<AnimatorComponent>(inst.entity);
+
+        const float t  = glm::clamp(inst.reaction.timer /
+                                    glm::max(inst.reaction.duration, 1e-4f), 0.0f, 1.0f);
+        const float e  = t * t * (3.0f - 2.0f * t);   // smoothstep
+        for (const RagdollBody& b : inst.bodies) {
+            glm::vec3 animPos; glm::quat animRot;
+            if (!RagdollBodyAnimTransform(scene, inst, *smc, anim, b, animPos, animRot))
+                continue;
+            glm::vec3 pos = glm::mix(b.blendStartPos, animPos, e);
+            glm::quat rot = glm::slerp(glm::normalize(b.blendStartRot), animRot, e);
+            bi.MoveKinematic(b.id, ToJolt(pos), ToJolt(glm::normalize(rot)), FIXED_DT);
+        }
+    }
+}
+
 // Engage or disengage the Position motors baked on every ragdoll joint. Powered
 // mode turns them on (driven toward targets by SyncRagdollPowered); Animated/Limp
 // turn them off. Kinematic bodies ignore motors, so this mainly matters on the
@@ -1213,6 +1337,38 @@ static void SetRagdollMotorsEnabled(PhysicsSystem::Impl& impl, RagdollInstance& 
     }
 }
 
+// The get-up root drive (per sub-step, get-up only). Joint motors can't lift the body — the
+// root (hips) has no parent joint, so no motor acts on it; and a velocity/force on the single
+// root body just gets absorbed by the 18-body chain hanging off its joints (verified: the
+// hips stall ~0.27 above the feet and never reach the ~0.66 standing clearance). So during the
+// heave the hips are KINEMATIC and we MoveKinematic them along an eased arc from the sprawled
+// start transform to the standing transform (fixed absolute height + upright orientation). A
+// kinematic body reaches its target regardless of the chain, dragging the body up; the limb
+// motors + wobble then pose it underneath for the sloppy stand. getupBalance scales how far
+// toward fully-upright/standing-height we drive (0 = no kinematic drive, the legacy behavior).
+static void DriveRagdollGetUpRoot(PhysicsSystem::Impl& impl, RagdollInstance& inst,
+                                  float /*strength*/, float balance)
+{
+    if (inst.rootBodySlot < 0 || balance <= 0.0f) return;
+    JPH::BodyInterface& bi = impl.joltSystem->GetBodyInterface();
+    const RagdollBody& root = inst.bodies[inst.rootBodySlot];
+
+    // Eased progress along the heave (smoothstep), clamped — holds at 1 once at the top.
+    const float gt = glm::clamp(inst.reaction.timer /
+                                glm::max(inst.reaction.duration, 1e-4f), 0.0f, 1.0f);
+    const float ge = gt * gt * (3.0f - 2.0f * gt);
+    const float a  = ge * glm::clamp(balance, 0.0f, 1.0f);   // balance scales the destination
+
+    // Target: keep the start XZ, lerp height up to the fixed standing target, and slerp the
+    // orientation from the sprawled start toward upright (bind). MoveKinematic sets the body's
+    // velocity to arrive in one step, so the constrained limbs get dragged along smoothly.
+    glm::vec3 targetPos = inst.getupStartPos;
+    targetPos.y         = glm::mix(inst.getupStartPos.y, inst.getupTargetY, a);
+    glm::quat targetRot = glm::slerp(inst.getupStartRot, inst.rootBindRot, a);
+
+    bi.MoveKinematic(root.id, ToJolt(targetPos), ToJolt(glm::normalize(targetRot)), FIXED_DT);
+}
+
 // Per sub-step (Powered mode): drive every joint motor toward the live animation
 // pose so the ragdoll actively holds / recovers an animated stance (active ragdoll).
 // Unlike SyncRagdollKinematic the bodies are Dynamic — the motors, not MoveKinematic,
@@ -1224,6 +1380,11 @@ static void SetRagdollMotorsEnabled(PhysicsSystem::Impl& impl, RagdollInstance& 
 // the scalar angle about their axis, referenced to the bind pose (the hinge's zero).
 // Motor torque is scaled by the rig's strength each frame, so a hit-reaction or
 // get-up blend can soften the muscles by lowering RagdollComponent::strength.
+//
+// During a get-up reaction (reaction.targetStand) the target flips from the animation
+// to the bind/stand pose, the hinge zero is taken from the joint's live buildRel (the
+// cones were opened so a sprawled limb can straighten), and per-joint torque is jittered
+// by reaction.wobble for the sloppy drunken flail.
 static void SyncRagdollPowered(Scene& scene, PhysicsSystem::Impl& impl)
 {
     if (impl.ragdolls.empty()) return;
@@ -1231,6 +1392,9 @@ static void SyncRagdollPowered(Scene& scene, PhysicsSystem::Impl& impl)
     JPH::BodyInterface& bi = impl.joltSystem->GetBodyInterface();
     for (auto& [id, inst] : impl.ragdolls) {
         if (inst.mode != RagdollMode::Powered || !reg.valid(inst.entity)) continue;
+        // The get-up tail cross-blend drives the bodies kinematically (SyncRagdollGetUpBlend);
+        // the motors are off, so skip the Powered motor/root drive for it this whole phase.
+        if (inst.reaction.kind == RagReaction::Kind::GetUpBlend) continue;
         auto* smc  = reg.try_get<SkinnedMeshComponent>(inst.entity);
         auto* anim = reg.try_get<AnimatorComponent>(inst.entity);
         auto* rag  = reg.try_get<RagdollComponent>(inst.entity);
@@ -1240,6 +1404,8 @@ static void SyncRagdollPowered(Scene& scene, PhysicsSystem::Impl& impl)
         if ((int)anim->pose.size() != n) continue;   // pose not built yet this frame
 
         const float strength = rag ? glm::clamp(rag->strength, 0.0f, 1.0f) : 1.0f;
+        const bool  toStand  = inst.reaction.targetStand;   // get-up: chase the stand pose
+        const float wobble   = inst.reaction.wobble;        // get-up: per-joint torque jitter
 
         // Model-space bone rotations for the live (animated) pose and for the bind
         // pose, forward-composed down the skeleton. Rotations only — translation and
@@ -1263,35 +1429,60 @@ static void SyncRagdollPowered(Scene& scene, PhysicsSystem::Impl& impl)
             if (cit == impl.constraintMap.end()) continue;
             JPH::Constraint* c = cit->second;
 
-            // Desired child-relative-to-parent orientation, straight from the pose.
+            // Target child-relative-to-parent orientation: the animation pose normally;
+            // during a get-up it SWEEPS from the sprawled start pose toward the stand pose
+            // over the heave, so the limbs travel smoothly instead of the stiff motors
+            // springing straight to the final pose.
             glm::quat desiredRel = glm::normalize(glm::conjugate(animRot[pb]) * animRot[cb]);
+            glm::quat restRel    = glm::normalize(glm::conjugate(bindRot[pb]) * bindRot[cb]);
+            glm::quat target     = desiredRel;
+            if (toStand) {
+                float gt = glm::clamp((float)(inst.reaction.timer /
+                               glm::max(inst.reaction.duration, 1e-4f)), 0.0f, 1.0f);
+                float ge = gt * gt * (3.0f - 2.0f * gt);                  // smoothstep
+                target = glm::slerp(glm::normalize(j.startRel), restRel, ge);
+            }
+
+            // Per-joint torque, jittered by the get-up wobble for the drunken flail.
+            float jt = j.cc.motorMaxTorque * strength;
+            if (wobble > 0.0f) {
+                float ph = (float)(j.constraintId % 29) * 0.7f;
+                float nz = std::sin((float)impl.simTime * 9.0f + ph) *
+                           std::sin((float)impl.simTime * 3.7f + ph * 1.7f);
+                jt *= glm::max(0.0f, 1.0f + wobble * nz);
+            }
 
             switch (c->GetSubType()) {
                 case JPH::EConstraintSubType::SwingTwist: {
                     auto* st = static_cast<JPH::SwingTwistConstraint*>(c);
-                    st->GetSwingMotorSettings().SetTorqueLimit(j.cc.motorMaxTorque * strength);
-                    st->GetTwistMotorSettings().SetTorqueLimit(j.cc.motorMaxTorque * strength);
-                    st->SetTargetOrientationBS(ToJolt(desiredRel));
+                    st->GetSwingMotorSettings().SetTorqueLimit(jt);
+                    st->GetTwistMotorSettings().SetTorqueLimit(jt);
+                    st->SetTargetOrientationBS(ToJolt(target));
                     break;
                 }
                 case JPH::EConstraintSubType::Hinge: {
                     auto* hinge = static_cast<JPH::HingeConstraint*>(c);
-                    // The hinge's zero angle is the relative orientation at creation
-                    // (bind). Drive to the rotation FROM bind-relative TO desired,
-                    // measured about the hinge axis expressed in the parent's frame —
-                    // the basis `delta` lives in.
-                    glm::quat restRel = glm::normalize(glm::conjugate(bindRot[pb]) * bindRot[cb]);
-                    glm::quat delta   = glm::normalize(glm::conjugate(restRel) * desiredRel);
-                    glm::vec3 axisP   = glm::normalize(glm::conjugate(bindRot[pb]) *
-                                          (bindRot[cb] * SafeAxis(j.twistAxisLocal, j.twistAxisLocal)));
+                    // Drive the rotation FROM the hinge's zero TO the target, about the
+                    // hinge axis. The zero is the relative orientation the joint was built
+                    // at: the bind pose normally, but the sprawled pose after a Limp
+                    // rebuild — so a get-up reads it from buildRel rather than assuming bind.
+                    glm::quat zeroRel = toStand ? glm::normalize(j.buildRel) : restRel;
+                    glm::quat delta   = glm::normalize(glm::conjugate(zeroRel) * target);
+                    glm::vec3 axisP   = glm::normalize(zeroRel * SafeAxis(j.twistAxisLocal, j.twistAxisLocal));
                     float angle = 2.0f * std::atan2(glm::dot(glm::vec3(delta.x, delta.y, delta.z), axisP), delta.w);
-                    hinge->GetMotorSettings().SetTorqueLimit(j.cc.motorMaxTorque * strength);
+                    hinge->GetMotorSettings().SetTorqueLimit(jt);
                     hinge->SetTargetAngle(angle);
                     break;
                 }
                 default: break;
             }
         }
+
+        // Get-up: the joint motors alone can't lift the root, so directly assist the hips
+        // (upright + lift). Runs while heaving and while holding the stand.
+        if (inst.reaction.kind == RagReaction::Kind::GetUp)
+            DriveRagdollGetUpRoot(impl, inst, strength,
+                                  (rag && rag->config) ? rag->config->getupBalance : 1.0f);
 
         // Keep the dynamic bodies awake so the motors keep correcting toward the pose.
         for (const RagdollBody& b : inst.bodies)
@@ -1466,50 +1657,272 @@ static void DispatchCallbacks(Scene& scene, std::vector<ContactEvent> events)
     }
 }
 
-// ---- Hit-react (flinch) -----------------------------------------------------
-// The lighter tier of the two-tier auto reaction (the heavier tier is knockdown ->
-// Limp in AutoTriggerRagdollImpacts). A flinch switches the rig to Powered with its
-// muscle strength dropped to flinchStrength, then TickRagdollReactions ramps strength
-// back to 1 over flinchRecovery seconds so it staggers and recovers its footing
-// instead of flopping. The strength value is read each substep by SyncRagdollPowered.
+// ---- Procedural reactions (flinch + get-up) ---------------------------------
+// Both are RagReactions: a timed motor-driven move layered on Powered mode. A FLINCH
+// (sub-knockdown hit) keeps chasing the animation while strength recovers; a GET-UP
+// (post-knockdown recovery) chases the bind/stand pose with opened cones so sprawled
+// limbs can straighten. TickRagdollReactions advances both; SyncRagdollPowered reads
+// the strength + target each substep.
 
-// Begin (or refresh) a flinch on an instance: go Powered (dynamic + motors on),
-// snapshot the timing from the config, and apply the initial strength dip. The caller
-// adds the directional impulse to the struck bone.
+// Open every joint's limits wide (open=true) so the get-up motors can haul sprawled
+// limbs back toward the stand pose — the Limp rebuild centered each cone on the sprawl,
+// which would otherwise pin the limbs. open=false restores the authored limits from the
+// joint's cc. Runtime setters only; no constraint rebuild.
+static void WidenRagdollJoints(PhysicsSystem::Impl& impl, RagdollInstance& inst, bool open)
+{
+    for (RagdollJoint& j : inst.joints) {
+        auto it = impl.constraintMap.find(j.constraintId);
+        if (it == impl.constraintMap.end()) continue;
+        JPH::Constraint* c = it->second;
+        switch (c->GetSubType()) {
+            case JPH::EConstraintSubType::SwingTwist: {
+                auto* st = static_cast<JPH::SwingTwistConstraint*>(c);
+                if (open) {
+                    st->SetNormalHalfConeAngle(glm::radians(175.0f));
+                    st->SetPlaneHalfConeAngle (glm::radians(175.0f));
+                    st->SetTwistMinAngle(glm::radians(-175.0f));
+                    st->SetTwistMaxAngle(glm::radians( 175.0f));
+                } else {
+                    st->SetNormalHalfConeAngle(glm::radians(glm::clamp(j.cc.swingNormalDeg, 0.0f, 180.0f)));
+                    st->SetPlaneHalfConeAngle (glm::radians(glm::clamp(j.cc.swingPlaneDeg,  0.0f, 180.0f)));
+                    st->SetTwistMinAngle(glm::radians(glm::clamp(j.cc.twistMinDeg, -180.0f, 0.0f)));
+                    st->SetTwistMaxAngle(glm::radians(glm::clamp(j.cc.twistMaxDeg,    0.0f, 180.0f)));
+                }
+                break;
+            }
+            case JPH::EConstraintSubType::Hinge: {
+                auto* h = static_cast<JPH::HingeConstraint*>(c);
+                if (open) h->SetLimits(glm::radians(-179.0f), glm::radians(179.0f));
+                else      h->SetLimits(glm::radians(glm::clamp(j.cc.limitMin, -180.0f, 0.0f)),
+                                       glm::radians(glm::clamp(j.cc.limitMax,    0.0f, 180.0f)));
+                break;
+            }
+            default: break;
+        }
+    }
+}
+
+// Cancel any active reaction and put the joints back to their authored limits (a get-up
+// or standing hold leaves the cones open). Called on an explicit mode change or when a
+// reaction is interrupted, so a later plain Powered/active rig isn't left floppy.
+static void ClearRagdollReaction(PhysicsSystem::Impl& impl, RagdollInstance& inst)
+{
+    if (inst.reaction.kind == RagReaction::Kind::GetUp ||
+        inst.reaction.kind == RagReaction::Kind::GetUpBlend) {
+        WidenRagdollJoints(impl, inst, false);   // idempotent (blend already restored them)
+        // The get-up drove the hips kinematically; hand the root back to the motion type the
+        // rest of the rig is in (match a sibling body) so it rejoins the dynamic simulation.
+        if (inst.rootBodySlot >= 0 && inst.bodies.size() > 1) {
+            JPH::BodyInterface& bi = impl.joltSystem->GetBodyInterface();
+            int sib = (inst.rootBodySlot == 0) ? 1 : 0;
+            bi.SetMotionType(inst.bodies[inst.rootBodySlot].id,
+                             bi.GetMotionType(inst.bodies[sib].id),
+                             JPH::EActivation::Activate);
+        }
+    }
+    inst.reaction  = RagReaction{};
+    inst.restTimer = 0.0f;
+}
+
+// Begin (or refresh) a flinch: go Powered, snapshot the timing from the config, apply
+// the initial strength dip. The caller adds the directional impulse to the struck bone.
 static void StartRagdollFlinch(RagdollInstance& inst, RagdollComponent& rag)
 {
     Physics::SetRagdollMode(rag, RagdollMode::Powered);   // kinematic -> dynamic, motors on
-    inst.flinchActive   = true;
-    inst.flinchTimer    = 0.0f;
-    inst.flinchDuration = glm::max(rag.config ? rag.config->flinchRecovery : 0.4f, 0.01f);
-    inst.flinchFloor    = glm::clamp(rag.config ? rag.config->flinchStrength : 0.3f, 0.0f, 1.0f);
-    rag.strength        = inst.flinchFloor;               // immediate dip; SyncRagdollPowered reads it
+    RagReaction& r  = inst.reaction;
+    r.kind          = RagReaction::Kind::Flinch;
+    r.timer         = 0.0f;
+    r.duration      = glm::max(rag.config ? rag.config->flinchRecovery : 0.4f, 0.01f);
+    r.startStrength = glm::clamp(rag.config ? rag.config->flinchStrength : 0.3f, 0.0f, 1.0f);
+    r.endStrength   = 1.0f;
+    r.targetStand   = false;   // flinch keeps tracking the animation
+    r.wobble        = 0.0f;
+    rag.strength    = r.startStrength;
 }
 
-// Per frame: advance any active flinch, ramping muscle strength flinchFloor -> 1 with a
-// smooth ease, then hand back to Animated (the cheap kinematic follow) once recovered.
-// A flinch is abandoned if something else moved the rig out of Powered — a follow-up
-// knockdown to Limp, or a manual mode switch in the inspector.
+// Begin a procedural get-up: open the joint cones, go Powered, and ramp muscle strength
+// 0 -> getupStrength while the motors chase the bind/stand pose (targetStand). Works from
+// Limp (the usual case) or any mode. Deliberately under-powered + wobbly = sloppy.
+static void StartRagdollGetUp(PhysicsSystem::Impl& impl, RagdollInstance& inst, RagdollComponent& rag)
+{
+    Physics::SetRagdollMode(rag, RagdollMode::Powered);   // clears any prior reaction first
+    WidenRagdollJoints(impl, inst, true);                 // ...then open the cones for the heave
+
+    // Snapshot the sprawled relative pose per joint so the motor target can sweep from
+    // here toward the stand pose (smooth travel instead of a stiff spring to the target).
+    JPH::BodyInterface& bi = impl.joltSystem->GetBodyInterface();
+    for (RagdollJoint& j : inst.joints) {
+        if (j.parentSlot < 0 || j.childSlot < 0) continue;
+        glm::quat pr = FromJolt(bi.GetRotation(inst.bodies[j.parentSlot].id));
+        glm::quat cr = FromJolt(bi.GetRotation(inst.bodies[j.childSlot].id));
+        j.startRel = glm::normalize(glm::conjugate(pr) * cr);
+    }
+
+    // Fixed standing-hip height: ground under the sprawled rig (its lowest body right now,
+    // resting on the floor) plus the bind-pose hip clearance. Captured once so the hips
+    // servo to an ABSOLUTE goal and stop there, instead of chasing their own rising feet.
+    float groundY = 1e30f;
+    for (const RagdollBody& b : inst.bodies)
+        groundY = glm::min(groundY, (float)bi.GetPosition(b.id).GetY());
+    inst.getupTargetY = (groundY < 1e29f ? groundY : 0.0f) + inst.standHipClearance;
+
+    // Snapshot the hips' transform and drive them KINEMATICALLY for the heave: a kinematic
+    // root reaches the standing pose regardless of the dynamic chain hanging off it, then the
+    // limb motors pose the body underneath. (Dynamic velocity/force on one body just gets
+    // absorbed by the joints.) Restored to Dynamic in ClearRagdollReaction.
+    if (inst.rootBodySlot >= 0) {
+        const RagdollBody& root = inst.bodies[inst.rootBodySlot];
+        inst.getupStartPos = FromJolt(bi.GetPosition(root.id));
+        inst.getupStartRot = FromJolt(bi.GetRotation(root.id));
+        bi.SetMotionType(root.id, JPH::EMotionType::Kinematic, JPH::EActivation::Activate);
+    }
+
+    RagReaction& r  = inst.reaction;
+    r.kind          = RagReaction::Kind::GetUp;
+    r.timer         = 0.0f;
+    r.duration      = glm::max(rag.config ? rag.config->getupDuration : 1.2f, 0.05f);
+    r.startStrength = 0.0f;
+    r.endStrength   = glm::clamp(rag.config ? rag.config->getupStrength : 0.7f, 0.0f, 1.0f);
+    r.targetStand   = true;
+    r.wobble        = glm::max(rag.config ? rag.config->getupWobble : 0.0f, 0.0f);
+    rag.strength    = 0.0f;
+    inst.restTimer  = 0.0f;
+    spdlog::info("Ragdoll {}: get-up start (heave {:.2f}s, peak strength {:.2f})",
+                 rag._ragdollId, r.duration, r.endStrength);
+}
+
+// Begin the get-up -> animation cross-blend: the stand has been held, now ease every body
+// from its current (held-stand) transform into the live animation pose, kinematically, then
+// hand to Animated. All bodies go Kinematic and motors off (the blend fully drives them);
+// the widened cones + kinematic root are restored on the way (ClearRagdollReaction handles
+// the same cleanup when this finalizes). With getupBlend == 0 there is nothing to ease, so
+// the caller switches straight to Animated instead of calling this.
+static void StartRagdollGetUpBlend(PhysicsSystem::Impl& impl, RagdollInstance& inst, RagdollComponent& rag)
+{
+    JPH::BodyInterface& bi = impl.joltSystem->GetBodyInterface();
+    WidenRagdollJoints(impl, inst, false);              // heave's over — restore authored cones
+    SetRagdollMotorsEnabled(impl, inst, false);         // the kinematic blend drives the bodies
+    for (RagdollBody& b : inst.bodies) {
+        b.blendStartPos = FromJolt(bi.GetPosition(b.id));
+        b.blendStartRot = FromJolt(bi.GetRotation(b.id));
+        bi.SetMotionType(b.id, JPH::EMotionType::Kinematic, JPH::EActivation::Activate);
+    }
+    RagReaction& r = inst.reaction;
+    r.kind     = RagReaction::Kind::GetUpBlend;
+    r.timer    = 0.0f;
+    r.duration = glm::max(rag.config ? rag.config->getupBlend : 0.25f, 1e-3f);
+    inst.restTimer = 0.0f;
+    spdlog::info("Ragdoll {}: get-up blending to animation ({:.2f}s)", rag._ragdollId, r.duration);
+}
+
+// True if every body of the rig has nearly stopped moving (settled on the floor).
+static bool RagdollAtRest(JPH::BodyInterface& bi, const RagdollInstance& inst)
+{
+    for (const RagdollBody& b : inst.bodies)
+        if (bi.GetLinearVelocity(b.id).Length()  > 0.25f ||
+            bi.GetAngularVelocity(b.id).Length() > 1.5f) return false;
+    return true;
+}
+
+// Per frame: (1) advance an active flinch/get-up reaction, ramping strength with a smooth
+// ease and ending it when the window elapses; (2) for a settled Limp rig, auto-start a
+// get-up once it has been at rest for cfg->getupDelay seconds. A reaction is abandoned if
+// something else moved the rig out of Powered (a follow-up knockdown, a manual switch).
 static void TickRagdollReactions(Scene& scene, PhysicsSystem::Impl& impl, float dt)
 {
     if (impl.ragdolls.empty()) return;
     auto& reg = scene.GetRegistry();
+    JPH::BodyInterface& bi = impl.joltSystem->GetBodyInterface();
     for (auto& [id, inst] : impl.ragdolls) {
-        if (!inst.flinchActive) continue;
-        if (inst.mode != RagdollMode::Powered) { inst.flinchActive = false; continue; }
         auto* rag = reg.valid(inst.entity) ? reg.try_get<RagdollComponent>(inst.entity) : nullptr;
-        if (!rag) { inst.flinchActive = false; continue; }
+        if (!rag) { inst.reaction.kind = RagReaction::Kind::None; continue; }
 
-        inst.flinchTimer += dt;
-        const float t    = glm::clamp(inst.flinchTimer / inst.flinchDuration, 0.0f, 1.0f);
-        const float ease = t * t * (3.0f - 2.0f * t);     // smoothstep
-        rag->strength    = glm::mix(inst.flinchFloor, 1.0f, ease);
+        // (1) advance an active reaction.
+        if (inst.reaction.kind != RagReaction::Kind::None) {
+            if (inst.mode != RagdollMode::Powered) {     // knocked down / mode changed under us
+                ClearRagdollReaction(impl, inst);
+                continue;
+            }
+            RagReaction& r = inst.reaction;
 
-        if (t >= 1.0f) {
-            // Recovered footing: full strength, back to animation-driven control.
-            inst.flinchActive = false;
-            rag->strength     = 1.0f;
-            Physics::SetRagdollMode(*rag, RagdollMode::Animated);
+            // Get-up -> animation cross-blend (the tail of a get-up): the kinematic blend in
+            // SyncRagdollGetUpBlend eases the bodies into the live pose; when it elapses we
+            // finalize to Animated (already at the anim pose, so no pop).
+            if (r.kind == RagReaction::Kind::GetUpBlend) {
+                r.timer += dt;
+                if (r.timer >= r.duration)
+                    Physics::SetRagdollMode(*rag, RagdollMode::Animated);   // clears reaction
+                continue;
+            }
+
+            // Get-up that has reached the top: hold the stand (kinematic root) for
+            // getupHold seconds, then hand back to the animation clip. The hand-off goes to
+            // Animated, NOT Powered: once the kinematic root is released the motors can't
+            // balance, so a Powered handoff would just topple. A getupBlend window first
+            // cross-blends the held pose into the live animation so it eases in instead of
+            // popping. getupHold == 0 holds indefinitely (manual hand-off), the old behavior.
+            if (r.kind == RagReaction::Kind::GetUp && r.timer >= r.duration) {
+                rag->strength = r.endStrength;
+                const float hold = rag->config ? rag->config->getupHold : 0.0f;
+                if (hold > 0.0f) {
+                    inst.restTimer += dt;   // idle during the hold — reused as the hold clock
+                    if (inst.restTimer >= hold) {
+                        const float blend = rag->config ? rag->config->getupBlend : 0.0f;
+                        if (blend > 0.0f) {
+                            StartRagdollGetUpBlend(impl, inst, *rag);
+                        } else {
+                            spdlog::info("Ragdoll {}: get-up hold elapsed — resuming animation", id);
+                            Physics::SetRagdollMode(*rag, RagdollMode::Animated);  // clears reaction
+                        }
+                    }
+                }
+                continue;
+            }
+
+            r.timer += dt;
+            const float t    = glm::clamp(r.timer / r.duration, 0.0f, 1.0f);
+            const float ease = t * t * (3.0f - 2.0f * t);   // smoothstep
+            rag->strength    = glm::mix(r.startStrength, r.endStrength, ease);
+
+            // TEMP DIAGNOSTIC: sample the get-up heave ~10x/s. clearance = hips height
+            // above the lowest body (≈ feet): a gradual rise climbs smoothly; a snap stays
+            // flat then jumps in one step. Remove once get-up motion is dialed in.
+            if (r.kind == RagReaction::Kind::GetUp && inst.rootBodySlot >= 0 &&
+                (int)((r.timer - dt) * 10.0f) != (int)(r.timer * 10.0f)) {
+                float hipsY = (float)bi.GetPosition(inst.bodies[inst.rootBodySlot].id).GetY();
+                float minY  = hipsY;
+                for (const RagdollBody& b : inst.bodies)
+                    minY = glm::min(minY, (float)bi.GetPosition(b.id).GetY());
+                spdlog::info("  get-up t={:.2f} str={:.2f} hipsY={:.3f} clearance={:.3f} target={:.3f}",
+                             t, rag->strength, hipsY, hipsY - minY, inst.standHipClearance);
+            }
+
+            if (t >= 1.0f) {
+                if (r.kind == RagReaction::Kind::Flinch) {
+                    // Recovered footing: full strength, but STAY an active ragdoll holding
+                    // the animation pose. No kinematic snap back to the walk frame — that
+                    // teleport was the "snaps up" artifact. Gameplay/inspector hands off.
+                    rag->strength = 1.0f;
+                    ClearRagdollReaction(impl, inst);
+                } else {
+                    // Get-up just reached the top — hold from here (handled above next tick).
+                    spdlog::info("Ragdoll {}: get-up reached the top — holding the stand", id);
+                }
+            }
+            continue;
+        }
+
+        // (2) auto get-up: a settled limp rig heaves itself up after a dwell.
+        if (inst.mode == RagdollMode::Limp && rag->config && rag->config->getupDelay > 0.0f) {
+            if (RagdollAtRest(bi, inst)) {
+                inst.restTimer += dt;
+                if (inst.restTimer >= rag->config->getupDelay)
+                    StartRagdollGetUp(impl, inst, *rag);
+            } else {
+                inst.restTimer = 0.0f;
+            }
+        } else {
+            inst.restTimer = 0.0f;
         }
     }
 }
@@ -1557,7 +1970,14 @@ static void AutoTriggerRagdollImpacts(PhysicsSystem::Impl& impl, Scene& scene,
                 const float knock  = rag->config->impactThreshold;
                 const float flinch = rag->config->flinchThreshold;
                 const bool  doKnock  = knock  > 0.0f && ev.impactMagnitude >= knock;
-                const bool  doFlinch = !doKnock && flinch > 0.0f && ev.impactMagnitude >= flinch;
+                // A get-up still HEAVING must not be flinch-interrupted — its own limbs
+                // slapping the floor read as impacts and would abandon the recovery. Only
+                // a full knockdown cuts a get-up short. (Once it's standing/holding, hits
+                // flinch normally again.)
+                const bool  getupHeaving = inst.reaction.kind == RagReaction::Kind::GetUp &&
+                                           inst.reaction.timer < inst.reaction.duration;
+                const bool  doFlinch = !doKnock && !getupHeaving &&
+                                       flinch > 0.0f && ev.impactMagnitude >= flinch;
                 if (!doKnock && !doFlinch) continue;
 
                 // Knockdown re-bakes joints at the live pose and flips Kinematic→Dynamic;
@@ -1645,8 +2065,10 @@ void PhysicsSystem::OnUpdate(Scene& scene, float dt) {
 
     JPH::BodyInterface& bi = m_impl->joltSystem->GetBodyInterface();
     while (m_accumulator >= FIXED_DT) {
+        m_impl->simTime += FIXED_DT;                 // physics clock for get-up wobble noise
         SyncKinematicBodies(scene, bi);
         SyncRagdollKinematic(scene, *m_impl, bi);   // Animated ragdolls follow the pose
+        SyncRagdollGetUpBlend(scene, *m_impl, bi);  // get-up tail: ease bodies into the anim pose
         SyncRagdollPowered(scene, *m_impl);         // Powered ragdolls drive motors toward the pose
         m_impl->joltSystem->Update(FIXED_DT, 2, m_impl->tempAllocator.get(), m_impl->jobSystem.get());
         SyncTransforms(scene, bi);
@@ -1820,6 +2242,11 @@ void SetRagdollMode(RagdollComponent& rag, RagdollMode mode) {
     if (it == s_Impl->ragdolls.end()) return;
     RagdollInstance& inst = it->second;
 
+    // An explicit mode set cancels any in-flight reaction (flinch / get-up / stand hold)
+    // and restores the authored joint limits a get-up had opened. Reaction starters call
+    // this first, then set their own reaction, so this never clobbers the new one.
+    ClearRagdollReaction(*s_Impl, inst);
+
     if (inst.mode != mode) {
         JPH::BodyInterface& bi = s_Impl->joltSystem->GetBodyInterface();
         // Re-center the joint limits on the live pose before the bodies go Dynamic,
@@ -1843,6 +2270,14 @@ void SetRagdollMode(RagdollComponent& rag, RagdollMode mode) {
 // by SyncRagdollPowered each substep to scale motor torque; takes effect next step.
 void SetRagdollStrength(RagdollComponent& rag, float strength) {
     rag.strength = glm::clamp(strength, 0.0f, 1.0f);
+}
+
+// Kick off a procedural get-up (the auto-on-settle path uses the same StartRagdollGetUp).
+void RagdollGetUp(RagdollComponent& rag) {
+    if (!s_Impl || rag._ragdollId == 0xFFFFFFFFu) return;
+    auto it = s_Impl->ragdolls.find(rag._ragdollId);
+    if (it == s_Impl->ragdolls.end()) return;
+    StartRagdollGetUp(*s_Impl, it->second, rag);
 }
 
 // After the physics step AND after the animation palette is built: for each Limp

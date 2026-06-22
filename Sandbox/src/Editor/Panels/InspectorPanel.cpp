@@ -1425,6 +1425,12 @@ void InspectorPanel::OnImGuiRender() {
                         Physics::SetRagdollMode(rag, RagdollMode::Animated);
                     if (ImGui::IsItemHovered() && playing)
                         ImGui::SetTooltip("Active = motors fight toward the animation pose.");
+                    if (ImGui::Button("Get Up"))
+                        Physics::RagdollGetUp(rag);
+                    if (ImGui::IsItemHovered() && playing)
+                        ImGui::SetTooltip("Procedurally heave the ragdoll back upright (motors drive\n"
+                                          "toward the stand pose). Also fires automatically once a\n"
+                                          "knocked-down rig settles (see Settle Delay).");
                     // Muscle strength for Powered mode — live-tunable mid-play.
                     if (ImGui::SliderFloat("Strength", &rag.strength, 0.0f, 1.0f, "%.2f"))
                         Physics::SetRagdollStrength(rag, rag.strength);
@@ -1472,6 +1478,52 @@ void InspectorPanel::OnImGuiRender() {
                         if (ImGui::IsItemHovered())
                             ImGui::SetTooltip("Seconds to ramp muscle strength back to full after a flinch,\n"
                                               "then return to animation-driven control.");
+
+                        // Procedural get-up tuning (the sloppy stagger back to standing).
+                        ImGui::Spacing();
+                        ImGui::TextDisabled("Get-up (procedural recovery)");
+                        if (ImGui::DragFloat("Get-up Strength", &rag.config->getupStrength,
+                                             0.01f, 0.0f, 1.0f, "%.2f"))
+                            { rag.config->getupStrength = glm::clamp(rag.config->getupStrength, 0.0f, 1.0f); dirty = true; }
+                        if (ImGui::IsItemHovered())
+                            ImGui::SetTooltip("Peak muscle strength while rising. <1 keeps it wobbly/drunk.");
+                        if (ImGui::DragFloat("Get-up Duration", &rag.config->getupDuration,
+                                             0.01f, 0.05f, 8.0f, "%.2f s"))
+                            { rag.config->getupDuration = glm::max(0.05f, rag.config->getupDuration); dirty = true; }
+                        if (ImGui::IsItemHovered())
+                            ImGui::SetTooltip("Seconds to heave from sprawled to standing.");
+                        if (ImGui::DragFloat("Get-up Wobble", &rag.config->getupWobble,
+                                             0.01f, 0.0f, 2.0f, "%.2f"))
+                            { rag.config->getupWobble = glm::max(0.0f, rag.config->getupWobble); dirty = true; }
+                        if (ImGui::IsItemHovered())
+                            ImGui::SetTooltip("Per-joint torque noise during get-up. 0 = clean, ~0.3 = drunk flail.");
+                        if (ImGui::DragFloat("Settle Delay", &rag.config->getupDelay,
+                                             0.05f, 0.0f, 10.0f, "%.2f s"))
+                            { rag.config->getupDelay = glm::max(0.0f, rag.config->getupDelay); dirty = true; }
+                        if (ImGui::IsItemHovered())
+                            ImGui::SetTooltip("Seconds a knocked-down rig must lie still before it auto-gets-up.\n"
+                                              "0 = manual Get-Up button only.");
+                        if (ImGui::DragFloat("Balance Assist", &rag.config->getupBalance,
+                                             0.05f, 0.0f, 5.0f, "%.2f"))
+                            { rag.config->getupBalance = glm::max(0.0f, rag.config->getupBalance); dirty = true; }
+                        if (ImGui::IsItemHovered())
+                            ImGui::SetTooltip("Direct pelvis upright+lift assist (joint motors can't lift the\n"
+                                              "root). 1 = normal, higher = stronger/snappier stand, 0 = pure\n"
+                                              "motors (won't actually rise).");
+                        if (ImGui::DragFloat("Hold Then Resume", &rag.config->getupHold,
+                                             0.05f, 0.0f, 10.0f, "%.2f s"))
+                            { rag.config->getupHold = glm::max(0.0f, rag.config->getupHold); dirty = true; }
+                        if (ImGui::IsItemHovered())
+                            ImGui::SetTooltip("After standing, hold the pose this long, then resume the\n"
+                                              "animation clip (switch to Animated). 0 = hold the stand\n"
+                                              "indefinitely (manual hand-off).");
+                        if (ImGui::DragFloat("Resume Blend", &rag.config->getupBlend,
+                                             0.01f, 0.0f, 2.0f, "%.2f s"))
+                            { rag.config->getupBlend = glm::max(0.0f, rag.config->getupBlend); dirty = true; }
+                        if (ImGui::IsItemHovered())
+                            ImGui::SetTooltip("Cross-blend the held stand pose into the live animation over\n"
+                                              "this long before resuming the clip, so it eases in instead of\n"
+                                              "popping. 0 = instant switch.");
 
                         if (ImGui::TreeNode("Bodies")) {
                             const char* shapeNames[] = { "Capsule", "Box", "Sphere" };

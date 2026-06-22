@@ -77,6 +77,34 @@ struct RagdollConfig {
     float flinchThreshold = 0.0f;   // stagger   -> Powered flinch (0 = off)
     float flinchStrength  = 0.3f;   // [0,1] muscle strength at the bottom of the dip
     float flinchRecovery  = 0.4f;   // seconds to ramp strength back to 1
+
+    // --- procedural get-up (active-ragdoll recovery, no animation clip) ---------
+    // After a knockdown, the rig heaves itself back upright: Limp -> Powered driving
+    // the joint motors toward the bind/stand pose (cones opened so sprawled limbs can
+    // straighten), strength ramping 0 -> getupStrength over getupDuration with
+    // getupWobble flail noise, then handing back to animation control. Deliberately
+    // under-powered + noisy = the sloppy bar-fight stagger-up. See RagdollGetUp.
+    float getupStrength = 0.7f;     // [0,1] peak muscle strength while rising (<1 = wobbly)
+    float getupDuration = 1.2f;     // seconds to heave from sprawled to standing
+    float getupWobble   = 0.3f;     // per-joint torque noise amplitude (0 = clean, ~0.3 = drunk)
+    float getupDelay    = 0.6f;     // seconds the limp rig must be ~at rest before auto get-up; 0 = manual only
+
+    // Root assist gain: joint motors can't lift the body's root (no joint acts on it), so
+    // get-up directly drives the pelvis upright + up to standing height. This scales that
+    // assist. 1 = normal, higher = snappier/stronger stand, 0 = pure motors (won't rise).
+    float getupBalance  = 1.0f;
+
+    // After the heave reaches the top, hold the (kinematic-root) stand this many seconds,
+    // then hand back to Animated so the character resumes its animation clip. The motors
+    // alone can't balance once the kinematic root is released, so the handoff goes to
+    // Animated (kinematic follow), not Powered. 0 = hold the stand indefinitely (manual
+    // hand-off via the inspector / gameplay), preserving the old behavior.
+    float getupHold     = 0.5f;
+
+    // Cross-blend duration for the hand-off: the bodies ease (kinematically) from the held
+    // stand pose into the live animation pose over this many seconds before switching to
+    // Animated, so resuming the clip doesn't pop. 0 = instant switch (no blend).
+    float getupBlend    = 0.25f;
 };
 
 // Best-effort auto-generation from a skeleton: classifies bones by topology + role

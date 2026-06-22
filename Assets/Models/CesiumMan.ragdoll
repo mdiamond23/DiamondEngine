@@ -595,6 +595,13 @@
     "flinchRecovery": 0.4000000059604645,
     "flinchStrength": 0.30000001192092896,
     "flinchThreshold": 10.0,
+    "getupBalance": 1.0,
+    "getupBlend": 0.25,
+    "getupDelay": 0.6000000238418579,
+    "getupDuration": 3.0,
+    "getupHold": 0.5,
+    "getupStrength": 1.0,
+    "getupWobble": 0.30000001192092896,
     "impactThreshold": 50.0,
     "version": 1
 }

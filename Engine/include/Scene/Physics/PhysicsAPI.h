@@ -92,6 +92,13 @@ namespace Physics {
     // hit-reactions and get-up blends. Only affects Powered mode.
     void SetRagdollStrength(RagdollComponent& rag, float strength);
 
+    // Start a procedural get-up: the rig heaves itself upright by driving its motors
+    // toward the bind/stand pose (cones opened, strength ramping up with wobble), then
+    // hands back to Animated. Works from Limp (the usual trigger) or any built ragdoll.
+    // Also fires automatically once a limp rig settles (RagdollConfig::getupDelay). No-op
+    // if the ragdoll isn't built. See Docs/ragdoll-design.md.
+    void RagdollGetUp(RagdollComponent& rag);
+
     // Overwrites the bone palette of every Limp ragdoll from its simulated bodies
     // (the animation->physics readback) and re-roots the entity to the hips. MUST be
     // called once per frame AFTER UpdateAnimators (so it isn't clobbered) and after
