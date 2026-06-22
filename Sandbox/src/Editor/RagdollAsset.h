@@ -97,6 +97,9 @@ inline bool LoadRagdoll(const std::string& path, RagdollConfig& out)
             d.twistMaxDeg    = jj.value("twistMaxDeg",    d.twistMaxDeg);
             d.hingeMinDeg    = jj.value("hingeMinDeg",    d.hingeMinDeg);
             d.hingeMaxDeg    = jj.value("hingeMaxDeg",    d.hingeMaxDeg);
+            d.motorMaxTorque = jj.value("motorMaxTorque", d.motorMaxTorque);
+            d.motorFrequency = jj.value("motorFrequency", d.motorFrequency);
+            d.motorDamping   = jj.value("motorDamping",   d.motorDamping);
         }
 
         out.bodies.push_back(std::move(d));
@@ -137,7 +140,10 @@ inline bool SaveRagdoll(const std::string& path, const RagdollConfig& cfg)
                 { "twistMinDeg",    d.twistMinDeg },
                 { "twistMaxDeg",    d.twistMaxDeg },
                 { "hingeMinDeg",    d.hingeMinDeg },
-                { "hingeMaxDeg",    d.hingeMaxDeg }
+                { "hingeMaxDeg",    d.hingeMaxDeg },
+                { "motorMaxTorque", d.motorMaxTorque },
+                { "motorFrequency", d.motorFrequency },
+                { "motorDamping",   d.motorDamping }
             };
         }
         j["bodies"].push_back(std::move(bj));

@@ -1406,9 +1406,11 @@ void InspectorPanel::OnImGuiRender() {
                                           "and attach a RagdollComponent.");
                 } else {
                     auto& rag = registry.get<RagdollComponent>(entity);
+                    const char* modeName = rag.mode == RagdollMode::Limp    ? "Limp"
+                                         : rag.mode == RagdollMode::Powered  ? "Powered"
+                                                                            : "Animated";
                     ImGui::Text("%zu bodies  (%s)",
-                                rag.config ? rag.config->bodies.size() : 0u,
-                                rag.mode == RagdollMode::Limp ? "Limp" : "Animated");
+                                rag.config ? rag.config->bodies.size() : 0u, modeName);
                     ImGui::TextDisabled("%s", rag.assetPath.c_str());
 
                     const bool playing = scene && scene->IsPlaying();
@@ -1416,8 +1418,19 @@ void InspectorPanel::OnImGuiRender() {
                     if (ImGui::Button("Go Limp"))
                         Physics::SetRagdollMode(rag, RagdollMode::Limp);
                     ImGui::SameLine();
+                    if (ImGui::Button("Go Active"))
+                        Physics::SetRagdollMode(rag, RagdollMode::Powered);
+                    ImGui::SameLine();
                     if (ImGui::Button("Reset to Animated"))
                         Physics::SetRagdollMode(rag, RagdollMode::Animated);
+                    if (ImGui::IsItemHovered() && playing)
+                        ImGui::SetTooltip("Active = motors fight toward the animation pose.");
+                    // Muscle strength for Powered mode — live-tunable mid-play.
+                    if (ImGui::SliderFloat("Strength", &rag.strength, 0.0f, 1.0f, "%.2f"))
+                        Physics::SetRagdollStrength(rag, rag.strength);
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("Powered-mode muscle strength: scales every joint motor's\n"
+                                          "torque budget. 1 = full strength, 0 = effectively limp.");
                     ImGui::EndDisabled();
                     if (!playing && ImGui::IsItemHovered())
                         ImGui::SetTooltip("Enter play mode to trigger the ragdoll.");
@@ -1481,6 +1494,16 @@ void InspectorPanel::OnImGuiRender() {
                                         } else if (d.jointType == ConstraintType::Hinge) {
                                             if (ImGui::DragFloat("Min Angle", &d.hingeMinDeg, 1.0f, -180.0f, 0.0f, "%.0f deg")) dirty = true;
                                             if (ImGui::DragFloat("Max Angle", &d.hingeMaxDeg, 1.0f,    0.0f, 180.0f, "%.0f deg")) dirty = true;
+                                        }
+
+                                        // Powered-mode motor (the "muscle"). Hinge + SwingTwist
+                                        // only — Fixed/Point have nothing to drive.
+                                        if (d.jointType == ConstraintType::SwingTwist ||
+                                            d.jointType == ConstraintType::Hinge) {
+                                            ImGui::TextDisabled("Motor (Powered mode)");
+                                            if (ImGui::DragFloat("Max Torque", &d.motorMaxTorque, 1.0f, 0.0f, 100000.0f, "%.0f N.m")) dirty = true;
+                                            if (ImGui::DragFloat("Frequency",  &d.motorFrequency, 0.1f, 0.1f, 120.0f, "%.1f Hz"))  dirty = true;
+                                            if (ImGui::DragFloat("Damping",    &d.motorDamping,   0.05f, 0.0f, 10.0f, "%.2f"))      dirty = true;
                                         }
                                     }
                                     ImGui::TreePop();

@@ -1048,7 +1048,15 @@ static void BuildRagdoll(PhysicsSystem::Impl& impl, Scene& scene,
         cc.hasLimits      = true;       // hinge: clamp; ignored by the other types
         cc.limitMin       = def.hingeMinDeg;
         cc.limitMax       = def.hingeMaxDeg;
-        cc.motorMode      = MotorMode::Off;  // v1 passive ragdoll
+        // Bake a Position-mode motor on every ragdoll joint so an active (Powered)
+        // ragdoll can drive it toward the animation pose. The motor is inert in
+        // Animated mode (bodies are kinematic) and switched Off in Limp mode
+        // (SetRagdollMode); only Powered engages it. Baking once means switching to
+        // Powered needs no joint rebuild. Target defaults to the rest pose.
+        cc.motorMode      = MotorMode::Position;
+        cc.motorMaxTorque = def.motorMaxTorque;
+        cc.motorFrequency = def.motorFrequency;
+        cc.motorDamping   = def.motorDamping;
 
         // Lock both bodies together (sorted internally), build, register. body1 =
         // parent, body2 = self — matching CreateConstraint's convention.
@@ -1167,6 +1175,119 @@ static void SyncRagdollKinematic(Scene& scene, PhysicsSystem::Impl& impl, JPH::B
             if (!std::isfinite(pos.x) || !std::isfinite(pos.y) || !std::isfinite(pos.z)) continue;
             bi.MoveKinematic(b.id, ToJolt(pos), ToJolt(rot), FIXED_DT);
         }
+    }
+}
+
+// Engage or disengage the Position motors baked on every ragdoll joint. Powered
+// mode turns them on (driven toward targets by SyncRagdollPowered); Animated/Limp
+// turn them off. Kinematic bodies ignore motors, so this mainly matters on the
+// Powered→on and Limp→off transitions (and after a joint rebuild, which recreates
+// the constraints with their baked Position motor re-enabled).
+static void SetRagdollMotorsEnabled(PhysicsSystem::Impl& impl, RagdollInstance& inst, bool on)
+{
+    const JPH::EMotorState state = on ? JPH::EMotorState::Position : JPH::EMotorState::Off;
+    for (const RagdollJoint& j : inst.joints) {
+        auto it = impl.constraintMap.find(j.constraintId);
+        if (it == impl.constraintMap.end()) continue;
+        JPH::Constraint* c = it->second;
+        switch (c->GetSubType()) {
+            case JPH::EConstraintSubType::Hinge:
+                static_cast<JPH::HingeConstraint*>(c)->SetMotorState(state);
+                break;
+            case JPH::EConstraintSubType::SwingTwist: {
+                auto* st = static_cast<JPH::SwingTwistConstraint*>(c);
+                st->SetSwingMotorState(state);
+                st->SetTwistMotorState(state);
+                break;
+            }
+            default: break;
+        }
+    }
+}
+
+// Per sub-step (Powered mode): drive every joint motor toward the live animation
+// pose so the ragdoll actively holds / recovers an animated stance (active ragdoll).
+// Unlike SyncRagdollKinematic the bodies are Dynamic — the motors, not MoveKinematic,
+// move them, so the rig reacts to and pushes against the world while still chasing
+// the animation. The swing-twist target is the desired orientation of the child body
+// relative to the parent body: SetTargetOrientationBS wants exactly R1^-1 * R2 (the
+// same convention as the restBS line in BuildConstraint), which we read straight from
+// the retained local Pose by forward-composing model-space bone rotations. Hinges get
+// the scalar angle about their axis, referenced to the bind pose (the hinge's zero).
+// Motor torque is scaled by the rig's strength each frame, so a hit-reaction or
+// get-up blend can soften the muscles by lowering RagdollComponent::strength.
+static void SyncRagdollPowered(Scene& scene, PhysicsSystem::Impl& impl)
+{
+    if (impl.ragdolls.empty()) return;
+    auto& reg = scene.GetRegistry();
+    JPH::BodyInterface& bi = impl.joltSystem->GetBodyInterface();
+    for (auto& [id, inst] : impl.ragdolls) {
+        if (inst.mode != RagdollMode::Powered || !reg.valid(inst.entity)) continue;
+        auto* smc  = reg.try_get<SkinnedMeshComponent>(inst.entity);
+        auto* anim = reg.try_get<AnimatorComponent>(inst.entity);
+        auto* rag  = reg.try_get<RagdollComponent>(inst.entity);
+        if (!smc || !anim) continue;
+        const Diamond::Skeleton& skel = smc->skeleton;
+        const int n = (int)skel.bones.size();
+        if ((int)anim->pose.size() != n) continue;   // pose not built yet this frame
+
+        const float strength = rag ? glm::clamp(rag->strength, 0.0f, 1.0f) : 1.0f;
+
+        // Model-space bone rotations for the live (animated) pose and for the bind
+        // pose, forward-composed down the skeleton. Rotations only — translation and
+        // scale don't change a joint's relative orientation.
+        std::vector<glm::quat> animRot(n), bindRot(n);
+        for (int i = 0; i < n; ++i) {
+            int p = skel.bones[i].parent;
+            glm::quat la = glm::normalize(anim->pose[i].rotation);
+            glm::quat lb = glm::normalize(skel.bones[i].localR);
+            animRot[i] = (p < 0) ? la : glm::normalize(animRot[p] * la);
+            bindRot[i] = (p < 0) ? lb : glm::normalize(bindRot[p] * lb);
+        }
+
+        for (const RagdollJoint& j : inst.joints) {
+            if (j.parentSlot < 0 || j.childSlot < 0) continue;
+            int pb = inst.bodies[j.parentSlot].boneIndex;
+            int cb = inst.bodies[j.childSlot].boneIndex;
+            if (pb < 0 || pb >= n || cb < 0 || cb >= n) continue;
+
+            auto cit = impl.constraintMap.find(j.constraintId);
+            if (cit == impl.constraintMap.end()) continue;
+            JPH::Constraint* c = cit->second;
+
+            // Desired child-relative-to-parent orientation, straight from the pose.
+            glm::quat desiredRel = glm::normalize(glm::conjugate(animRot[pb]) * animRot[cb]);
+
+            switch (c->GetSubType()) {
+                case JPH::EConstraintSubType::SwingTwist: {
+                    auto* st = static_cast<JPH::SwingTwistConstraint*>(c);
+                    st->GetSwingMotorSettings().SetTorqueLimit(j.cc.motorMaxTorque * strength);
+                    st->GetTwistMotorSettings().SetTorqueLimit(j.cc.motorMaxTorque * strength);
+                    st->SetTargetOrientationBS(ToJolt(desiredRel));
+                    break;
+                }
+                case JPH::EConstraintSubType::Hinge: {
+                    auto* hinge = static_cast<JPH::HingeConstraint*>(c);
+                    // The hinge's zero angle is the relative orientation at creation
+                    // (bind). Drive to the rotation FROM bind-relative TO desired,
+                    // measured about the hinge axis expressed in the parent's frame —
+                    // the basis `delta` lives in.
+                    glm::quat restRel = glm::normalize(glm::conjugate(bindRot[pb]) * bindRot[cb]);
+                    glm::quat delta   = glm::normalize(glm::conjugate(restRel) * desiredRel);
+                    glm::vec3 axisP   = glm::normalize(glm::conjugate(bindRot[pb]) *
+                                          (bindRot[cb] * SafeAxis(j.twistAxisLocal, j.twistAxisLocal)));
+                    float angle = 2.0f * std::atan2(glm::dot(glm::vec3(delta.x, delta.y, delta.z), axisP), delta.w);
+                    hinge->GetMotorSettings().SetTorqueLimit(j.cc.motorMaxTorque * strength);
+                    hinge->SetTargetAngle(angle);
+                    break;
+                }
+                default: break;
+            }
+        }
+
+        // Keep the dynamic bodies awake so the motors keep correcting toward the pose.
+        for (const RagdollBody& b : inst.bodies)
+            bi.ActivateBody(b.id);
     }
 }
 
@@ -1455,6 +1576,7 @@ void PhysicsSystem::OnUpdate(Scene& scene, float dt) {
     while (m_accumulator >= FIXED_DT) {
         SyncKinematicBodies(scene, bi);
         SyncRagdollKinematic(scene, *m_impl, bi);   // Animated ragdolls follow the pose
+        SyncRagdollPowered(scene, *m_impl);         // Powered ragdolls drive motors toward the pose
         m_impl->joltSystem->Update(FIXED_DT, 2, m_impl->tempAllocator.get(), m_impl->jobSystem.get());
         SyncTransforms(scene, bi);
         std::vector<ContactEvent> events = m_impl->contactListener->DrainEvents();
@@ -1630,16 +1752,26 @@ void SetRagdollMode(RagdollComponent& rag, RagdollMode mode) {
     if (inst.mode != mode) {
         JPH::BodyInterface& bi = s_Impl->joltSystem->GetBodyInterface();
         // Re-center the joint limits on the live pose before the bodies go Dynamic,
-        // so no limb is born outside its cone and yanked back (the explosion).
+        // so no limb is born outside its cone and yanked back (the explosion). Only
+        // Limp does this: a Powered rig must KEEP its bind-relative joint frames so
+        // its motors can drive back toward the animated pose.
         if (mode == RagdollMode::Limp)
             RebuildRagdollJointsAtPose(*s_Impl, inst);
-        JPH::EMotionType mt = (mode == RagdollMode::Limp)
-            ? JPH::EMotionType::Dynamic : JPH::EMotionType::Kinematic;
+        JPH::EMotionType mt = (mode == RagdollMode::Animated)
+            ? JPH::EMotionType::Kinematic : JPH::EMotionType::Dynamic;
         for (const RagdollBody& b : inst.bodies)
             bi.SetMotionType(b.id, mt, JPH::EActivation::Activate);
+        // Motors drive only in Powered mode; Animated (kinematic) and Limp run passive.
+        SetRagdollMotorsEnabled(*s_Impl, inst, mode == RagdollMode::Powered);
         inst.mode = mode;
     }
     rag.mode = mode;
+}
+
+// Muscle strength for an active (Powered) ragdoll. Stored on the component and read
+// by SyncRagdollPowered each substep to scale motor torque; takes effect next step.
+void SetRagdollStrength(RagdollComponent& rag, float strength) {
+    rag.strength = glm::clamp(strength, 0.0f, 1.0f);
 }
 
 // After the physics step AND after the animation palette is built: for each Limp
@@ -1654,7 +1786,9 @@ void SyncRagdollPoses(Scene& scene) {
     JPH::BodyInterface& bi = s_Impl->joltSystem->GetBodyInterface();
 
     for (auto& [id, inst] : s_Impl->ragdolls) {
-        if (inst.mode != RagdollMode::Limp || !reg.valid(inst.entity)) continue;
+        // Both Limp and Powered are dynamic — skin them from the simulated bodies.
+        // Only Animated keeps the animation palette as-is.
+        if (inst.mode == RagdollMode::Animated || !reg.valid(inst.entity)) continue;
         auto* smc  = reg.try_get<SkinnedMeshComponent>(inst.entity);
         auto* anim = reg.try_get<AnimatorComponent>(inst.entity);
         if (!smc || !anim) continue;

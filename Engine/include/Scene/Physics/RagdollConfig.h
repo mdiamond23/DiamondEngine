@@ -48,6 +48,16 @@ struct RagdollBodyDef {
     // Hinge limits, degrees (min in [-180,0], max in [0,180]).
     float hingeMinDeg = 0.0f;
     float hingeMaxDeg = 150.0f;
+
+    // --- powered/active-ragdoll motor (per bone) -------------------------------
+    // The "muscle" driving this joint toward the animation pose in RagdollMode::Powered.
+    // Motors are baked on every ragdoll joint at build (Position mode) and only
+    // engaged in Powered mode; Animated (kinematic) and Limp (motors off) ignore them.
+    // motorMaxTorque is the budget in N·m — heavier limbs / stronger characters want
+    // more. frequency/damping shape the servo spring (Hz / damping ratio).
+    float motorMaxTorque = 50.0f;
+    float motorFrequency = 8.0f;
+    float motorDamping   = 1.0f;
 };
 
 // The whole ragdoll: an ordered list of bodies (roots first is convenient but not

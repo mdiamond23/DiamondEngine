@@ -12,6 +12,7 @@
 #include "Animation/Skeleton.h"
 #include "Animation/AnimationClip.h"
 #include "Animation/AnimationStateMachine.h"
+#include "Animation/Pose.h"
 
 // Skinned-character components. Kept in the global namespace to match the other
 // ECS components in Scene/Components.h. Populated from GltfImporter::LoadModel.
@@ -49,6 +50,14 @@ struct AnimatorComponent {
     float fadeElapsed  = 0.0f;
 
     std::vector<glm::mat4> palette;
+
+    // The final blended LOCAL (parent-relative) pose that produced `palette` this
+    // frame, retained rather than recomputed. The skinning path only needs the
+    // composed palette, but an active ragdoll reads this to drive each joint motor
+    // toward the animated target (Physics::SyncRagdollPowered). Cheap to keep — one
+    // BoneTransform per bone — and avoids re-sampling/decomposing the pose in the
+    // physics system. See Pose.h.
+    Diamond::Pose pose;
 
     // Begin a cross-fade to `newClip` over `fade` seconds. The current clip keeps
     // playing as the outgoing pose; the new clip starts at time 0. fade <= 0 (or

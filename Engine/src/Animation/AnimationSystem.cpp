@@ -56,19 +56,20 @@ void UpdateAnimators(entt::registry& reg, float dt, bool advance)
         if (clipValid(anim.clip)) SampleLocalPose(smc.skeleton, smc.clips[anim.clip], anim.time, target);
         else                      BindPose(smc.skeleton, target);
 
-        // Blend with the outgoing pose while a fade is in progress.
+        // Blend with the outgoing pose while a fade is in progress, then keep the
+        // resulting LOCAL pose on the component (an active ragdoll drives its joint
+        // motors from it) before composing the GPU palette.
         if (anim.prevClip >= 0 && anim.fadeDuration > 0.0f) {
             Pose from;
             if (clipValid(anim.prevClip)) SampleLocalPose(smc.skeleton, smc.clips[anim.prevClip], anim.prevTime, from);
             else                          BindPose(smc.skeleton, from);
 
             float w = std::clamp(anim.fadeElapsed / anim.fadeDuration, 0.0f, 1.0f);
-            Pose blended;
-            BlendPoses(from, target, w, blended);
-            ComputePalette(smc.skeleton, blended, anim.palette);
+            BlendPoses(from, target, w, anim.pose);
         } else {
-            ComputePalette(smc.skeleton, target, anim.palette);
+            anim.pose = std::move(target);
         }
+        ComputePalette(smc.skeleton, anim.pose, anim.palette);
     }
 }
 

@@ -81,10 +81,16 @@ namespace Physics {
                                            entt::entity ignore = entt::null, bool drawDebug = false);
 
     // ---- Ragdoll ----
-    // Flip a built ragdoll between Animated (kinematic, shadows the animation) and
-    // Limp (dynamic, flops). v1 passive ragdoll — see Docs/ragdoll-design.md. No-op
-    // if the ragdoll hasn't been built (play start) or the session isn't active.
+    // Flip a built ragdoll between Animated (kinematic, shadows the animation), Limp
+    // (dynamic, flops passively) and Powered (dynamic, joint motors fight toward the
+    // animation pose — active ragdoll). See Docs/ragdoll-design.md. No-op if the
+    // ragdoll hasn't been built (play start) or the session isn't active.
     void SetRagdollMode(RagdollComponent& rag, RagdollMode mode);
+
+    // Set a Powered ragdoll's muscle strength in [0,1] — scales every joint motor's
+    // torque budget. 1 = full authored strength, 0 = effectively limp. The knob for
+    // hit-reactions and get-up blends. Only affects Powered mode.
+    void SetRagdollStrength(RagdollComponent& rag, float strength);
 
     // Overwrites the bone palette of every Limp ragdoll from its simulated bodies
     // (the animation->physics readback) and re-roots the entity to the hips. MUST be
