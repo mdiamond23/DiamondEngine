@@ -17,6 +17,7 @@
 #include "Scene/Physics/Constraint.h"
 #include "Scene/Physics/RagdollComponent.h"
 #include "Scene/Physics/PhysicsAPI.h"
+#include "Animation/IKComponent.h"
 #include "Assets/ModelImporter.h"
 #include "Assets/GltfImporter.h"
 #include "Renderer/MeshData.h"
@@ -1606,6 +1607,99 @@ void InspectorPanel::OnImGuiRender() {
 
                     if (ImGui::Button("Remove Ragdoll"))
                         registry.remove<RagdollComponent>(entity);
+                }
+            }
+
+            // --- Inverse Kinematics --------------------------------------------
+            // Per-chain hand reach / foot placement. UpdateIK pulls each chain's
+            // end-effector bone to its target and blends into the animated pose
+            // (Docs/ik-design.md). Two-bone analytic solver.
+            if (!smc.skeleton.bones.empty()) {
+                ImGui::Spacing();
+                ImGui::TextDisabled("Inverse Kinematics");
+
+                if (!registry.all_of<IKComponent>(entity)) {
+                    if (ImGui::Button("Add IK"))
+                        registry.emplace<IKComponent>(entity);
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("Attach an IKComponent, then add reach chains below.");
+                } else {
+                    auto& ik = registry.get<IKComponent>(entity);
+
+                    for (size_t ci = 0; ci < ik.chains.size(); ++ci) {
+                        ImGui::PushID((int)ci);
+                        IKChain& chain = ik.chains[ci];
+
+                        // End-effector bone picker (combo over the skeleton bones).
+                        const char* curName = chain.endEffectorBone.empty()
+                            ? "(pick bone)" : chain.endEffectorBone.c_str();
+                        if (ImGui::BeginCombo("End Effector", curName)) {
+                            for (const auto& bone : smc.skeleton.bones) {
+                                bool sel = bone.name == chain.endEffectorBone;
+                                if (ImGui::Selectable(bone.name.c_str(), sel)) {
+                                    chain.endEffectorBone = bone.name;
+                                    chain._tipBone = -1;   // force re-resolve next frame
+                                }
+                            }
+                            ImGui::EndCombo();
+                        }
+
+                        // Target source: a world point, or follow another entity (its
+                        // world position + offset). UpdateIK reads targetEntity first.
+                        const bool followingEntity =
+                            chain.targetEntity != entt::null && registry.valid(chain.targetEntity);
+                        const char* srcLabel = followingEntity
+                            ? scene->GetEntityName(chain.targetEntity).c_str()
+                            : "World Point";
+                        if (ImGui::BeginCombo("Target Source", srcLabel)) {
+                            if (ImGui::Selectable("World Point", !followingEntity))
+                                chain.targetEntity = entt::null;
+                            for (auto& [e, nm] : scene->GetEntityNames()) {
+                                if (e == entity) continue;
+                                if (ImGui::Selectable(nm.c_str(), chain.targetEntity == e))
+                                    chain.targetEntity = e;
+                            }
+                            ImGui::EndCombo();
+                        }
+
+                        if (followingEntity)
+                            ImGui::DragFloat3("Target Offset", &chain.targetOffset.x, 0.01f);
+                        else
+                            ImGui::DragFloat3("Target (world)", &chain.targetWorldPos.x, 0.01f);
+                        ImGui::DragFloat3("Pole Offset",    &chain.poleOffset.x, 0.01f);
+                        ImGui::SliderFloat("Weight",        &chain.weight,   0.0f, 1.0f);
+                        ImGui::SliderFloat("Ease Time (s)", &chain.easeTime, 0.0f, 0.5f);
+                        if (ImGui::IsItemHovered())
+                            ImGui::SetTooltip("Smoothing for weight + target. 0 = snap.");
+
+                        // Resolved-chain readout so a bad bone pick is obvious.
+                        int tip = chain._tipBone, mid = -1, root = -1;
+                        if (tip >= 0 && tip < (int)smc.skeleton.bones.size()) {
+                            mid = smc.skeleton.bones[tip].parent;
+                            if (mid >= 0) root = smc.skeleton.bones[mid].parent;
+                        }
+                        if (root >= 0)
+                            ImGui::TextDisabled("chain: %s <- %s <- %s",
+                                smc.skeleton.bones[tip].name.c_str(),
+                                smc.skeleton.bones[mid].name.c_str(),
+                                smc.skeleton.bones[root].name.c_str());
+                        else
+                            ImGui::TextDisabled("chain: needs a bone with two parents");
+
+                        if (ImGui::SmallButton("Remove Chain")) {
+                            ik.chains.erase(ik.chains.begin() + ci);
+                            ImGui::PopID();
+                            break;
+                        }
+                        ImGui::Separator();
+                        ImGui::PopID();
+                    }
+
+                    if (ImGui::Button("Add Chain"))
+                        ik.chains.emplace_back();
+                    ImGui::SameLine();
+                    if (ImGui::Button("Remove IK"))
+                        registry.remove<IKComponent>(entity);
                 }
             }
         }

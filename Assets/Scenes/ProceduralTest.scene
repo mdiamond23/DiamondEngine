@@ -535,6 +535,13 @@
         "assetPath": "C:\\Dev\\DiamondEngine\\Assets\\Models\\CesiumMan.ragdoll",
         "mode": 0
       },
+      "scriptComponents": {
+        "Punch": {
+          "handBone": "Skeleton_arm_joint_L__2_",
+          "reach": 0.800000011920929,
+          "shoulderHeight": 1.2999999523162842
+        }
+      },
       "skinnedMesh": {
         "albedoPath": "",
         "aoPath": "",

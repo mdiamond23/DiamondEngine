@@ -1286,6 +1286,15 @@ static bool RagdollBodyAnimTransform(Scene& scene, RagdollInstance& inst,
 // Per sub-step (get-up cross-blend): ease every body kinematically from its captured held-
 // stand transform toward its live animation transform, so handing back to Animated doesn't
 // pop. When the window elapses TickRagdollReactions finalizes the switch to Animated.
+//
+// The blend is done HIERARCHICALLY in each body's parent-relative (local) frame, not on its
+// world transform: we decompose both endpoints — A = the held-stand pose, B = the live
+// animation pose — into a rotation/offset relative to the parent body, slerp/lerp there, then
+// forward-compose down the joint tree so every child rides its parent's already-blended frame.
+// Blending world transforms per body independently (the old path) let each limb take its own
+// straight-line path through space, so mid-blend they drifted off their joints and the bones
+// stretched/detached — that disjointed flicker was the get-up pop. Composing in local space
+// keeps the rig rigid: limbs rotate about their joints and the endpoints reproduce exactly.
 static void SyncRagdollGetUpBlend(Scene& scene, PhysicsSystem::Impl& impl, JPH::BodyInterface& bi)
 {
     if (impl.ragdolls.empty()) return;
@@ -1296,16 +1305,70 @@ static void SyncRagdollGetUpBlend(Scene& scene, PhysicsSystem::Impl& impl, JPH::
         if (!smc) continue;
         auto* anim = reg.try_get<AnimatorComponent>(inst.entity);
 
-        const float t  = glm::clamp(inst.reaction.timer /
-                                    glm::max(inst.reaction.duration, 1e-4f), 0.0f, 1.0f);
-        const float e  = t * t * (3.0f - 2.0f * t);   // smoothstep
-        for (const RagdollBody& b : inst.bodies) {
-            glm::vec3 animPos; glm::quat animRot;
-            if (!RagdollBodyAnimTransform(scene, inst, *smc, anim, b, animPos, animRot))
-                continue;
-            glm::vec3 pos = glm::mix(b.blendStartPos, animPos, e);
-            glm::quat rot = glm::slerp(glm::normalize(b.blendStartRot), animRot, e);
-            bi.MoveKinematic(b.id, ToJolt(pos), ToJolt(glm::normalize(rot)), FIXED_DT);
+        const int n = (int)inst.bodies.size();
+        if (n == 0) continue;
+
+        const float t = glm::clamp(inst.reaction.timer /
+                                   glm::max(inst.reaction.duration, 1e-4f), 0.0f, 1.0f);
+        const float e = t * t * (3.0f - 2.0f * t);   // smoothstep
+
+        // Endpoint world transforms per body: A = captured held-stand pose, B = live anim pose.
+        std::vector<glm::vec3> aPos(n), bPos(n);
+        std::vector<glm::quat> aRot(n), bRot(n);
+        std::vector<int>       parent(n, -1);
+        for (int i = 0; i < n; ++i) {
+            const RagdollBody& body = inst.bodies[i];
+            aPos[i] = body.blendStartPos;
+            aRot[i] = glm::normalize(body.blendStartRot);
+            glm::vec3 p; glm::quat r;
+            if (RagdollBodyAnimTransform(scene, inst, *smc, anim, body, p, r)) {
+                bPos[i] = p; bRot[i] = glm::normalize(r);
+            } else {                       // degenerate anim pose: hold this body at its start
+                bPos[i] = aPos[i]; bRot[i] = aRot[i];
+            }
+        }
+        // Body tree from the joints (child -> parent); the root (hips) stays parentless.
+        for (const RagdollJoint& j : inst.joints)
+            if (j.childSlot >= 0 && j.childSlot < n && j.parentSlot >= 0 && j.parentSlot < n)
+                parent[j.childSlot] = j.parentSlot;
+
+        // Visit parents before children so each recompose can read its parent's blended frame.
+        std::vector<int>  order; order.reserve(n);
+        std::vector<char> placed(n, 0);
+        for (int i = 0; i < n; ++i) if (parent[i] < 0) { order.push_back(i); placed[i] = 1; }
+        for (size_t h = 0; h < order.size(); ++h)
+            for (int i = 0; i < n; ++i)
+                if (!placed[i] && parent[i] == order[h]) { order.push_back(i); placed[i] = 1; }
+        for (int i = 0; i < n; ++i) if (!placed[i]) { parent[i] = -1; order.push_back(i); }  // stragglers: world-relative
+
+        std::vector<glm::vec3> outPos(n); std::vector<glm::quat> outRot(n);
+        for (int slot : order) {
+            const int par = parent[slot];
+            // Decompose each endpoint into its parent's frame (root: relative to world).
+            glm::quat aLoc, bLoc; glm::vec3 aOff, bOff;
+            if (par < 0) {
+                aLoc = aRot[slot]; aOff = aPos[slot];
+                bLoc = bRot[slot]; bOff = bPos[slot];
+            } else {
+                aLoc = glm::conjugate(aRot[par]) * aRot[slot];
+                aOff = glm::conjugate(aRot[par]) * (aPos[slot] - aPos[par]);
+                bLoc = glm::conjugate(bRot[par]) * bRot[slot];
+                bOff = glm::conjugate(bRot[par]) * (bPos[slot] - bPos[par]);
+            }
+            aLoc = glm::normalize(aLoc); bLoc = glm::normalize(bLoc);
+            if (glm::dot(aLoc, bLoc) < 0.0f) bLoc = -bLoc;   // shortest arc
+            const glm::quat locR = glm::slerp(aLoc, bLoc, e);
+            const glm::vec3 locP = glm::mix(aOff, bOff, e);
+            // Re-compose onto the parent's already-blended world frame.
+            if (par < 0) {
+                outRot[slot] = glm::normalize(locR);
+                outPos[slot] = locP;
+            } else {
+                outRot[slot] = glm::normalize(outRot[par] * locR);
+                outPos[slot] = outPos[par] + outRot[par] * locP;
+            }
+            bi.MoveKinematic(inst.bodies[slot].id, ToJolt(outPos[slot]),
+                             ToJolt(outRot[slot]), FIXED_DT);
         }
     }
 }

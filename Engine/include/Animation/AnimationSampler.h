@@ -35,6 +35,12 @@ void BlendPoses(const Pose& a, const Pose& b, float w, Pose& out);
 
 // ---- stage 3: compose -------------------------------------------------------
 
+// Composes a local-space pose into per-bone MODEL-space transforms (out sized to
+// bone count) in one forward pass: out[i] = out[parent] * TRS(pose[i]). This is the
+// shared step under both skinning and procedural passes (ragdoll readback, IK) that
+// need bone positions/orientations rather than the inverse-bind-folded palette.
+void ComputeWorldTransforms(const Skeleton& skel, const Pose& pose, std::vector<glm::mat4>& out);
+
 // Composes a local-space pose into the skinning palette (out sized to bone count).
 void ComputePalette(const Skeleton& skel, const Pose& pose, std::vector<glm::mat4>& out);
 

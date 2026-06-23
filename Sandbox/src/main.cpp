@@ -45,6 +45,7 @@
 #include "Assets/GltfImporter.h"
 #include "Animation/AnimationComponents.h"
 #include "Animation/AnimationSystem.h"
+#include "Animation/IKSystem.h"
 
 using namespace Diamond;
 
@@ -634,6 +635,11 @@ int main()
         const bool animAdvance = scene.IsPlaying() && !scene.IsPaused();
         Diamond::UpdateStateMachines(scene.GetRegistry(), deltaTime, animAdvance);
         Diamond::UpdateAnimators(scene.GetRegistry(), deltaTime, animAdvance);
+
+        // Procedural IK (hand reach / foot placement): pull end-effector bones to their
+        // targets and blend into the pose UpdateAnimators just built, before skinning
+        // consumes the palette. Skips entities whose ragdoll owns the pose.
+        Diamond::UpdateIK(scene, deltaTime);
 
         // Ragdoll readback: for any limp ragdoll, overwrite the palette UpdateAnimators
         // just produced with the simulated body transforms. Must run after the physics

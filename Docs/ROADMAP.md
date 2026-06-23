@@ -81,7 +81,7 @@ ragdoll characters, active physics control, grabbing, local multiplayer.
 - [x] Animation clips + blending — keyframe playback, pose-blend pipeline, cross-fade between clips, and a reusable `.animsm` state machine (states/transitions/parameters) with an in-editor Animator window (timeline scrubber + node-graph canvas). (Any-state transitions, exit-time, and blend trees deferred.)
 - [x] Material assets — reusable `.mat` files: create in the content browser (rendered material-ball preview), drag onto meshes, shared instances (edit one → all update), `MeshComponent` references by path. Inline materials still supported.
 - [x] Shader system — formal registration and hot-swap instead of ad-hoc shader handles; materials reference a shader/variant by name
-- [ ] Ragdoll system — skeleton mapped to rigid body chains; passive (limp) and active (joint motors fight toward an animation pose) modes
+- [x] Ragdoll system — skeleton mapped to rigid body chains; passive (limp) and active (joint motors fight toward an animation pose) modes
 - [ ] Procedural animation / IK — foot placement, hand reach, secondary motion on loose parts
 - [ ] Grab / constraint system — runtime point constraints for grabbing objects and other characters; destroy on release
 

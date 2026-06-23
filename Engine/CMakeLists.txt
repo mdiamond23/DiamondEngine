@@ -167,6 +167,8 @@ add_library(MyEngine STATIC
     src/Animation/AnimationSampler.cpp
     src/Animation/AnimationSystem.cpp
     src/Animation/AnimatorAPI.cpp
+    src/Animation/IKSolver.cpp
+    src/Animation/IKSystem.cpp
     src/Platform/OpenGL/Resources/OpenGLMesh.cpp
     src/Platform/OpenGL/Resources/OpenGLRendererAPI.cpp
     src/Platform/OpenGL/Resources/OpenGLShader.cpp

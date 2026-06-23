@@ -97,21 +97,26 @@ void BlendPoses(const Pose& a, const Pose& b, float w, Pose& out)
 }
 
 // --- stage 3: compose ------------------------------------------------------
-// Walks the (sorted) skeleton turning local transforms into the skinning palette
-// in a single forward pass.
+// Walks the (sorted) skeleton turning local transforms into model-space bone
+// transforms, then into the skinning palette, each in a single forward pass.
 
-void ComputePalette(const Skeleton& skel, const Pose& pose, std::vector<glm::mat4>& out)
+void ComputeWorldTransforms(const Skeleton& skel, const Pose& pose, std::vector<glm::mat4>& out)
 {
     const size_t n = skel.bones.size();
-    std::vector<glm::mat4> world(n);
     out.resize(n);
     for (size_t i = 0; i < n; ++i) {
         const BoneTransform& bt = pose[i];
         glm::mat4 local = TRS(bt.translation, bt.rotation, bt.scale);
         int parent = skel.bones[i].parent;
-        world[i] = (parent < 0) ? local : world[parent] * local;
-        out[i]   = world[i] * skel.bones[i].inverseBind;
+        out[i] = (parent < 0) ? local : out[parent] * local;
     }
+}
+
+void ComputePalette(const Skeleton& skel, const Pose& pose, std::vector<glm::mat4>& out)
+{
+    ComputeWorldTransforms(skel, pose, out);   // out now holds model-space bone transforms
+    for (size_t i = 0; i < skel.bones.size(); ++i)
+        out[i] = out[i] * skel.bones[i].inverseBind;
 }
 
 // --- convenience wrappers --------------------------------------------------
