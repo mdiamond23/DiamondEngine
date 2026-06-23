@@ -2443,6 +2443,23 @@ private:
     JPH::BodyID m_id;
 };
 
+// Ignores EVERY body owned by one entity (matched via Body::GetUserData, which every
+// body sets to its entity). A ragdoll is one entity with many bodies, so ignoring a
+// single BodyID isn't enough — a downward foot raycast would still hit the character's
+// other limb capsules. The UserData lives on the Body, so the filtering happens in the
+// locked callback; the broadphase pass passes everything through.
+class EntityIgnoreFilter final : public JPH::BodyFilter {
+public:
+    explicit EntityIgnoreFilter(entt::entity e)
+        : m_ignore(e == entt::null ? ~0ull : (JPH::uint64)entt::to_integral(e)) {}
+    bool ShouldCollide(const JPH::BodyID&)         const override { return true; }
+    bool ShouldCollideLocked(const JPH::Body& b)   const override {
+        return b.GetUserData() != m_ignore;
+    }
+private:
+    JPH::uint64 m_ignore;
+};
+
 HitResult Raycast(glm::vec3 origin, glm::vec3 direction, float distance,
                   entt::entity ignore, bool drawDebug) {
     HitResult result;
@@ -2459,14 +2476,8 @@ HitResult Raycast(glm::vec3 origin, glm::vec3 direction, float distance,
         JPH::Vec3(normDir.x * distance, normDir.y * distance, normDir.z * distance)
     };
 
-    // Find the Jolt BodyID for the entity to ignore (reverse lookup in bodyMap)
-    JPH::BodyID ignoreID = JPH::BodyID();
-    if (ignore != entt::null) {
-        for (auto& [id, record] : s_Impl->bodyMap) {
-            if (record.entity == ignore) { ignoreID = JPH::BodyID(id); break; }
-        }
-    }
-    SingleBodyIgnoreFilter bodyFilter(ignoreID);
+    // Ignore every body owned by the entity (a ragdoll has many).
+    EntityIgnoreFilter bodyFilter(ignore);
 
     JPH::BroadPhaseLayerFilter bpFilter;
     JPH::ObjectLayerFilter     objFilter;
@@ -2522,13 +2533,7 @@ HitResult SphereCast(glm::vec3 origin, float radius, glm::vec3 direction, float 
         JPH::Vec3(normDir.x * distance, normDir.y * distance, normDir.z * distance)
     );
 
-    JPH::BodyID ignoreID = JPH::BodyID();
-    if (ignore != entt::null) {
-        for (auto& [id, record] : s_Impl->bodyMap) {
-            if (record.entity == ignore) { ignoreID = JPH::BodyID(id); break; }
-        }
-    }
-    SingleBodyIgnoreFilter bodyFilter(ignoreID);
+    EntityIgnoreFilter bodyFilter(ignore);
 
     JPH::ShapeCastSettings settings;
     JPH::ClosestHitCollisionCollector<JPH::CastShapeCollector> collector;
@@ -2589,13 +2594,7 @@ std::vector<HitResult> RaycastMulti(glm::vec3 origin, glm::vec3 direction, float
         JPH::Vec3(normDir.x * distance, normDir.y * distance, normDir.z * distance)
     };
 
-    JPH::BodyID ignoreID = JPH::BodyID();
-    if (ignore != entt::null) {
-        for (auto& [id, record] : s_Impl->bodyMap) {
-            if (record.entity == ignore) { ignoreID = JPH::BodyID(id); break; }
-        }
-    }
-    SingleBodyIgnoreFilter bodyFilter(ignoreID);
+    EntityIgnoreFilter bodyFilter(ignore);
 
     JPH::RayCastSettings              rayCastSettings;
     JPH::AllHitCollisionCollector<JPH::CastRayCollector> collector;
@@ -2666,13 +2665,7 @@ std::vector<HitResult> SphereCastMulti(glm::vec3 origin, float radius, glm::vec3
         JPH::Vec3(normDir.x * distance, normDir.y * distance, normDir.z * distance)
     );
 
-    JPH::BodyID ignoreID = JPH::BodyID();
-    if (ignore != entt::null) {
-        for (auto& [id, record] : s_Impl->bodyMap) {
-            if (record.entity == ignore) { ignoreID = JPH::BodyID(id); break; }
-        }
-    }
-    SingleBodyIgnoreFilter bodyFilter(ignoreID);
+    EntityIgnoreFilter bodyFilter(ignore);
 
     JPH::ShapeCastSettings settings;
     JPH::AllHitCollisionCollector<JPH::CastShapeCollector> collector;

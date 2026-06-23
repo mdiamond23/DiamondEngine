@@ -1638,34 +1638,59 @@ void InspectorPanel::OnImGuiRender() {
                                 bool sel = bone.name == chain.endEffectorBone;
                                 if (ImGui::Selectable(bone.name.c_str(), sel)) {
                                     chain.endEffectorBone = bone.name;
-                                    chain._tipBone = -1;   // force re-resolve next frame
+                                    chain._tipBone = -1;
+                                    chain._bindResolved = false;   // re-resolve bind position
                                 }
                             }
                             ImGui::EndCombo();
                         }
 
-                        // Target source: a world point, or follow another entity (its
-                        // world position + offset). UpdateIK reads targetEntity first.
-                        const bool followingEntity =
-                            chain.targetEntity != entt::null && registry.valid(chain.targetEntity);
-                        const char* srcLabel = followingEntity
-                            ? scene->GetEntityName(chain.targetEntity).c_str()
-                            : "World Point";
-                        if (ImGui::BeginCombo("Target Source", srcLabel)) {
-                            if (ImGui::Selectable("World Point", !followingEntity))
-                                chain.targetEntity = entt::null;
-                            for (auto& [e, nm] : scene->GetEntityNames()) {
-                                if (e == entity) continue;
-                                if (ImGui::Selectable(nm.c_str(), chain.targetEntity == e))
-                                    chain.targetEntity = e;
+                        ImGui::Checkbox("Foot Chain", &chain.isFootChain);
+
+                        if (chain.isFootChain) {
+                            // Foot placement drives the target from a downward raycast;
+                            // the authored Target Source is ignored.
+                            ImGui::DragFloat("Cast Offset",     &chain.castOffset,     0.01f, 0.0f, 5.0f);
+                            if (ImGui::IsItemHovered())
+                                ImGui::SetTooltip("Ray origin = animated ankle + up * castOffset.");
+                            ImGui::DragFloat("Max Step Height", &chain.maxStepHeight,  0.01f, 0.0f, 2.0f);
+                            if (ImGui::IsItemHovered())
+                                ImGui::SetTooltip("Total ray length = castOffset + maxStepHeight.");
+                            ImGui::DragFloat("Ankle Height",    &chain.ankleHeight,    0.005f, 0.0f, 0.5f);
+                            if (ImGui::IsItemHovered())
+                                ImGui::SetTooltip("Ankle center above the floor (added to hit point).");
+                            ImGui::DragFloat("Swing Threshold", &chain.swingThreshold, 0.01f,  0.0f, 1.0f);
+                            if (ImGui::IsItemHovered())
+                                ImGui::SetTooltip("Ankle model-space rise above bind pose that triggers swing (IK releases).");
+                            ImGui::Checkbox("Tilt to Normal", &chain.tiltToNormal);
+                            if (chain.tiltToNormal)
+                                ImGui::SliderFloat("Tilt Weight", &chain.tiltWeight, 0.0f, 1.0f);
+                            ImGui::TextDisabled("drop %.3f  |  normal (%.2f, %.2f, %.2f)",
+                                chain._rawDrop,
+                                chain._groundNormal.x, chain._groundNormal.y, chain._groundNormal.z);
+                        } else {
+                            // Target source: a world point, or follow another entity.
+                            const bool followingEntity =
+                                chain.targetEntity != entt::null && registry.valid(chain.targetEntity);
+                            const char* srcLabel = followingEntity
+                                ? scene->GetEntityName(chain.targetEntity).c_str()
+                                : "World Point";
+                            if (ImGui::BeginCombo("Target Source", srcLabel)) {
+                                if (ImGui::Selectable("World Point", !followingEntity))
+                                    chain.targetEntity = entt::null;
+                                for (auto& [e, nm] : scene->GetEntityNames()) {
+                                    if (e == entity) continue;
+                                    if (ImGui::Selectable(nm.c_str(), chain.targetEntity == e))
+                                        chain.targetEntity = e;
+                                }
+                                ImGui::EndCombo();
                             }
-                            ImGui::EndCombo();
+                            if (followingEntity)
+                                ImGui::DragFloat3("Target Offset", &chain.targetOffset.x, 0.01f);
+                            else
+                                ImGui::DragFloat3("Target (world)", &chain.targetWorldPos.x, 0.01f);
                         }
 
-                        if (followingEntity)
-                            ImGui::DragFloat3("Target Offset", &chain.targetOffset.x, 0.01f);
-                        else
-                            ImGui::DragFloat3("Target (world)", &chain.targetWorldPos.x, 0.01f);
                         ImGui::DragFloat3("Pole Offset",    &chain.poleOffset.x, 0.01f);
                         ImGui::SliderFloat("Weight",        &chain.weight,   0.0f, 1.0f);
                         ImGui::SliderFloat("Ease Time (s)", &chain.easeTime, 0.0f, 0.5f);
@@ -1693,6 +1718,34 @@ void InspectorPanel::OnImGuiRender() {
                         }
                         ImGui::Separator();
                         ImGui::PopID();
+                    }
+
+                    // Pelvis correction (shown when any foot chain is present or already configured).
+                    {
+                        bool hasFoot = false;
+                        for (const auto& c : ik.chains) if (c.isFootChain) { hasFoot = true; break; }
+                        if (hasFoot || !ik.pelvisBone.empty()) {
+                            ImGui::Separator();
+                            ImGui::TextDisabled("Pelvis Correction");
+                            const char* pelvName = ik.pelvisBone.empty() ? "(none)" : ik.pelvisBone.c_str();
+                            if (ImGui::BeginCombo("Pelvis Bone", pelvName)) {
+                                if (ImGui::Selectable("(none)", ik.pelvisBone.empty())) {
+                                    ik.pelvisBone     = "";
+                                    ik._pelvisBoneIdx = -1;
+                                }
+                                for (const auto& bone : smc.skeleton.bones) {
+                                    bool sel = bone.name == ik.pelvisBone;
+                                    if (ImGui::Selectable(bone.name.c_str(), sel)) {
+                                        ik.pelvisBone     = bone.name;
+                                        ik._pelvisBoneIdx = -1;
+                                    }
+                                }
+                                ImGui::EndCombo();
+                            }
+                            ImGui::DragFloat("Max Pelvis Drop",  &ik.maxPelvisDrop,  0.01f, 0.0f, 2.0f);
+                            ImGui::DragFloat("Pelvis Ease Time", &ik.pelvisEaseTime, 0.01f, 0.0f, 1.0f);
+                            ImGui::TextDisabled("cur drop: %.3f", ik._curPelvisDrop);
+                        }
                     }
 
                     if (ImGui::Button("Add Chain"))

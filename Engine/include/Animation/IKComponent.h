@@ -32,13 +32,37 @@ struct IKChain {
     float        weight     = 1.0f;               // 0..1 blend of the solved chain against the animated pose
     float        easeTime   = 0.15f;              // smoothing time-constant (s) for weight + target; 0 = snap
 
+    // --- foot placement (isFootChain = true) ---
+    // When enabled, UpdateIK casts a ray down from the animated ankle each frame
+    // and drives targetWorldPos from the hit point instead of the authored value.
+    bool      isFootChain    = false;
+    float     castOffset     = 0.5f;    // ray origin = animated ankle + worldUp * castOffset
+    float     maxStepHeight  = 0.5f;    // total ray length = castOffset + maxStepHeight
+    float     ankleHeight    = 0.08f;   // ankle center above the floor (added to hit.point)
+    float     swingThreshold = 0.1f;    // model-space ankle Y rise above bind pose that triggers swing (IK off)
+    bool      tiltToNormal   = true;    // rotate the tip bone to match the surface normal
+    float     tiltWeight     = 0.8f;    // blend weight for the foot tilt (0..1)
+
     // --- runtime cache (resolved/smoothed by UpdateIK, not authored/serialized) ---
-    int          _tipBone     = -1;               // resolved from endEffectorBone (-1 = unresolved/invalid)
-    float        _curWeight   = 0.0f;             // smoothed weight (eases toward `weight`)
-    glm::vec3    _curTarget   { 0.0f };           // smoothed model-space target
+    int          _tipBone      = -1;              // resolved from endEffectorBone (-1 = unresolved/invalid)
+    float        _curWeight    = 0.0f;            // smoothed weight (eases toward `weight`)
+    glm::vec3    _curTarget    { 0.0f };          // smoothed model-space target
     bool         _curTargetSet = false;           // false until _curTarget has been seeded (avoids a swing from the origin)
+    glm::vec3    _groundNormal { 0.0f, 1.0f, 0.0f }; // smoothed world-space surface normal (foot chains)
+    float        _rawDrop      = 0.0f;            // corrective drop this frame, fed to pelvis correction
+    glm::vec3    _bindFootPos  { 0.0f };          // model-space ankle position in bind pose (swing detection)
+    bool         _bindResolved = false;           // false until _bindFootPos has been cached
 };
 
 struct IKComponent {
     std::vector<IKChain> chains;
+
+    // --- pelvis correction (foot placement) ---
+    // Shifts the pelvis bone down by the max foot correction needed so the legs
+    // can reach without hyperextending. Ignored when pelvisBone is empty.
+    std::string pelvisBone     = "";
+    float       maxPelvisDrop  = 0.5f;
+    float       pelvisEaseTime = 0.1f;
+    float       _curPelvisDrop = 0.0f;  // smoothed current drop (runtime)
+    int         _pelvisBoneIdx = -1;    // cached bone index
 };

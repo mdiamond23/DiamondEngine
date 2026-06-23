@@ -738,7 +738,7 @@ int main()
 
         // Collider debug wireframes — drawn into the editor viewport after the scene pass
         glBindFramebuffer(GL_FRAMEBUFFER, viewportFBO);
-        //Physics::DrawColliders(scene);
+        Physics::DrawColliders(scene);
         if (scene.IsPlaying()) Physics::DrawRagdolls(scene);
         DebugDraw::Flush(proj * view);
 

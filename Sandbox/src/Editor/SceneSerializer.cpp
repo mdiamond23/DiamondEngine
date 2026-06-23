@@ -10,6 +10,7 @@
 #include "Scene/Physics/Rigidbody.h"
 #include "Scene/Physics/Constraint.h"
 #include "Scene/Physics/RagdollComponent.h"
+#include "Animation/IKComponent.h"
 #include "Assets/ModelImporter.h"
 #include "Assets/GltfImporter.h"
 #include "Animation/AnimationComponents.h"
@@ -207,6 +208,45 @@ static json ToJson(Scene& scene)
             ej["ragdoll"] = {
                 { "assetPath", rag.assetPath },
                 { "mode",      (int)rag.mode }   // serialized initial mode (usually Animated)
+            };
+        }
+
+        if (reg.all_of<IKComponent>(entity)) {
+            auto& ik = reg.get<IKComponent>(entity);
+            json chainsJ = json::array();
+            for (const auto& ch : ik.chains) {
+                json c = {
+                    { "endEffectorBone", ch.endEffectorBone     },
+                    { "boneCount",       ch.boneCount           },
+                    { "solver",          (int)ch.solver         },
+                    { "targetOffset",    JVec3(ch.targetOffset) },
+                    { "poleOffset",      JVec3(ch.poleOffset)   },
+                    { "weight",          ch.weight              },
+                    { "easeTime",        ch.easeTime            },
+                    { "isFootChain",     ch.isFootChain         },
+                    { "castOffset",      ch.castOffset          },
+                    { "maxStepHeight",   ch.maxStepHeight       },
+                    { "ankleHeight",     ch.ankleHeight         },
+                    { "swingThreshold",  ch.swingThreshold      },
+                    { "tiltToNormal",    ch.tiltToNormal        },
+                    { "tiltWeight",      ch.tiltWeight          }
+                };
+                // Foot chains overwrite targetWorldPos every frame from the ground
+                // raycast, so it's runtime scratch — only persist the authored target
+                // (explicit world point / followed entity) for non-foot chains.
+                if (!ch.isFootChain) {
+                    c["targetWorldPos"] = JVec3(ch.targetWorldPos);
+                    if (ch.targetEntity != entt::null && reg.valid(ch.targetEntity) &&
+                        reg.all_of<IDComponent>(ch.targetEntity))
+                        c["targetUuid"] = reg.get<IDComponent>(ch.targetEntity).uuid;
+                }
+                chainsJ.push_back(c);
+            }
+            ej["ik"] = {
+                { "chains",         chainsJ           },
+                { "pelvisBone",     ik.pelvisBone     },
+                { "maxPelvisDrop",  ik.maxPelvisDrop  },
+                { "pelvisEaseTime", ik.pelvisEaseTime }
             };
         }
 
@@ -524,6 +564,39 @@ static bool FromJson(Scene& scene, const json& root)
             anim.speed   = aj.value("speed",   1.0f);
             anim.loop    = aj.value("loop",    true);
             anim.playing = aj.value("playing", true);
+        }
+
+        if (ej.contains("ik")) {
+            const auto& ikj = ej["ik"];
+            auto& ik = reg.emplace<IKComponent>(e);
+            ik.pelvisBone     = ikj.value("pelvisBone", std::string{});
+            ik.maxPelvisDrop  = ikj.value("maxPelvisDrop",  0.5f);
+            ik.pelvisEaseTime = ikj.value("pelvisEaseTime", 0.1f);
+            if (ikj.contains("chains")) {
+                for (const auto& c : ikj["chains"]) {
+                    IKChain ch;
+                    ch.endEffectorBone = c.value("endEffectorBone", std::string{});
+                    ch.boneCount       = c.value("boneCount", 2);
+                    ch.solver          = (IKSolverType)c.value("solver", 0);
+                    if (c.contains("targetOffset")) ch.targetOffset = ToVec3(c["targetOffset"]);
+                    if (c.contains("poleOffset"))   ch.poleOffset   = ToVec3(c["poleOffset"]);
+                    ch.weight          = c.value("weight",   1.0f);
+                    ch.easeTime        = c.value("easeTime", 0.15f);
+                    ch.isFootChain     = c.value("isFootChain",    false);
+                    ch.castOffset      = c.value("castOffset",     0.5f);
+                    ch.maxStepHeight   = c.value("maxStepHeight",  0.5f);
+                    ch.ankleHeight     = c.value("ankleHeight",    0.08f);
+                    ch.swingThreshold  = c.value("swingThreshold", 0.1f);
+                    ch.tiltToNormal    = c.value("tiltToNormal",   true);
+                    ch.tiltWeight      = c.value("tiltWeight",     0.8f);
+                    if (c.contains("targetWorldPos")) ch.targetWorldPos = ToVec3(c["targetWorldPos"]);
+                    if (c.contains("targetUuid")) {
+                        auto it = uuidToEntity.find(c["targetUuid"].get<uint64_t>());
+                        if (it != uuidToEntity.end()) ch.targetEntity = it->second;
+                    }
+                    ik.chains.push_back(ch);
+                }
+            }
         }
 
         if (ej.contains("animStateMachine")) {

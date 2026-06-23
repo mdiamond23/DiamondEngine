@@ -43,6 +43,17 @@
         "visible": true
       },
       "name": "Floor",
+      "rigidbody": {
+        "angularDamping": 0.05000000074505806,
+        "bodyType": 0,
+        "continuousCollision": false,
+        "gravityScale": 1.0,
+        "linearDamping": 0.05000000074505806,
+        "lockRotX": false,
+        "lockRotY": false,
+        "lockRotZ": false,
+        "mass": 1.0
+      },
       "transform": {
         "eulerDegrees": [
           0.0,
@@ -524,11 +535,95 @@
     },
     {
       "animator": {
-        "clip": 0,
+        "clip": -1,
         "loop": true,
         "playing": true,
         "speed": 1.0,
         "time": 0.0
+      },
+      "ik": {
+        "chains": [
+          {
+            "ankleHeight": 0.07999999821186066,
+            "boneCount": 2,
+            "castOffset": 0.5,
+            "easeTime": 0.15000000596046448,
+            "endEffectorBone": "Skeleton_arm_joint_L__2_",
+            "isFootChain": false,
+            "maxStepHeight": 0.5,
+            "poleOffset": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "solver": 0,
+            "swingThreshold": 0.10000000149011612,
+            "targetOffset": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "targetWorldPos": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "tiltToNormal": true,
+            "tiltWeight": 0.800000011920929,
+            "weight": 1.0
+          },
+          {
+            "ankleHeight": 0.07999999821186066,
+            "boneCount": 2,
+            "castOffset": 0.5,
+            "easeTime": 0.15000000596046448,
+            "endEffectorBone": "leg_joint_L_3",
+            "isFootChain": true,
+            "maxStepHeight": 0.5,
+            "poleOffset": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "solver": 0,
+            "swingThreshold": 0.10000000149011612,
+            "targetOffset": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "tiltToNormal": true,
+            "tiltWeight": 0.800000011920929,
+            "weight": 1.0
+          },
+          {
+            "ankleHeight": 0.07999999821186066,
+            "boneCount": 2,
+            "castOffset": 0.5,
+            "easeTime": 0.15000000596046448,
+            "endEffectorBone": "leg_joint_R_3",
+            "isFootChain": true,
+            "maxStepHeight": 0.5,
+            "poleOffset": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "solver": 0,
+            "swingThreshold": 0.10000000149011612,
+            "targetOffset": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "tiltToNormal": true,
+            "tiltWeight": 0.800000011920929,
+            "weight": 1.0
+          }
+        ],
+        "maxPelvisDrop": 0.5,
+        "pelvisBone": "torso_joint_3",
+        "pelvisEaseTime": 0.10000000149011612
       },
       "name": "Rag",
       "ragdoll": {
@@ -562,8 +657,8 @@
           0.00012291790335439146
         ],
         "position": [
-          1.9293644428253174,
-          1.9021912813186646,
+          1.9293643236160278,
+          2.6346378326416016,
           4.435873985290527
         ],
         "rotation": [
@@ -574,8 +669,8 @@
         ],
         "scale": [
           1.000000238418579,
-          0.9998860359191895,
-          0.9998723268508911
+          0.9998696446418762,
+          0.9998559355735779
         ]
       },
       "uuid": 6818450401873832087
