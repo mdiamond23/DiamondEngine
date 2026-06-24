@@ -10,6 +10,17 @@ void GameViewportPanel::OnImGuiRender()
     m_IsActive = ImGui::IsWindowFocused();
 
     ImVec2 size = ImGui::GetContentRegionAvail();
+    ImVec2 pos  = ImGui::GetCursorScreenPos();
+
+    // Publish the cursor's position within the game viewport (0..1) so the HUD
+    // layer can map the OS mouse into the game-viewport UI framebuffer.
+    if (m_Context) {
+        ImVec2 m = ImGui::GetMousePos();
+        m_Context->gameViewportMouseNorm = {
+            size.x > 0.0f ? (m.x - pos.x) / size.x : -1.0f,
+            size.y > 0.0f ? (m.y - pos.y) / size.y : -1.0f
+        };
+    }
 
     bool playing = m_Context && m_Context->ActiveScene->IsPlaying();
 

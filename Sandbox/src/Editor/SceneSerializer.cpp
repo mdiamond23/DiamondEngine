@@ -21,6 +21,7 @@
 #include "Assets/ImageLoader.h"
 #include "Renderer/MeshData.h"
 #include "Renderer/TextureData.h"
+#include "Renderer/Font.h"
 
 using json = nlohmann::json;
 using namespace Diamond;
@@ -29,9 +30,11 @@ using namespace Diamond;
 
 static json JVec2(const glm::vec2& v) { return { v.x, v.y }; }
 static json JVec3(const glm::vec3& v) { return { v.x, v.y, v.z }; }
+static json JVec4(const glm::vec4& v) { return { v.x, v.y, v.z, v.w }; }
 static json JQuat(const glm::quat& q) { return { q.w, q.x, q.y, q.z }; }
 static glm::vec2 ToVec2(const json& j) { return { j[0], j[1] }; }
 static glm::vec3 ToVec3(const json& j) { return { j[0], j[1], j[2] }; }
+static glm::vec4 ToVec4(const json& j) { return { j[0], j[1], j[2], j[3] }; }
 static glm::quat ToQuat(const json& j) { return glm::quat(float(j[0]), float(j[1]), float(j[2]), float(j[3])); }
 
 static std::shared_ptr<Texture> LoadCached(
@@ -41,6 +44,16 @@ static std::shared_ptr<Texture> LoadCached(
     if (path.empty()) return nullptr;
     auto [it, inserted] = cache.emplace(path, nullptr);
     if (inserted) it->second = Texture::Create(path, false);
+    return it->second;
+}
+
+static std::shared_ptr<Font> LoadFontCached(
+    const std::string& path,
+    std::unordered_map<std::string, std::shared_ptr<Font>>& cache)
+{
+    if (path.empty()) return nullptr;
+    auto [it, inserted] = cache.emplace(path, nullptr);
+    if (inserted) it->second = Font::Create(path, kUIFontBakeHeight);
     return it->second;
 }
 
@@ -161,6 +174,52 @@ static json ToJson(Scene& scene)
                 { "position",  JVec2(rt.position)  },
                 { "size",      JVec2(rt.size)      },
                 { "zOrder",    rt.zOrder           }
+            };
+        }
+
+        if (reg.all_of<UIImageComponent>(entity)) {
+            auto& im = reg.get<UIImageComponent>(entity);
+            ej["uiImage"] = {
+                { "texturePath", im.texturePath },
+                { "tint",        JVec4(im.tint)  },
+                { "uvMin",       JVec2(im.uvMin) },
+                { "uvMax",       JVec2(im.uvMax) }
+            };
+        }
+
+        if (reg.all_of<UITextComponent>(entity)) {
+            auto& tx = reg.get<UITextComponent>(entity);
+            ej["uiText"] = {
+                { "text",        tx.text         },
+                { "fontPath",    tx.fontPath     },
+                { "sizePx",      tx.sizePx       },
+                { "color",       JVec4(tx.color) },
+                { "hAlign",      (int)tx.hAlign  },
+                { "vAlign",      (int)tx.vAlign  },
+                { "lineSpacing", tx.lineSpacing  },
+                { "wrap",        tx.wrap         },
+                { "underline",   tx.underline    }
+            };
+        }
+
+        if (reg.all_of<UIProgressBarComponent>(entity)) {
+            auto& pb = reg.get<UIProgressBarComponent>(entity);
+            ej["uiProgressBar"] = {
+                { "progress",        pb.progress                },
+                { "backgroundColor", JVec4(pb.backgroundColor)  },
+                { "fillColor",       JVec4(pb.fillColor)        },
+                { "fillTexturePath", pb.fillTexturePath         },
+                { "direction",       (int)pb.direction          }
+            };
+        }
+
+        if (reg.all_of<UIButtonComponent>(entity)) {
+            auto& bt = reg.get<UIButtonComponent>(entity);
+            // onClick is behavior, not scene data — assigned from scripts, never saved.
+            ej["uiButton"] = {
+                { "normalTint",  JVec4(bt.normalTint)  },
+                { "hoverTint",   JVec4(bt.hoverTint)   },
+                { "pressedTint", JVec4(bt.pressedTint) }
             };
         }
 
@@ -345,6 +404,7 @@ static bool FromJson(Scene& scene, const json& root)
     scene.Clear();
 
     std::unordered_map<std::string, std::shared_ptr<Texture>>  texCache;
+    std::unordered_map<std::string, std::shared_ptr<Font>>     fontCache;
     std::unordered_map<std::string, std::vector<MeshData>>     meshCache;
     std::unordered_map<std::string, ImportedModel>             skinnedCache;
 
@@ -482,6 +542,50 @@ static bool FromJson(Scene& scene, const json& root)
             if (rj.contains("position"))  rt.position  = ToVec2(rj["position"]);
             if (rj.contains("size"))      rt.size      = ToVec2(rj["size"]);
             rt.zOrder = rj.value("zOrder", 0);
+        }
+
+        if (ej.contains("uiImage")) {
+            const auto& j = ej["uiImage"];
+            auto& im = reg.emplace<UIImageComponent>(e);
+            im.texturePath = j.value("texturePath", "");
+            im.texture     = LoadCached(im.texturePath, texCache);
+            if (j.contains("tint"))  im.tint  = ToVec4(j["tint"]);
+            if (j.contains("uvMin")) im.uvMin = ToVec2(j["uvMin"]);
+            if (j.contains("uvMax")) im.uvMax = ToVec2(j["uvMax"]);
+        }
+
+        if (ej.contains("uiText")) {
+            const auto& j = ej["uiText"];
+            auto& tx = reg.emplace<UITextComponent>(e);
+            tx.text     = j.value("text", "");
+            tx.fontPath = j.value("fontPath", "");
+            tx.font     = LoadFontCached(tx.fontPath, fontCache);
+            tx.sizePx   = j.value("sizePx", 24.0f);
+            if (j.contains("color")) tx.color = ToVec4(j["color"]);
+            tx.hAlign      = (UITextComponent::HAlign)j.value("hAlign", 0);
+            tx.vAlign      = (UITextComponent::VAlign)j.value("vAlign", 0);
+            tx.lineSpacing = j.value("lineSpacing", 1.0f);
+            tx.wrap        = j.value("wrap", true);
+            tx.underline   = j.value("underline", false);
+        }
+
+        if (ej.contains("uiProgressBar")) {
+            const auto& j = ej["uiProgressBar"];
+            auto& pb = reg.emplace<UIProgressBarComponent>(e);
+            pb.progress = j.value("progress", 0.5f);
+            if (j.contains("backgroundColor")) pb.backgroundColor = ToVec4(j["backgroundColor"]);
+            if (j.contains("fillColor"))       pb.fillColor       = ToVec4(j["fillColor"]);
+            pb.fillTexturePath = j.value("fillTexturePath", "");
+            pb.fillTexture     = LoadCached(pb.fillTexturePath, texCache);
+            pb.direction       = (UIProgressBarComponent::Direction)j.value("direction", 0);
+        }
+
+        if (ej.contains("uiButton")) {
+            const auto& j = ej["uiButton"];
+            auto& bt = reg.emplace<UIButtonComponent>(e);
+            if (j.contains("normalTint"))  bt.normalTint  = ToVec4(j["normalTint"]);
+            if (j.contains("hoverTint"))   bt.hoverTint   = ToVec4(j["hoverTint"]);
+            if (j.contains("pressedTint")) bt.pressedTint = ToVec4(j["pressedTint"]);
         }
 
         if (ej.contains("collider")) {

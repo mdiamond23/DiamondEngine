@@ -6,10 +6,13 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include <functional>
 #include "Renderer/MeshData.h"
 #include "Renderer/Material.h"
 #include "Renderer/Frustum.h"
 #include <cstdint>
+
+namespace Diamond { class Texture; class Font; }
 
 enum class LightType {
     Sun,
@@ -116,4 +119,81 @@ struct RectTransformComponent {
     // --- computed by UISystem each frame; not serialized ---
     glm::vec2 resolvedPos  { 0.0f };   // top-left, screen pixels
     glm::vec2 resolvedSize { 0.0f };   // screen pixels
+};
+
+// Paints a quad into the entity's resolved RectTransform rect. The simplest
+// widget: a flat color, or a texture modulated by `tint`. Drawn by UIRenderSystem.
+//   - texture == null -> solid quad filled with `tint` (the "white image" default).
+//   - texture != null -> textured quad, with the texture multiplied by `tint`.
+// `tint` is straight (non-premultiplied) RGBA: rgb is a color multiply, a is opacity.
+struct UIImageComponent {
+    std::shared_ptr<Diamond::Texture> texture;          // null = solid color
+    std::string texturePath;                            // asset path; round-trips `texture`
+    glm::vec4 tint  { 1.0f, 1.0f, 1.0f, 1.0f };
+    glm::vec2 uvMin { 0.0f, 0.0f };                     // sub-rect of the texture
+    glm::vec2 uvMax { 1.0f, 1.0f };
+};
+
+// UI text/fonts bake at this fixed pixel height; UITextComponent::sizePx then
+// scales from it. A single bake height is a known crispness tradeoff (SDF fonts
+// are the long-term fix). Shared so serialization and the inspector agree.
+inline constexpr float kUIFontBakeHeight = 48.0f;
+
+// Lays out and paints a string inside the entity's resolved RectTransform rect.
+// Honors explicit '\n', optional word-wrap to the rect width, horizontal and
+// vertical alignment, a line-spacing multiplier, and an optional underline.
+// Drawn by UIRenderSystem. Bold/italic are intentionally unsupported (the Font
+// is a single baked face) — use a bold/italic font file if needed.
+struct UITextComponent {
+    enum class HAlign { Left, Center, Right };
+    enum class VAlign { Top, Middle, Bottom };
+
+    std::string                    text;
+    std::shared_ptr<Diamond::Font> font;
+    std::string                    fontPath;   // asset path; round-trips `font`
+    float     sizePx      = 24.0f;   // target pixel height; scaled from the font's baked height
+    glm::vec4 color       { 1.0f, 1.0f, 1.0f, 1.0f };
+    HAlign    hAlign      = HAlign::Left;
+    VAlign    vAlign      = VAlign::Top;
+    float     lineSpacing = 1.0f;    // multiplier on the font's line height
+    bool      wrap        = true;    // word-wrap to the rect width
+    bool      underline   = false;
+};
+
+// A linear fill bar: a background quad, then a fill quad covering `progress`
+// (0..1) of the rect along `direction`. An optional fill texture is UV-clipped to
+// the filled fraction so it reveals rather than squashes. Two quads, no shader.
+struct UIProgressBarComponent {
+    enum class Direction { LeftToRight, RightToLeft, BottomToTop, TopToBottom };
+
+    float     progress        = 0.5f;                       // clamped to 0..1 when drawn
+    glm::vec4 backgroundColor { 0.10f, 0.10f, 0.12f, 1.0f };
+    glm::vec4 fillColor       { 0.25f, 0.80f, 0.40f, 1.0f };
+    std::shared_ptr<Diamond::Texture> fillTexture;          // optional; modulated by fillColor
+    std::string fillTexturePath;                            // asset path; round-trips `fillTexture`
+    Direction direction       = Direction::LeftToRight;
+};
+
+// Interaction-only widget. Buttons are composed: this rides on the same entity as
+// a UIImageComponent (background) and usually a UITextComponent (label), and draws
+// nothing itself. UIInputSystem hit-tests the pointer against the entity's
+// resolved rect and writes `state`; UIRenderSystem multiplies the sibling image's
+// tint by the matching state tint. onClick fires on a press that began on the
+// button and released while still over it (a completed click).
+struct UIButtonComponent {
+    enum class State { Normal, Hover, Pressed };
+
+    glm::vec4 normalTint  { 1.00f, 1.00f, 1.00f, 1.0f };
+    glm::vec4 hoverTint   { 1.20f, 1.20f, 1.20f, 1.0f };
+    glm::vec4 pressedTint  { 0.80f, 0.80f, 0.80f, 1.0f };
+    std::function<void()> onClick;
+
+    // --- runtime, written by UIInputSystem; not serialized ---
+    State state = State::Normal;
+
+    const glm::vec4& TintForState() const {
+        return state == State::Pressed ? pressedTint
+             : state == State::Hover   ? hoverTint
+             :                           normalTint;
+    }
 };

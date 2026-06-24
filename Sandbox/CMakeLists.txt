@@ -16,6 +16,12 @@ add_executable(Sandbox
 
 target_link_libraries(Sandbox PRIVATE MyEngine nlohmann_json::nlohmann_json imguizmo miniz)
 
+# InspectorPanel.cpp's many inline lambdas + template instantiations overflow the
+# COFF section limit on MSVC; /bigobj raises it. Harmless on other compilers.
+if(MSVC)
+    target_compile_options(Sandbox PRIVATE /bigobj)
+endif()
+
 target_include_directories(Sandbox PRIVATE
     ${CMAKE_SOURCE_DIR}/Engine/src
     ${CMAKE_CURRENT_SOURCE_DIR}/src

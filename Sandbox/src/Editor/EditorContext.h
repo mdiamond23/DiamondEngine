@@ -20,6 +20,14 @@ struct EditorContext {
     glm::mat4 projMatrix  = glm::mat4(1.0f);
     glm::vec3 cameraPos   = {};
 
+    // Mouse position within a viewport, normalized to 0..1 (top-left origin).
+    // Written each frame by the owning panel; components < 0 or >= 1 mean the
+    // cursor is outside that viewport. Used to map the OS mouse into the
+    // full-window UI framebuffer for UI hit-testing. The Scene one feeds the
+    // editor; the Game one feeds the in-game HUD during play.
+    glm::vec2 viewportMouseNorm     { -1.0f, -1.0f };
+    glm::vec2 gameViewportMouseNorm { -1.0f, -1.0f };
+
     // Viewport debug visualization — one master toggle gating collider wireframes,
     // ragdoll bodies, and IK chain/target draw (+ the IK target gizmo).
     bool showDebugDraw = false;

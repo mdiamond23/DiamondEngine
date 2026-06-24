@@ -29,6 +29,10 @@
 #include "Renderer/Font.h"
 #include "Renderer/Renderer2D.h"
 #include "Scene/UISystem.h"
+#include "Scene/UIRenderSystem.h"
+#include "Scene/UIInputSystem.h"
+#include <cmath>
+#include <string>
 #include <cstdio>
 #include "Platform/OpenGL/Resources/OpenGLRenderTypes.h"
 #include "Platform/OpenGL/Resources/OpenGLShader.h"
@@ -247,40 +251,10 @@ int main()
     OpenGLTransparencyPass     transparencyPass;
     bool fxaaEnabled = true;
 
-    // --- 2D UI layer: backend-agnostic text + quad batcher (HUD foundation) ---
+    // --- 2D UI layer: backend-agnostic text + quad batcher. Scene UI (canvases +
+    // widget components authored in the editor) is resolved and drawn through this
+    // into the game-viewport FBO during play. ---
     auto uiRenderer = Renderer2D::Create();
-    auto uiFont     = Font::Create(ASSETS_DIR "/Fonts/OpenSans-Regular.ttf", 32.0f);
-
-    // --- Demo UI canvas: exercises the anchor/stretch resolver (UISystem) ---
-    // Standalone registry so it doesn't touch the scene. Gets replaced by ECS
-    // widget components + editor authoring in the next step.
-    entt::registry uiDemo;
-    entt::entity   uiCanvas = uiDemo.create();
-    {
-        auto& cc = uiDemo.emplace<CanvasComponent>(uiCanvas);
-        cc.scaleMode = CanvasComponent::ScaleMode::ConstantPixelSize;
-        uiDemo.emplace<HierarchyComponent>(uiCanvas);
-    }
-    auto uiMakeElement = [&](glm::vec2 aMin, glm::vec2 aMax, glm::vec2 pivot,
-                             glm::vec2 pos, glm::vec2 size) {
-        entt::entity e = uiDemo.create();
-        RectTransformComponent rt;
-        rt.anchorMin = aMin; rt.anchorMax = aMax; rt.pivot = pivot;
-        rt.position  = pos;  rt.size = size;
-        uiDemo.emplace<RectTransformComponent>(e, rt);
-        uiDemo.emplace<HierarchyComponent>(e).parent = uiCanvas;
-        uiDemo.get<HierarchyComponent>(uiCanvas).children.push_back(e);
-        return e;
-    };
-    // Top bar: stretched across the full width (anchorX 0->1), pinned to the top.
-    entt::entity uiTopBar = uiMakeElement({0.0f, 0.0f}, {1.0f, 0.0f}, {0.5f, 0.0f},
-                                          {0.0f, 20.0f}, {-40.0f, 48.0f});
-    // HUD readout: pinned to the bottom-right corner.
-    entt::entity uiCorner = uiMakeElement({1.0f, 1.0f}, {1.0f, 1.0f}, {1.0f, 1.0f},
-                                          {-20.0f, -20.0f}, {220.0f, 72.0f});
-    // Center panel.
-    entt::entity uiCenter = uiMakeElement({0.5f, 0.5f}, {0.5f, 0.5f}, {0.5f, 0.5f},
-                                          {0.0f, 0.0f}, {420.0f, 90.0f});
 
     // IBL bake — one-time
     {
@@ -863,48 +837,6 @@ int main()
         }
         DebugDraw::Flush(proj * view);
 
-        // --- 2D UI overlay (demo of the new text + quad batcher) ---
-        // Drawn into the editor scene viewport so it's always visible while we
-        // build out the system. The real in-game HUD will drive this batcher from
-        // a canvas/widget layer and render into the game viewport.
-        if (uiRenderer && uiFont) {
-            glBindFramebuffer(GL_FRAMEBUFFER, viewportFBO);
-            glViewport(0, 0, fbW, fbH);
-
-            // Resolve anchors against the viewport, then draw each element's rect.
-            // Resize the window and watch the top bar stretch and the corner box
-            // stay pinned — that's the anchor resolver doing its job.
-            UISystem::Resolve(uiDemo, { (float)fbW, (float)fbH });
-
-            const auto& bar    = uiDemo.get<RectTransformComponent>(uiTopBar);
-            const auto& corner = uiDemo.get<RectTransformComponent>(uiCorner);
-            const auto& center = uiDemo.get<RectTransformComponent>(uiCenter);
-
-            uiRenderer->Begin(Renderer2D::OrthoProjection((float)fbW, (float)fbH));
-
-            uiRenderer->DrawQuad(bar.resolvedPos, bar.resolvedSize,
-                                 { 0.05f, 0.06f, 0.09f, 0.75f });
-            uiRenderer->DrawText(*uiFont, "DiamondEngine UI",
-                                 bar.resolvedPos + glm::vec2(14.0f, 10.0f),
-                                 { 1.0f, 1.0f, 1.0f, 1.0f }, 0.6f);
-
-            uiRenderer->DrawQuad(center.resolvedPos, center.resolvedSize,
-                                 { 0.10f, 0.12f, 0.16f, 0.7f });
-            uiRenderer->DrawText(*uiFont, "Canvas + anchors online",
-                                 center.resolvedPos + glm::vec2(16.0f, 14.0f),
-                                 { 0.55f, 0.85f, 1.0f, 1.0f }, 0.55f);
-
-            uiRenderer->DrawQuad(corner.resolvedPos, corner.resolvedSize,
-                                 { 0.05f, 0.06f, 0.09f, 0.75f });
-            char fpsBuf[32];
-            std::snprintf(fpsBuf, sizeof(fpsBuf), "FPS  %d", displayFps);
-            uiRenderer->DrawText(*uiFont, fpsBuf,
-                                 corner.resolvedPos + glm::vec2(14.0f, 12.0f),
-                                 { 0.7f, 1.0f, 0.7f, 1.0f }, 0.55f);
-
-            uiRenderer->End();
-        }
-
         // --- Game viewport: primary camera entity (play mode only) ---
         entt::entity primaryCam = scene.GetPrimaryCamera();
         if (scene.IsPlaying() && primaryCam != entt::null)
@@ -914,6 +846,28 @@ int main()
             view = glm::inverse(camW);
             proj = glm::perspective(glm::radians(cc.fov), (float)fbW / (float)fbH, cc.nearClip, cc.farClip);
             cullAndExecute(gameViewportFBO);
+
+            // In-game UI HUD: resolve the scene's canvases against the game
+            // viewport, hit-test the cursor, and draw every widget on top of the
+            // rendered frame. Same FBO, so it composites over the 3D scene.
+            if (uiRenderer) {
+                glBindFramebuffer(GL_FRAMEBUFFER, gameViewportFBO);
+                glViewport(0, 0, fbW, fbH);
+
+                UISystem::Resolve(scene.GetRegistry(), { (float)fbW, (float)fbH });
+
+                // Map the game-viewport-local cursor (published by GameViewportPanel)
+                // into UI framebuffer space for button interaction.
+                const glm::vec2 mNorm = editorLayer.GetContext().gameViewportMouseNorm;
+                glm::vec2 uiPointer(-1.0f);
+                if (mNorm.x >= 0.0f && mNorm.y >= 0.0f && mNorm.x < 1.0f && mNorm.y < 1.0f)
+                    uiPointer = mNorm * glm::vec2((float)fbW, (float)fbH);
+                UIInputSystem::Update(scene.GetRegistry(), uiPointer,
+                                      Input::IsMouseButtonHeld(MouseButton::Left));
+
+                UIRenderSystem::Render(scene.GetRegistry(), *uiRenderer, { (float)fbW, (float)fbH });
+            }
+
             editorLayer.SetGameViewportTexture(gameViewportTex);
         }
         else

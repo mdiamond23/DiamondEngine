@@ -20,6 +20,16 @@ void ViewportPanel::OnImGuiRender() {
     ImVec2 vpSize = ImGui::GetContentRegionAvail();
     ImVec2 vpPos  = ImGui::GetCursorScreenPos();
 
+    // Publish the cursor's position within the viewport (0..1) so the UI layer can
+    // map the OS mouse into the full-window UI framebuffer for hit-testing.
+    if (m_Context) {
+        ImVec2 m = ImGui::GetMousePos();
+        m_Context->viewportMouseNorm = {
+            vpSize.x > 0.0f ? (m.x - vpPos.x) / vpSize.x : -1.0f,
+            vpSize.y > 0.0f ? (m.y - vpPos.y) / vpSize.y : -1.0f
+        };
+    }
+
     if (m_TextureID != 0) {
         ImGui::Image(
             (ImTextureID)(intptr_t)m_TextureID,

@@ -22,6 +22,7 @@
 #include "Assets/GltfImporter.h"
 #include "Renderer/MeshData.h"
 #include "Renderer/TextureData.h"
+#include "Renderer/Font.h"
 #include <algorithm>
 #include <filesystem>
 
@@ -523,13 +524,19 @@ void InspectorPanel::OnImGuiRender() {
     bool removeSkinnedMesh = false;
     bool removeAnimator    = false;
     bool removeAnimSM      = false;
-    bool removeCanvas      = false;  CanvasComponent        savedCanvas;
-    bool removeRect        = false;  RectTransformComponent savedRect;
+    bool removeCanvas      = false;  CanvasComponent          savedCanvas;
+    bool removeRect        = false;  RectTransformComponent   savedRect;
+    bool removeUIImage     = false;  UIImageComponent         savedUIImage;
+    bool removeUIText      = false;  UITextComponent          savedUIText;
+    bool removeUIProgress  = false;  UIProgressBarComponent   savedUIProgress;
+    bool removeUIButton    = false;  UIButtonComponent        savedUIButton;
 
     // Pre-edit stash for the single UI fields below. ImGui has one active widget
     // at a time, so a shared stash per type is safe.
-    static glm::vec2 s_uiOldVec2(0.0f);
-    static float     s_uiOldFloat = 0.0f;
+    static glm::vec2   s_uiOldVec2(0.0f);
+    static float       s_uiOldFloat = 0.0f;
+    static glm::vec4   s_uiOldVec4(0.0f);
+    static std::string s_uiOldStr;
 
     // Mesh Component
     if (registry.all_of<MeshComponent>(entity)) {
@@ -970,6 +977,230 @@ void InspectorPanel::OnImGuiRender() {
                                 rt.resolvedPos.x, rt.resolvedPos.y,
                                 rt.resolvedSize.x, rt.resolvedSize.y);
 
+            ImGui::PopID();
+        }
+    }
+
+    // ---- UI widget components -------------------------------------------------
+    // Generic undo-recording field editors (write the live field, record one
+    // command on commit). Setters re-fetch the component from the registry so the
+    // command survives entity-pointer churn, matching the rest of this panel.
+    auto uiColorEdit = [&](const char* label, glm::vec4& ref,
+                           std::function<void(const glm::vec4&)> setter, const char* desc) {
+        ImGui::ColorEdit4(label, glm::value_ptr(ref), ImGuiColorEditFlags_AlphaBar);
+        if (ImGui::IsItemActivated()) s_uiOldVec4 = ref;
+        if (ImGui::IsItemDeactivatedAfterEdit()) {
+            glm::vec4 n = ref, o = s_uiOldVec4;
+            m_Context->Commands.ExecuteCommand(std::make_unique<ValueChangeCommand<glm::vec4>>(
+                std::move(setter), o, n, desc));
+        }
+    };
+    auto uiFloatEdit = [&](const char* label, float& ref, float speed, float lo, float hi,
+                           const char* fmt, std::function<void(const float&)> setter, const char* desc) {
+        ImGui::DragFloat(label, &ref, speed, lo, hi, fmt);
+        if (ImGui::IsItemActivated()) s_uiOldFloat = ref;
+        if (ImGui::IsItemDeactivatedAfterEdit()) {
+            float n = ref, o = s_uiOldFloat;
+            m_Context->Commands.ExecuteCommand(std::make_unique<ValueChangeCommand<float>>(
+                std::move(setter), o, n, desc));
+        }
+    };
+    auto uiBoolEdit = [&](const char* label, bool& ref,
+                          std::function<void(const bool&)> setter, const char* desc) {
+        if (ImGui::Checkbox(label, &ref)) {
+            bool n = ref;
+            m_Context->Commands.ExecuteCommand(std::make_unique<ValueChangeCommand<bool>>(
+                std::move(setter), !n, n, desc));
+        }
+    };
+    auto uiComboEdit = [&](const char* label, int current, const char* const* items, int count,
+                           std::function<void(const int&)> setter, const char* desc) {
+        int idx = current;
+        if (ImGui::Combo(label, &idx, items, count) && idx != current)
+            m_Context->Commands.ExecuteCommand(std::make_unique<ValueChangeCommand<int>>(
+                std::move(setter), current, idx, desc));
+    };
+    auto uiTextEdit = [&](const char* label, std::string& ref,
+                          std::function<void(const std::string&)> setter, const char* desc) {
+        char buf[512];
+        std::strncpy(buf, ref.c_str(), sizeof(buf) - 1);
+        buf[sizeof(buf) - 1] = '\0';
+        if (ImGui::InputText(label, buf, sizeof(buf))) ref = buf;
+        if (ImGui::IsItemActivated()) s_uiOldStr = ref;
+        if (ImGui::IsItemDeactivatedAfterEdit()) {
+            std::string n = ref, o = s_uiOldStr;
+            m_Context->Commands.ExecuteCommand(std::make_unique<ValueChangeCommand<std::string>>(
+                std::move(setter), o, n, desc));
+        }
+    };
+    // Font asset slot: drag a .ttf/.otf from the content browser.
+    auto uiFontSlot = [&](UITextComponent& tx) {
+        std::string name = tx.fontPath.empty() ? "None" : Basename(tx.fontPath);
+        ImGui::TextDisabled("Font"); ImGui::SameLine();
+        ImGui::Button((name + "##fontslot").c_str(), { -1.0f, 0.0f });
+        if (ImGui::BeginDragDropTarget()) {
+            if (auto* p = ImGui::AcceptDragDropPayload("CONTENT_ITEM_PATH")) {
+                std::string path((const char*)p->Data);
+                std::string ext = LowerExtOf(path);
+                if (ext == ".ttf" || ext == ".otf") {
+                    auto of = tx.font; std::string op = tx.fontPath;
+                    tx.fontPath = path;
+                    tx.font     = Font::Create(path, kUIFontBakeHeight);
+                    auto nf = tx.font; std::string np = tx.fontPath;
+                    m_Context->Commands.RecordCommand(std::make_unique<FunctionCommand>(
+                        [scene, entity, nf, np]() { auto& c = scene->GetRegistry().get<UITextComponent>(entity); c.font = nf; c.fontPath = np; },
+                        [scene, entity, of, op]() { auto& c = scene->GetRegistry().get<UITextComponent>(entity); c.font = of; c.fontPath = op; },
+                        "Change Text Font"));
+                }
+            }
+            ImGui::EndDragDropTarget();
+        }
+    };
+
+    // Reusable component bodies — the Button section composes these so its
+    // background image + label are edited inline under one "Button" header.
+    auto drawUIImageBody = [&](UIImageComponent& im) {
+        auto r = DrawTextureRow("Texture", im.texture, im.texturePath, m_ContentPanel);
+        if (r.changed) {
+            auto nt = im.texture, ot = r.oldTex;
+            std::string np = im.texturePath, op = r.oldPath;
+            m_Context->Commands.RecordCommand(std::make_unique<FunctionCommand>(
+                [scene, entity, nt, np]() { auto& c = scene->GetRegistry().get<UIImageComponent>(entity); c.texture = nt; c.texturePath = np; },
+                [scene, entity, ot, op]() { auto& c = scene->GetRegistry().get<UIImageComponent>(entity); c.texture = ot; c.texturePath = op; },
+                "Change Image Texture"));
+        }
+        uiColorEdit("Tint", im.tint,
+            [scene, entity](const glm::vec4& v) { scene->GetRegistry().get<UIImageComponent>(entity).tint = v; },
+            "Change Image Tint");
+    };
+    auto drawUITextBody = [&](UITextComponent& tx) {
+        uiTextEdit("Text", tx.text,
+            [scene, entity](const std::string& v) { scene->GetRegistry().get<UITextComponent>(entity).text = v; },
+            "Change Text");
+        uiFontSlot(tx);
+        uiFloatEdit("Size", tx.sizePx, 0.5f, 1.0f, 512.0f, "%.0f",
+            [scene, entity](const float& v) { scene->GetRegistry().get<UITextComponent>(entity).sizePx = v; },
+            "Change Text Size");
+        uiColorEdit("Color", tx.color,
+            [scene, entity](const glm::vec4& v) { scene->GetRegistry().get<UITextComponent>(entity).color = v; },
+            "Change Text Color");
+        const char* hItems[] = { "Left", "Center", "Right" };
+        uiComboEdit("H Align", (int)tx.hAlign, hItems, 3,
+            [scene, entity](const int& v) { scene->GetRegistry().get<UITextComponent>(entity).hAlign = (UITextComponent::HAlign)v; },
+            "Change Text H Align");
+        const char* vItems[] = { "Top", "Middle", "Bottom" };
+        uiComboEdit("V Align", (int)tx.vAlign, vItems, 3,
+            [scene, entity](const int& v) { scene->GetRegistry().get<UITextComponent>(entity).vAlign = (UITextComponent::VAlign)v; },
+            "Change Text V Align");
+        uiFloatEdit("Line Spacing", tx.lineSpacing, 0.01f, 0.1f, 4.0f, "%.2f",
+            [scene, entity](const float& v) { scene->GetRegistry().get<UITextComponent>(entity).lineSpacing = v; },
+            "Change Line Spacing");
+        uiBoolEdit("Wrap", tx.wrap,
+            [scene, entity](const bool& v) { scene->GetRegistry().get<UITextComponent>(entity).wrap = v; },
+            "Toggle Text Wrap");
+        uiBoolEdit("Underline", tx.underline,
+            [scene, entity](const bool& v) { scene->GetRegistry().get<UITextComponent>(entity).underline = v; },
+            "Toggle Underline");
+    };
+
+    // UI Image (standalone; folded into the Button section when one is present)
+    if (registry.all_of<UIImageComponent>(entity) && !registry.all_of<UIButtonComponent>(entity)) {
+        ImGui::Separator();
+        ImGui::Text("UI Image");
+        if (ImGui::BeginPopupContextItem("##UIImageCtx")) {
+            if (ImGui::MenuItem("Remove Component")) { savedUIImage = registry.get<UIImageComponent>(entity); removeUIImage = true; }
+            ImGui::EndPopup();
+        }
+        if (!removeUIImage) {
+            ImGui::PushID("UIImage");
+            drawUIImageBody(registry.get<UIImageComponent>(entity));
+            ImGui::PopID();
+        }
+    }
+
+    // UI Text (standalone; folded into the Button section when one is present)
+    if (registry.all_of<UITextComponent>(entity) && !registry.all_of<UIButtonComponent>(entity)) {
+        ImGui::Separator();
+        ImGui::Text("UI Text");
+        if (ImGui::BeginPopupContextItem("##UITextCtx")) {
+            if (ImGui::MenuItem("Remove Component")) { savedUIText = registry.get<UITextComponent>(entity); removeUIText = true; }
+            ImGui::EndPopup();
+        }
+        if (!removeUIText) {
+            ImGui::PushID("UIText");
+            drawUITextBody(registry.get<UITextComponent>(entity));
+            ImGui::PopID();
+        }
+    }
+
+    // UI Progress Bar
+    if (registry.all_of<UIProgressBarComponent>(entity)) {
+        ImGui::Separator();
+        ImGui::Text("UI Progress Bar");
+        if (ImGui::BeginPopupContextItem("##UIProgressCtx")) {
+            if (ImGui::MenuItem("Remove Component")) { savedUIProgress = registry.get<UIProgressBarComponent>(entity); removeUIProgress = true; }
+            ImGui::EndPopup();
+        }
+        if (!removeUIProgress) {
+            ImGui::PushID("UIProgress");
+            auto& pb = registry.get<UIProgressBarComponent>(entity);
+            uiFloatEdit("Progress", pb.progress, 0.005f, 0.0f, 1.0f, "%.2f",
+                [scene, entity](const float& v) { scene->GetRegistry().get<UIProgressBarComponent>(entity).progress = v; },
+                "Change Progress");
+            uiColorEdit("Background", pb.backgroundColor,
+                [scene, entity](const glm::vec4& v) { scene->GetRegistry().get<UIProgressBarComponent>(entity).backgroundColor = v; },
+                "Change Bar Background");
+            uiColorEdit("Fill", pb.fillColor,
+                [scene, entity](const glm::vec4& v) { scene->GetRegistry().get<UIProgressBarComponent>(entity).fillColor = v; },
+                "Change Bar Fill");
+            auto r = DrawTextureRow("Fill Tex", pb.fillTexture, pb.fillTexturePath, m_ContentPanel);
+            if (r.changed) {
+                auto nt = pb.fillTexture, ot = r.oldTex;
+                std::string np = pb.fillTexturePath, op = r.oldPath;
+                m_Context->Commands.RecordCommand(std::make_unique<FunctionCommand>(
+                    [scene, entity, nt, np]() { auto& c = scene->GetRegistry().get<UIProgressBarComponent>(entity); c.fillTexture = nt; c.fillTexturePath = np; },
+                    [scene, entity, ot, op]() { auto& c = scene->GetRegistry().get<UIProgressBarComponent>(entity); c.fillTexture = ot; c.fillTexturePath = op; },
+                    "Change Bar Fill Texture"));
+            }
+            const char* dItems[] = { "Left To Right", "Right To Left", "Bottom To Top", "Top To Bottom" };
+            uiComboEdit("Direction", (int)pb.direction, dItems, 4,
+                [scene, entity](const int& v) { scene->GetRegistry().get<UIProgressBarComponent>(entity).direction = (UIProgressBarComponent::Direction)v; },
+                "Change Bar Direction");
+            ImGui::PopID();
+        }
+    }
+
+    // Button — composed widget: shows its background image + label + interaction
+    // tints under one header, per design. onClick is wired from scripts.
+    if (registry.all_of<UIButtonComponent>(entity)) {
+        ImGui::Separator();
+        ImGui::Text("Button");
+        if (ImGui::BeginPopupContextItem("##UIButtonCtx")) {
+            if (ImGui::MenuItem("Remove Component")) { savedUIButton = registry.get<UIButtonComponent>(entity); removeUIButton = true; }
+            ImGui::EndPopup();
+        }
+        if (!removeUIButton) {
+            ImGui::PushID("UIButton");
+            if (registry.all_of<UIImageComponent>(entity)) {
+                ImGui::SeparatorText("Background");
+                drawUIImageBody(registry.get<UIImageComponent>(entity));
+            }
+            if (registry.all_of<UITextComponent>(entity)) {
+                ImGui::SeparatorText("Label");
+                drawUITextBody(registry.get<UITextComponent>(entity));
+            }
+            ImGui::SeparatorText("Interaction");
+            auto& bt = registry.get<UIButtonComponent>(entity);
+            uiColorEdit("Normal Tint", bt.normalTint,
+                [scene, entity](const glm::vec4& v) { scene->GetRegistry().get<UIButtonComponent>(entity).normalTint = v; },
+                "Change Button Normal Tint");
+            uiColorEdit("Hover Tint", bt.hoverTint,
+                [scene, entity](const glm::vec4& v) { scene->GetRegistry().get<UIButtonComponent>(entity).hoverTint = v; },
+                "Change Button Hover Tint");
+            uiColorEdit("Pressed Tint", bt.pressedTint,
+                [scene, entity](const glm::vec4& v) { scene->GetRegistry().get<UIButtonComponent>(entity).pressedTint = v; },
+                "Change Button Pressed Tint");
+            ImGui::TextDisabled("onClick is assigned in scripts (not serialized).");
             ImGui::PopID();
         }
     }
@@ -2174,6 +2405,34 @@ void InspectorPanel::OnImGuiRender() {
             [scene, entity, savedRect]() { scene->GetRegistry().emplace_or_replace<RectTransformComponent>(entity, savedRect); },
             "Remove Rect Transform Component"));
     }
+    if (removeUIImage) {
+        registry.remove<UIImageComponent>(entity);
+        m_Context->Commands.RecordCommand(std::make_unique<FunctionCommand>(
+            [scene, entity]()              { scene->GetRegistry().remove<UIImageComponent>(entity); },
+            [scene, entity, savedUIImage]() { scene->GetRegistry().emplace_or_replace<UIImageComponent>(entity, savedUIImage); },
+            "Remove UI Image Component"));
+    }
+    if (removeUIText) {
+        registry.remove<UITextComponent>(entity);
+        m_Context->Commands.RecordCommand(std::make_unique<FunctionCommand>(
+            [scene, entity]()             { scene->GetRegistry().remove<UITextComponent>(entity); },
+            [scene, entity, savedUIText]() { scene->GetRegistry().emplace_or_replace<UITextComponent>(entity, savedUIText); },
+            "Remove UI Text Component"));
+    }
+    if (removeUIProgress) {
+        registry.remove<UIProgressBarComponent>(entity);
+        m_Context->Commands.RecordCommand(std::make_unique<FunctionCommand>(
+            [scene, entity]()                 { scene->GetRegistry().remove<UIProgressBarComponent>(entity); },
+            [scene, entity, savedUIProgress]() { scene->GetRegistry().emplace_or_replace<UIProgressBarComponent>(entity, savedUIProgress); },
+            "Remove UI Progress Bar Component"));
+    }
+    if (removeUIButton) {
+        registry.remove<UIButtonComponent>(entity);
+        m_Context->Commands.RecordCommand(std::make_unique<FunctionCommand>(
+            [scene, entity]()               { scene->GetRegistry().remove<UIButtonComponent>(entity); },
+            [scene, entity, savedUIButton]() { scene->GetRegistry().emplace_or_replace<UIButtonComponent>(entity, savedUIButton); },
+            "Remove Button Component"));
+    }
     if (removeUserComp)
     {
         auto removeFn  = removeUserComp->remove;
@@ -2212,11 +2471,21 @@ void InspectorPanel::OnImGuiRender() {
         bool hasAnimSM      = registry.all_of<AnimStateMachineComponent>(entity);
         bool hasCanvas      = registry.all_of<CanvasComponent>(entity);
         bool hasRect        = registry.all_of<RectTransformComponent>(entity);
+        bool hasUIImage     = registry.all_of<UIImageComponent>(entity);
+        bool hasUIText      = registry.all_of<UITextComponent>(entity);
+        bool hasUIProgress  = registry.all_of<UIProgressBarComponent>(entity);
+        bool hasUIButton    = registry.all_of<UIButtonComponent>(entity);
         bool canAddAnimator = hasSkinnedMesh && !hasAnimator;
         bool canAddAnimSM   = hasSkinnedMesh && !hasAnimSM;
+        // UI widgets need a rect to resolve into; only offer them on a rect entity.
+        bool canAddUIImage    = hasRect && !hasUIImage;
+        bool canAddUIText     = hasRect && !hasUIText;
+        bool canAddUIProgress = hasRect && !hasUIProgress;
+        bool canAddUIButton   = hasRect && !hasUIButton;
         bool anyShown       = !hasMesh || !hasLight || !hasCamera || !hasCollider
                               || !hasRigidbody || !hasConstraint || !hasSkinnedMesh
-                              || canAddAnimator || canAddAnimSM || !hasCanvas || !hasRect;
+                              || canAddAnimator || canAddAnimSM || !hasCanvas || !hasRect
+                              || canAddUIImage || canAddUIText || canAddUIProgress || canAddUIButton;
 
         constexpr ImGuiSelectableFlags kCompFlags =
             ImGuiSelectableFlags_AllowDoubleClick | ImGuiSelectableFlags_DontClosePopups;
@@ -2346,6 +2615,57 @@ void InspectorPanel::OnImGuiRender() {
                         [scene, entity]() { scene->GetRegistry().emplace<RectTransformComponent>(entity); },
                         [scene, entity]() { scene->GetRegistry().remove<RectTransformComponent>(entity); },
                         "Add Rect Transform Component"));
+                    ImGui::CloseCurrentPopup();
+                }
+        }
+
+        if (canAddUIImage) {
+            if (ImGui::Selectable("UI Image", false, kCompFlags))
+                if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                    m_Context->Commands.ExecuteCommand(std::make_unique<FunctionCommand>(
+                        [scene, entity]() { scene->GetRegistry().emplace<UIImageComponent>(entity); },
+                        [scene, entity]() { scene->GetRegistry().remove<UIImageComponent>(entity); },
+                        "Add UI Image Component"));
+                    ImGui::CloseCurrentPopup();
+                }
+        }
+
+        if (canAddUIText) {
+            if (ImGui::Selectable("UI Text", false, kCompFlags))
+                if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                    m_Context->Commands.ExecuteCommand(std::make_unique<FunctionCommand>(
+                        [scene, entity]() { scene->GetRegistry().emplace<UITextComponent>(entity); },
+                        [scene, entity]() { scene->GetRegistry().remove<UITextComponent>(entity); },
+                        "Add UI Text Component"));
+                    ImGui::CloseCurrentPopup();
+                }
+        }
+
+        if (canAddUIProgress) {
+            if (ImGui::Selectable("UI Progress Bar", false, kCompFlags))
+                if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                    m_Context->Commands.ExecuteCommand(std::make_unique<FunctionCommand>(
+                        [scene, entity]() { scene->GetRegistry().emplace<UIProgressBarComponent>(entity); },
+                        [scene, entity]() { scene->GetRegistry().remove<UIProgressBarComponent>(entity); },
+                        "Add UI Progress Bar Component"));
+                    ImGui::CloseCurrentPopup();
+                }
+        }
+
+        if (canAddUIButton) {
+            // Composed widget: a button needs an image background + text label to
+            // edit/draw, so add those too if missing.
+            if (ImGui::Selectable("Button", false, kCompFlags))
+                if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                    m_Context->Commands.ExecuteCommand(std::make_unique<FunctionCommand>(
+                        [scene, entity]() {
+                            auto& r = scene->GetRegistry();
+                            r.emplace<UIButtonComponent>(entity);
+                            if (!r.all_of<UIImageComponent>(entity)) r.emplace<UIImageComponent>(entity);
+                            if (!r.all_of<UITextComponent>(entity))  r.emplace<UITextComponent>(entity);
+                        },
+                        [scene, entity]() { scene->GetRegistry().remove<UIButtonComponent>(entity); },
+                        "Add Button Component"));
                     ImGui::CloseCurrentPopup();
                 }
         }

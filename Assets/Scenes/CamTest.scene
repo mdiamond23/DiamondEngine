@@ -530,6 +530,349 @@
         ]
       },
       "uuid": 1269252802217616190
+    },
+    {
+      "canvas": {
+        "matchWidthHeight": 0.5,
+        "referenceResolution": [
+          1920.0,
+          1080.0
+        ],
+        "scaleMode": 1,
+        "sortOrder": 0
+      },
+      "name": "Canvas",
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "position": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 7290702978885404139
+    },
+    {
+      "name": "Image",
+      "parentUuid": 7290702978885404139,
+      "rectTransform": {
+        "anchorMax": [
+          0.5,
+          0.5
+        ],
+        "anchorMin": [
+          0.5,
+          0.5
+        ],
+        "pivot": [
+          0.5,
+          0.5
+        ],
+        "position": [
+          25.0,
+          -25.0
+        ],
+        "size": [
+          100.0,
+          100.0
+        ],
+        "zOrder": 0
+      },
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "position": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uiImage": {
+        "texturePath": "C:/Dev/DiamondEngine\\Assets\\Textures\\ibl_hdr_radiance.png",
+        "tint": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "uvMax": [
+          1.0,
+          1.0
+        ],
+        "uvMin": [
+          0.0,
+          0.0
+        ]
+      },
+      "uuid": 1891702920981867048
+    },
+    {
+      "name": "Text",
+      "parentUuid": 7290702978885404139,
+      "rectTransform": {
+        "anchorMax": [
+          0.5,
+          0.5
+        ],
+        "anchorMin": [
+          0.5,
+          0.5
+        ],
+        "pivot": [
+          0.5,
+          0.5
+        ],
+        "position": [
+          0.0,
+          0.0
+        ],
+        "size": [
+          100.0,
+          100.0
+        ],
+        "zOrder": 0
+      },
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "position": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uiText": {
+        "color": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "fontPath": "C:/Dev/DiamondEngine\\Assets\\Fonts\\OpenSans-Regular.ttf",
+        "hAlign": 0,
+        "lineSpacing": 1.7000000476837158,
+        "sizePx": 24.0,
+        "text": "Test Text!",
+        "underline": false,
+        "vAlign": 1,
+        "wrap": true
+      },
+      "uuid": 17037433089795119097
+    },
+    {
+      "name": "Progress Bar",
+      "parentUuid": 7290702978885404139,
+      "rectTransform": {
+        "anchorMax": [
+          0.5,
+          0.5
+        ],
+        "anchorMin": [
+          0.5,
+          0.5
+        ],
+        "pivot": [
+          0.5,
+          0.5
+        ],
+        "position": [
+          0.0,
+          0.0
+        ],
+        "size": [
+          100.0,
+          100.0
+        ],
+        "zOrder": 0
+      },
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "position": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uiProgressBar": {
+        "backgroundColor": [
+          0.10000000149011612,
+          0.10000000149011612,
+          0.11999999731779099,
+          1.0
+        ],
+        "direction": 0,
+        "fillColor": [
+          0.25,
+          0.800000011920929,
+          0.4000000059604645,
+          1.0
+        ],
+        "fillTexturePath": "",
+        "progress": 0.5
+      },
+      "uuid": 8686602789785547718
+    },
+    {
+      "name": "Button",
+      "parentUuid": 7290702978885404139,
+      "rectTransform": {
+        "anchorMax": [
+          0.5,
+          0.5
+        ],
+        "anchorMin": [
+          0.5,
+          0.5
+        ],
+        "pivot": [
+          0.5,
+          0.5
+        ],
+        "position": [
+          -500.0,
+          500.0
+        ],
+        "size": [
+          100.0,
+          100.0
+        ],
+        "zOrder": 0
+      },
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "position": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uiButton": {
+        "hoverTint": [
+          1.2000000476837158,
+          1.2000000476837158,
+          1.2000000476837158,
+          1.0
+        ],
+        "normalTint": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "pressedTint": [
+          0.800000011920929,
+          0.800000011920929,
+          0.800000011920929,
+          1.0
+        ]
+      },
+      "uiImage": {
+        "texturePath": "C:/Dev/DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\DiamondPlate006C_2K-PNG_Color.png",
+        "tint": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "uvMax": [
+          1.0,
+          1.0
+        ],
+        "uvMin": [
+          0.0,
+          0.0
+        ]
+      },
+      "uiText": {
+        "color": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "fontPath": "C:/Dev/DiamondEngine\\Assets\\Fonts\\OpenSans-Regular.ttf",
+        "hAlign": 0,
+        "lineSpacing": 1.0,
+        "sizePx": 24.0,
+        "text": "Button!",
+        "underline": false,
+        "vAlign": 0,
+        "wrap": true
+      },
+      "uuid": 14907860051876901126
     }
   ]
 }

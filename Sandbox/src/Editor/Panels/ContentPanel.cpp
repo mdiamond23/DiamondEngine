@@ -157,6 +157,7 @@ static const char* AssetTypeName(AssetType t) {
         case AssetType::Scene:       return "Scene";
         case AssetType::PhysicsMat:  return "Physics Mat";
         case AssetType::AnimSM:      return "State Machine";
+        case AssetType::Font:        return "Font";
         default:                     return "File";
     }
 }
@@ -183,6 +184,7 @@ AssetType ContentPanel::GetAssetType(const fs::path& p) {
     if (ext == ".animsm")  return AssetType::AnimSM;
     if (ext == ".glsl" || ext == ".vert" || ext == ".frag") return AssetType::Shader;
     if (ext == ".scene")   return AssetType::Scene;
+    if (ext == ".ttf" || ext == ".otf") return AssetType::Font;
     return AssetType::File;
 }
 
@@ -278,6 +280,8 @@ void ContentPanel::DrawFileIcon(ImVec2 tl, float size, const std::string& ext) {
     ImDrawList* dl  = ImGui::GetWindowDrawList();
     float fold = size * 0.22f;
 
+    const bool isFont = (ext == ".ttf" || ext == ".otf");
+
     ImU32 pageCol;
     if (ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".bmp" || ext == ".tga")
         pageCol = IM_COL32(80, 130, 220, 255);
@@ -289,6 +293,8 @@ void ContentPanel::DrawFileIcon(ImVec2 tl, float size, const std::string& ext) {
         pageCol = IM_COL32(90, 190, 200, 255);
     else if (ext == ".animsm")
         pageCol = IM_COL32(180, 120, 210, 255);
+    else if (isFont)
+        pageCol = IM_COL32(225, 185, 95, 255);   // warm gold — fonts stand out
     else
         pageCol = IM_COL32(155, 155, 170, 255);
 
@@ -316,6 +322,15 @@ void ContentPanel::DrawFileIcon(ImVec2 tl, float size, const std::string& ext) {
         {tl.x + size - fold, tl.y + fold},
     };
     dl->AddConvexPolyFilled(ear, 3, foldCol);
+
+    // Fonts get a big "Aa" so the page unmistakably reads as a typeface.
+    if (isFont) {
+        ImFont* f  = ImGui::GetFont();
+        float   fs = size * 0.46f;
+        ImVec2  ts = f->CalcTextSizeA(fs, 10000.0f, 0.0f, "Aa");
+        ImVec2  tp = { tl.x + (size - ts.x) * 0.5f, tl.y + (size - ts.y) * 0.5f };
+        dl->AddText(f, fs, tp, IM_COL32(45, 33, 10, 255), "Aa");
+    }
 }
 
 void ContentPanel::DrawToolbar() {
@@ -571,7 +586,8 @@ void ContentPanel::DrawItems() {
                                          item.type == AssetType::Texture ||
                                          item.type == AssetType::PhysicsMat ||
                                          item.type == AssetType::AnimSM ||
-                                         item.type == AssetType::Material);
+                                         item.type == AssetType::Material ||
+                                         item.type == AssetType::Font);
             const char* payloadType = isInspectorDraggable ? "CONTENT_ITEM_PATH"
                                                             : "CONTENT_MOVE";
             ImGui::SetDragDropPayload(payloadType, pathStr.c_str(), pathStr.size() + 1);
