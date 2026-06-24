@@ -26,6 +26,9 @@
 #include "Renderer/Material.h"
 #include "Renderer/TextureData.h"
 #include "Renderer/RenderGraph.h"
+#include "Renderer/Font.h"
+#include "Renderer/Renderer2D.h"
+#include <cstdio>
 #include "Platform/OpenGL/Resources/OpenGLRenderTypes.h"
 #include "Platform/OpenGL/Resources/OpenGLShader.h"
 #include "Platform/OpenGL/Resources/ShaderLibrary.h"
@@ -242,6 +245,10 @@ int main()
     OpenGLFXAAPass             fxaaPass;
     OpenGLTransparencyPass     transparencyPass;
     bool fxaaEnabled = true;
+
+    // --- 2D UI layer: backend-agnostic text + quad batcher (HUD foundation) ---
+    auto uiRenderer = Renderer2D::Create();
+    auto uiFont     = Font::Create(ASSETS_DIR "/Fonts/OpenSans-Regular.ttf", 32.0f);
 
     // IBL bake — one-time
     {
@@ -650,6 +657,7 @@ int main()
 
     // --- Render loop ---
     int lastFbW = 0, lastFbH = 0;
+    int displayFps = 0;   // refreshed alongside the window-title FPS counter
 
     while (!glfwWindowShouldClose(window))
     {
@@ -663,7 +671,8 @@ int main()
         fpsTimer += deltaTime;
         frameCount++;
         if (fpsTimer >= 0.5f) {
-            std::string title = "LearnOpenGL | FPS: " + std::to_string((int)(frameCount / fpsTimer));
+            displayFps = (int)(frameCount / fpsTimer);
+            std::string title = "LearnOpenGL | FPS: " + std::to_string(displayFps);
             glfwSetWindowTitle(window, title.c_str());
             fpsTimer = 0.0f;
             frameCount = 0;
@@ -821,6 +830,32 @@ int main()
                         editorLayer.GetContext().activeIKChain);
         }
         DebugDraw::Flush(proj * view);
+
+        // --- 2D UI overlay (demo of the new text + quad batcher) ---
+        // Drawn into the editor scene viewport so it's always visible while we
+        // build out the system. The real in-game HUD will drive this batcher from
+        // a canvas/widget layer and render into the game viewport.
+        if (uiRenderer && uiFont) {
+            glBindFramebuffer(GL_FRAMEBUFFER, viewportFBO);
+            glViewport(0, 0, fbW, fbH);
+            uiRenderer->Begin(Renderer2D::OrthoProjection((float)fbW, (float)fbH));
+
+            // Translucent panel
+            uiRenderer->DrawQuad({ 20.0f, 20.0f }, { 300.0f, 96.0f },
+                                 { 0.05f, 0.06f, 0.09f, 0.65f });
+            // Title + subtitle
+            uiRenderer->DrawText(*uiFont, "DiamondEngine", { 34.0f, 28.0f },
+                                 { 1.0f, 1.0f, 1.0f, 1.0f }, 0.72f);
+            uiRenderer->DrawText(*uiFont, "2D UI layer online", { 34.0f, 60.0f },
+                                 { 0.55f, 0.85f, 1.0f, 1.0f }, 0.5f);
+            // Live FPS readout
+            char fpsBuf[32];
+            std::snprintf(fpsBuf, sizeof(fpsBuf), "FPS  %d", displayFps);
+            uiRenderer->DrawText(*uiFont, fpsBuf, { 34.0f, 84.0f },
+                                 { 0.7f, 1.0f, 0.7f, 1.0f }, 0.5f);
+
+            uiRenderer->End();
+        }
 
         // --- Game viewport: primary camera entity (play mode only) ---
         entt::entity primaryCam = scene.GetPrimaryCamera();

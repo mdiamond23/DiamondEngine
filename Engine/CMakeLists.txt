@@ -170,6 +170,7 @@ add_library(MyEngine STATIC
     src/Animation/IKSolver.cpp
     src/Animation/IKSystem.cpp
     src/Platform/OpenGL/Resources/OpenGLMesh.cpp
+    src/Platform/OpenGL/Resources/OpenGLRenderer2D.cpp
     src/Platform/OpenGL/Resources/OpenGLRendererAPI.cpp
     src/Platform/OpenGL/Resources/OpenGLShader.cpp
     src/Platform/OpenGL/Resources/OpenGLTexture.cpp
@@ -185,8 +186,10 @@ add_library(MyEngine STATIC
     src/Platform/OpenGL/Passes/PostProcess/OpenGLBloomPass.cpp
     src/Platform/OpenGL/Passes/PostProcess/OpenGLFXAAPass.cpp
     src/Renderer/RenderGraph.cpp
+    src/Renderer/Font.cpp
     src/Renderer/Material.cpp
     src/Renderer/MeshData.cpp
+    src/Renderer/Renderer2D.cpp
     src/Renderer/RendererAPI.cpp
     src/Renderer/Shader.cpp
     src/Renderer/TextureData.cpp

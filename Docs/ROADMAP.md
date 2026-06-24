@@ -90,8 +90,15 @@ ragdoll characters, active physics control, grabbing, local multiplayer.
 ## Milestone 5 — Game Layer
 > Goal: enough systems to build a local-multiplayer physics fighting game
 
-- [x] Dynamic camera system — multi-target tracking, zoom-out when players spread apart, collision avoidance. **Implemented (build-verified, play-test pending):** `CameraTarget` tag + `CameraDirector` component/system in `Sandbox/src/Scripts/CameraDirector.h`; fixed-angle framing, frustum-fit zoom from target spread, exp-eased pivot/distance, spherecast collision (snap-in/ease-out). Design in [`camera-design.md`](camera-design.md). Deferred: player-mesh fade, orbit/auto-yaw, target weighting.
+- [x] Dynamic camera system — multi-target tracking, zoom-out when players spread apart, collision avoidance. 
 - [ ] In-game UI system — HUD, menus, health bars separate from ImGui (ImGui is editor-only)
+  - [x] Text rendering — `Font` bakes a TTF/OTF (stb_truetype) into an R8 glyph atlas; backend-agnostic (rides the abstract `Texture`)
+  - [x] 2D batched quad renderer — `Renderer2D` interface (`Begin`/`End`/`DrawQuad`/`DrawTexturedQuad`/`DrawText` + ortho helper) with `OpenGLRenderer2D` batching by texture; quads/sprites/text share one shader
+  - [ ] Canvas + anchoring (reference resolution, anchors/pivots)
+  - [ ] ECS widget components + UISystem (Image/Text/Button/ProgressBar)
+  - [ ] Input + gamepad-navigable focus/events
+  - [ ] Data flow: imperative API from scripts now; event bus later ([#27](https://github.com/mdiamond23/DiamondEngine/issues/27))
+  - [ ] Editor authoring + serialization
 - [ ] Particle system — hit sparks, dust, environmental effects
 - [ ] Audio — [miniaudio](https://miniaud.io) (single header, no dependencies); 3D positional audio
 - [ ] Local multiplayer — shared-screen with multiple gamepads; player management, respawn

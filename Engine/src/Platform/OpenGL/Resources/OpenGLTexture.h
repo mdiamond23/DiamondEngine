@@ -15,6 +15,11 @@ public:
     uint32_t GetWidth()  const override { return m_Width; }
     uint32_t GetHeight() const override { return m_Height; }
 
+    // Native GL texture name. Backend-only — not part of the abstract Texture
+    // interface; used by other OpenGL code (e.g. the 2D batcher) that needs to
+    // group draws by texture handle.
+    uint32_t GetRendererID() const { return m_RendererID; }
+
 private:
     uint32_t m_RendererID = 0;
     uint32_t m_Width      = 0;
