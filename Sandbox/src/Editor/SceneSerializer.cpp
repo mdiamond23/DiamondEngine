@@ -27,8 +27,10 @@ using namespace Diamond;
 
 // ---- helpers ----------------------------------------------------------------
 
+static json JVec2(const glm::vec2& v) { return { v.x, v.y }; }
 static json JVec3(const glm::vec3& v) { return { v.x, v.y, v.z }; }
 static json JQuat(const glm::quat& q) { return { q.w, q.x, q.y, q.z }; }
+static glm::vec2 ToVec2(const json& j) { return { j[0], j[1] }; }
 static glm::vec3 ToVec3(const json& j) { return { j[0], j[1], j[2] }; }
 static glm::quat ToQuat(const json& j) { return glm::quat(float(j[0]), float(j[1]), float(j[2]), float(j[3])); }
 
@@ -137,6 +139,28 @@ static json ToJson(Scene& scene)
                 { "fov",       cc.fov       },
                 { "nearClip",  cc.nearClip  },
                 { "farClip",   cc.farClip   }
+            };
+        }
+
+        if (reg.all_of<CanvasComponent>(entity)) {
+            auto& cv = reg.get<CanvasComponent>(entity);
+            ej["canvas"] = {
+                { "scaleMode",           (int)cv.scaleMode             },
+                { "referenceResolution", JVec2(cv.referenceResolution) },
+                { "matchWidthHeight",    cv.matchWidthHeight           },
+                { "sortOrder",           cv.sortOrder                  }
+            };
+        }
+
+        if (reg.all_of<RectTransformComponent>(entity)) {
+            auto& rt = reg.get<RectTransformComponent>(entity);
+            ej["rectTransform"] = {
+                { "anchorMin", JVec2(rt.anchorMin) },
+                { "anchorMax", JVec2(rt.anchorMax) },
+                { "pivot",     JVec2(rt.pivot)     },
+                { "position",  JVec2(rt.position)  },
+                { "size",      JVec2(rt.size)      },
+                { "zOrder",    rt.zOrder           }
             };
         }
 
@@ -437,6 +461,27 @@ static bool FromJson(Scene& scene, const json& root)
             cc.fov       = cj.value("fov",       60.0f);
             cc.nearClip  = cj.value("nearClip",  0.1f);
             cc.farClip   = cj.value("farClip",   1000.0f);
+        }
+
+        if (ej.contains("canvas")) {
+            const auto& cj = ej["canvas"];
+            auto& cv = reg.emplace<CanvasComponent>(e);
+            cv.scaleMode = (CanvasComponent::ScaleMode)cj.value("scaleMode", 1);
+            if (cj.contains("referenceResolution"))
+                cv.referenceResolution = ToVec2(cj["referenceResolution"]);
+            cv.matchWidthHeight = cj.value("matchWidthHeight", 0.5f);
+            cv.sortOrder        = cj.value("sortOrder", 0);
+        }
+
+        if (ej.contains("rectTransform")) {
+            const auto& rj = ej["rectTransform"];
+            auto& rt = reg.emplace<RectTransformComponent>(e);
+            if (rj.contains("anchorMin")) rt.anchorMin = ToVec2(rj["anchorMin"]);
+            if (rj.contains("anchorMax")) rt.anchorMax = ToVec2(rj["anchorMax"]);
+            if (rj.contains("pivot"))     rt.pivot     = ToVec2(rj["pivot"]);
+            if (rj.contains("position"))  rt.position  = ToVec2(rj["position"]);
+            if (rj.contains("size"))      rt.size      = ToVec2(rj["size"]);
+            rt.zOrder = rj.value("zOrder", 0);
         }
 
         if (ej.contains("collider")) {

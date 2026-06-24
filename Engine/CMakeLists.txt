@@ -195,6 +195,7 @@ add_library(MyEngine STATIC
     src/Renderer/TextureData.cpp
     src/Scene/Scene.cpp
     src/Scene/TransformSystem.cpp
+    src/Scene/UISystem.cpp
     src/Scene/UUIDGenerator.cpp
     src/Scene/Physics/PhysicsSystem.cpp
     src/Scene/Physics/RagdollConfig.cpp

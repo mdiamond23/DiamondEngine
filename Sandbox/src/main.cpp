@@ -28,6 +28,7 @@
 #include "Renderer/RenderGraph.h"
 #include "Renderer/Font.h"
 #include "Renderer/Renderer2D.h"
+#include "Scene/UISystem.h"
 #include <cstdio>
 #include "Platform/OpenGL/Resources/OpenGLRenderTypes.h"
 #include "Platform/OpenGL/Resources/OpenGLShader.h"
@@ -249,6 +250,37 @@ int main()
     // --- 2D UI layer: backend-agnostic text + quad batcher (HUD foundation) ---
     auto uiRenderer = Renderer2D::Create();
     auto uiFont     = Font::Create(ASSETS_DIR "/Fonts/OpenSans-Regular.ttf", 32.0f);
+
+    // --- Demo UI canvas: exercises the anchor/stretch resolver (UISystem) ---
+    // Standalone registry so it doesn't touch the scene. Gets replaced by ECS
+    // widget components + editor authoring in the next step.
+    entt::registry uiDemo;
+    entt::entity   uiCanvas = uiDemo.create();
+    {
+        auto& cc = uiDemo.emplace<CanvasComponent>(uiCanvas);
+        cc.scaleMode = CanvasComponent::ScaleMode::ConstantPixelSize;
+        uiDemo.emplace<HierarchyComponent>(uiCanvas);
+    }
+    auto uiMakeElement = [&](glm::vec2 aMin, glm::vec2 aMax, glm::vec2 pivot,
+                             glm::vec2 pos, glm::vec2 size) {
+        entt::entity e = uiDemo.create();
+        RectTransformComponent rt;
+        rt.anchorMin = aMin; rt.anchorMax = aMax; rt.pivot = pivot;
+        rt.position  = pos;  rt.size = size;
+        uiDemo.emplace<RectTransformComponent>(e, rt);
+        uiDemo.emplace<HierarchyComponent>(e).parent = uiCanvas;
+        uiDemo.get<HierarchyComponent>(uiCanvas).children.push_back(e);
+        return e;
+    };
+    // Top bar: stretched across the full width (anchorX 0->1), pinned to the top.
+    entt::entity uiTopBar = uiMakeElement({0.0f, 0.0f}, {1.0f, 0.0f}, {0.5f, 0.0f},
+                                          {0.0f, 20.0f}, {-40.0f, 48.0f});
+    // HUD readout: pinned to the bottom-right corner.
+    entt::entity uiCorner = uiMakeElement({1.0f, 1.0f}, {1.0f, 1.0f}, {1.0f, 1.0f},
+                                          {-20.0f, -20.0f}, {220.0f, 72.0f});
+    // Center panel.
+    entt::entity uiCenter = uiMakeElement({0.5f, 0.5f}, {0.5f, 0.5f}, {0.5f, 0.5f},
+                                          {0.0f, 0.0f}, {420.0f, 90.0f});
 
     // IBL bake — one-time
     {
@@ -838,21 +870,37 @@ int main()
         if (uiRenderer && uiFont) {
             glBindFramebuffer(GL_FRAMEBUFFER, viewportFBO);
             glViewport(0, 0, fbW, fbH);
+
+            // Resolve anchors against the viewport, then draw each element's rect.
+            // Resize the window and watch the top bar stretch and the corner box
+            // stay pinned — that's the anchor resolver doing its job.
+            UISystem::Resolve(uiDemo, { (float)fbW, (float)fbH });
+
+            const auto& bar    = uiDemo.get<RectTransformComponent>(uiTopBar);
+            const auto& corner = uiDemo.get<RectTransformComponent>(uiCorner);
+            const auto& center = uiDemo.get<RectTransformComponent>(uiCenter);
+
             uiRenderer->Begin(Renderer2D::OrthoProjection((float)fbW, (float)fbH));
 
-            // Translucent panel
-            uiRenderer->DrawQuad({ 20.0f, 20.0f }, { 300.0f, 96.0f },
-                                 { 0.05f, 0.06f, 0.09f, 0.65f });
-            // Title + subtitle
-            uiRenderer->DrawText(*uiFont, "DiamondEngine", { 34.0f, 28.0f },
-                                 { 1.0f, 1.0f, 1.0f, 1.0f }, 0.72f);
-            uiRenderer->DrawText(*uiFont, "2D UI layer online", { 34.0f, 60.0f },
-                                 { 0.55f, 0.85f, 1.0f, 1.0f }, 0.5f);
-            // Live FPS readout
+            uiRenderer->DrawQuad(bar.resolvedPos, bar.resolvedSize,
+                                 { 0.05f, 0.06f, 0.09f, 0.75f });
+            uiRenderer->DrawText(*uiFont, "DiamondEngine UI",
+                                 bar.resolvedPos + glm::vec2(14.0f, 10.0f),
+                                 { 1.0f, 1.0f, 1.0f, 1.0f }, 0.6f);
+
+            uiRenderer->DrawQuad(center.resolvedPos, center.resolvedSize,
+                                 { 0.10f, 0.12f, 0.16f, 0.7f });
+            uiRenderer->DrawText(*uiFont, "Canvas + anchors online",
+                                 center.resolvedPos + glm::vec2(16.0f, 14.0f),
+                                 { 0.55f, 0.85f, 1.0f, 1.0f }, 0.55f);
+
+            uiRenderer->DrawQuad(corner.resolvedPos, corner.resolvedSize,
+                                 { 0.05f, 0.06f, 0.09f, 0.75f });
             char fpsBuf[32];
             std::snprintf(fpsBuf, sizeof(fpsBuf), "FPS  %d", displayFps);
-            uiRenderer->DrawText(*uiFont, fpsBuf, { 34.0f, 84.0f },
-                                 { 0.7f, 1.0f, 0.7f, 1.0f }, 0.5f);
+            uiRenderer->DrawText(*uiFont, fpsBuf,
+                                 corner.resolvedPos + glm::vec2(14.0f, 12.0f),
+                                 { 0.7f, 1.0f, 0.7f, 1.0f }, 0.55f);
 
             uiRenderer->End();
         }

@@ -77,3 +77,43 @@ struct HierarchyComponent {
     entt::entity              parent   = entt::null;
     std::vector<entt::entity> children;
 };
+
+// ---- In-game UI (screen-space) ---------------------------------------------
+// A CanvasComponent marks an entity as the root of a UI tree. Its rect is the
+// full render target. Descendant entities carry RectTransformComponent and are
+// resolved top-down by UISystem into screen-pixel rects, then drawn by Renderer2D.
+struct CanvasComponent {
+    // ConstantPixelSize  : 1 UI unit == 1 screen pixel, regardless of resolution.
+    // ScaleWithScreenSize: UI authored at referenceResolution, then uniformly
+    //                      scaled to fit the actual target (resolution independence).
+    enum class ScaleMode { ConstantPixelSize, ScaleWithScreenSize };
+
+    ScaleMode scaleMode           = ScaleMode::ScaleWithScreenSize;
+    glm::vec2 referenceResolution { 1920.0f, 1080.0f };
+    float     matchWidthHeight    = 0.5f;   // 0 = match width, 1 = match height
+    int       sortOrder           = 0;      // draw order between canvases
+};
+
+// Anchor/pivot rect, Unity RectTransform-style. Resolved against the parent's
+// resolved rect (another RectTransform, or the Canvas = full screen).
+//
+// Coordinate space: top-left origin, +X right, +Y down (matches Renderer2D).
+// Anchors are fractions of the parent rect: (0,0) = top-left, (1,1) = bottom-right.
+//   - anchorMin == anchorMax  -> "point" anchor: `size` is the literal box size.
+//   - anchorMin != anchorMax  -> "stretch": the box follows the parent's edges;
+//                                 `size` is a delta added to the anchor gap
+//                                 (size 0 fills the gap exactly, negative insets it).
+// `position` offsets the box from its anchor (anchoredPosition).
+// `pivot` is the box's local reference point for position/scaling (the "Alignment").
+struct RectTransformComponent {
+    glm::vec2 anchorMin { 0.5f, 0.5f };
+    glm::vec2 anchorMax { 0.5f, 0.5f };
+    glm::vec2 pivot     { 0.5f, 0.5f };
+    glm::vec2 position  { 0.0f,  0.0f  };   // anchoredPosition, in canvas units
+    glm::vec2 size      { 100.0f, 100.0f }; // sizeDelta, in canvas units
+    int       zOrder    = 0;
+
+    // --- computed by UISystem each frame; not serialized ---
+    glm::vec2 resolvedPos  { 0.0f };   // top-left, screen pixels
+    glm::vec2 resolvedSize { 0.0f };   // screen pixels
+};

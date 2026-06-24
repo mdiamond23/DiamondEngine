@@ -741,6 +741,65 @@
         ]
       },
       "uuid": 7906604254731482450
+    },
+    {
+      "canvas": {
+        "matchWidthHeight": 0.5199999809265137,
+        "referenceResolution": [
+          1920.0,
+          1080.0
+        ],
+        "scaleMode": 1,
+        "sortOrder": 0
+      },
+      "name": "Empty Entity",
+      "rectTransform": {
+        "anchorMax": [
+          0.5,
+          0.10999999940395355
+        ],
+        "anchorMin": [
+          1.1699999570846558,
+          0.7099999785423279
+        ],
+        "pivot": [
+          0.5,
+          0.5
+        ],
+        "position": [
+          0.0,
+          0.0
+        ],
+        "size": [
+          100.0,
+          100.0
+        ],
+        "zOrder": 0
+      },
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "position": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 1806891200734195669
     }
   ]
 }

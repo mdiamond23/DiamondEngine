@@ -523,6 +523,13 @@ void InspectorPanel::OnImGuiRender() {
     bool removeSkinnedMesh = false;
     bool removeAnimator    = false;
     bool removeAnimSM      = false;
+    bool removeCanvas      = false;  CanvasComponent        savedCanvas;
+    bool removeRect        = false;  RectTransformComponent savedRect;
+
+    // Pre-edit stash for the single UI fields below. ImGui has one active widget
+    // at a time, so a shared stash per type is safe.
+    static glm::vec2 s_uiOldVec2(0.0f);
+    static float     s_uiOldFloat = 0.0f;
 
     // Mesh Component
     if (registry.all_of<MeshComponent>(entity)) {
@@ -869,6 +876,101 @@ void InspectorPanel::OnImGuiRender() {
                     [scene, entity](const float& v) { scene->GetRegistry().get<CameraComponent>(entity).farClip = v; },
                     o, n, "Change Far Clip"));
             }
+        }
+    }
+
+    // Canvas Component
+    if (registry.all_of<CanvasComponent>(entity)) {
+        ImGui::Separator();
+        auto& cv = registry.get<CanvasComponent>(entity);
+
+        ImGui::Text("Canvas");
+        if (ImGui::BeginPopupContextItem("##CanvasCompCtx")) {
+            if (ImGui::MenuItem("Remove Component")) { savedCanvas = cv; removeCanvas = true; }
+            ImGui::EndPopup();
+        }
+
+        if (!removeCanvas) {
+            const char* modes[] = { "Constant Pixel Size", "Scale With Screen Size" };
+            int modeIdx = (int)cv.scaleMode;
+            if (ImGui::Combo("Scale Mode", &modeIdx, modes, 2)) {
+                auto oldMode = cv.scaleMode;
+                auto newMode = (CanvasComponent::ScaleMode)modeIdx;
+                cv.scaleMode = newMode;
+                m_Context->Commands.ExecuteCommand(std::make_unique<ValueChangeCommand<CanvasComponent::ScaleMode>>(
+                    [scene, entity](const CanvasComponent::ScaleMode& m) { scene->GetRegistry().get<CanvasComponent>(entity).scaleMode = m; },
+                    oldMode, newMode, "Change Canvas Scale Mode"));
+            }
+
+            if (cv.scaleMode == CanvasComponent::ScaleMode::ScaleWithScreenSize) {
+                ImGui::DragFloat2("Reference Resolution", glm::value_ptr(cv.referenceResolution), 1.0f, 1.0f, 16384.0f, "%.0f");
+                if (ImGui::IsItemActivated()) s_uiOldVec2 = cv.referenceResolution;
+                if (ImGui::IsItemDeactivatedAfterEdit()) {
+                    glm::vec2 n = cv.referenceResolution, o = s_uiOldVec2;
+                    m_Context->Commands.ExecuteCommand(std::make_unique<ValueChangeCommand<glm::vec2>>(
+                        [scene, entity](const glm::vec2& v) { scene->GetRegistry().get<CanvasComponent>(entity).referenceResolution = v; },
+                        o, n, "Change Reference Resolution"));
+                }
+
+                ImGui::SliderFloat("Match W/H", &cv.matchWidthHeight, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemActivated()) s_uiOldFloat = cv.matchWidthHeight;
+                if (ImGui::IsItemDeactivatedAfterEdit()) {
+                    float n = cv.matchWidthHeight, o = s_uiOldFloat;
+                    m_Context->Commands.ExecuteCommand(std::make_unique<ValueChangeCommand<float>>(
+                        [scene, entity](const float& v) { scene->GetRegistry().get<CanvasComponent>(entity).matchWidthHeight = v; },
+                        o, n, "Change Canvas Match"));
+                }
+            }
+
+            int sort = cv.sortOrder;
+            if (ImGui::InputInt("Sort Order", &sort)) cv.sortOrder = sort;
+        }
+    }
+
+    // Rect Transform Component
+    if (registry.all_of<RectTransformComponent>(entity)) {
+        ImGui::Separator();
+        auto& rt = registry.get<RectTransformComponent>(entity);
+
+        ImGui::Text("Rect Transform");
+        if (ImGui::BeginPopupContextItem("##RectCompCtx")) {
+            if (ImGui::MenuItem("Remove Component")) { savedRect = rt; removeRect = true; }
+            ImGui::EndPopup();
+        }
+
+        if (!removeRect) {
+            // Scope these widgets: "Position" would otherwise collide with the 3D
+            // TransformComponent's "Position" field on the same entity.
+            ImGui::PushID("RectTransform");
+
+            // DragFloat2 + per-drag undo for one RectTransform vec2 field.
+            auto rectVec2 = [&](const char* label, glm::vec2 RectTransformComponent::* mem,
+                                float speed, const char* fmt, const char* desc) {
+                auto& r = registry.get<RectTransformComponent>(entity);
+                ImGui::DragFloat2(label, glm::value_ptr(r.*mem), speed, 0.0f, 0.0f, fmt);
+                if (ImGui::IsItemActivated()) s_uiOldVec2 = r.*mem;
+                if (ImGui::IsItemDeactivatedAfterEdit()) {
+                    glm::vec2 n = r.*mem, o = s_uiOldVec2;
+                    m_Context->Commands.ExecuteCommand(std::make_unique<ValueChangeCommand<glm::vec2>>(
+                        [scene, entity, mem](const glm::vec2& v) { scene->GetRegistry().get<RectTransformComponent>(entity).*mem = v; },
+                        o, n, desc));
+                }
+            };
+
+            rectVec2("Anchor Min", &RectTransformComponent::anchorMin, 0.01f, "%.2f", "Change Anchor Min");
+            rectVec2("Anchor Max", &RectTransformComponent::anchorMax, 0.01f, "%.2f", "Change Anchor Max");
+            rectVec2("Pivot",      &RectTransformComponent::pivot,     0.01f, "%.2f", "Change Pivot");
+            rectVec2("Position",   &RectTransformComponent::position,  1.0f,  "%.0f", "Change UI Position");
+            rectVec2("Size",       &RectTransformComponent::size,      1.0f,  "%.0f", "Change UI Size");
+
+            int z = rt.zOrder;
+            if (ImGui::InputInt("Z Order", &z)) rt.zOrder = z;
+
+            ImGui::TextDisabled("Resolved: %.0f, %.0f   %.0f x %.0f",
+                                rt.resolvedPos.x, rt.resolvedPos.y,
+                                rt.resolvedSize.x, rt.resolvedSize.y);
+
+            ImGui::PopID();
         }
     }
 
@@ -2058,6 +2160,20 @@ void InspectorPanel::OnImGuiRender() {
             [scene, entity, saved]() { scene->GetRegistry().emplace_or_replace<AnimStateMachineComponent>(entity, saved); },
             "Remove Animator State Machine Component"));
     }
+    if (removeCanvas) {
+        registry.remove<CanvasComponent>(entity);
+        m_Context->Commands.RecordCommand(std::make_unique<FunctionCommand>(
+            [scene, entity]()             { scene->GetRegistry().remove<CanvasComponent>(entity); },
+            [scene, entity, savedCanvas]() { scene->GetRegistry().emplace_or_replace<CanvasComponent>(entity, savedCanvas); },
+            "Remove Canvas Component"));
+    }
+    if (removeRect) {
+        registry.remove<RectTransformComponent>(entity);
+        m_Context->Commands.RecordCommand(std::make_unique<FunctionCommand>(
+            [scene, entity]()           { scene->GetRegistry().remove<RectTransformComponent>(entity); },
+            [scene, entity, savedRect]() { scene->GetRegistry().emplace_or_replace<RectTransformComponent>(entity, savedRect); },
+            "Remove Rect Transform Component"));
+    }
     if (removeUserComp)
     {
         auto removeFn  = removeUserComp->remove;
@@ -2094,11 +2210,13 @@ void InspectorPanel::OnImGuiRender() {
         bool hasSkinnedMesh = registry.all_of<SkinnedMeshComponent>(entity);
         bool hasAnimator    = registry.all_of<AnimatorComponent>(entity);
         bool hasAnimSM      = registry.all_of<AnimStateMachineComponent>(entity);
+        bool hasCanvas      = registry.all_of<CanvasComponent>(entity);
+        bool hasRect        = registry.all_of<RectTransformComponent>(entity);
         bool canAddAnimator = hasSkinnedMesh && !hasAnimator;
         bool canAddAnimSM   = hasSkinnedMesh && !hasAnimSM;
         bool anyShown       = !hasMesh || !hasLight || !hasCamera || !hasCollider
                               || !hasRigidbody || !hasConstraint || !hasSkinnedMesh
-                              || canAddAnimator || canAddAnimSM;
+                              || canAddAnimator || canAddAnimSM || !hasCanvas || !hasRect;
 
         constexpr ImGuiSelectableFlags kCompFlags =
             ImGuiSelectableFlags_AllowDoubleClick | ImGuiSelectableFlags_DontClosePopups;
@@ -2204,6 +2322,30 @@ void InspectorPanel::OnImGuiRender() {
                         },
                         [scene, entity]() { scene->GetRegistry().remove<AnimStateMachineComponent>(entity); },
                         "Add Animator State Machine Component"));
+                    ImGui::CloseCurrentPopup();
+                }
+        }
+
+        if (!hasCanvas) {
+            // Root of a UI tree; full-screen rect that RectTransform children anchor to.
+            if (ImGui::Selectable("Canvas", false, kCompFlags))
+                if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                    m_Context->Commands.ExecuteCommand(std::make_unique<FunctionCommand>(
+                        [scene, entity]() { scene->GetRegistry().emplace<CanvasComponent>(entity); },
+                        [scene, entity]() { scene->GetRegistry().remove<CanvasComponent>(entity); },
+                        "Add Canvas Component"));
+                    ImGui::CloseCurrentPopup();
+                }
+        }
+
+        if (!hasRect) {
+            // UI element rect; resolves against its parent (a Canvas or another rect).
+            if (ImGui::Selectable("Rect Transform", false, kCompFlags))
+                if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                    m_Context->Commands.ExecuteCommand(std::make_unique<FunctionCommand>(
+                        [scene, entity]() { scene->GetRegistry().emplace<RectTransformComponent>(entity); },
+                        [scene, entity]() { scene->GetRegistry().remove<RectTransformComponent>(entity); },
+                        "Add Rect Transform Component"));
                     ImGui::CloseCurrentPopup();
                 }
         }
