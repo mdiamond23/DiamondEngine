@@ -1626,9 +1626,27 @@ void InspectorPanel::OnImGuiRender() {
                 } else {
                     auto& ik = registry.get<IKComponent>(entity);
 
+                    // Keep the viewport's active-chain index (gizmo + highlight) in range.
+                    if (m_Context) {
+                        if (m_Context->activeIKChain >= (int)ik.chains.size())
+                            m_Context->activeIKChain = (int)ik.chains.size() - 1;
+                        if (m_Context->activeIKChain < 0)
+                            m_Context->activeIKChain = 0;
+                    }
+
                     for (size_t ci = 0; ci < ik.chains.size(); ++ci) {
                         ImGui::PushID((int)ci);
                         IKChain& chain = ik.chains[ci];
+
+                        // Active-chain radio — the active chain gets the viewport
+                        // target gizmo and the highlighted debug draw.
+                        bool isActive = m_Context && m_Context->activeIKChain == (int)ci;
+                        if (ImGui::RadioButton("Active", isActive) && m_Context)
+                            m_Context->activeIKChain = (int)ci;
+                        if (ImGui::IsItemHovered())
+                            ImGui::SetTooltip("Gizmo + highlight target this chain in the viewport (enable Debug Draw).");
+                        ImGui::SameLine();
+                        ImGui::Text("Chain %d", (int)ci);
 
                         // End-effector bone picker (combo over the skeleton bones).
                         const char* curName = chain.endEffectorBone.empty()

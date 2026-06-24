@@ -31,4 +31,9 @@ private:
 
     // Multi-select gizmo anchor — world-aligned, at the selection centroid.
     glm::mat4 m_MultiGizmoMatrix { 1.0f };
+
+    // IK target gizmo — translates the active chain's world-point target. Tracked
+    // separately so its drag undo doesn't entangle with the entity transform gizmo.
+    bool      m_IKGizmoWasUsing = false;
+    glm::vec3 m_IKGizmoOldTarget { 0.0f };
 };

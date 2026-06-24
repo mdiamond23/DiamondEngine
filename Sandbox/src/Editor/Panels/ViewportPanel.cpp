@@ -10,6 +10,8 @@
 #include <cmath>
 #include "Scene/Components.h"
 #include "Scene/Scene.h"
+#include "Animation/IKComponent.h"
+#include "Animation/AnimationComponents.h"
 
 void ViewportPanel::OnImGuiRender() {
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0, 0});
@@ -24,6 +26,17 @@ void ViewportPanel::OnImGuiRender() {
             vpSize,
             {0, 1}, {1, 0}
         );
+    }
+
+    // Debug-draw toggle overlay (top-left). One switch for collider wireframes,
+    // ragdoll bodies, and IK chain/target visualization + the IK target gizmo.
+    bool overlayHovered = false;
+    if (m_Context) {
+        ImGui::SetCursorScreenPos({ vpPos.x + 8.0f, vpPos.y + 8.0f });
+        ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.0f, 0.0f, 0.0f, 0.45f));
+        ImGui::Checkbox("Debug Draw", &m_Context->showDebugDraw);
+        ImGui::PopStyleColor();
+        overlayHovered = ImGui::IsItemHovered();
     }
 
     if (ImGui::IsWindowHovered() && !m_IsViewportActive) {
@@ -66,6 +79,7 @@ void ViewportPanel::OnImGuiRender() {
         && m_Context->ActiveScene
         && !m_IsViewportActive
         && !ImGuizmo::IsOver()
+        && !overlayHovered
         && vpSize.x > 0 && vpSize.y > 0
         && ImGui::IsWindowHovered()
         && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
@@ -255,6 +269,76 @@ void ViewportPanel::OnImGuiRender() {
             }
 
             m_GizmoWasUsing = gizmoUsing;
+        }
+    }
+
+    // IK target gizmo — a TRANSLATE handle on the active chain's world-point target.
+    // Only world-point chains get a handle (entity-follow chains move with their
+    // target entity; foot chains derive the target from a raycast). Gated by the
+    // same Debug Draw toggle as the chain visualization.
+    if (m_Context && m_Context->ActiveScene && m_Context->showDebugDraw
+        && vpSize.x > 0 && vpSize.y > 0)
+    {
+        auto&  reg   = m_Context->ActiveScene->GetRegistry();
+        Scene* scene = m_Context->ActiveScene;
+        entt::entity sel = m_Context->PrimarySelection();
+
+        IKChain* chain = nullptr;
+        if (sel != entt::null && reg.valid(sel) && reg.all_of<IKComponent>(sel)) {
+            auto& ik = reg.get<IKComponent>(sel);
+            int ci = m_Context->activeIKChain;
+            if (ci >= 0 && ci < (int)ik.chains.size()) {
+                IKChain& c = ik.chains[ci];
+                if (!c.isFootChain && c.targetEntity == entt::null)
+                    chain = &c;
+            }
+        }
+
+        if (chain) {
+            const int ci = m_Context->activeIKChain;
+            ImGuizmo::SetOrthographic(false);
+            ImGuizmo::SetDrawlist();
+            ImGuizmo::SetRect(vpPos.x, vpPos.y, vpSize.x, vpSize.y);
+            ImGuizmo::PushID(1);   // distinct from the entity transform gizmo
+
+            bool ikUsing = ImGuizmo::IsUsing();
+            if (ikUsing && !m_IKGizmoWasUsing)
+                m_IKGizmoOldTarget = chain->targetWorldPos;
+
+            glm::mat4 m = glm::translate(glm::mat4(1.0f), chain->targetWorldPos + chain->targetOffset);
+            if (ImGuizmo::Manipulate(
+                    glm::value_ptr(m_Context->viewMatrix),
+                    glm::value_ptr(m_Context->projMatrix),
+                    ImGuizmo::TRANSLATE,
+                    ImGuizmo::WORLD,
+                    glm::value_ptr(m)))
+            {
+                chain->targetWorldPos = glm::vec3(m[3]) - chain->targetOffset;
+            }
+
+            // Record one undoable command when the drag ends.
+            if (!ikUsing && m_IKGizmoWasUsing) {
+                glm::vec3 oldT = m_IKGizmoOldTarget;
+                glm::vec3 newT = chain->targetWorldPos;
+                if (oldT != newT) {
+                    auto setTarget = [scene, sel, ci](const glm::vec3& v) {
+                        auto& r = scene->GetRegistry();
+                        if (!r.valid(sel) || !r.all_of<IKComponent>(sel)) return;
+                        auto& ik = r.get<IKComponent>(sel);
+                        if (ci >= 0 && ci < (int)ik.chains.size())
+                            ik.chains[ci].targetWorldPos = v;
+                    };
+                    m_Context->Commands.RecordCommand(std::make_unique<FunctionCommand>(
+                        [setTarget, newT]() { setTarget(newT); },
+                        [setTarget, oldT]() { setTarget(oldT); },
+                        "Move IK Target"));
+                }
+            }
+
+            ImGuizmo::PopID();
+            m_IKGizmoWasUsing = ikUsing;
+        } else {
+            m_IKGizmoWasUsing = false;
         }
     }
 

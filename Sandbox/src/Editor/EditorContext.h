@@ -20,6 +20,13 @@ struct EditorContext {
     glm::mat4 projMatrix  = glm::mat4(1.0f);
     glm::vec3 cameraPos   = {};
 
+    // Viewport debug visualization — one master toggle gating collider wireframes,
+    // ragdoll bodies, and IK chain/target draw (+ the IK target gizmo).
+    bool showDebugDraw = false;
+    // Which chain of the selected entity's IKComponent gets the viewport target
+    // gizmo and the highlighted draw. Clamped to the chain list by the inspector.
+    int  activeIKChain = 0;
+
     bool HasSelection() const { return !selectedEntities.empty(); }
 
     entt::entity PrimarySelection() const {

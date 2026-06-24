@@ -45,9 +45,83 @@
 #include "Assets/GltfImporter.h"
 #include "Animation/AnimationComponents.h"
 #include "Animation/AnimationSystem.h"
+#include "Animation/AnimationSampler.h"
 #include "Animation/IKSystem.h"
+#include "Animation/IKComponent.h"
 
 using namespace Diamond;
+
+// Draws the IK chains of the selected entity into the debug-line buffer: each
+// chain's root->mid->tip bone segments, joint markers, the resolved world target
+// (with a line to the tip), and the pole point. The active chain is highlighted;
+// the rest are dimmed. Gated by EditorContext::showDebugDraw at the call site.
+static void DrawIKDebug(Scene& scene, entt::entity sel, int activeChain)
+{
+    auto& reg = scene.GetRegistry();
+    if (sel == entt::null || !reg.valid(sel)) return;
+    if (!reg.all_of<SkinnedMeshComponent, AnimatorComponent, IKComponent>(sel)) return;
+
+    auto& smc  = reg.get<SkinnedMeshComponent>(sel);
+    auto& anim = reg.get<AnimatorComponent>(sel);
+    auto& ik   = reg.get<IKComponent>(sel);
+
+    const Skeleton& skel = smc.skeleton;
+    const int n = (int)skel.bones.size();
+    if (n == 0 || (int)anim.pose.size() != n) return;
+
+    const glm::mat4 worldMat = scene.GetTransformSystem().GetWorldMatrix(sel);
+    std::vector<glm::mat4> world;
+    ComputeWorldTransforms(skel, anim.pose, world);
+
+    auto boneWorld = [&](int i) { return glm::vec3(worldMat * world[i] * glm::vec4(0, 0, 0, 1)); };
+
+    for (int ci = 0; ci < (int)ik.chains.size(); ++ci) {
+        const IKChain& chain = ik.chains[ci];
+        const bool active = (ci == activeChain);
+
+        int tip = skel.Find(chain.endEffectorBone);
+        if (tip < 0) continue;
+        const int mid  = skel.bones[tip].parent;
+        if (mid < 0) continue;
+        const int root = skel.bones[mid].parent;
+        if (root < 0) continue;
+
+        const glm::vec3 cBone = boneWorld(tip);
+        const glm::vec3 cMid  = boneWorld(mid);
+        const glm::vec3 cRoot = boneWorld(root);
+
+        // Bone segments: bright orange for the active chain, dim steel for the rest.
+        const glm::vec3 boneCol = active ? glm::vec3(1.0f, 0.55f, 0.1f)
+                                         : glm::vec3(0.35f, 0.45f, 0.6f);
+        DebugDraw::Line(cRoot, cMid, boneCol);
+        DebugDraw::Line(cMid,  cBone, boneCol);
+        DebugDraw::Sphere(cRoot, 0.025f, boneCol);
+        DebugDraw::Sphere(cMid,  0.025f, boneCol);
+        DebugDraw::Sphere(cBone, 0.03f,  boneCol);
+
+        // Resolved world target (mirrors UpdateIK's resolution order).
+        glm::vec3 targetWorld = chain.targetOffset;
+        if (!chain.isFootChain && chain.targetEntity != entt::null && reg.valid(chain.targetEntity))
+            targetWorld += glm::vec3(scene.GetTransformSystem().GetWorldMatrix(chain.targetEntity)[3]);
+        else
+            targetWorld += chain.targetWorldPos;
+
+        const glm::vec3 tgtCol = active ? glm::vec3(0.2f, 1.0f, 0.3f)
+                                        : glm::vec3(0.2f, 0.55f, 0.3f);
+        DebugDraw::Sphere(targetWorld, 0.04f, tgtCol);
+        DebugDraw::Line(cBone, targetWorld, tgtCol);
+
+        // Pole hint: model-space (mid + poleOffset) into world. Only worth showing
+        // when the user has nudged it off the animated bend.
+        if (active && glm::dot(chain.poleOffset, chain.poleOffset) > 1e-8f) {
+            const glm::vec3 poleModel = glm::vec3(world[mid] * glm::vec4(0, 0, 0, 1)) + chain.poleOffset;
+            const glm::vec3 poleWorld = glm::vec3(worldMat * glm::vec4(poleModel, 1.0f));
+            const glm::vec3 poleCol(0.85f, 0.2f, 0.9f);
+            DebugDraw::Sphere(poleWorld, 0.03f, poleCol);
+            DebugDraw::Line(cMid, poleWorld, poleCol);
+        }
+    }
+}
 
 static Camera g_camera(glm::vec3(0.0f, 0.0f, 5.0f));
 static float  g_deltaTime = 0.0f, g_lastFrame = 0.0f;
@@ -736,10 +810,16 @@ int main()
         proj = glm::perspective(glm::radians(g_camera.Zoom), (float)fbW / (float)fbH, 0.1f, 100.0f);
         cullAndExecute(viewportFBO);
 
-        // Collider debug wireframes — drawn into the editor viewport after the scene pass
+        // Debug visualization — drawn into the editor viewport after the scene pass,
+        // all behind the viewport's "Debug Draw" toggle (colliders, ragdoll bodies,
+        // and IK chains/targets for the selected entity).
         glBindFramebuffer(GL_FRAMEBUFFER, viewportFBO);
-        Physics::DrawColliders(scene);
-        if (scene.IsPlaying()) Physics::DrawRagdolls(scene);
+        if (editorLayer.GetContext().showDebugDraw) {
+            Physics::DrawColliders(scene);
+            if (scene.IsPlaying()) Physics::DrawRagdolls(scene);
+            DrawIKDebug(scene, editorLayer.GetContext().PrimarySelection(),
+                        editorLayer.GetContext().activeIKChain);
+        }
         DebugDraw::Flush(proj * view);
 
         // --- Game viewport: primary camera entity (play mode only) ---

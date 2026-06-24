@@ -20,6 +20,7 @@ public:
     void SetGameViewportTexture(uint32_t textureID);
     void SetEditorCamera(Diamond::Camera* cam) { m_Context.EditorCamera = cam; }
     void UpdateCamera(const glm::mat4& view, const glm::mat4& proj, const glm::vec3& camPos);
+    EditorContext& GetContext() { return m_Context; }
     bool IsViewportActive() const     { return m_Viewport.IsActive(); }
     bool IsGameViewportActive() const { return m_GameViewport.IsActive(); }
     void NotifyDroppedFiles(int count, const char** paths) { m_Content.QueueDroppedFiles(count, paths); }

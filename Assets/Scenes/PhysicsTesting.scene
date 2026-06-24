@@ -46,6 +46,7 @@
       "rigidbody": {
         "angularDamping": 0.05000000074505806,
         "bodyType": 1,
+        "continuousCollision": false,
         "gravityScale": 1.0,
         "linearDamping": 0.05000000074505806,
         "lockRotX": false,
@@ -230,6 +231,7 @@
       "rigidbody": {
         "angularDamping": 0.05000000074505806,
         "bodyType": 1,
+        "continuousCollision": false,
         "gravityScale": 1.0,
         "linearDamping": 0.05000000074505806,
         "lockRotX": false,
@@ -567,6 +569,7 @@
       "rigidbody": {
         "angularDamping": 0.05000000074505806,
         "bodyType": 1,
+        "continuousCollision": false,
         "gravityScale": 1.0,
         "linearDamping": 0.05000000074505806,
         "lockRotX": false,
@@ -676,6 +679,7 @@
       "rigidbody": {
         "angularDamping": 0.05000000074505806,
         "bodyType": 1,
+        "continuousCollision": false,
         "gravityScale": 1.0,
         "linearDamping": 0.05000000074505806,
         "lockRotX": false,
@@ -785,6 +789,7 @@
       "rigidbody": {
         "angularDamping": 0.05000000074505806,
         "bodyType": 1,
+        "continuousCollision": false,
         "gravityScale": 1.0,
         "linearDamping": 0.05000000074505806,
         "lockRotX": false,
