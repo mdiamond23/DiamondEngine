@@ -90,7 +90,7 @@ ragdoll characters, active physics control, grabbing, local multiplayer.
 ## Milestone 5 — Game Layer
 > Goal: enough systems to build a local-multiplayer physics fighting game
 
-- [ ] Dynamic camera system — multi-target tracking, zoom-out when players spread apart, collision avoidance
+- [x] Dynamic camera system — multi-target tracking, zoom-out when players spread apart, collision avoidance. **Implemented (build-verified, play-test pending):** `CameraTarget` tag + `CameraDirector` component/system in `Sandbox/src/Scripts/CameraDirector.h`; fixed-angle framing, frustum-fit zoom from target spread, exp-eased pivot/distance, spherecast collision (snap-in/ease-out). Design in [`camera-design.md`](camera-design.md). Deferred: player-mesh fade, orbit/auto-yaw, target weighting.
 - [ ] In-game UI system — HUD, menus, health bars separate from ImGui (ImGui is editor-only)
 - [ ] Particle system — hit sparks, dust, environmental effects
 - [ ] Audio — [miniaudio](https://miniaud.io) (single header, no dependencies); 3D positional audio

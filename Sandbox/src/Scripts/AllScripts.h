@@ -7,3 +7,4 @@
 #include "TriggerTest.h"
 #include "ArmControl.h"
 #include "Punch.h"
+#include "CameraDirector.h"

@@ -18,6 +18,9 @@
         "visible": true
       },
       "name": "Sphere",
+      "scriptComponents": {
+        "CameraTarget": {}
+      },
       "transform": {
         "eulerDegrees": [
           0.0,
@@ -41,9 +44,34 @@
           1.0
         ]
       },
-      "uuid": 3413847079428902643
+      "uuid": 4935550655304295734
     },
     {
+      "collider": {
+        "collisionGroup": 0,
+        "halfExtents": [
+          20.0,
+          0.4000000059604645,
+          20.0
+        ],
+        "halfHeight": 0.5,
+        "isTrigger": false,
+        "localOffset": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "localRotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "meshPath": "",
+        "physMatPath": "",
+        "radius": 0.5,
+        "shapeType": 0
+      },
       "mesh": {
         "albedoPath": "C:/Dev/DiamondEngine/Assets/Materials/Lava004_2K-PNG/Lava004_2K-PNG_Color.png",
         "aoPath": "",
@@ -84,7 +112,7 @@
           20.0
         ]
       },
-      "uuid": 16659186796481909957
+      "uuid": 16217894821515006168
     },
     {
       "mesh": {
@@ -104,6 +132,9 @@
         "visible": true
       },
       "name": "Cube 1",
+      "scriptComponents": {
+        "CameraTarget": {}
+      },
       "transform": {
         "eulerDegrees": [
           0.0,
@@ -127,7 +158,7 @@
           1.0
         ]
       },
-      "uuid": 18166036707595337324
+      "uuid": 2493186942195714162
     },
     {
       "mesh": {
@@ -147,6 +178,9 @@
         "visible": true
       },
       "name": "Cube 2",
+      "scriptComponents": {
+        "CameraTarget": {}
+      },
       "transform": {
         "eulerDegrees": [
           0.0,
@@ -170,9 +204,34 @@
           1.0
         ]
       },
-      "uuid": 14512069896901754533
+      "uuid": 8732095598476156909
     },
     {
+      "collider": {
+        "collisionGroup": 0,
+        "halfExtents": [
+          1.0,
+          3.0,
+          1.0
+        ],
+        "halfHeight": 0.5,
+        "isTrigger": false,
+        "localOffset": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "localRotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "meshPath": "",
+        "physMatPath": "",
+        "radius": 0.5,
+        "shapeType": 0
+      },
       "mesh": {
         "albedoPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Color.png",
         "aoPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_AmbientOcclusion.png",
@@ -190,6 +249,17 @@
         "visible": true
       },
       "name": "Cube 3",
+      "rigidbody": {
+        "angularDamping": 0.05000000074505806,
+        "bodyType": 2,
+        "continuousCollision": false,
+        "gravityScale": 1.0,
+        "linearDamping": 0.05000000074505806,
+        "lockRotX": false,
+        "lockRotY": false,
+        "lockRotZ": false,
+        "mass": 1.0
+      },
       "transform": {
         "eulerDegrees": [
           0.0,
@@ -197,9 +267,9 @@
           0.0
         ],
         "position": [
-          -4.5,
-          1.7000000476837158,
-          -2.0
+          0.33000001311302185,
+          2.200000047683716,
+          2.200000047683716
         ],
         "rotation": [
           1.0,
@@ -213,136 +283,7 @@
           1.0
         ]
       },
-      "uuid": 15114686814829637708
-    },
-    {
-      "mesh": {
-        "albedoPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Color.png",
-        "aoPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_AmbientOcclusion.png",
-        "castsShadow": true,
-        "emissivePath": "",
-        "emissiveStrength": 0.0,
-        "materialPath": "",
-        "meshPath": "__cube",
-        "meshSubIndex": 0,
-        "metallicPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Metalness.png",
-        "normalPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_NormalGL.png",
-        "receivesShadow": true,
-        "roughnessPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Roughness.png",
-        "uvScale": 1.0,
-        "visible": true
-      },
-      "name": "Cube 4",
-      "transform": {
-        "eulerDegrees": [
-          0.0,
-          0.0,
-          0.0
-        ],
-        "position": [
-          -1.5,
-          -0.30000001192092896,
-          3.5
-        ],
-        "rotation": [
-          1.0,
-          0.0,
-          0.0,
-          0.0
-        ],
-        "scale": [
-          1.2000000476837158,
-          1.2000000476837158,
-          1.2000000476837158
-        ]
-      },
-      "uuid": 7428794700532047804
-    },
-    {
-      "mesh": {
-        "albedoPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Color.png",
-        "aoPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_AmbientOcclusion.png",
-        "castsShadow": true,
-        "emissivePath": "",
-        "emissiveStrength": 0.0,
-        "materialPath": "",
-        "meshPath": "__cube",
-        "meshSubIndex": 0,
-        "metallicPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Metalness.png",
-        "normalPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_NormalGL.png",
-        "receivesShadow": true,
-        "roughnessPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Roughness.png",
-        "uvScale": 1.0,
-        "visible": true
-      },
-      "name": "Cube 5",
-      "transform": {
-        "eulerDegrees": [
-          0.0,
-          0.0,
-          0.0
-        ],
-        "position": [
-          5.5,
-          -0.30000001192092896,
-          -3.0
-        ],
-        "rotation": [
-          1.0,
-          0.0,
-          0.0,
-          0.0
-        ],
-        "scale": [
-          1.0,
-          1.0,
-          1.0
-        ]
-      },
-      "uuid": 12906355315714417543
-    },
-    {
-      "mesh": {
-        "albedoPath": "C:/Dev/DiamondEngine/Assets/Models/Cerberus_by_Andrew_Maximov/Textures/Cerberus_A.tga",
-        "aoPath": "",
-        "castsShadow": true,
-        "emissivePath": "",
-        "emissiveStrength": 0.0,
-        "materialPath": "",
-        "meshPath": "C:/Dev/DiamondEngine/Assets/Models/Cerberus_by_Andrew_Maximov/Revolver.FBX",
-        "meshSubIndex": 0,
-        "metallicPath": "C:/Dev/DiamondEngine/Assets/Models/Cerberus_by_Andrew_Maximov/Textures/Cerberus_M.tga",
-        "normalPath": "C:/Dev/DiamondEngine/Assets/Models/Cerberus_by_Andrew_Maximov/Textures/Cerberus_N.tga",
-        "receivesShadow": true,
-        "roughnessPath": "C:/Dev/DiamondEngine/Assets/Models/Cerberus_by_Andrew_Maximov/Textures/Cerberus_R.tga",
-        "uvScale": 1.0,
-        "visible": true
-      },
-      "name": "Cerberus 0",
-      "transform": {
-        "eulerDegrees": [
-          0.0,
-          0.0,
-          0.0
-        ],
-        "position": [
-          1.5,
-          1.5,
-          1.0
-        ],
-        "rotation": [
-          0.7071067690849304,
-          -0.7071067690849304,
-          -0.0,
-          -0.0
-        ],
-        "scale": [
-          0.05000000074505806,
-          0.05000000074505806,
-          0.05000000074505806
-        ]
-      },
-      "uuid": 9402460875442308172
+      "uuid": 4596982876375556457
     },
     {
       "light": {
@@ -381,7 +322,7 @@
           1.0
         ]
       },
-      "uuid": 1426206424118802011
+      "uuid": 13912881681182179723
     },
     {
       "light": {
@@ -420,7 +361,7 @@
           1.0
         ]
       },
-      "uuid": 4945185692025642446
+      "uuid": 16025532204768676420
     },
     {
       "light": {
@@ -459,7 +400,7 @@
           1.0
         ]
       },
-      "uuid": 15620195759982433755
+      "uuid": 8979856965135737057
     },
     {
       "light": {
@@ -498,7 +439,7 @@
           1.0
         ]
       },
-      "uuid": 10464086040547055352
+      "uuid": 4796623881219770198
     },
     {
       "light": {
@@ -537,7 +478,58 @@
           1.0
         ]
       },
-      "uuid": 16120323589580633744
+      "uuid": 10161312981934849838
+    },
+    {
+      "camera": {
+        "farClip": 1000.0,
+        "fov": 60.0,
+        "isPrimary": true,
+        "nearClip": 0.10000000149011612
+      },
+      "name": "Camera",
+      "scriptComponents": {
+        "CameraDirector": {
+          "aspect": 1.7777777910232544,
+          "collisionEnabled": true,
+          "collisionRadius": 0.30000001192092896,
+          "collisionSkin": 0.20000000298023224,
+          "distanceDeadzone": 0.25,
+          "framingMargin": 1.2999999523162842,
+          "maxDistance": 30.0,
+          "minClearance": 0.5,
+          "minDistance": 6.0,
+          "pitchDeg": 25.0,
+          "pivotHeightOffset": 1.0,
+          "recoverSmoothing": 3.0,
+          "smoothing": 6.0,
+          "yawDeg": 0.0
+        }
+      },
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "position": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 1269252802217616190
     }
   ]
 }
