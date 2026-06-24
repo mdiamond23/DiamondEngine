@@ -24,10 +24,16 @@
 //   • LEFT TRIGGER — grab/release only. Hold while the arm is extended near an
 //                    object to grab it; release to drop.
 //
-// Grab: a sphere cast leaves the hand along the reach direction. The first dynamic
-// body it finds is pinned to a kinematic "hand proxy" body (which tracks the IK
-// hand each frame) with a free-rotating Point constraint — so the grabbed object
-// dangles from the hand until the trigger is released.
+// Grab: a sphere cast leaves the hand along the reach direction. The first dynamic body
+// it finds is pinned to a kinematic "hand proxy" (which tracks the IK hand) by a SOLVER-
+// STABLE force-limited joint (a motorized SixDOF, ConstraintType::Grab). The motor's
+// force cap (`grabStrength`) is what makes WEIGHT MATTER: a body needs ~mass*g just to
+// hover, so heavy things sag and won't lift while light ones snap up. Rotation is free so
+// the object dangles. Releasing the trigger destroys the joint and the object drops.
+//
+// `grabIgnoreHolder` (default on) drops the held object into the holder's collision group
+// so it doesn't shove the character around. Turn it OFF to let held objects bash into the
+// holder — a fun shove mechanic.
 
 struct PunchComponent
 {
@@ -36,14 +42,20 @@ struct PunchComponent
     float shoulderHeight = 1.3f;   // target anchor height above the entity origin (model units)
 
     // --- grab ---
-    float grabRadius = 0.15f;      // sphere-cast radius for the grab probe
-    float grabRange  = 0.35f;      // how far past the hand the grab probe sweeps
+    float grabRadius   = 0.15f;    // sphere-cast radius for the grab probe
+    float grabRange    = 0.35f;    // how far past the hand the grab probe sweeps
+    float grabStrength = 800.0f;   // motor force budget (N). Lifts up to ~grabStrength/9.81 kg; heavier sags
+    float grabResponse = 4.0f;     // motor spring frequency (Hz). Lower = looser/draggier (drunk), higher = snappier
+    bool  grabIgnoreHolder = true; // held object ignores the holder's body (off = it can shove you — fun mechanic)
 
     // --- runtime (not serialized) ---
-    glm::vec3    _dir       { 0, 0, -1 };                 // current arm aim (world); follows the stick while pushed
-    entt::entity _handProxy = entt::null;                 // kinematic body that follows the IK hand (grab anchor)
-    Physics::ConstraintHandle _grab = Physics::kInvalidConstraint; // live grab joint, or invalid when not holding
-    entt::entity _grabbed   = entt::null;                 // the currently grabbed entity (debug / bookkeeping)
+    glm::vec3    _dir        { 0, 0, -1 };                          // current arm aim (world); follows the stick
+    entt::entity _handProxy  = entt::null;                          // kinematic body tracking the IK hand (grab anchor)
+    Physics::ConstraintHandle _grab = Physics::kInvalidConstraint;  // live grab joint, or invalid when not holding
+    entt::entity _grabbed    = entt::null;                          // the entity currently grabbed, or null
+    uint32_t     _objOrigGroup    = Physics::kUngroupedCollision;   // grabbed object's collision group before grab
+    uint32_t     _holderOrigGroup = Physics::kUngroupedCollision;   // holder's collision group before grab
+    bool         _excluded   = false;                              // whether collision exclusion is currently applied
 };
 
 // ---- Inspector UI -----------------------------------------------------------
@@ -59,6 +71,10 @@ inline void DrawComponentInspector<PunchComponent>(PunchComponent& c)
     ImGui::DragFloat("Shoulder Height", &c.shoulderHeight, 0.01f, 0.0f, 3.0f);
     ImGui::DragFloat("Grab Radius",     &c.grabRadius,     0.01f, 0.0f, 1.0f);
     ImGui::DragFloat("Grab Range",      &c.grabRange,      0.01f, 0.0f, 2.0f);
+    ImGui::DragFloat("Grab Strength",   &c.grabStrength,   5.0f,  0.0f, 10000.0f, "%.0f N");
+    ImGui::DragFloat("Grab Response",   &c.grabResponse,   0.1f,  0.5f, 15.0f,    "%.1f Hz");
+    ImGui::Checkbox("Ignore Holder Collision", &c.grabIgnoreHolder);
+    ImGui::TextDisabled("Lifts up to ~%.0f kg; heavier sags", c.grabStrength / 9.81f);
     ImGui::TextDisabled("Left stick = move/extend arm (play mode)");
     ImGui::TextDisabled("Left trigger = grab while extended; release to drop");
 }
@@ -74,6 +90,9 @@ inline std::string SerializeComponent<PunchComponent>(const PunchComponent& c)
     j["shoulderHeight"] = c.shoulderHeight;
     j["grabRadius"]     = c.grabRadius;
     j["grabRange"]      = c.grabRange;
+    j["grabStrength"]     = c.grabStrength;
+    j["grabResponse"]     = c.grabResponse;
+    j["grabIgnoreHolder"] = c.grabIgnoreHolder;
     return j.dump();
 }
 
@@ -86,6 +105,9 @@ inline void DeserializeComponent<PunchComponent>(PunchComponent& c, const std::s
     c.shoulderHeight = j.value("shoulderHeight", 1.3f);
     c.grabRadius     = j.value("grabRadius",     0.15f);
     c.grabRange      = j.value("grabRange",      0.35f);
+    c.grabStrength   = j.value("grabStrength",   800.0f);
+    c.grabResponse   = j.value("grabResponse",   4.0f);
+    c.grabIgnoreHolder = j.value("grabIgnoreHolder", true);
 }
 
 // ---- Registration -----------------------------------------------------------
@@ -142,9 +164,8 @@ public:
             chain->weight         = extend;   // eased toward by the chain's easeTime
 
             // --- Grab (LEFT TRIGGER, independent of arm movement) --------------
-            // The hand proxy is a kinematic body glued to the (last-solved) IK hand
-            // each frame, so the grab constraint has a body to anchor to. It lives in
-            // the same physics world; the cast below filters it (and ourselves) out.
+            // The hand proxy is a kinematic body glued to the (last-solved) IK hand each
+            // frame; the grab joint's force-limited motor drags the object toward it.
             entt::entity proxy = EnsureHandProxy(scene, punch);
 
             glm::vec3 handPos;
@@ -152,22 +173,29 @@ public:
             if (haveHand && proxy != entt::null && scene.Has<TransformComponent>(proxy))
                 scene.Get<TransformComponent>(proxy).position = handPos;
 
+            const bool proxyLive = proxy != entt::null && scene.Has<RigidBodyComponent>(proxy) &&
+                                   scene.Get<RigidBodyComponent>(proxy)._bodyId != 0xFFFFFFFFu;
+
             if (!grabHeld) {
-                ReleaseGrab(punch);   // releasing the trigger drops whatever we held
-            } else if (punch._grab == Physics::kInvalidConstraint && haveHand &&
-                       proxy != entt::null && chain->_curWeight > 0.8f) {
+                ReleaseGrab(scene, entity, punch);   // releasing the trigger drops the object
+            } else if (punch._grab == Physics::kInvalidConstraint && haveHand && proxyLive &&
+                       chain->_curWeight > 0.8f) {
                 // Trigger held and the arm is extended near a target — probe for a grab.
-                TryGrab(scene, entity, proxy, punch, handPos);
+                TryGrab(scene, entity, proxy, punch);
+            } else if (punch._grab != Physics::kInvalidConstraint &&
+                       (!scene.GetRegistry().valid(punch._grabbed) ||
+                        !scene.Has<RigidBodyComponent>(punch._grabbed))) {
+                ReleaseGrab(scene, entity, punch);   // grabbed entity went away
             }
         }
     }
 
     void OnDestroy(Scene& scene) override
     {
-        // Release any joints still held so they don't outlive the session (physics
-        // tears them down too, but this keeps our handles clean).
+        // Drop anything still held (release the joint and restore collision groups) so it
+        // doesn't outlive the session.
         for (auto [entity, punch] : scene.View<PunchComponent>().each())
-            ReleaseGrab(punch);
+            ReleaseGrab(scene, entity, punch);
     }
 
 private:
@@ -198,9 +226,9 @@ private:
         return &ik.chains.back();
     }
 
-    // Lazily provision the kinematic "hand proxy": a small sensor sphere that follows
-    // the IK hand and serves as the grab constraint's anchor body. Created in play
-    // mode (so it isn't serialized) and wiped when the scene restores on stop.
+    // Lazily provision the kinematic "hand proxy": a small sensor sphere that follows the
+    // IK hand and serves as the grab joint's anchor body. Created in play (so it isn't
+    // serialized) and wiped when the scene restores on stop.
     entt::entity EnsureHandProxy(Scene& scene, PunchComponent& punch)
     {
         if (punch._handProxy != entt::null && scene.GetRegistry().valid(punch._handProxy))
@@ -214,7 +242,7 @@ private:
         auto& col     = scene.Add<ColliderComponent>(proxy);
         col.shapeType = CollisionShape::Sphere;
         col.radius    = 0.05f;
-        col.isTrigger = true;   // sensor: anchors the constraint without shoving the world
+        col.isTrigger = true;   // sensor: anchors the joint without shoving the world
 
         punch._handProxy = proxy;
         return proxy;
@@ -246,9 +274,45 @@ private:
         return true;
     }
 
-    // Destroy the live grab joint (if any) and clear the bookkeeping. Idempotent.
-    static void ReleaseGrab(PunchComponent& punch)
+    // Sphere-cast from the hand; pin the first dynamic body found to the proxy with a
+    // force-limited Grab joint, and (if enabled) exclude it from colliding with the holder.
+    // Skips ourselves and the proxy (the cast ignores only one entity, so we filter here).
+    void TryGrab(Scene& scene, entt::entity self, entt::entity proxy, PunchComponent& punch)
     {
+        auto& proxyRb = scene.Get<RigidBodyComponent>(proxy);
+        const glm::vec3 handPos = scene.Get<TransformComponent>(proxy).position;
+
+        std::vector<HitResult> hits =
+            Physics::SphereCastMulti(handPos, punch.grabRadius, punch._dir, punch.grabRange, self);
+
+        for (const HitResult& h : hits) {
+            if (h.entity == self || h.entity == proxy || h.entity == entt::null) continue;
+            if (!scene.Has<RigidBodyComponent>(h.entity)) continue;          // need a body to pin
+            auto& targetRb = scene.Get<RigidBodyComponent>(h.entity);
+            if (targetRb.bodyType != BodyType::Dynamic) continue;            // only grab free objects
+            if (targetRb._bodyId == 0xFFFFFFFFu) continue;
+
+            ConstraintComponent desc;
+            desc.type           = ConstraintType::Grab;   // force-limited motorized pull, rotation free
+            desc.anchor         = handPos;                 // body1/body2 frames coincide at the hand
+            desc.motorMaxForce  = punch.grabStrength;
+            desc.motorFrequency = punch.grabResponse;
+            desc.motorDamping   = 1.0f;                    // critically damped
+
+            Physics::ConstraintHandle handle = Physics::CreateConstraint(desc, proxyRb, targetRb);
+            if (handle == Physics::kInvalidConstraint) return;
+            punch._grab    = handle;
+            punch._grabbed = h.entity;
+
+            ApplyHolderExclusion(scene, self, punch);
+            return;   // stop at the first viable candidate
+        }
+    }
+
+    // Destroy the live grab joint and undo any collision exclusion. Idempotent.
+    void ReleaseGrab(Scene& scene, entt::entity self, PunchComponent& punch)
+    {
+        RemoveHolderExclusion(scene, self, punch);
         if (punch._grab != Physics::kInvalidConstraint) {
             Physics::ReleaseConstraint(punch._grab);
             punch._grab = Physics::kInvalidConstraint;
@@ -256,37 +320,44 @@ private:
         punch._grabbed = entt::null;
     }
 
-    // Sphere-cast from the hand along the reach direction; pin the first dynamic body
-    // found to the hand proxy with a free-rotating Point constraint. Skips ourselves
-    // and the proxy (the cast can't ignore more than one entity, so we filter here).
-    void TryGrab(Scene& scene, entt::entity self, entt::entity proxy,
-                 PunchComponent& punch, glm::vec3 handPos)
+    // Drop the grabbed object into the holder's collision group so the two stop colliding
+    // (GroupExcludeFilter: same non-zero group = no collision). Snapshots both groups so
+    // RemoveHolderExclusion can put them back. No-op if disabled or the holder has no body.
+    void ApplyHolderExclusion(Scene& scene, entt::entity self, PunchComponent& punch)
     {
-        if (!scene.Has<RigidBodyComponent>(proxy)) return;
-        auto& proxyRb = scene.Get<RigidBodyComponent>(proxy);
-        if (proxyRb._bodyId == 0xFFFFFFFFu) return;   // proxy body not built yet (first frame)
+        punch._excluded = false;
+        if (!punch.grabIgnoreHolder) return;
+        if (!scene.Has<RigidBodyComponent>(self) || !scene.Has<RigidBodyComponent>(punch._grabbed)) return;
 
-        std::vector<HitResult> hits =
-            Physics::SphereCastMulti(handPos, punch.grabRadius, punch._dir, punch.grabRange, self);
+        auto& holderRb = scene.Get<RigidBodyComponent>(self);
+        auto& objRb    = scene.Get<RigidBodyComponent>(punch._grabbed);
+        if (holderRb._bodyId == 0xFFFFFFFFu || objRb._bodyId == 0xFFFFFFFFu) return;
 
-        for (const HitResult& h : hits) {
-            if (h.entity == self || h.entity == proxy || h.entity == entt::null) continue;
-            if (!scene.Has<RigidBodyComponent>(h.entity)) continue;          // need a body to constrain to
-            auto& targetRb = scene.Get<RigidBodyComponent>(h.entity);
-            if (targetRb.bodyType != BodyType::Dynamic) continue;            // only grab free objects
-            if (targetRb._bodyId == 0xFFFFFFFFu) continue;
+        punch._objOrigGroup    = Physics::GetCollisionGroup(objRb);
+        punch._holderOrigGroup = Physics::GetCollisionGroup(holderRb);
 
-            ConstraintComponent desc;
-            desc.type   = ConstraintType::Point;   // 3 translational DOF locked, rotation free
-            desc.anchor = h.point;                 // pivot at the contact point
+        // Unique non-zero group for this holder, well clear of user groups and ragdolls (1000+).
+        const uint32_t group = 0x40000000u + (uint32_t)entt::to_integral(self);
+        Physics::SetCollisionGroup(holderRb, group);
+        Physics::SetCollisionGroup(objRb,    group);
+        punch._excluded = true;
+    }
 
-            Physics::ConstraintHandle handle = Physics::CreateConstraint(desc, proxyRb, targetRb);
-            if (handle != Physics::kInvalidConstraint) {
-                punch._grab    = handle;
-                punch._grabbed = h.entity;
-            }
-            return;   // stop at the first viable candidate
-        }
+    // Restore the collision groups snapshotted at grab time (back to ungrouped if they
+    // were ungrouped, so the object collides with the world normally again).
+    void RemoveHolderExclusion(Scene& scene, entt::entity self, PunchComponent& punch)
+    {
+        if (!punch._excluded) return;
+        punch._excluded = false;
+
+        auto restore = [](Scene& s, entt::entity e, uint32_t group) {
+            if (e == entt::null || !s.GetRegistry().valid(e) || !s.Has<RigidBodyComponent>(e)) return;
+            auto& rb = s.Get<RigidBodyComponent>(e);
+            if (group == Physics::kUngroupedCollision) Physics::ClearCollisionGroup(rb);
+            else                                       Physics::SetCollisionGroup(rb, group);
+        };
+        restore(scene, self,          punch._holderOrigGroup);
+        restore(scene, punch._grabbed, punch._objOrigGroup);
     }
 
     // World-space punch direction from the left-stick tilt, oriented by the entity's

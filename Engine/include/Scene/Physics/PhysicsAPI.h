@@ -77,6 +77,18 @@ namespace Physics {
     // call once per handle; handles are never reused, so a stale handle never aliases.
     void ReleaseConstraint(ConstraintHandle handle);
 
+    // ---- Collision groups (runtime) ----
+    // Bodies sharing the same NON-ZERO group never collide (engine GroupExcludeFilter).
+    // Use to make a held object ignore its holder: snapshot both groups with
+    // GetCollisionGroup, SetCollisionGroup both to one shared non-zero id while held, then
+    // restore on release — SetCollisionGroup if the snapshot was a real group, else
+    // ClearCollisionGroup to go back to ungrouped. kUngroupedCollision (0xFFFFFFFF) is the
+    // value GetCollisionGroup returns for an ungrouped body.
+    inline constexpr uint32_t kUngroupedCollision = 0xFFFFFFFFu;
+    uint32_t GetCollisionGroup(const RigidBodyComponent& rb);
+    void     SetCollisionGroup(const RigidBodyComponent& rb, uint32_t group);
+    void     ClearCollisionGroup(const RigidBodyComponent& rb);   // back to ungrouped
+
     // ---- Constraint motors ----
     // Drives a hinge motor's live target each frame. The motor's mode (Velocity
     // or Position) is configured on the ConstraintComponent; this sets the target

@@ -13,8 +13,13 @@
 // Point = a ball joint that removes the 3 translational DOF only, leaving
 // rotation completely free (grabbing). Point uses only `anchor`; it has no
 // axis, no limits, and no motor (nothing angular is constrained to drive).
+// Grab = a SOFT, force-limited version of Point (a motorized SixDOF): translation
+// is driven toward the anchor by position motors capped at `motorMaxForce` newtons
+// with a `motorFrequency`/`motorDamping` spring, rotation left free. Because the pull
+// is force-limited, a held body needs ~mass*g just to hover — so weight matters and a
+// too-heavy load sags. The solver-stable replacement for a hand-rolled grab spring.
 
-enum class ConstraintType { Hinge, SwingTwist, Fixed, Point };
+enum class ConstraintType { Hinge, SwingTwist, Fixed, Point, Grab };
 
 // Motor drive mode. Off = passive joint. Velocity = spin toward a target angular
 // velocity (powered wheel). Position = drive toward a target angle like a
@@ -60,6 +65,7 @@ struct ConstraintComponent {
     MotorMode motorMode      = MotorMode::Off;
     float     motorTarget    = 0.0f;
     float     motorMaxTorque = 50.0f;
+    float     motorMaxForce  = 100.0f; // Grab only: linear motor force budget (N) — the lift-capacity cap
     float     motorFrequency = 2.0f;   // position-mode spring stiffness (Hz)
     float     motorDamping   = 1.0f;   // position-mode spring damping ratio
 

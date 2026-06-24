@@ -31,6 +31,7 @@
 #include <Jolt/Physics/Constraints/SwingTwistConstraint.h>
 #include <Jolt/Physics/Constraints/FixedConstraint.h>
 #include <Jolt/Physics/Constraints/PointConstraint.h>
+#include <Jolt/Physics/Constraints/SixDOFConstraint.h>
 
 #include "Scene/Physics/PhysicsSystem.h"
 #include "Scene/Physics/PhysicsAPI.h"
@@ -653,6 +654,32 @@ static JPH::Ref<JPH::TwoBodyConstraint> BuildConstraint(const ConstraintComponen
             s.mSpace  = JPH::EConstraintSpace::WorldSpace;
             s.mPoint1 = s.mPoint2 = JPH::RVec3(cc.anchor.x, cc.anchor.y, cc.anchor.z);
             return s.Create(body1, body2);
+        }
+        case ConstraintType::Grab: {
+            // A motorized SixDOF used as a soft, force-limited grab. Translation axes
+            // are left free but driven by position motors toward the anchor (target 0 in
+            // body1's frame); rotation is free so the held body dangles. The force limit
+            // (motorMaxForce) caps the pull, which is what makes weight matter — the body
+            // sags if its weight exceeds the budget. body1 is the (kinematic) hand anchor;
+            // moving body1 drags body2 along up to the force cap. Solver-driven = stable.
+            using EAxis = JPH::SixDOFConstraintSettings::EAxis;
+            JPH::SixDOFConstraintSettings s;
+            s.mSpace     = JPH::EConstraintSpace::WorldSpace;
+            s.mPosition1 = s.mPosition2 = JPH::RVec3(cc.anchor.x, cc.anchor.y, cc.anchor.z);
+
+            JPH::MotorSettings m(cc.motorFrequency, cc.motorDamping);
+            m.SetForceLimit(glm::max(cc.motorMaxForce, 0.0f));   // ±budget on the linear motor
+            s.mMotorSettings[EAxis::TranslationX] = m;
+            s.mMotorSettings[EAxis::TranslationY] = m;
+            s.mMotorSettings[EAxis::TranslationZ] = m;
+
+            JPH::Ref<JPH::TwoBodyConstraint> c = s.Create(body1, body2);
+            auto* six = static_cast<JPH::SixDOFConstraint*>(c.GetPtr());
+            six->SetMotorState(EAxis::TranslationX, JPH::EMotorState::Position);
+            six->SetMotorState(EAxis::TranslationY, JPH::EMotorState::Position);
+            six->SetMotorState(EAxis::TranslationZ, JPH::EMotorState::Position);
+            six->SetTargetPositionCS(JPH::Vec3::sZero());        // hold body2 at body1's anchor
+            return c;
         }
     }
 }
@@ -2325,6 +2352,36 @@ void ReleaseConstraint(ConstraintHandle handle) {
     s_Impl->constraintMap.erase(it);
     // The handle may linger in bodyToConstraints, but that's harmless:
     // RemoveConstraintsTouching skips ids no longer in constraintMap, and ids never repeat.
+}
+
+// ---- Collision groups (runtime) ---------------------------------------------
+// Two bodies sharing the same NON-ZERO group id (and the engine's GroupExcludeFilter)
+// never collide. The grab system uses this to stop a held object from shoving its
+// holder: it reads both bodies' groups, drops them into a shared group while held, then
+// restores. cInvalidGroup (0xFFFFFFFF) means "ungrouped" (collides with everything).
+
+uint32_t GetCollisionGroup(const RigidBodyComponent& rb) {
+    if (!s_Impl || !Valid(rb)) return (uint32_t)JPH::CollisionGroup::cInvalidGroup;
+    JPH::BodyLockRead lock(s_Impl->joltSystem->GetBodyLockInterface(), BID(rb));
+    if (!lock.Succeeded()) return (uint32_t)JPH::CollisionGroup::cInvalidGroup;
+    return (uint32_t)lock.GetBody().GetCollisionGroup().GetGroupID();
+}
+
+void SetCollisionGroup(const RigidBodyComponent& rb, uint32_t group) {
+    if (!s_Impl || !Valid(rb)) return;
+    JPH::BodyLockWrite lock(s_Impl->joltSystem->GetBodyLockInterface(), BID(rb));
+    if (!lock.Succeeded()) return;
+    // Attach the exclude filter; subgroup is ignored by GroupExcludeFilter so 0 is fine.
+    lock.GetBody().SetCollisionGroup(JPH::CollisionGroup(
+        s_Impl->groupFilter, (JPH::CollisionGroup::GroupID)group, (JPH::CollisionGroup::SubGroupID)0));
+}
+
+void ClearCollisionGroup(const RigidBodyComponent& rb) {
+    if (!s_Impl || !Valid(rb)) return;
+    JPH::BodyLockWrite lock(s_Impl->joltSystem->GetBodyLockInterface(), BID(rb));
+    if (!lock.Succeeded()) return;
+    // Default group = no filter, ungrouped: collides with everything again.
+    lock.GetBody().SetCollisionGroup(JPH::CollisionGroup());
 }
 
 // ---- Ragdoll ----------------------------------------------------------------
