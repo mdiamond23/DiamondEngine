@@ -48,6 +48,35 @@ namespace Physics {
     // Default: (0, -9.81, 0). No-op if physics session is not active.
     void SetGravity(glm::vec3 gravity);
 
+    // ---- Runtime constraints ----
+    // Opaque handle to a joint built at runtime via CreateConstraint. Compare
+    // against kInvalidConstraint to detect a failed build.
+    using ConstraintHandle = uint32_t;
+    inline constexpr ConstraintHandle kInvalidConstraint = 0xFFFFFFFFu;
+
+    // Build a physics joint at runtime between two live bodies, described by `desc`
+    // — the same fields the editor authors on a ConstraintComponent (type, world-space
+    // anchor/axis, limits, motor). `self` is body 2, `target` is body 1, matching the
+    // component path's convention. Returns a handle to release later, or
+    // kInvalidConstraint if the session is inactive or either body isn't live.
+    //
+    // Unlike a ConstraintComponent, this joint is NOT a component and is NOT serialized —
+    // it lives only until ReleaseConstraint, or until either body is destroyed (which
+    // tears it down automatically). Built for transient runtime joints like grabs: e.g.
+    // a Point constraint from a grabbed body to a hand-proxy body.
+    ConstraintHandle CreateConstraint(const ConstraintComponent& desc,
+                                      const RigidBodyComponent& self,
+                                      const RigidBodyComponent& target);
+
+    // As above, but anchors `self` to the immovable static world (Body::sFixedToWorld).
+    ConstraintHandle CreateConstraintToWorld(const ConstraintComponent& desc,
+                                             const RigidBodyComponent& self);
+
+    // Destroy a runtime constraint created by CreateConstraint. Silent no-op if the
+    // handle is invalid or already gone (e.g. a referenced body was destroyed). Safe to
+    // call once per handle; handles are never reused, so a stale handle never aliases.
+    void ReleaseConstraint(ConstraintHandle handle);
+
     // ---- Constraint motors ----
     // Drives a hinge motor's live target each frame. The motor's mode (Velocity
     // or Position) is configured on the ConstraintComponent; this sets the target

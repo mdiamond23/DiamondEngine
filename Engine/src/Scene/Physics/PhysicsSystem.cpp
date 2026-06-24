@@ -2294,6 +2294,39 @@ void SetMotorTargetOrientation(const ConstraintComponent& cc, glm::quat targetBS
     }
 }
 
+// ---- Runtime constraints ----------------------------------------------------
+
+// Imperative create/destroy that bypasses the ConstraintComponent path: it builds
+// straight into constraintMap via the same BuildConstraint/RegisterConstraint the
+// component drain uses, and hands back the table id as an opaque handle. For
+// transient joints (grabs) that shouldn't be authored components.
+ConstraintHandle CreateConstraint(const ConstraintComponent& desc,
+                                  const RigidBodyComponent& self,
+                                  const RigidBodyComponent& target) {
+    if (!s_Impl || !Valid(self) || !Valid(target)) return kInvalidConstraint;
+    ConstraintComponent cc = desc;          // local copy receives the assigned _constraintId
+    ::CreateConstraint(*s_Impl, entt::null, cc, self._bodyId, target._bodyId);
+    return cc._constraintId;                // stays sentinel if the Jolt build failed
+}
+
+ConstraintHandle CreateConstraintToWorld(const ConstraintComponent& desc,
+                                         const RigidBodyComponent& self) {
+    if (!s_Impl || !Valid(self)) return kInvalidConstraint;
+    ConstraintComponent cc = desc;
+    ::CreateConstraint(*s_Impl, entt::null, cc, self._bodyId, 0xFFFFFFFFu);
+    return cc._constraintId;
+}
+
+void ReleaseConstraint(ConstraintHandle handle) {
+    if (!s_Impl || handle == kInvalidConstraint) return;
+    auto it = s_Impl->constraintMap.find(handle);
+    if (it == s_Impl->constraintMap.end()) return; // already gone (e.g. a body was destroyed)
+    s_Impl->joltSystem->RemoveConstraint(it->second);
+    s_Impl->constraintMap.erase(it);
+    // The handle may linger in bodyToConstraints, but that's harmless:
+    // RemoveConstraintsTouching skips ids no longer in constraintMap, and ids never repeat.
+}
+
 // ---- Ragdoll ----------------------------------------------------------------
 
 // Flip a ragdoll between Animated (kinematic, follows the pose) and Limp (dynamic,
