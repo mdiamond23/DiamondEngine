@@ -12,6 +12,8 @@
 class Scene
 {
 public:
+    Scene();
+
     // Creates an entity with TransformComponent, IDComponent, and HierarchyComponent.
     entt::entity CreateEntity(std::string_view name);
 
@@ -83,6 +85,12 @@ public:
 
     entt::registry&       GetRegistry()       { return m_Registry; }
     const entt::registry& GetRegistry() const { return m_Registry; }
+
+    // Per-scene event bus for global, cross-cutting notifications. Lives in the
+    // registry context so systems holding only an entt::registry& can reach it.
+    // Cleared on StopPlay; deferred events (enqueue) are drained in UpdateSystems.
+    entt::dispatcher&       Events()       { return m_Registry.ctx().get<entt::dispatcher>(); }
+    const entt::dispatcher& Events() const { return m_Registry.ctx().get<const entt::dispatcher>(); }
 
     entt::entity GetPrimaryCamera() const;
 

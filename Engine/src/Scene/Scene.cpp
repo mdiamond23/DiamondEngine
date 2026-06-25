@@ -4,6 +4,15 @@
 #define GLM_ENABLE_EXPERIMENTAL
 #include <glm/gtx/matrix_decompose.hpp>
 
+// ---- construction -----------------------------------------------------------
+
+Scene::Scene()
+{
+    // The event bus lives in the registry context so it shares the registry's
+    // lifetime and is reachable from systems that only hold an entt::registry&.
+    m_Registry.ctx().emplace<entt::dispatcher>();
+}
+
 // ---- entity lifetime --------------------------------------------------------
 
 entt::entity Scene::CreateEntity(std::string_view name)
@@ -139,6 +148,11 @@ void Scene::StopPlay()
     for (auto& system : m_Systems)
         system->OnDestroy(*this);
     m_Systems.clear();
+
+    // Drop every subscription: handlers captured in OnStart (e.g. script-owned
+    // std::functions) would otherwise dangle once the systems are destroyed.
+    m_Registry.ctx().get<entt::dispatcher>().clear();
+
     m_Playing = false;
     m_Paused  = false;
 }
@@ -158,6 +172,10 @@ void Scene::UpdateSystems(float dt)
     if (!m_Playing || m_Paused) return;
     for (auto& system : m_Systems)
         system->OnUpdate(*this, dt);
+
+    // Drain any events posted via enqueue() this frame. trigger() dispatches
+    // immediately and is unaffected.
+    m_Registry.ctx().get<entt::dispatcher>().update();
 }
 
 // ---- camera -----------------------------------------------------------------

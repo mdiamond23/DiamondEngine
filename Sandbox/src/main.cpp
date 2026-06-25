@@ -28,6 +28,8 @@
 #include "Renderer/RenderGraph.h"
 #include "Renderer/Font.h"
 #include "Renderer/Renderer2D.h"
+#include "Renderer/ParticleRenderer.h"
+#include "Scene/ParticleSystem.h"
 #include "Scene/UISystem.h"
 #include "Scene/UIRenderSystem.h"
 #include "Scene/UIInputSystem.h"
@@ -257,6 +259,31 @@ int main()
     // into the game-viewport FBO during play. ---
     auto uiRenderer = Renderer2D::Create();
 
+    // --- Particle billboard renderer. World-space camera-facing quads drawn into
+    // the HDR buffer after Transparency. The simulation (ParticleSystem) fills each
+    // emitter's pool during play; the render pass below draws the live particles. ---
+    auto particleRenderer = ParticleRenderer::Create();
+
+    // Procedural soft-dot sprite: white core with a radial alpha falloff, so the
+    // billboards read as glowing points without depending on an asset file. Used as
+    // the default when an emitter has no texture assigned.
+    std::vector<uint8_t> dotPixels(64 * 64 * 4);
+    for (int y = 0; y < 64; ++y)
+        for (int x = 0; x < 64; ++x) {
+            float dx = (x + 0.5f) / 64.0f * 2.0f - 1.0f;
+            float dy = (y + 0.5f) / 64.0f * 2.0f - 1.0f;
+            float a  = glm::clamp(1.0f - std::sqrt(dx * dx + dy * dy), 0.0f, 1.0f);
+            a *= a;  // soften the edge
+            int i = (y * 64 + x) * 4;
+            dotPixels[i + 0] = 255; dotPixels[i + 1] = 255;
+            dotPixels[i + 2] = 255; dotPixels[i + 3] = (uint8_t)(a * 255.0f);
+        }
+    auto particleTex = Texture::CreateFromPixels(dotPixels.data(), 64, 64, 4);
+
+    // Scratch buffer reused each frame to convert an emitter's pool into the
+    // renderer's RenderParticle contract (kept outside the loop to avoid realloc).
+    std::vector<Diamond::RenderParticle> particleScratch;
+
     // IBL bake — one-time
     {
         OpenGLTexture envTex(ASSETS_DIR "/Textures/citrus_orchard_road_puresky_4k.hdr", true, true);
@@ -329,6 +356,15 @@ int main()
         tc.position = glm::vec3(0.0f, -1.7f, 0.0f);
         tc.scale    = glm::vec3(20.0f, 0.4f, 20.0f);
         scene.GetRegistry().emplace<MeshComponent>(e, cube, lavaMaterial, cubeAABB).meshPath = "__cube";
+    }
+    {
+        // Test emitter — a fiery fountain. Simulates only in play mode (the
+        // ParticleSystem is a GameSystem); hit Play to see it.
+        auto e = scene.CreateEntity("Particle Fountain");
+        auto& tc = scene.GetRegistry().get<TransformComponent>(e);
+        tc.position = glm::vec3(0.0f, -1.0f, 0.0f);
+        auto& em = scene.GetRegistry().emplace<ParticleEmitterComponent>(e);
+        em.texture = particleTex;   // default soft-dot sprite
     }
     {
         struct CubeDesc { glm::vec3 pos; glm::vec3 scale; };
@@ -620,6 +656,34 @@ int main()
                                         graph.GetFBO(hdrBuffer),
                                         view, proj, g_camera.Position,
                                         fbW, fbH);
+            });
+
+        // Particle billboards — drawn into the HDR buffer after Transparency so
+        // they composite over opaques and bloom picks up bright sparks. Reads
+        // gViewPos + hdrBuffer (no writes → sink, always alive); by insertion
+        // order it sorts after Transparency and before BloomComposite. Depth is
+        // already present in hdrBuffer (Transparency blits it from gViewPos), so
+        // particles depth-test against the scene.
+        graph.AddPass("Particles")
+            .Read(gViewPos)
+            .Read(hdrBuffer)
+            .SetExecute([&]{
+                if (!particleRenderer) return;
+                glBindFramebuffer(GL_FRAMEBUFFER, graph.GetFBO(hdrBuffer));
+                glViewport(0, 0, fbW, fbH);
+                particleRenderer->Begin(view, proj);
+                for (auto [e, em] : scene.View<ParticleEmitterComponent>().each()) {
+                    if (em.liveCount == 0) continue;
+                    particleScratch.clear();
+                    particleScratch.reserve(em.liveCount);
+                    for (std::size_t i = 0; i < em.liveCount; ++i) {
+                        const auto& p = em.pool[i];
+                        particleScratch.push_back({ p.pos, p.size, p.color, p.rotation });
+                    }
+                    const Texture& tex = em.texture ? *em.texture : *particleTex;
+                    particleRenderer->Draw(particleScratch, tex, em.blend);
+                }
+                particleRenderer->End();
             });
 
         // Bloom blur ping-pong

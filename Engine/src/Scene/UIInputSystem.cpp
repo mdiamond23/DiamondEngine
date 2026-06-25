@@ -1,6 +1,7 @@
 #include "Scene/UIInputSystem.h"
 #include "Scene/Components.h"
 #include "Scene/Scene.h"
+#include "Scene/Events.h"
 
 void UIInputSystem::Update(entt::registry& reg, const glm::vec2& pointer, bool pointerDown)
 {
@@ -23,7 +24,11 @@ void UIInputSystem::Update(entt::registry& reg, const glm::vec2& pointer, bool p
         if (btn.state == State::Pressed) {
             // A press is latched on this button; hold it until release.
             if (!pointerDown) {
-                if (inside && btn.onClick) btn.onClick();   // released inside => click
+                if (inside) {
+                    if (btn.onClick) btn.onClick();         // released inside => click
+                    if (auto* bus = reg.ctx().find<entt::dispatcher>())
+                        bus->trigger(UIButtonFired{ e });
+                }
                 btn.state = inside ? State::Hover : State::Normal;
             }
         } else {

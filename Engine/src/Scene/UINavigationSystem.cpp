@@ -1,5 +1,6 @@
 #include "Scene/UINavigationSystem.h"
 #include "Scene/Components.h"
+#include "Scene/Events.h"
 #include "Core/Input.h"
 
 #include <glm/glm.hpp>
@@ -122,6 +123,8 @@ void UINavigationSystem::Update(entt::registry& reg, const UINavInput& input)
     if (input.activate) {
         btn.state = State::Pressed;
         if (btn.onClick) btn.onClick();
+        if (auto* bus = reg.ctx().find<entt::dispatcher>())
+            bus->trigger(UIButtonFired{ focus.focused });
     } else {
         // Highlight the focused button with the same look as mouse hover.
         btn.state = State::Hover;

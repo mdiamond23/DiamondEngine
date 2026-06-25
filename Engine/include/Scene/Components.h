@@ -10,6 +10,7 @@
 #include "Renderer/MeshData.h"
 #include "Renderer/Material.h"
 #include "Renderer/Frustum.h"
+#include "Renderer/ParticleRenderer.h"
 #include <cstdint>
 
 namespace Diamond { class Texture; class Font; }
@@ -196,4 +197,41 @@ struct UIButtonComponent {
              : state == State::Hover   ? hoverTint
              :                           normalTint;
     }
+};
+
+// ---- Particles -------------------------------------------------------------
+// Marks an entity as a particle emitter. ParticleSystem simulates the pool each
+// frame during play; the engine's particle render pass draws the live particles
+// as camera-facing billboards. Particles are spawned at the emitter's world
+// position and then simulated in world space (they ignore later emitter motion).
+struct ParticleEmitterComponent {
+    // ---- Emission (config) ----
+    float       spawnRate    = 40.0f;               // particles per second
+    std::size_t maxParticles = 512;                 // hard cap / pool size
+    glm::vec2 lifetimeRange { 1.0f, 2.0f };         // seconds, randomized per particle
+    glm::vec3 velocityMin   { -0.6f, 2.5f, -0.6f }; // initial velocity range (world)
+    glm::vec3 velocityMax   {  0.6f, 4.5f,  0.6f };
+    glm::vec2 sizeRange     { 0.15f, 0.30f };       // start size, randomized per particle
+    glm::vec3 gravity       { 0.0f, -3.0f, 0.0f };
+
+    // ---- Over-lifetime ----
+    glm::vec4 startColor { 1.0f, 0.75f, 0.25f, 1.0f };
+    glm::vec4 endColor   { 1.0f, 0.15f, 0.0f,  0.0f };
+    float     endSize    = 0.0f;                    // size lerps startSize -> endSize
+
+    // ---- Render ----
+    std::shared_ptr<Diamond::Texture> texture;      // null -> renderer's default soft-dot
+    Diamond::ParticleBlend blend = Diamond::ParticleBlend::Additive;
+
+    // ---- Runtime pool: transient, NOT serialized and NOT shown in the inspector.
+    // Live particles occupy pool[0, liveCount); dead slots are recycled via
+    // swap-remove so the live span stays contiguous and ready to upload. ----
+    struct Particle {
+        glm::vec3 pos { 0.0f }, vel { 0.0f };
+        glm::vec4 color { 1.0f };
+        float size = 1.0f, startSize = 1.0f, age = 0.0f, lifetime = 1.0f, rotation = 0.0f;
+    };
+    std::vector<Particle> pool;
+    std::size_t liveCount        = 0;
+    float       spawnAccumulator = 0.0f;
 };

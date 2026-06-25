@@ -91,14 +91,7 @@ ragdoll characters, active physics control, grabbing, local multiplayer.
 > Goal: enough systems to build a local-multiplayer physics fighting game
 
 - [x] Dynamic camera system — multi-target tracking, zoom-out when players spread apart, collision avoidance. 
-- [ ] In-game UI system — HUD, menus, health bars separate from ImGui (ImGui is editor-only)
-  - [x] Text rendering — `Font` bakes a TTF/OTF (stb_truetype) into an R8 glyph atlas; backend-agnostic (rides the abstract `Texture`)
-  - [x] 2D batched quad renderer — `Renderer2D` interface (`Begin`/`End`/`DrawQuad`/`DrawTexturedQuad`/`DrawText` + ortho helper) with `OpenGLRenderer2D` batching by texture; quads/sprites/text share one shader
-  - [x] Canvas + anchoring — `CanvasComponent` (scale mode + reference resolution) + `RectTransformComponent` (min/max anchors, pivot, position/size, zOrder); `UISystem` resolves rects top-down (point + stretch) into screen pixels for `Renderer2D`. Inspector authoring + scene serialization wired up (undo-tracked).
-  - [x] ECS widget components + UISystem (Image/Text/Button/ProgressBar)
-  - [ ] Input + gamepad-navigable focus/events
-  - [ ] Data flow: imperative API from scripts now; event bus later ([#27](https://github.com/mdiamond23/DiamondEngine/issues/27))
-  - [x] Editor authoring + serialization
+- [x] In-game UI system — HUD, menus, health bars separate from ImGui (ImGui is editor-only).
 - [ ] Particle system — hit sparks, dust, environmental effects
 - [ ] Audio — [miniaudio](https://miniaud.io) (single header, no dependencies); 3D positional audio
 - [ ] Local multiplayer — shared-screen with multiple gamepads; player management, respawn
