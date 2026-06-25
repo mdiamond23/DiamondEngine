@@ -31,6 +31,7 @@
 #include "Scene/UISystem.h"
 #include "Scene/UIRenderSystem.h"
 #include "Scene/UIInputSystem.h"
+#include "Scene/UINavigationSystem.h"
 #include <cmath>
 #include <string>
 #include <cstdio>
@@ -837,6 +838,17 @@ int main()
         }
         DebugDraw::Flush(proj * view);
 
+        // UI canvas preview — draw the scene's widgets into the editor viewport so
+        // HUDs can be authored without entering play mode. Visual only: no input or
+        // gamepad nav pass, so nothing mutates button state here. Gated by the
+        // viewport's "Show UI" toggle.
+        if (uiRenderer && editorLayer.GetContext().showUI) {
+            glBindFramebuffer(GL_FRAMEBUFFER, viewportFBO);
+            glViewport(0, 0, fbW, fbH);
+            UISystem::Resolve(scene.GetRegistry(), { (float)fbW, (float)fbH });
+            UIRenderSystem::Render(scene.GetRegistry(), *uiRenderer, { (float)fbW, (float)fbH });
+        }
+
         // --- Game viewport: primary camera entity (play mode only) ---
         entt::entity primaryCam = scene.GetPrimaryCamera();
         if (scene.IsPlaying() && primaryCam != entt::null)
@@ -864,6 +876,14 @@ int main()
                     uiPointer = mNorm * glm::vec2((float)fbW, (float)fbH);
                 UIInputSystem::Update(scene.GetRegistry(), uiPointer,
                                       Input::IsMouseButtonHeld(MouseButton::Left));
+
+                // Gamepad focus navigation, after the mouse pass so the focus
+                // highlight wins when the mouse is idle. Mouse activity releases
+                // focus so the two input paths don't fight over button state.
+                UINavigationSystem::UINavInput nav = UI::PollGamepadNav();
+                nav.mouseMoved = glm::length(Input::GetMouseDelta()) > 0.0f ||
+                                 Input::IsMouseButtonHeld(MouseButton::Left);
+                UINavigationSystem::Update(scene.GetRegistry(), nav);
 
                 UIRenderSystem::Render(scene.GetRegistry(), *uiRenderer, { (float)fbW, (float)fbH });
             }

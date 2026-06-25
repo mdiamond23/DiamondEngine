@@ -8,6 +8,58 @@ Text, Progress Bar, and Button.
 
 ---
 
+## Architecture overview (the whole system at a glance)
+
+The UI is a **retained-mode, ECS-integrated, backend-agnostic** layer that borrows
+the engine's existing bones rather than inventing parallel ones. It stacks in
+three layers, each depending only on the one below:
+
+**1. Rendering foundation — knows nothing about UI.**
+- `Font` ([Engine/include/Renderer/Font.h]) bakes a TTF into a glyph-atlas texture
+  (stb_truetype).
+- `Renderer2D` ([Engine/include/Renderer/Renderer2D.h]) batches quads + text in
+  pixel space. `Renderer2D::Create()` dispatches on the active backend exactly like
+  `Shader`/`Mesh`/`Texture`, so a Vulkan backend brings the whole UI stack with it.
+
+**2. UI data + logic — the ECS layer.**
+- Components (pure data, in [Engine/include/Scene/Components.h] beside the 3D
+  components): `CanvasComponent`, `RectTransformComponent`, `UIImageComponent`,
+  `UITextComponent`, `UIProgressBarComponent`, `UIButtonComponent`.
+- Systems (stateless functions over the registry):
+  `UISystem::Resolve` (anchors → pixel rects), `UIInputSystem::Update` (pointer
+  hit-test → button state + `onClick`), `UIRenderSystem::Render` (draw each widget
+  through `Renderer2D` in z-order).
+
+**3. Editor integration.** Serialization (assets by path), inspector sections with
+drag-drop slots + undo, the content-browser `Font` asset type, and the
+viewport→UI mouse mapping in `EditorContext`.
+
+### Per-frame flow (play mode)
+The UI is a thin layer that runs **after** the existing 3D pipeline, into the same
+framebuffer:
+
+```text
+[existing 3D pipeline]  → renders scene into gameViewportFBO
+  → UISystem::Resolve(scene registry, screenSize)   // compute pixel rects
+  → UIInputSystem::Update(registry, pointer, down)   // hover / press / click
+  → UIRenderSystem::Render(registry, renderer2D)     // draw on top (depth-off, alpha-blend)
+```
+
+It composites over the 3D frame in the **same FBO** — no separate render target or
+pass.
+
+### Seams with existing systems
+| Existing system | How the UI plugs in |
+|---|---|
+| EnTT / Scene | UI entities are plain scene entities; reuse the **same `HierarchyComponent`** as 3D transforms — no separate UI tree. A Canvas is implicitly full-screen (no RectTransform). |
+| Render pipeline / FBO | Draws into `gameViewportFBO` after `cullAndExecute`, next to the deferred/bloom/FXAA passes. |
+| Serialization | Widgets round-trip like any component; textures/fonts serialize **by path** (mesh/material convention). `onClick` is never saved. |
+| Inspector / ContentPanel / Command | Inspector sections, drag-drop asset slots, and undo via the existing `ValueChangeCommand`/`FunctionCommand`. Fonts are a first-class `AssetType`. |
+| Input | `UIInputSystem` takes a pointer **already in UI-space**; the editor maps the OS mouse via `EditorContext::viewportMouseNorm` / `gameViewportMouseNorm`. Gamepad focus will plug in here as a synthetic cursor. |
+| Scripting | Behavior lives in scripts: `UI::SetButtonCallback(scene, "Name", fn)` from a `GameSystem::OnStart`. Scene data stays declarative. |
+
+---
+
 ## The core idea
 
 `UISystem::Resolve` already walks every canvas top-down and writes each

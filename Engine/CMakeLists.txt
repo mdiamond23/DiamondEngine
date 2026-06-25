@@ -198,6 +198,7 @@ add_library(MyEngine STATIC
     src/Scene/UISystem.cpp
     src/Scene/UIRenderSystem.cpp
     src/Scene/UIInputSystem.cpp
+    src/Scene/UINavigationSystem.cpp
     src/Scene/UUIDGenerator.cpp
     src/Scene/Physics/PhysicsSystem.cpp
     src/Scene/Physics/RagdollConfig.cpp

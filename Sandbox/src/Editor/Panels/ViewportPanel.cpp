@@ -45,8 +45,10 @@ void ViewportPanel::OnImGuiRender() {
         ImGui::SetCursorScreenPos({ vpPos.x + 8.0f, vpPos.y + 8.0f });
         ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.0f, 0.0f, 0.0f, 0.45f));
         ImGui::Checkbox("Debug Draw", &m_Context->showDebugDraw);
-        ImGui::PopStyleColor();
         overlayHovered = ImGui::IsItemHovered();
+        ImGui::Checkbox("Show UI", &m_Context->showUI);
+        overlayHovered |= ImGui::IsItemHovered();
+        ImGui::PopStyleColor();
     }
 
     if (ImGui::IsWindowHovered() && !m_IsViewportActive) {

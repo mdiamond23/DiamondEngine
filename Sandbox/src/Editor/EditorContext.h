@@ -31,6 +31,9 @@ struct EditorContext {
     // Viewport debug visualization — one master toggle gating collider wireframes,
     // ragdoll bodies, and IK chain/target draw (+ the IK target gizmo).
     bool showDebugDraw = false;
+    // Preview the scene's UI canvases in the editor viewport (visual only, no
+    // interaction) so HUDs can be authored without entering play mode.
+    bool showUI = false;
     // Which chain of the selected entity's IKComponent gets the viewport target
     // gizmo and the highlighted draw. Clamped to the chain list by the inspector.
     int  activeIKChain = 0;
