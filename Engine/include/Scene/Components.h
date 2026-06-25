@@ -200,18 +200,41 @@ struct UIButtonComponent {
 };
 
 // ---- Particles -------------------------------------------------------------
+// Where particles spawn and which way they launch. The shape supplies a local
+// spawn-position offset and an emission direction; speedRange gives the velocity
+// magnitude along that direction. Local space is oriented by the emitter's world
+// rotation, so a tilted emitter emits sideways. Axis convention is local +Y.
+enum class EmissionShape {
+    Point,   // at the origin, straight up
+    Cone,    // apex (+ optional base disc), within coneAngle of +Y
+    Sphere,  // inside sphereRadius, radially outward
+    Box      // inside boxHalfExtents, straight up
+};
+
 // Marks an entity as a particle emitter. ParticleSystem simulates the pool each
 // frame during play; the engine's particle render pass draws the live particles
 // as camera-facing billboards. Particles are spawned at the emitter's world
 // position and then simulated in world space (they ignore later emitter motion).
 struct ParticleEmitterComponent {
-    // ---- Emission (config) ----
-    float       spawnRate    = 40.0f;               // particles per second
+    // ---- Emission rate / cap ----
+    float       spawnRate    = 40.0f;               // continuous particles per second
     std::size_t maxParticles = 512;                 // hard cap / pool size
-    glm::vec2 lifetimeRange { 1.0f, 2.0f };         // seconds, randomized per particle
-    glm::vec3 velocityMin   { -0.6f, 2.5f, -0.6f }; // initial velocity range (world)
-    glm::vec3 velocityMax   {  0.6f, 4.5f,  0.6f };
-    glm::vec2 sizeRange     { 0.15f, 0.30f };       // start size, randomized per particle
+
+    // ---- Shape: spawn position + emission direction ----
+    EmissionShape shape          = EmissionShape::Cone;
+    float         coneAngle      = 25.0f;           // Cone: half-angle off +Y, degrees
+    float         coneRadius     = 0.0f;            // Cone: base disc radius at the apex
+    float         sphereRadius   = 0.5f;            // Sphere: spawn radius
+    glm::vec3     boxHalfExtents { 1.0f, 0.1f, 1.0f }; // Box: half-size of the volume
+    glm::vec2     speedRange     { 2.5f, 4.5f };    // initial speed along the emission dir
+
+    // ---- Bursts: spawn a clump at once, independent of spawnRate ----
+    std::size_t burstCount    = 0;     // particles per burst (0 = continuous only)
+    float       burstInterval = 0.0f;  // seconds between bursts (<=0 = one shot at start)
+
+    // ---- Per-particle randomized ranges ----
+    glm::vec2 lifetimeRange { 1.0f, 2.0f };         // seconds
+    glm::vec2 sizeRange     { 0.15f, 0.30f };       // start size
     glm::vec3 gravity       { 0.0f, -3.0f, 0.0f };
 
     // ---- Over-lifetime ----
@@ -221,6 +244,7 @@ struct ParticleEmitterComponent {
 
     // ---- Render ----
     std::shared_ptr<Diamond::Texture> texture;      // null -> renderer's default soft-dot
+    std::string texturePath;                        // asset path; round-trips `texture`
     Diamond::ParticleBlend blend = Diamond::ParticleBlend::Additive;
 
     // ---- Runtime pool: transient, NOT serialized and NOT shown in the inspector.
@@ -233,5 +257,6 @@ struct ParticleEmitterComponent {
     };
     std::vector<Particle> pool;
     std::size_t liveCount        = 0;
-    float       spawnAccumulator = 0.0f;
+    float       spawnAccumulator = 0.0f;   // fractional carry for sub-frame spawn rates
+    float       burstTimer       = 0.0f;   // counts down to the next burst
 };

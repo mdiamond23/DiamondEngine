@@ -8,3 +8,4 @@
 #include "ArmControl.h"
 #include "Punch.h"
 #include "CameraDirector.h"
+#include "ParticleEmitterEditor.h"

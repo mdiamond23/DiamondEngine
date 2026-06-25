@@ -1,0 +1,470 @@
+{
+  "entities": [
+    {
+      "mesh": {
+        "albedoPath": "C:/Dev/DiamondEngine/Assets/Materials/Lava004_2K-PNG/Lava004_2K-PNG_Color.png",
+        "aoPath": "",
+        "castsShadow": true,
+        "emissivePath": "C:/Dev/DiamondEngine/Assets/Materials/Lava004_2K-PNG/Lava004_2K-PNG_Emission.png",
+        "emissiveStrength": 2.5,
+        "materialPath": "",
+        "meshPath": "__cube",
+        "meshSubIndex": 0,
+        "metallicPath": "",
+        "normalPath": "C:/Dev/DiamondEngine/Assets/Materials/Lava004_2K-PNG/Lava004_2K-PNG_NormalGL.png",
+        "receivesShadow": true,
+        "roughnessPath": "C:/Dev/DiamondEngine/Assets/Materials/Lava004_2K-PNG/Lava004_2K-PNG_Roughness.png",
+        "uvScale": 5.0,
+        "visible": true
+      },
+      "name": "Floor",
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "position": [
+          0.0,
+          -1.7000000476837158,
+          0.0
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          20.0,
+          0.4000000059604645,
+          20.0
+        ]
+      },
+      "uuid": 2679832811386742987
+    },
+    {
+      "name": "Particle Fountain",
+      "scriptComponents": {
+        "Particle Emitter": {
+          "blend": 1,
+          "boxHalfExtents": [
+            1.0,
+            0.10000000149011612,
+            1.0
+          ],
+          "burstCount": 0,
+          "burstInterval": 0.0,
+          "coneAngle": 25.0,
+          "coneRadius": 0.0,
+          "endColor": [
+            1.0,
+            0.15000000596046448,
+            0.0,
+            0.0
+          ],
+          "endSize": 0.0,
+          "gravity": [
+            0.0,
+            -3.0,
+            0.0
+          ],
+          "lifetimeRange": [
+            1.0,
+            2.0
+          ],
+          "maxParticles": 512,
+          "shape": 1,
+          "sizeRange": [
+            0.15000000596046448,
+            0.30000001192092896
+          ],
+          "spawnRate": 40.0,
+          "speedRange": [
+            2.5,
+            4.5
+          ],
+          "sphereRadius": 0.5,
+          "startColor": [
+            1.0,
+            0.75,
+            0.25,
+            1.0
+          ],
+          "texturePath": ""
+        }
+      },
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "position": [
+          -3.0,
+          -1.0,
+          0.0
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 14094194962829418366
+    },
+    {
+      "name": "Particle Explosion",
+      "scriptComponents": {
+        "Particle Emitter": {
+          "blend": 1,
+          "boxHalfExtents": [
+            1.0,
+            0.10000000149011612,
+            1.0
+          ],
+          "burstCount": 200,
+          "burstInterval": 1.5,
+          "coneAngle": 25.0,
+          "coneRadius": 0.0,
+          "endColor": [
+            0.10000000149011612,
+            0.20000000298023224,
+            0.6000000238418579,
+            0.0
+          ],
+          "endSize": 0.0,
+          "gravity": [
+            0.0,
+            -1.0,
+            0.0
+          ],
+          "lifetimeRange": [
+            0.6000000238418579,
+            1.100000023841858
+          ],
+          "maxParticles": 512,
+          "shape": 2,
+          "sizeRange": [
+            0.10000000149011612,
+            0.2199999988079071
+          ],
+          "spawnRate": 0.0,
+          "speedRange": [
+            3.0,
+            6.0
+          ],
+          "sphereRadius": 0.20000000298023224,
+          "startColor": [
+            0.6000000238418579,
+            0.8500000238418579,
+            1.0,
+            1.0
+          ],
+          "texturePath": ""
+        }
+      },
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "position": [
+          3.0,
+          0.5,
+          0.0
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 2940200907372350473
+    },
+    {
+      "light": {
+        "color": [
+          1.0,
+          0.3330000042915344,
+          0.16699999570846558
+        ],
+        "innerConeAngle": 15.0,
+        "intensity": 600.0,
+        "outerConeAngle": 30.0,
+        "radius": 10.0,
+        "type": 1
+      },
+      "name": "Point Light 1",
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "position": [
+          1.0,
+          3.0,
+          2.0
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 14198923049227888904
+    },
+    {
+      "light": {
+        "color": [
+          0.13300000131130219,
+          0.3330000042915344,
+          1.0
+        ],
+        "innerConeAngle": 15.0,
+        "intensity": 600.0,
+        "outerConeAngle": 30.0,
+        "radius": 10.0,
+        "type": 1
+      },
+      "name": "Point Light 2",
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "position": [
+          -5.0,
+          2.0,
+          4.0
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 2320422251819817704
+    },
+    {
+      "light": {
+        "color": [
+          0.5,
+          1.0,
+          0.3330000042915344
+        ],
+        "innerConeAngle": 15.0,
+        "intensity": 600.0,
+        "outerConeAngle": 30.0,
+        "radius": 10.0,
+        "type": 1
+      },
+      "name": "Point Light 3",
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "position": [
+          8.0,
+          4.0,
+          -6.0
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 7139982737271629753
+    },
+    {
+      "light": {
+        "color": [
+          1.0,
+          0.800000011920929,
+          0.10000000149011612
+        ],
+        "innerConeAngle": 15.0,
+        "intensity": 500.0,
+        "outerConeAngle": 30.0,
+        "radius": 10.0,
+        "type": 1
+      },
+      "name": "Point Light 4",
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "position": [
+          -8.0,
+          4.0,
+          -6.0
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 15973138565397729715
+    },
+    {
+      "light": {
+        "color": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "innerConeAngle": 15.0,
+        "intensity": 3.0,
+        "outerConeAngle": 30.0,
+        "radius": 10.0,
+        "type": 0
+      },
+      "name": "Sun",
+      "transform": {
+        "eulerDegrees": [
+          15.048063278198242,
+          3.4431450366973877,
+          -25.640003204345703
+        ],
+        "position": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rotation": [
+          0.9653673768043518,
+          0.13422897458076477,
+          0.0,
+          -0.2237149178981781
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 16607574006336105930
+    },
+    {
+      "name": "Empty Entity",
+      "scriptComponents": {
+        "Particle Emitter": {
+          "blend": 1,
+          "boxHalfExtents": [
+            1.0,
+            0.10000000149011612,
+            1.0
+          ],
+          "burstCount": 0,
+          "burstInterval": 0.0,
+          "coneAngle": 25.0,
+          "coneRadius": 0.0,
+          "endColor": [
+            1.0,
+            0.14117646217346191,
+            0.0,
+            1.0
+          ],
+          "endSize": 0.0,
+          "gravity": [
+            0.0,
+            -3.0,
+            0.0
+          ],
+          "lifetimeRange": [
+            1.0,
+            2.0
+          ],
+          "maxParticles": 512,
+          "shape": 3,
+          "sizeRange": [
+            0.15000000596046448,
+            0.30000001192092896
+          ],
+          "spawnRate": 40.0,
+          "speedRange": [
+            2.5,
+            4.5
+          ],
+          "sphereRadius": 0.5,
+          "startColor": [
+            0.8529411554336548,
+            1.0,
+            0.0,
+            1.0
+          ],
+          "texturePath": "C:/Dev/DiamondEngine\\Assets\\Textures\\ibl_hdr_radiance.png"
+        }
+      },
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          -0.0,
+          0.0
+        ],
+        "position": [
+          -0.3397482931613922,
+          0.0,
+          0.0
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 4898024710345484019
+    }
+  ]
+}

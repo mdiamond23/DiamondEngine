@@ -358,13 +358,34 @@ int main()
         scene.GetRegistry().emplace<MeshComponent>(e, cube, lavaMaterial, cubeAABB).meshPath = "__cube";
     }
     {
-        // Test emitter — a fiery fountain. Simulates only in play mode (the
-        // ParticleSystem is a GameSystem); hit Play to see it.
+        // Test emitter — a fiery fountain (cone, continuous). Simulates only in
+        // play mode (the ParticleSystem is a GameSystem); hit Play to see it.
         auto e = scene.CreateEntity("Particle Fountain");
         auto& tc = scene.GetRegistry().get<TransformComponent>(e);
-        tc.position = glm::vec3(0.0f, -1.0f, 0.0f);
+        tc.position = glm::vec3(-3.0f, -1.0f, 0.0f);
         auto& em = scene.GetRegistry().emplace<ParticleEmitterComponent>(e);
         em.texture = particleTex;   // default soft-dot sprite
+        // shape defaults to a 25-deg upward cone — the fiery defaults
+    }
+    {
+        // Test emitter — a repeating explosion (sphere, burst). A clump fires
+        // radially outward every 1.5s.
+        auto e = scene.CreateEntity("Particle Explosion");
+        auto& tc = scene.GetRegistry().get<TransformComponent>(e);
+        tc.position = glm::vec3(3.0f, 0.5f, 0.0f);
+        auto& em = scene.GetRegistry().emplace<ParticleEmitterComponent>(e);
+        em.texture       = particleTex;
+        em.shape         = EmissionShape::Sphere;
+        em.sphereRadius  = 0.2f;
+        em.spawnRate     = 0.0f;        // bursts only, no continuous stream
+        em.burstCount    = 200;
+        em.burstInterval = 1.5f;        // repeat so it's easy to watch
+        em.speedRange    = { 3.0f, 6.0f };
+        em.lifetimeRange = { 0.6f, 1.1f };
+        em.sizeRange     = { 0.10f, 0.22f };
+        em.gravity       = glm::vec3(0.0f, -1.0f, 0.0f);
+        em.startColor    = glm::vec4(0.6f, 0.85f, 1.0f, 1.0f);  // blue-white spark
+        em.endColor      = glm::vec4(0.1f, 0.2f, 0.6f, 0.0f);
     }
     {
         struct CubeDesc { glm::vec3 pos; glm::vec3 scale; };
