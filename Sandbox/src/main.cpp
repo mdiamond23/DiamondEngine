@@ -147,6 +147,23 @@ float shaderReloadTimer = 0.0f;   // throttles the shader hot-reload mtime poll
 
 static void framebufferSizeCallback(GLFWwindow*, int w, int h) { glViewport(0, 0, w, h); }
 
+// (Re)creates a color-only RGBA8 FBO + texture at w x h, deleting any prior pair.
+// Used for offscreen editor panels (e.g. the particle preview) that render at
+// their own size, outside the render graph.
+static void makeColorFBO(uint32_t& fbo, uint32_t& tex, int w, int h) {
+    if (tex) glDeleteTextures(1,     &tex);
+    if (fbo) glDeleteFramebuffers(1, &fbo);
+    glGenTextures(1, &tex);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glGenFramebuffers(1, &fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, 0);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+}
+
 static void dropCallback(GLFWwindow* window, int count, const char** paths) {
     auto* layer = static_cast<EditorLayer*>(glfwGetWindowUserPointer(window));
     if (layer) layer->NotifyDroppedFiles(count, paths);
@@ -358,36 +375,6 @@ int main()
         scene.GetRegistry().emplace<MeshComponent>(e, cube, lavaMaterial, cubeAABB).meshPath = "__cube";
     }
     {
-        // Test emitter — a fiery fountain (cone, continuous). Simulates only in
-        // play mode (the ParticleSystem is a GameSystem); hit Play to see it.
-        auto e = scene.CreateEntity("Particle Fountain");
-        auto& tc = scene.GetRegistry().get<TransformComponent>(e);
-        tc.position = glm::vec3(-3.0f, -1.0f, 0.0f);
-        auto& em = scene.GetRegistry().emplace<ParticleEmitterComponent>(e);
-        em.texture = particleTex;   // default soft-dot sprite
-        // shape defaults to a 25-deg upward cone — the fiery defaults
-    }
-    {
-        // Test emitter — a repeating explosion (sphere, burst). A clump fires
-        // radially outward every 1.5s.
-        auto e = scene.CreateEntity("Particle Explosion");
-        auto& tc = scene.GetRegistry().get<TransformComponent>(e);
-        tc.position = glm::vec3(3.0f, 0.5f, 0.0f);
-        auto& em = scene.GetRegistry().emplace<ParticleEmitterComponent>(e);
-        em.texture       = particleTex;
-        em.shape         = EmissionShape::Sphere;
-        em.sphereRadius  = 0.2f;
-        em.spawnRate     = 0.0f;        // bursts only, no continuous stream
-        em.burstCount    = 200;
-        em.burstInterval = 1.5f;        // repeat so it's easy to watch
-        em.speedRange    = { 3.0f, 6.0f };
-        em.lifetimeRange = { 0.6f, 1.1f };
-        em.sizeRange     = { 0.10f, 0.22f };
-        em.gravity       = glm::vec3(0.0f, -1.0f, 0.0f);
-        em.startColor    = glm::vec4(0.6f, 0.85f, 1.0f, 1.0f);  // blue-white spark
-        em.endColor      = glm::vec4(0.1f, 0.2f, 0.6f, 0.0f);
-    }
-    {
         struct CubeDesc { glm::vec3 pos; glm::vec3 scale; };
         CubeDesc cubes[] = {
             {{ 0.5f, -0.3f, -3.5f}, {1.0f, 1.0f, 1.0f}},
@@ -540,6 +527,11 @@ int main()
     uint32_t gameViewportFBO  = 0;
     uint32_t gameViewportTex  = 0;
     uint32_t outputFBO        = 0;  // set before each graph.Execute() to select render target
+
+    // Particle preview FBO — sized to the preview panel's content region (not the
+    // window), recreated only when that size changes. Lives outside the graph.
+    uint32_t previewFBO = 0, previewTex = 0;
+    int      previewW   = 0, previewH   = 0;
 
     auto buildGraph = [&](int w, int h)
     {
@@ -984,6 +976,47 @@ int main()
         view = g_camera.GetViewMatrix();
         proj = glm::perspective(glm::radians(g_camera.Zoom), (float)fbW / (float)fbH, 0.1f, 100.0f);
 
+        // --- Particle preview panel: simulate the selected emitter's working copy
+        // (decoupled from play mode) and render it into its own FBO. The panel
+        // reports its content-region size a frame late; recreate the FBO on change
+        // so the projection aspect matches the displayed image with no distortion. ---
+        {
+            auto& preview = editorLayer.GetParticlePreviewPanel();
+            preview.Tick(deltaTime);
+
+            glm::ivec2 want = preview.DesiredSize();
+            want.x = std::max(want.x, 1);
+            want.y = std::max(want.y, 1);
+            if (want.x != previewW || want.y != previewH) {
+                makeColorFBO(previewFBO, previewTex, want.x, want.y);
+                previewW = want.x;
+                previewH = want.y;
+            }
+
+            glBindFramebuffer(GL_FRAMEBUFFER, previewFBO);
+            glViewport(0, 0, previewW, previewH);
+            glm::vec3 bg = preview.BackgroundColor();
+            glClearColor(bg.r, bg.g, bg.b, 1.0f);
+            glClear(GL_COLOR_BUFFER_BIT);
+
+            if (particleRenderer && preview.HasParticles()) {
+                const auto& em = preview.Emitter();
+                if (em.liveCount > 0) {
+                    particleScratch.clear();
+                    particleScratch.reserve(em.liveCount);
+                    for (std::size_t i = 0; i < em.liveCount; ++i) {
+                        const auto& p = em.pool[i];
+                        particleScratch.push_back({ p.pos, p.size, p.color, p.rotation });
+                    }
+                    const Texture& tex = em.texture ? *em.texture : *particleTex;
+                    particleRenderer->Begin(preview.ViewMatrix(), preview.ProjMatrix());
+                    particleRenderer->Draw(particleScratch, tex, em.blend);
+                    particleRenderer->End();
+                }
+            }
+            editorLayer.GetParticlePreviewPanel().SetTexture(previewTex);
+        }
+
         // Clear backbuffer for ImGui — scene now lives in viewportTex
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
         glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
@@ -1023,6 +1056,8 @@ int main()
     if (viewportFBO)     glDeleteFramebuffers(1, &viewportFBO);
     if (gameViewportTex) glDeleteTextures(1,     &gameViewportTex);
     if (gameViewportFBO) glDeleteFramebuffers(1, &gameViewportFBO);
+    if (previewTex)      glDeleteTextures(1,     &previewTex);
+    if (previewFBO)      glDeleteFramebuffers(1, &previewFBO);
 
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplGlfw_Shutdown();

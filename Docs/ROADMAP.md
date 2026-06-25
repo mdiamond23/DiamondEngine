@@ -92,7 +92,7 @@ ragdoll characters, active physics control, grabbing, local multiplayer.
 
 - [x] Dynamic camera system — multi-target tracking, zoom-out when players spread apart, collision avoidance. 
 - [x] In-game UI system — HUD, menus, health bars separate from ImGui (ImGui is editor-only).
-- [ ] Particle system — hit sparks, dust, environmental effects
+- [x] Particle system — hit sparks, dust, environmental effects
 - [ ] Audio — [miniaudio](https://miniaud.io) (single header, no dependencies); 3D positional audio
 - [ ] Local multiplayer — shared-screen with multiple gamepads; player management, respawn
 - [ ] Game camera entity — runtime-controllable camera component usable from scripts

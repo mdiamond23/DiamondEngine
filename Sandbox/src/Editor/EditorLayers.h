@@ -10,6 +10,7 @@
 #include "Panels/ContentPanel.h"
 #include "Panels/ConsolePanel.h"
 #include "Panels/AnimatorPanel.h"
+#include "Panels/ParticlePreviewPanel.h"
 
 class EditorLayer {
 public:
@@ -23,6 +24,7 @@ public:
     EditorContext& GetContext() { return m_Context; }
     bool IsViewportActive() const     { return m_Viewport.IsActive(); }
     bool IsGameViewportActive() const { return m_GameViewport.IsActive(); }
+    ParticlePreviewPanel& GetParticlePreviewPanel() { return m_ParticlePreview; }
     void NotifyDroppedFiles(int count, const char** paths) { m_Content.QueueDroppedFiles(count, paths); }
 
 private:
@@ -46,5 +48,6 @@ private:
     ContentPanel      m_Content;
     ConsolePanel      m_Console;
     AnimatorPanel     m_Animator;
+    ParticlePreviewPanel m_ParticlePreview;
     EditorContext     m_Context;
 };

@@ -140,6 +140,7 @@ EditorLayer::EditorLayer(Scene* scene, ImFont* iconFont)
     m_Viewport.SetContext(&m_Context);
     m_GameViewport.SetContext(&m_Context);
     m_Animator.SetContext(&m_Context);
+    m_ParticlePreview.SetContext(&m_Context);
 
     m_Content.SetOnSceneOpen([this](const std::string& path) {
         m_Context.ClearSelection();
@@ -171,6 +172,7 @@ void EditorLayer::SetupDockspace()
     ImGui::DockBuilderDockWindow("Hierarchy", left);
     ImGui::DockBuilderDockWindow("Viewport", center);
     ImGui::DockBuilderDockWindow("Game", center);
+    ImGui::DockBuilderDockWindow("Particle Preview", center);
     ImGui::DockBuilderDockWindow("Inspector", right);
     ImGui::DockBuilderDockWindow("Content Browser", down);
     ImGui::DockBuilderDockWindow("Console", down);
@@ -462,4 +464,5 @@ void EditorLayer::OnImGuiRender()
     m_Content.OnImGuiRender();
     m_Animator.OnImGuiRender();
     m_Console.OnImGuiRender();
+    m_ParticlePreview.OnImGuiRender();
 }

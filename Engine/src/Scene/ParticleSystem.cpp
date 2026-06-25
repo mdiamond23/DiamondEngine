@@ -1,4 +1,5 @@
 #include "Scene/ParticleSystem.h"
+#include "Scene/ParticleSim.h"
 #include "Scene/Scene.h"
 #include "Scene/Components.h"
 
@@ -95,94 +96,97 @@ void SpawnOne(ParticleEmitterComponent& em, const glm::vec3& origin, const glm::
     p.rotation  = RandRange(0.0f, glm::two_pi<float>());
 }
 
-// Drop every emitter back to an empty pool — used at play start/stop so a session
-// never inherits stale particles (and the editor isn't left with frozen ones).
-void ResetPools(Scene& scene)
+} // namespace
+
+void ParticleSim::Reset(ParticleEmitterComponent& em)
 {
-    for (auto [e, em] : scene.View<ParticleEmitterComponent>().each()) {
-        em.pool.clear();
-        em.liveCount        = 0;
-        em.spawnAccumulator = 0.0f;
-        em.burstTimer       = 0.0f;   // first burst fires immediately on play
+    em.pool.clear();
+    em.liveCount        = 0;
+    em.spawnAccumulator = 0.0f;
+    em.burstTimer       = 0.0f;   // first burst fires immediately on next Step
+}
+
+void ParticleSim::Step(ParticleEmitterComponent& em, float dt, const glm::mat4& world)
+{
+    if (dt <= 0.0f) return;
+    if (em.maxParticles == 0) { em.liveCount = 0; return; }
+
+    // Lazily size the pool to the configured cap; clamp the live span if the
+    // cap shrank (e.g. edited at runtime).
+    if (em.pool.size() != em.maxParticles)
+        em.pool.resize(em.maxParticles);
+    if (em.liveCount > em.maxParticles)
+        em.liveCount = em.maxParticles;
+
+    // Emitter world transform: position is the spawn origin, the rotation
+    // (orthonormalized to drop scale) orients the shape.
+    const glm::vec3 origin = glm::vec3(world[3]);
+    glm::mat3 rot(world);
+    rot[0] = glm::normalize(rot[0]);
+    rot[1] = glm::normalize(rot[1]);
+    rot[2] = glm::normalize(rot[2]);
+
+    // --- Continuous emit: accumulate fractional spawns for exact rates. ---
+    em.spawnAccumulator += em.spawnRate * dt;
+    while (em.spawnAccumulator >= 1.0f) {
+        em.spawnAccumulator -= 1.0f;
+        if (em.liveCount >= em.maxParticles) { em.spawnAccumulator = 0.0f; break; }
+        SpawnOne(em, origin, rot);
+    }
+
+    // --- Burst emit: a clump at once. Repeats every burstInterval, or fires
+    // a single shot at start when the interval is non-positive. ---
+    if (em.burstCount > 0) {
+        em.burstTimer -= dt;
+        if (em.burstTimer <= 0.0f) {
+            for (std::size_t k = 0; k < em.burstCount; ++k) {
+                if (em.liveCount >= em.maxParticles) break;
+                SpawnOne(em, origin, rot);
+            }
+            em.burstTimer = (em.burstInterval > 0.0f)
+                          ? em.burstTimer + em.burstInterval
+                          : std::numeric_limits<float>::max();   // one-shot
+        }
+    }
+
+    // --- Integrate / age / lerp / kill. Swap-remove keeps the live span
+    // contiguous; the swapped-in particle is re-processed at the same index. ---
+    for (std::size_t i = 0; i < em.liveCount; ) {
+        auto& p = em.pool[i];
+        p.age += dt;
+        if (p.age >= p.lifetime) {
+            em.pool[i] = em.pool[--em.liveCount];
+            continue;
+        }
+
+        p.vel += em.gravity * dt;
+        p.pos += p.vel * dt;
+
+        const float t = p.age / p.lifetime;
+        p.color = glm::mix(em.startColor, em.endColor, t);
+        p.size  = glm::mix(p.startSize, em.endSize, t);
+        ++i;
     }
 }
 
-} // namespace
-
 void ParticleSystem::OnStart(Scene& scene)
 {
-    ResetPools(scene);
+    for (auto [e, em] : scene.View<ParticleEmitterComponent>().each())
+        ParticleSim::Reset(em);
 }
 
 void ParticleSystem::OnDestroy(Scene& scene)
 {
-    ResetPools(scene);
+    for (auto [e, em] : scene.View<ParticleEmitterComponent>().each())
+        ParticleSim::Reset(em);
 }
 
 void ParticleSystem::OnUpdate(Scene& scene, float dt)
 {
     if (dt <= 0.0f) return;
 
-    for (auto [e, em] : scene.View<ParticleEmitterComponent>().each()) {
-        if (em.maxParticles == 0) { em.liveCount = 0; continue; }
-
-        // Lazily size the pool to the configured cap; clamp the live span if the
-        // cap shrank (e.g. edited at runtime).
-        if (em.pool.size() != em.maxParticles)
-            em.pool.resize(em.maxParticles);
-        if (em.liveCount > em.maxParticles)
-            em.liveCount = em.maxParticles;
-
-        // Emitter world transform: position is the spawn origin, the rotation
-        // (orthonormalized to drop scale) orients the shape. One-frame-late is
-        // fine — TransformSystem updates after the gameplay systems.
-        const glm::mat4 world  = scene.GetTransformSystem().GetWorldMatrix(e);
-        const glm::vec3 origin = glm::vec3(world[3]);
-        glm::mat3 rot(world);
-        rot[0] = glm::normalize(rot[0]);
-        rot[1] = glm::normalize(rot[1]);
-        rot[2] = glm::normalize(rot[2]);
-
-        // --- Continuous emit: accumulate fractional spawns for exact rates. ---
-        em.spawnAccumulator += em.spawnRate * dt;
-        while (em.spawnAccumulator >= 1.0f) {
-            em.spawnAccumulator -= 1.0f;
-            if (em.liveCount >= em.maxParticles) { em.spawnAccumulator = 0.0f; break; }
-            SpawnOne(em, origin, rot);
-        }
-
-        // --- Burst emit: a clump at once. Repeats every burstInterval, or fires
-        // a single shot at start when the interval is non-positive. ---
-        if (em.burstCount > 0) {
-            em.burstTimer -= dt;
-            if (em.burstTimer <= 0.0f) {
-                for (std::size_t k = 0; k < em.burstCount; ++k) {
-                    if (em.liveCount >= em.maxParticles) break;
-                    SpawnOne(em, origin, rot);
-                }
-                em.burstTimer = (em.burstInterval > 0.0f)
-                              ? em.burstTimer + em.burstInterval
-                              : std::numeric_limits<float>::max();   // one-shot
-            }
-        }
-
-        // --- Integrate / age / lerp / kill. Swap-remove keeps the live span
-        // contiguous; the swapped-in particle is re-processed at the same index. ---
-        for (std::size_t i = 0; i < em.liveCount; ) {
-            auto& p = em.pool[i];
-            p.age += dt;
-            if (p.age >= p.lifetime) {
-                em.pool[i] = em.pool[--em.liveCount];
-                continue;
-            }
-
-            p.vel += em.gravity * dt;
-            p.pos += p.vel * dt;
-
-            const float t = p.age / p.lifetime;
-            p.color = glm::mix(em.startColor, em.endColor, t);
-            p.size  = glm::mix(p.startSize, em.endSize, t);
-            ++i;
-        }
-    }
+    // One-frame-late world transform is fine — TransformSystem updates after
+    // the gameplay systems.
+    for (auto [e, em] : scene.View<ParticleEmitterComponent>().each())
+        ParticleSim::Step(em, dt, scene.GetTransformSystem().GetWorldMatrix(e));
 }
