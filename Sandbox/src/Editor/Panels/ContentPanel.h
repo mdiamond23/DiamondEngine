@@ -11,7 +11,7 @@
 #include <unordered_set>
 #include <cstdint>
 
-enum class AssetType { Folder, Texture, Mesh, SkinnedMesh, Material, Shader, Scene, PhysicsMat, AnimSM, Font, File };
+enum class AssetType { Folder, Texture, Mesh, SkinnedMesh, Material, Shader, Scene, PhysicsMat, AnimSM, Font, Audio, File };
 
 struct ContentItem {
     std::filesystem::path path;
@@ -83,4 +83,8 @@ private:
     int                             m_SelectionPivotIdx = -1;
 
     float m_IconSize = 68.0f;
+
+    // The audio asset currently being auditioned (empty when nothing is playing), so
+    // the panel can show a stop affordance on it and toggle play/stop on re-click.
+    std::string m_PreviewingPath;
 };

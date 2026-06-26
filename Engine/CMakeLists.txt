@@ -154,6 +154,19 @@ if(MSVC AND TARGET Jolt)
     target_compile_options(Jolt PRIVATE /WX- /wd4865)
 endif()
 
+# miniaudio — single-header audio backend. Populated only (no CMakeLists we want);
+# its implementation is compiled into MyEngine via src/Audio/miniaudio_impl.c, and the
+# include dir is added PRIVATE so the dependency never leaks into Engine's public API.
+FetchContent_Declare(
+    miniaudio
+    GIT_REPOSITORY https://github.com/mackron/miniaudio.git
+    GIT_TAG        0.11.25
+)
+FetchContent_GetProperties(miniaudio)
+if(NOT miniaudio_POPULATED)
+    FetchContent_Populate(miniaudio)
+endif()
+
 find_package(OpenGL REQUIRED)
 
 add_library(MyEngine STATIC
@@ -164,6 +177,8 @@ add_library(MyEngine STATIC
     src/Assets/ModelImporter.cpp
     src/Assets/GltfImporter.cpp
     src/Assets/cgltf_impl.c
+    src/Audio/miniaudio_impl.c
+    src/Audio/AudioEngine.cpp
     src/Animation/AnimationSampler.cpp
     src/Animation/AnimationSystem.cpp
     src/Animation/AnimatorAPI.cpp
@@ -215,6 +230,7 @@ target_include_directories(MyEngine
         src
         ${CMAKE_SOURCE_DIR}/ThirdParty/cgltf
         ${joltphysics_SOURCE_DIR}
+        ${miniaudio_SOURCE_DIR}
 )
 
 target_link_libraries(MyEngine
@@ -230,3 +246,14 @@ target_link_libraries(MyEngine
     PRIVATE
         Jolt
 )
+
+# miniaudio backend platform libs (it dynamically loads the device APIs at runtime).
+# Windows needs nothing extra; macOS needs the CoreAudio frameworks; Linux needs
+# pthread/m/dl for threading and dlopen of ALSA/PulseAudio.
+if(APPLE)
+    target_link_libraries(MyEngine PRIVATE
+        "-framework CoreFoundation" "-framework CoreAudio" "-framework AudioToolbox")
+elseif(UNIX)
+    find_package(Threads REQUIRED)
+    target_link_libraries(MyEngine PRIVATE Threads::Threads ${CMAKE_DL_LIBS} m)
+endif()

@@ -2,6 +2,7 @@
 #include "../PhysicsMaterialAsset.h"
 #include "../AnimStateMachineAsset.h"
 #include "../MaterialAsset.h"
+#include <Audio/AudioAPI.h>
 #include <imgui.h>
 
 #ifndef ASSETS_DIR
@@ -25,6 +26,7 @@
 #include <filesystem>
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstring>
 
 namespace fs = std::filesystem;
@@ -158,6 +160,7 @@ static const char* AssetTypeName(AssetType t) {
         case AssetType::PhysicsMat:  return "Physics Mat";
         case AssetType::AnimSM:      return "State Machine";
         case AssetType::Font:        return "Font";
+        case AssetType::Audio:       return "Audio";
         default:                     return "File";
     }
 }
@@ -185,6 +188,7 @@ AssetType ContentPanel::GetAssetType(const fs::path& p) {
     if (ext == ".glsl" || ext == ".vert" || ext == ".frag") return AssetType::Shader;
     if (ext == ".scene")   return AssetType::Scene;
     if (ext == ".ttf" || ext == ".otf") return AssetType::Font;
+    if (ext == ".wav" || ext == ".mp3" || ext == ".flac" || ext == ".ogg") return AssetType::Audio;
     return AssetType::File;
 }
 
@@ -280,7 +284,8 @@ void ContentPanel::DrawFileIcon(ImVec2 tl, float size, const std::string& ext) {
     ImDrawList* dl  = ImGui::GetWindowDrawList();
     float fold = size * 0.22f;
 
-    const bool isFont = (ext == ".ttf" || ext == ".otf");
+    const bool isFont  = (ext == ".ttf" || ext == ".otf");
+    const bool isAudio = (ext == ".wav" || ext == ".mp3" || ext == ".flac" || ext == ".ogg");
 
     ImU32 pageCol;
     if (ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".bmp" || ext == ".tga")
@@ -295,6 +300,8 @@ void ContentPanel::DrawFileIcon(ImVec2 tl, float size, const std::string& ext) {
         pageCol = IM_COL32(180, 120, 210, 255);
     else if (isFont)
         pageCol = IM_COL32(225, 185, 95, 255);   // warm gold — fonts stand out
+    else if (isAudio)
+        pageCol = IM_COL32(225, 95, 150, 255);   // magenta-pink — audio stands out
     else
         pageCol = IM_COL32(155, 155, 170, 255);
 
@@ -330,6 +337,23 @@ void ContentPanel::DrawFileIcon(ImVec2 tl, float size, const std::string& ext) {
         ImVec2  ts = f->CalcTextSizeA(fs, 10000.0f, 0.0f, "Aa");
         ImVec2  tp = { tl.x + (size - ts.x) * 0.5f, tl.y + (size - ts.y) * 0.5f };
         dl->AddText(f, fs, tp, IM_COL32(45, 33, 10, 255), "Aa");
+    }
+
+    // Audio clips get a beamed eighth-note (drawn, since the default font has no
+    // musical glyph): two note heads + stems + a connecting beam.
+    if (isAudio) {
+        ImU32       ink = IM_COL32(40, 12, 28, 255);
+        float       cx  = tl.x + size * 0.5f;
+        float       cy  = tl.y + size * 0.5f;
+        float       r   = size * 0.085f;                 // note-head radius
+        ImVec2      h1  = { cx - size * 0.13f, cy + size * 0.13f };
+        ImVec2      h2  = { cx + size * 0.17f, cy + size * 0.05f };
+        float       top = cy - size * 0.20f;
+        dl->AddCircleFilled(h1, r, ink);
+        dl->AddCircleFilled(h2, r, ink);
+        dl->AddLine({ h1.x + r * 0.9f, h1.y }, { h1.x + r * 0.9f, top + size * 0.08f }, ink, 2.0f);
+        dl->AddLine({ h2.x + r * 0.9f, h2.y }, { h2.x + r * 0.9f, top }, ink, 2.0f);
+        dl->AddLine({ h1.x + r * 0.9f, top + size * 0.08f }, { h2.x + r * 0.9f, top }, ink, 3.0f);
     }
 }
 
@@ -423,6 +447,17 @@ void ContentPanel::DrawItems() {
 
         // Right-click context menu
         if (ImGui::BeginPopupContextItem("##ctx")) {
+            // Audio assets can be auditioned straight from the menu.
+            if (item.type == AssetType::Audio) {
+                std::string p = ToUtf8(item.path);
+                bool playingThis = (m_PreviewingPath == p) && Audio::IsPreviewPlaying();
+                if (playingThis) {
+                    if (ImGui::MenuItem("Stop")) { Audio::StopPreview(); m_PreviewingPath.clear(); }
+                } else {
+                    if (ImGui::MenuItem("Play")) { if (Audio::PreviewClip(p)) m_PreviewingPath = p; }
+                }
+                ImGui::Separator();
+            }
             if (ImGui::MenuItem("Rename")) {
                 m_RenamingPath   = item.path;
                 m_RenameFocusSet = false;
@@ -524,6 +559,19 @@ void ContentPanel::DrawItems() {
                         IM_COL32(80, 215, 205, 255), 4.0f, 0, 2.0f);
         }
 
+        // Audio audition indicator: a pulsing green ring + stop badge on the clip
+        // that's currently previewing, signalling "playing — click again to stop".
+        if (item.type == AssetType::Audio &&
+            m_PreviewingPath == ToUtf8(item.path) && Audio::IsPreviewPlaying()) {
+            float pulse = 0.5f + 0.5f * std::sin((float)ImGui::GetTime() * 6.0f);
+            dl->AddRect(iPos, {iPos.x + iSz, iPos.y + iSz},
+                        IM_COL32(90, 230, 120, (int)(140 + 90 * pulse)), 4.0f, 0, 2.5f);
+            ImVec2 bc = { iPos.x + iSz - 9.0f, iPos.y + 9.0f };
+            dl->AddCircleFilled(bc, 8.0f, IM_COL32(20, 25, 20, 220));
+            dl->AddRectFilled({bc.x - 3.5f, bc.y - 3.5f}, {bc.x + 3.5f, bc.y + 3.5f},
+                              IM_COL32(120, 240, 150, 255), 1.0f);
+        }
+
         // Name + type label drawn directly via DrawList so we don't disturb the cursor
         float  lineH = ImGui::GetTextLineHeight();
         float  ty    = cellOrigin.y + m_IconSize + 2.0f;
@@ -587,7 +635,8 @@ void ContentPanel::DrawItems() {
                                          item.type == AssetType::PhysicsMat ||
                                          item.type == AssetType::AnimSM ||
                                          item.type == AssetType::Material ||
-                                         item.type == AssetType::Font);
+                                         item.type == AssetType::Font ||
+                                         item.type == AssetType::Audio);
             const char* payloadType = isInspectorDraggable ? "CONTENT_ITEM_PATH"
                                                             : "CONTENT_MOVE";
             ImGui::SetDragDropPayload(payloadType, pathStr.c_str(), pathStr.size() + 1);
@@ -629,6 +678,16 @@ void ContentPanel::DrawItems() {
             pendingNav = item.path;
         else if (dblClick && item.type == AssetType::Scene && m_OnSceneOpen)
             m_OnSceneOpen(ToUtf8(item.path));
+        else if (dblClick && item.type == AssetType::Audio) {
+            // Toggle audition: stop if this clip is already previewing, else play it.
+            std::string p = ToUtf8(item.path);
+            if (m_PreviewingPath == p && Audio::IsPreviewPlaying()) {
+                Audio::StopPreview();
+                m_PreviewingPath.clear();
+            } else {
+                m_PreviewingPath = Audio::PreviewClip(p) ? p : std::string{};
+            }
+        }
 
         ImGui::NextColumn();
         ImGui::PopID();

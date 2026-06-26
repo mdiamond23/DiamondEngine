@@ -34,6 +34,8 @@
 #include "Scene/UIRenderSystem.h"
 #include "Scene/UIInputSystem.h"
 #include "Scene/UINavigationSystem.h"
+#include "Audio/AudioEngine.h"
+#include "Audio/AudioAPI.h"
 #include <cmath>
 #include <string>
 #include <cstdio>
@@ -205,6 +207,11 @@ int main()
     if (!gladLoadGL(glfwGetProcAddress)) { glfwTerminate(); return -1; }
 
     Input::Init(window);
+
+    // Audio backend (miniaudio). One engine for the app lifetime; the 3D listener is
+    // driven from the active camera each frame and Update() reclaims finished voices.
+    AudioEngine audioEngine;
+    audioEngine.Init();
 
     // ImGui init
     IMGUI_CHECKVERSION();
@@ -792,6 +799,9 @@ int main()
         scene.UpdateSystems(deltaTime);
         Input::SetEnabled(true);
 
+        // Audio housekeeping: reclaim finished one-shot voices, enforce the voice cap.
+        audioEngine.Update();
+
         // Update world transforms — rebuilds sorted arrays if hierarchy changed, then linear pass.
         scene.GetTransformSystem().Update(scene.GetRegistry());
 
@@ -898,10 +908,20 @@ int main()
             graph.Execute();
         };
 
+        // Point the 3D audio listener at whatever camera produced `view`. Derived from
+        // the inverse view matrix: column 3 = position, -column 2 = forward, column 1 =
+        // up. Called for the editor camera below, then overridden by the game camera in
+        // play mode so spatial audio tracks the camera the player actually hears from.
+        auto updateListener = [&](const glm::mat4& v) {
+            glm::mat4 inv = glm::inverse(v);
+            Audio::SetListener(glm::vec3(inv[3]), -glm::vec3(inv[2]), glm::vec3(inv[1]));
+        };
+
         // --- Scene viewport: editor camera ---
         view = g_camera.GetViewMatrix();
         proj = glm::perspective(glm::radians(g_camera.Zoom), (float)fbW / (float)fbH, 0.1f, 100.0f);
         cullAndExecute(viewportFBO);
+        updateListener(view);
 
         // Debug visualization — drawn into the editor viewport after the scene pass,
         // all behind the viewport's "Debug Draw" toggle (colliders, ragdoll bodies,
@@ -935,6 +955,7 @@ int main()
             view = glm::inverse(camW);
             proj = glm::perspective(glm::radians(cc.fov), (float)fbW / (float)fbH, cc.nearClip, cc.farClip);
             cullAndExecute(gameViewportFBO);
+            updateListener(view);   // play mode: hear from the game camera
 
             // In-game UI HUD: resolve the scene's canvases against the game
             // viewport, hit-test the cursor, and draw every widget on top of the
@@ -1058,6 +1079,8 @@ int main()
     if (gameViewportFBO) glDeleteFramebuffers(1, &gameViewportFBO);
     if (previewTex)      glDeleteTextures(1,     &previewTex);
     if (previewFBO)      glDeleteFramebuffers(1, &previewFBO);
+
+    audioEngine.Shutdown();
 
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplGlfw_Shutdown();
