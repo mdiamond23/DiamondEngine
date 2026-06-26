@@ -177,6 +177,7 @@ void EditorLayer::SetupDockspace()
     ImGui::DockBuilderDockWindow("Content Browser", down);
     ImGui::DockBuilderDockWindow("Console", down);
     ImGui::DockBuilderDockWindow("Animator", down);
+    ImGui::DockBuilderDockWindow("Mixer", down);
     ImGui::DockBuilderFinish(id);
 }
 
@@ -465,4 +466,5 @@ void EditorLayer::OnImGuiRender()
     m_Animator.OnImGuiRender();
     m_Console.OnImGuiRender();
     m_ParticlePreview.OnImGuiRender();
+    m_Mixer.OnImGuiRender();
 }

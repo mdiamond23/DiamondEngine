@@ -11,6 +11,7 @@
 #include "Panels/ConsolePanel.h"
 #include "Panels/AnimatorPanel.h"
 #include "Panels/ParticlePreviewPanel.h"
+#include "Panels/MixerPanel.h"
 
 class EditorLayer {
 public:
@@ -49,5 +50,6 @@ private:
     ConsolePanel      m_Console;
     AnimatorPanel     m_Animator;
     ParticlePreviewPanel m_ParticlePreview;
+    MixerPanel        m_Mixer;
     EditorContext     m_Context;
 };

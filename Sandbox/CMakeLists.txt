@@ -13,6 +13,7 @@ add_executable(Sandbox
     src/Editor/Panels/GameViewportPanel.cpp
     src/Editor/Panels/AnimatorPanel.cpp
     src/Editor/Panels/ParticlePreviewPanel.cpp
+    src/Editor/Panels/MixerPanel.cpp
 )
 
 target_link_libraries(Sandbox PRIVATE MyEngine nlohmann_json::nlohmann_json imguizmo miniz)

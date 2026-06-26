@@ -454,4 +454,16 @@ bool IsBusMuted(Bus bus)
     return impl->busMuted[(int)bus];
 }
 
+int ActiveVoiceCount()
+{
+    auto* impl = AudioFacadeAccess::Active();
+    return impl ? (int)impl->voices.size() : 0;
+}
+
+int VoiceCap()
+{
+    auto* impl = AudioFacadeAccess::Active();
+    return impl ? impl->voiceCap : 0;
+}
+
 } // namespace Audio

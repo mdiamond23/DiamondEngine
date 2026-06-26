@@ -120,7 +120,17 @@ namespace Audio {
   `Audio::PreviewClip` in edit mode — a streamed preview voice with a pulsing green
   ring + stop badge on the playing clip. *(Phase 2 — done.)* Inspector audition lands
   with the AudioSource inspector in Phase 3.
-- **Mixer panel**: DAW-style per-bus strips (volume slider + mute/solo + master).
+- **Mixer panel**: DAW-style per-bus strips (vertical volume fader + dB readout +
+  mute/solo), Master set off from the four routable groups. Volume is owned by the
+  engine (read/written via the facade); mute/solo are resolved in the panel — it keeps
+  the user's mute intent and solo set, then each frame pushes the effective mute
+  (`userMute || any-solo-and-not-soloed`) to the engine. Solo never touches Master;
+  engine mute is lossless so toggling solo can't lose a fader. *(Phase 4 — done.)*
+- **Spatial-audio viewport visualization**: under the viewport "Debug Draw" toggle,
+  each 3D `AudioSourceComponent` draws a min/max distance sphere pair (selected one
+  highlighted) and, when not omnidirectional, its directional cone; each enabled
+  `AudioListenerComponent` draws a marker + forward line. Built on `DebugDraw`,
+  alongside the IK/collider debug draw. *(Phase 4 — done.)*
 
 ## ECS
 
@@ -129,8 +139,17 @@ namespace Audio {
   attenuation model, min/max distance, cone params, `stream` flag. Position synced
   from `TransformComponent`. Registered via `ComponentRegistry` for free
   serialization + inspector (same path as `ParticleEmitterComponent`).
-- Events: `SoundStarted` / `SoundFinished` / `UISoundPlayed` published through
-  `Scene::Events()` (entt dispatcher), matching the UI event-bus pattern.
+- Events: `SoundStarted` / `SoundFinished` / `UISoundPlayed` (in `Scene/Events.h`)
+  published through `Scene::Events()` (entt dispatcher), matching the UI event-bus
+  pattern. **Crucially these are entity-scoped, so they cover only component-owned
+  source voices** — fire-and-forget one-shots are reclaimed inside `AudioEngine`,
+  which has no entity/Scene context, so they emit nothing. `AudioSystem` publishes
+  `SoundStarted` when it starts a source voice and `SoundFinished` when it reclaims a
+  finished non-looping one (both `enqueue`d, drained end-of-frame). **UI-bus
+  integration:** `AudioSystem` subscribes to `UIButtonFired` in `OnStart`; a fired
+  button carrying an `AudioSourceComponent` is played as a one-shot on its bus
+  (`Play2D` unless `is3D`), then `UISoundPlayed` is published. Subscriptions are
+  dropped when `StopPlay` clears the dispatcher.
 
 ## Build phases
 
@@ -140,8 +159,10 @@ namespace Audio {
 2. `AudioClip` content-browser asset + audition preview.
 3. `AudioListenerComponent` + `AudioSourceComponent` + Transform sync + serialization
    + inspector.
-4. Mixer panel.
-5. entt events (`SoundFinished`, etc.) + UI-bus integration + voice-limiting polish.
+4. Mixer panel + spatial-audio viewport visualization. *(done.)*
+5. entt events (`SoundStarted`/`SoundFinished`/`UISoundPlayed`) + UI-bus integration
+   + voice-limiting polish (mixer voice meter via `Audio::ActiveVoiceCount`/`VoiceCap`).
+   *(done — audio system feature-complete.)*
 
 ## Deferred (architected for, not built)
 

@@ -79,4 +79,13 @@ namespace Audio {
     void  SetBusMuted(Bus bus, bool muted);
     bool  IsBusMuted(Bus bus);
 
+    // ---- Diagnostics -------------------------------------------------------
+    // Number of live fire-and-forget one-shot voices (the pool subject to the
+    // voice cap). Excludes component-owned source voices and the preview voice.
+    // Returns 0 when no engine is active.
+    int ActiveVoiceCount();
+
+    // The current ceiling on one-shot voices (kDefaultVoiceCap). 0 when inactive.
+    int VoiceCap();
+
 } // namespace Audio

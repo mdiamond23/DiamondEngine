@@ -1,6 +1,7 @@
 #include "Scene/AudioSystem.h"
 #include "Scene/Scene.h"
 #include "Scene/Components.h"
+#include "Scene/Events.h"
 #include "Audio/AudioAPI.h"
 
 #include <glm/glm.hpp>
@@ -31,12 +32,19 @@ Audio::SourceParams MakeParams(const AudioSourceComponent& s)
 
 void AudioSystem::OnStart(Scene& scene)
 {
+    m_scene = &scene;
+
     // Fresh play session: clear any runtime voice state left in the components so
     // playOnStart fires cleanly. Voices themselves are spun up in OnUpdate.
     for (auto [e, s] : scene.View<AudioSourceComponent>().each()) {
         s._voice   = Audio::kInvalidVoice;
         s._started = false;
     }
+
+    // UI-bus integration: a fired button that carries an AudioSourceComponent
+    // sounds it as a one-shot. The connection is dropped when StopPlay clears the
+    // dispatcher, so it never outlives this system.
+    scene.Events().sink<UIButtonFired>().connect<&AudioSystem::OnButtonFired>(*this);
 }
 
 void AudioSystem::OnUpdate(Scene& scene, float /*dt*/)
@@ -61,13 +69,17 @@ void AudioSystem::OnUpdate(Scene& scene, float /*dt*/)
             s._started = true;
             const Audio::ClipHandle clip = Audio::Load(s.clipPath, s.stream);
             s._voice = Audio::PlaySource(clip, pos, MakeParams(s));
+            if (s._voice != Audio::kInvalidVoice)
+                scene.Events().enqueue<SoundStarted>(SoundStarted{ e });
         }
 
         if (s._voice != Audio::kInvalidVoice) {
             if (!Audio::IsVoicePlaying(s._voice)) {
-                // A non-looping source finished — release it and forget the handle.
+                // A non-looping source finished — release it, forget the handle,
+                // and tell the bus.
                 Audio::StopVoice(s._voice);
                 s._voice = Audio::kInvalidVoice;
+                scene.Events().enqueue<SoundFinished>(SoundFinished{ e });
             } else {
                 if (s.is3D) Audio::SetVoicePosition(s._voice, pos);
                 Audio::SetVoiceVolume(s._voice, s.volume);
@@ -85,4 +97,27 @@ void AudioSystem::OnDestroy(Scene& scene)
         s._voice   = Audio::kInvalidVoice;
         s._started = false;
     }
+    m_scene = nullptr;   // dispatcher subscription is cleared by Scene::StopPlay
+}
+
+void AudioSystem::OnButtonFired(const UIButtonFired& ev)
+{
+    if (!m_scene) return;
+    auto& reg = m_scene->GetRegistry();
+    if (!reg.valid(ev.button) || !reg.all_of<AudioSourceComponent>(ev.button)) return;
+
+    const auto& s = reg.get<AudioSourceComponent>(ev.button);
+    if (s.clipPath.empty()) return;
+
+    const Audio::ClipHandle clip = Audio::Load(s.clipPath, s.stream);
+
+    // Buttons are normally non-spatial; fire as 2D unless the source opts into 3D.
+    if (s.is3D) {
+        const glm::vec3 pos = glm::vec3(m_scene->GetTransformSystem().GetWorldMatrix(ev.button)[3]);
+        Audio::PlayOneShot(clip, pos, s.bus, s.volume, s.pitch);
+    } else {
+        Audio::Play2D(clip, s.bus, s.volume, s.pitch);
+    }
+
+    m_scene->Events().enqueue<UISoundPlayed>(UISoundPlayed{ ev.button });
 }

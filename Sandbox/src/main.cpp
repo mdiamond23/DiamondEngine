@@ -3,6 +3,7 @@
 #include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/constants.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <vector>
 #include <unordered_map>
@@ -134,6 +135,78 @@ static void DrawIKDebug(Scene& scene, entt::entity sel, int activeChain)
             DebugDraw::Sphere(poleWorld, 0.03f, poleCol);
             DebugDraw::Line(cMid, poleWorld, poleCol);
         }
+    }
+}
+
+// Draws a wireframe cone outline: edge lines from the apex plus a ring at the far
+// end, opening along `dir` (normalized) with the given half-angle. Used to picture
+// an audio source's directional cone.
+static void DrawConeOutline(glm::vec3 apex, glm::vec3 dir, float halfAngleRad,
+                            float length, glm::vec3 color)
+{
+    // Orthonormal basis around the cone axis.
+    glm::vec3 up = std::abs(dir.y) > 0.99f ? glm::vec3(1, 0, 0) : glm::vec3(0, 1, 0);
+    glm::vec3 right = glm::normalize(glm::cross(dir, up));
+    up = glm::normalize(glm::cross(right, dir));
+
+    const float ringRadius = std::tan(halfAngleRad) * length;
+    const glm::vec3 ringCenter = apex + dir * length;
+
+    constexpr int kSeg = 24;
+    glm::vec3 prev{};
+    for (int i = 0; i <= kSeg; ++i) {
+        float a = (float)i / kSeg * glm::two_pi<float>();
+        glm::vec3 p = ringCenter + (right * std::cos(a) + up * std::sin(a)) * ringRadius;
+        if (i > 0) DebugDraw::Line(prev, p, color);
+        // Four edge spokes from the apex.
+        if (i % (kSeg / 4) == 0) DebugDraw::Line(apex, p, color);
+        prev = p;
+    }
+}
+
+// Draws spatial-audio cues into the debug-line buffer: a min/max distance sphere
+// pair per 3D AudioSourceComponent (the selected one highlighted), the directional
+// cone when the source is not omnidirectional, and a marker + forward line for each
+// enabled AudioListenerComponent. Gated by EditorContext::showDebugDraw at the call
+// site, mirroring DrawIKDebug.
+static void DrawAudioDebug(Scene& scene, entt::entity sel)
+{
+    auto& reg = scene.GetRegistry();
+    auto& ts  = scene.GetTransformSystem();
+
+    for (auto [e, src] : reg.view<AudioSourceComponent>().each()) {
+        if (!src.is3D) continue;
+        const glm::mat4 w = ts.GetWorldMatrix(e);
+        const glm::vec3 pos = glm::vec3(w[3]);
+        const bool selected = (e == sel);
+
+        // Min distance (full volume) and max distance (falloff end).
+        const glm::vec3 minCol = selected ? glm::vec3(0.25f, 1.0f, 0.4f) : glm::vec3(0.15f, 0.6f, 0.25f);
+        const glm::vec3 maxCol = selected ? glm::vec3(0.3f, 0.6f, 1.0f)  : glm::vec3(0.18f, 0.35f, 0.6f);
+        DebugDraw::Sphere(pos, src.minDistance, minCol);
+        DebugDraw::Sphere(pos, src.maxDistance, maxCol);
+
+        // Directional cone (only when it actually narrows the field).
+        if (src.coneOuterAngle < 359.9f) {
+            const glm::vec3 fwd = glm::normalize(-glm::vec3(w[2]));
+            const float len = std::min(src.maxDistance, src.minDistance * 4.0f + 1.0f);
+            const glm::vec3 coneCol = selected ? glm::vec3(1.0f, 0.8f, 0.2f) : glm::vec3(0.6f, 0.5f, 0.15f);
+            DrawConeOutline(pos, fwd, glm::radians(src.coneOuterAngle * 0.5f), len, coneCol);
+            if (src.coneInnerAngle < src.coneOuterAngle - 0.1f)
+                DrawConeOutline(pos, fwd, glm::radians(src.coneInnerAngle * 0.5f), len,
+                                coneCol * 0.7f + glm::vec3(0.0f, 0.0f, 0.1f));
+        }
+    }
+
+    // Listeners: a small marker and a forward line (-Z), like the AudioSystem basis.
+    for (auto [e, l] : reg.view<AudioListenerComponent>().each()) {
+        if (!l.enabled) continue;
+        const glm::mat4 w = ts.GetWorldMatrix(e);
+        const glm::vec3 pos = glm::vec3(w[3]);
+        const glm::vec3 fwd = glm::normalize(-glm::vec3(w[2]));
+        const glm::vec3 col(1.0f, 0.55f, 0.15f);
+        DebugDraw::Sphere(pos, 0.15f, col);
+        DebugDraw::Line(pos, pos + fwd * 0.6f, col);
     }
 }
 
@@ -936,6 +1009,7 @@ int main()
             if (scene.IsPlaying()) Physics::DrawRagdolls(scene);
             DrawIKDebug(scene, editorLayer.GetContext().PrimarySelection(),
                         editorLayer.GetContext().activeIKChain);
+            DrawAudioDebug(scene, editorLayer.GetContext().PrimarySelection());
         }
         DebugDraw::Flush(proj * view);
 
