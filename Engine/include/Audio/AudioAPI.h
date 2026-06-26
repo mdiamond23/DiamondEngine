@@ -31,6 +31,29 @@ namespace Audio {
     // Bus::Music for a stinger or Bus::SFX for a non-positional effect.
     void Play2D(ClipHandle clip, Bus bus = Bus::UI, float volume = 1.0f, float pitch = 1.0f);
 
+    // ---- Source voices (component-owned) -----------------------------------
+    // Starts a persistent voice for an AudioSourceComponent and returns a handle to
+    // drive it. Unlike PlayOneShot, this voice is NOT auto-reclaimed and is exempt
+    // from the voice cap — the owner keeps it alive and must StopVoice() it (looping
+    // sources play until then). Returns kInvalidVoice on an invalid clip or inactive
+    // engine. `params.spatial` toggles 3D positioning; the rest configure the mixer
+    // bus, level, looping, and the spatializer (attenuation / distance / cone).
+    VoiceHandle PlaySource(ClipHandle clip, const glm::vec3& position, const SourceParams& params);
+
+    // Stops and releases a source voice. A silent no-op on kInvalidVoice or a handle
+    // that has already been reclaimed.
+    void StopVoice(VoiceHandle voice);
+
+    // Live edits to a playing source voice; no-ops on a stale handle. Lets the owning
+    // component push transform/volume/pitch changes to an in-flight sound each frame.
+    void SetVoicePosition(VoiceHandle voice, const glm::vec3& position);
+    void SetVoiceVolume  (VoiceHandle voice, float volume);
+    void SetVoicePitch   (VoiceHandle voice, float pitch);
+
+    // True while the voice exists and has not finished. A non-looping voice that has
+    // played to its end reports false, so the owner can clear its handle and release it.
+    bool IsVoicePlaying(VoiceHandle voice);
+
     // ---- Listener ----------------------------------------------------------
     // Sets the single 3D listener (typically driven from the active camera). `forward`
     // and `up` need not be normalized. `velocity` feeds Doppler; pass 0 to disable it.

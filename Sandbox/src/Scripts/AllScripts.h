@@ -9,3 +9,5 @@
 #include "Punch.h"
 #include "CameraDirector.h"
 #include "ParticleEmitterEditor.h"
+#include "AudioComponentsEditor.h"
+#include "PlayAudioOnSpace.h"

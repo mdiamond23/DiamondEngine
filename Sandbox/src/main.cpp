@@ -30,6 +30,7 @@
 #include "Renderer/Renderer2D.h"
 #include "Renderer/ParticleRenderer.h"
 #include "Scene/ParticleSystem.h"
+#include "Scene/AudioSystem.h"
 #include "Scene/UISystem.h"
 #include "Scene/UIRenderSystem.h"
 #include "Scene/UIInputSystem.h"
@@ -921,7 +922,10 @@ int main()
         view = g_camera.GetViewMatrix();
         proj = glm::perspective(glm::radians(g_camera.Zoom), (float)fbW / (float)fbH, 0.1f, 100.0f);
         cullAndExecute(viewportFBO);
-        updateListener(view);
+        // Edit mode auditions spatial audio from the editor camera. In play mode the
+        // listener is owned by the scene (AudioListenerComponent, or the game camera
+        // below), so don't let the editor camera clobber it.
+        if (!scene.IsPlaying()) updateListener(view);
 
         // Debug visualization — drawn into the editor viewport after the scene pass,
         // all behind the viewport's "Debug Draw" toggle (colliders, ragdoll bodies,
@@ -955,7 +959,11 @@ int main()
             view = glm::inverse(camW);
             proj = glm::perspective(glm::radians(cc.fov), (float)fbW / (float)fbH, cc.nearClip, cc.farClip);
             cullAndExecute(gameViewportFBO);
-            updateListener(view);   // play mode: hear from the game camera
+            // Hear from the game camera, unless the scene has an AudioListenerComponent
+            // — in which case AudioSystem already drove the listener from its transform.
+            bool sceneHasListener = false;
+            for (auto le : scene.View<AudioListenerComponent>()) { (void)le; sceneHasListener = true; break; }
+            if (!sceneHasListener) updateListener(view);   // play mode: hear from the game camera
 
             // In-game UI HUD: resolve the scene's canvases against the game
             // viewport, hit-test the cursor, and draw every widget on top of the

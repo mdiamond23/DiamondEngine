@@ -6,6 +6,8 @@
 #include <spdlog/spdlog.h>
 #include <vector>
 #include <string>
+#include <unordered_map>
+#include <glm/gtc/constants.hpp>
 
 // ---------------------------------------------------------------------------
 // All miniaudio state lives in this PIMPL struct, defined only in this TU so no
@@ -149,6 +151,74 @@ struct AudioEngine::Impl
         voices.push_back(s);
         return s;
     }
+
+    // ---- component-owned source voices ------------------------------------
+    // Persistent voices keyed by an ever-increasing handle. Unlike the one-shot
+    // pool, these are owned by an AudioSourceComponent: never cap-evicted, never
+    // auto-reclaimed in Update() — the owner stops them (or Shutdown does).
+    std::unordered_map<Audio::VoiceHandle, ma_sound*> sources;
+    Audio::VoiceHandle nextSource = 1;
+
+    static ma_attenuation_model ToMaAttenuation(Audio::AttenuationModel m)
+    {
+        switch (m) {
+            case Audio::AttenuationModel::None:        return ma_attenuation_model_none;
+            case Audio::AttenuationModel::Linear:      return ma_attenuation_model_linear;
+            case Audio::AttenuationModel::Exponential: return ma_attenuation_model_exponential;
+            case Audio::AttenuationModel::Inverse:
+            default:                                   return ma_attenuation_model_inverse;
+        }
+    }
+
+    ma_sound* FindSource(Audio::VoiceHandle v)
+    {
+        auto it = sources.find(v);
+        return it == sources.end() ? nullptr : it->second;
+    }
+
+    Audio::VoiceHandle StartSource(Audio::ClipHandle clip, const glm::vec3& pos,
+                                   const Audio::SourceParams& p)
+    {
+        if (clip >= clips.size() || !clips[clip].valid) return Audio::kInvalidVoice;
+        const Clip& c = clips[clip];
+
+        ma_uint32 flags = (c.stream || p.stream) ? MA_SOUND_FLAG_STREAM : MA_SOUND_FLAG_DECODE;
+        if (!p.spatial) flags |= MA_SOUND_FLAG_NO_SPATIALIZATION;
+
+        auto* s = new ma_sound{};
+        if (ma_sound_init_from_file(&engine, c.path.c_str(), flags, GroupFor(p.bus), nullptr, s)
+            != MA_SUCCESS) {
+            delete s;
+            spdlog::warn("[Audio] failed to start source '{}'", c.path);
+            return Audio::kInvalidVoice;
+        }
+
+        ma_sound_set_volume(s, p.volume);
+        ma_sound_set_pitch(s, p.pitch);
+        ma_sound_set_looping(s, p.loop ? MA_TRUE : MA_FALSE);
+        if (p.spatial) {
+            ma_sound_set_position(s, pos.x, pos.y, pos.z);
+            ma_sound_set_attenuation_model(s, ToMaAttenuation(p.attenuation));
+            ma_sound_set_min_distance(s, p.minDistance);
+            ma_sound_set_max_distance(s, p.maxDistance);
+            ma_sound_set_rolloff(s, p.rolloff);
+            ma_sound_set_cone(s, glm::radians(p.coneInnerAngle),
+                                 glm::radians(p.coneOuterAngle), p.coneOuterGain);
+        }
+        ma_sound_start(s);
+
+        Audio::VoiceHandle h = nextSource++;
+        sources[h] = s;
+        return h;
+    }
+
+    void StopSource(Audio::VoiceHandle v)
+    {
+        auto it = sources.find(v);
+        if (it == sources.end()) return;
+        DestroyVoice(it->second);
+        sources.erase(it);
+    }
 };
 
 // Grants the namespace-level Audio:: facade access to the active engine's Impl without
@@ -207,6 +277,8 @@ void AudioEngine::Shutdown()
 
     for (auto* s : m_Impl->voices) m_Impl->DestroyVoice(s);
     m_Impl->voices.clear();
+    for (auto& [h, s] : m_Impl->sources) m_Impl->DestroyVoice(s);
+    m_Impl->sources.clear();
     m_Impl->StopPreviewVoice();
 
     if (m_Impl->engineOK) {
@@ -273,6 +345,52 @@ void Play2D(ClipHandle clip, Bus bus, float volume, float pitch)
     auto* impl = AudioFacadeAccess::Active();
     if (!impl) return;
     impl->StartVoice(clip, bus, volume, pitch, /*spatial*/false);
+}
+
+VoiceHandle PlaySource(ClipHandle clip, const glm::vec3& position, const SourceParams& params)
+{
+    auto* impl = AudioFacadeAccess::Active();
+    if (!impl) return kInvalidVoice;
+    return impl->StartSource(clip, position, params);
+}
+
+void StopVoice(VoiceHandle voice)
+{
+    auto* impl = AudioFacadeAccess::Active();
+    if (!impl) return;
+    impl->StopSource(voice);
+}
+
+void SetVoicePosition(VoiceHandle voice, const glm::vec3& position)
+{
+    auto* impl = AudioFacadeAccess::Active();
+    if (!impl) return;
+    if (ma_sound* s = impl->FindSource(voice))
+        ma_sound_set_position(s, position.x, position.y, position.z);
+}
+
+void SetVoiceVolume(VoiceHandle voice, float volume)
+{
+    auto* impl = AudioFacadeAccess::Active();
+    if (!impl) return;
+    if (ma_sound* s = impl->FindSource(voice))
+        ma_sound_set_volume(s, volume);
+}
+
+void SetVoicePitch(VoiceHandle voice, float pitch)
+{
+    auto* impl = AudioFacadeAccess::Active();
+    if (!impl) return;
+    if (ma_sound* s = impl->FindSource(voice))
+        ma_sound_set_pitch(s, pitch);
+}
+
+bool IsVoicePlaying(VoiceHandle voice)
+{
+    auto* impl = AudioFacadeAccess::Active();
+    if (!impl) return false;
+    ma_sound* s = impl->FindSource(voice);
+    return s && !ma_sound_at_end(s);
 }
 
 bool PreviewClip(const std::string& path)

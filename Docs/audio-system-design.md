@@ -134,7 +134,7 @@ namespace Audio {
 
 ## Build phases
 
-1. **(this PR)** miniaudio wired in; `AudioEngine` + buses + `Audio::PlayOneShot`/
+1. miniaudio implemented in; `AudioEngine` + buses + `Audio::PlayOneShot`/
    `Play2D` + listener + bus mixer API + voice cap. App init/update/shutdown. No ECS,
    no events yet — goal is "sound comes out."
 2. `AudioClip` content-browser asset + audition preview.

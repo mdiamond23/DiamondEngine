@@ -11,6 +11,7 @@
 #include "Renderer/Material.h"
 #include "Renderer/Frustum.h"
 #include "Renderer/ParticleRenderer.h"
+#include "Audio/AudioTypes.h"
 #include <cstdint>
 
 namespace Diamond { class Texture; class Font; }
@@ -259,4 +260,42 @@ struct ParticleEmitterComponent {
     std::size_t liveCount        = 0;
     float       spawnAccumulator = 0.0f;   // fractional carry for sub-frame spawn rates
     float       burstTimer       = 0.0f;   // counts down to the next burst
+};
+
+// ---- Audio -----------------------------------------------------------------
+// Marks the entity whose world transform drives the single 3D audio listener
+// (typically the camera). During play, AudioSystem syncs its position/forward/up
+// to Audio::SetListener; in edit mode the editor camera drives the listener. Only
+// one listener is honored — if several exist, the first enabled one wins.
+struct AudioListenerComponent {
+    bool enabled = true;
+};
+
+// Plays a clip from the entity's world position. AudioSystem owns the live voice:
+// it starts the clip when play begins (if playOnStart), follows the transform while
+// `is3D`, and pushes volume/pitch edits to the running sound each frame. The spatial
+// fields map straight onto miniaudio's spatializer. Registered with the
+// ComponentRegistry for free serialization + inspector (same path as particles).
+struct AudioSourceComponent {
+    std::string clipPath;                 // asset path; loaded to a ClipHandle on play
+    Audio::Bus  bus         = Audio::Bus::SFX;
+    float       volume      = 1.0f;
+    float       pitch       = 1.0f;
+    bool        loop        = false;
+    bool        playOnStart = true;
+    bool        stream      = false;      // long tracks: decode from disk on the fly
+
+    // ---- 3D spatialization (ignored when is3D is false) ----
+    bool                    is3D           = true;
+    Audio::AttenuationModel attenuation    = Audio::AttenuationModel::Inverse;
+    float                   minDistance    = 1.0f;    // full volume within this radius
+    float                   maxDistance    = 100.0f;
+    float                   rolloff        = 1.0f;
+    float                   coneInnerAngle = 360.0f;  // degrees; 360 = omnidirectional
+    float                   coneOuterAngle = 360.0f;  // degrees
+    float                   coneOuterGain  = 0.0f;    // gain beyond the outer cone
+
+    // ---- runtime: transient, NOT serialized and NOT shown in the inspector ----
+    Audio::VoiceHandle _voice   = Audio::kInvalidVoice; // active voice, or kInvalidVoice
+    bool               _started = false;                // playOnStart has fired
 };

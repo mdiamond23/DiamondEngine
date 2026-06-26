@@ -2294,6 +2294,11 @@ void InspectorPanel::OnImGuiRender() {
     {
         if (!desc.has(*scene, entity)) continue;
 
+        // Isolate each registered component's widget IDs so identical labels in
+        // different components (e.g. an "Enabled" checkbox in both CameraDirector
+        // and AudioListener) don't collide into the same ImGui ID.
+        ImGui::PushID(desc.name.c_str());
+
         ImGui::Separator();
         ImGui::Text("%s", desc.name.c_str());
 
@@ -2307,6 +2312,8 @@ void InspectorPanel::OnImGuiRender() {
 
         if (desc.drawInspector)
             desc.drawInspector(*scene, entity);
+
+        ImGui::PopID();
     }
 
     // Deferred removals — component refs (mc/lc) are no longer live past here
