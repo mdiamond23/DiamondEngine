@@ -169,6 +169,45 @@ endif()
 
 find_package(OpenGL REQUIRED)
 
+# ── Vulkan backend dependencies ──────────────────────────────────────────────
+# Fetched (not the system loader): we load entry points via volk with
+# VK_NO_PROTOTYPES, so MyEngine never links the Vulkan loader directly. The
+# installed Vulkan SDK still supplies validation layers + glslangValidator at
+# dev time. See Docs/vulkan-renderer-design.md.
+if(DIAMOND_ENABLE_VULKAN)
+    FetchContent_Declare(
+        vulkan_headers
+        GIT_REPOSITORY https://github.com/KhronosGroup/Vulkan-Headers.git
+        GIT_TAG        v1.4.350
+        GIT_SHALLOW    TRUE
+    )
+    FetchContent_MakeAvailable(vulkan_headers)
+
+    # Point volk's header search at the fetched Vulkan-Headers (its CMake checks
+    # VULKAN_HEADERS_INSTALL_DIR first). Forces use of our pinned 1.4.350 headers
+    # rather than whatever the installed SDK happens to be. ON+FORCE also clears
+    # any stale VOLK_PULL_IN_VULKAN cache value.
+    set(VOLK_PULL_IN_VULKAN ON CACHE BOOL "" FORCE)
+    set(VULKAN_HEADERS_INSTALL_DIR "${vulkan_headers_SOURCE_DIR}" CACHE PATH "" FORCE)
+    FetchContent_Declare(
+        volk
+        GIT_REPOSITORY https://github.com/zeux/volk.git
+        GIT_TAG        vulkan-sdk-1.4.350.0
+        GIT_SHALLOW    TRUE
+    )
+    FetchContent_MakeAvailable(volk)
+
+    # VMA is header-only; its single implementation TU is compiled into MyEngine
+    # via src/Platform/Vulkan/vma_impl.cpp (mirrors the miniaudio_impl.c pattern).
+    FetchContent_Declare(
+        vma
+        GIT_REPOSITORY https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator.git
+        GIT_TAG        v3.4.0
+        GIT_SHALLOW    TRUE
+    )
+    FetchContent_MakeAvailable(vma)
+endif()
+
 add_library(MyEngine STATIC
     src/DebugDraw.cpp
     src/Core/Input.cpp
@@ -247,6 +286,28 @@ target_link_libraries(MyEngine
     PRIVATE
         Jolt
 )
+
+# ── Vulkan backend wiring ────────────────────────────────────────────────────
+# volk + VMA are PRIVATE: Vulkan types never appear in MyEngine's public headers
+# (same discipline as Jolt). VK_NO_PROTOTYPES forces all calls through volk's
+# loaded pointers. DIAMOND_ENABLE_VULKAN gates the backend at compile time.
+if(DIAMOND_ENABLE_VULKAN)
+    target_sources(MyEngine PRIVATE
+        src/Platform/Vulkan/vma_impl.cpp
+        src/Platform/Vulkan/VulkanContext.cpp
+        src/Platform/Vulkan/VulkanSwapchain.cpp
+        src/Platform/Vulkan/VulkanRenderer.cpp
+        src/Platform/Vulkan/VulkanClearDemo.cpp
+    )
+    target_link_libraries(MyEngine PRIVATE
+        volk
+        VulkanMemoryAllocator
+    )
+    target_compile_definitions(MyEngine PRIVATE
+        DIAMOND_ENABLE_VULKAN
+        VK_NO_PROTOTYPES
+    )
+endif()
 
 # miniaudio backend platform libs (it dynamically loads the device APIs at runtime).
 # Windows needs nothing extra; macOS needs the CoreAudio frameworks; Linux needs
