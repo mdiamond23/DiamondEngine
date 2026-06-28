@@ -144,6 +144,7 @@ void VulkanContext::Init(GLFWwindow* window) {
     volkLoadDevice(m_Device);            // device-level entry points — direct dispatch, no trampoline
 
     CreateAllocator();
+    CreateImmediateContext();
 
     spdlog::info("[Vulkan] Context ready on '{}' (Vulkan {}.{}.{})",
                  m_DeviceProps.deviceName,
@@ -290,9 +291,48 @@ void VulkanContext::CreateAllocator() {
     VK_CHECK(vmaCreateAllocator(&ci, &m_Allocator));
 }
 
+void VulkanContext::CreateImmediateContext() {
+    VkCommandPoolCreateInfo poolInfo{ VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO };
+    poolInfo.flags            = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
+    poolInfo.queueFamilyIndex = m_Queues.graphics;
+    VK_CHECK(vkCreateCommandPool(m_Device, &poolInfo, nullptr, &m_ImmediatePool));
+
+    VkFenceCreateInfo fenceInfo{ VK_STRUCTURE_TYPE_FENCE_CREATE_INFO };
+    VK_CHECK(vkCreateFence(m_Device, &fenceInfo, nullptr, &m_ImmediateFence));
+}
+
+void VulkanContext::ImmediateSubmit(const std::function<void(VkCommandBuffer)>& record) {
+    VkCommandBufferAllocateInfo allocInfo{ VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO };
+    allocInfo.commandPool        = m_ImmediatePool;
+    allocInfo.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    allocInfo.commandBufferCount = 1;
+    VkCommandBuffer cmd = VK_NULL_HANDLE;
+    VK_CHECK(vkAllocateCommandBuffers(m_Device, &allocInfo, &cmd));
+
+    VkCommandBufferBeginInfo begin{ VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
+    begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    VK_CHECK(vkBeginCommandBuffer(cmd, &begin));
+    record(cmd);
+    VK_CHECK(vkEndCommandBuffer(cmd));
+
+    VkCommandBufferSubmitInfo cmdInfo{ VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO };
+    cmdInfo.commandBuffer = cmd;
+    VkSubmitInfo2 submit{ VK_STRUCTURE_TYPE_SUBMIT_INFO_2 };
+    submit.commandBufferInfoCount = 1;
+    submit.pCommandBufferInfos    = &cmdInfo;
+    VK_CHECK(vkQueueSubmit2(m_GraphicsQueue, 1, &submit, m_ImmediateFence));
+
+    VK_CHECK(vkWaitForFences(m_Device, 1, &m_ImmediateFence, VK_TRUE, UINT64_MAX));
+    VK_CHECK(vkResetFences(m_Device, 1, &m_ImmediateFence));
+    // Frees the command buffer back to the pool for the next immediate submit.
+    VK_CHECK(vkResetCommandPool(m_Device, m_ImmediatePool, 0));
+}
+
 void VulkanContext::Shutdown() {
     // Reverse creation order. Caller is responsible for having destroyed all
     // swapchain/frame resources first (vkDeviceWaitIdle before this).
+    if (m_ImmediateFence) { vkDestroyFence(m_Device, m_ImmediateFence, nullptr); m_ImmediateFence = VK_NULL_HANDLE; }
+    if (m_ImmediatePool)  { vkDestroyCommandPool(m_Device, m_ImmediatePool, nullptr); m_ImmediatePool = VK_NULL_HANDLE; }
     if (m_Allocator) { vmaDestroyAllocator(m_Allocator); m_Allocator = VK_NULL_HANDLE; }
     if (m_Device)    { vkDestroyDevice(m_Device, nullptr); m_Device = VK_NULL_HANDLE; }
     if (m_Surface)   { vkDestroySurfaceKHR(m_Instance, m_Surface, nullptr); m_Surface = VK_NULL_HANDLE; }

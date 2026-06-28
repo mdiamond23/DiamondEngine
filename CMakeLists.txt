@@ -36,8 +36,8 @@ add_subdirectory(Sandbox)
 add_executable(GltfDump Tools/GltfDump.cpp)
 target_link_libraries(GltfDump PRIVATE MyEngine)
 
-# M0 Vulkan smoke test — clears the screen via the Vulkan backend.
+# M1 Vulkan smoke test — draws a spinning triangle via the Vulkan backend.
 if(DIAMOND_ENABLE_VULKAN)
-    add_executable(VulkanClear Tools/VulkanClear.cpp)
-    target_link_libraries(VulkanClear PRIVATE MyEngine)
+    add_executable(VulkanTriangle Tools/VulkanTriangle.cpp)
+    target_link_libraries(VulkanTriangle PRIVATE MyEngine)
 endif()

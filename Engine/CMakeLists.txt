@@ -260,6 +260,7 @@ add_library(MyEngine STATIC
     src/Scene/UUIDGenerator.cpp
     src/Scene/Physics/PhysicsSystem.cpp
     src/Scene/Physics/RagdollConfig.cpp
+    src/Renderer/RHI/RHIDevice.cpp
 )
 
 target_include_directories(MyEngine
@@ -296,16 +297,50 @@ if(DIAMOND_ENABLE_VULKAN)
         src/Platform/Vulkan/vma_impl.cpp
         src/Platform/Vulkan/VulkanContext.cpp
         src/Platform/Vulkan/VulkanSwapchain.cpp
-        src/Platform/Vulkan/VulkanRenderer.cpp
-        src/Platform/Vulkan/VulkanClearDemo.cpp
+        src/Platform/Vulkan/VulkanBuffer.cpp
+        src/Platform/Vulkan/RHI/VulkanRHIDevice.cpp
+        src/Platform/Vulkan/RHI/VulkanRHIResources.cpp
+        src/Platform/Vulkan/VulkanTriangleDemo.cpp
     )
     target_link_libraries(MyEngine PRIVATE
         volk
         VulkanMemoryAllocator
     )
+
+    # ── M1: compile triangle GLSL → SPIR-V at build time ─────────────────────
+    # glslangValidator ships with the Vulkan SDK. Offline compilation keeps M1
+    # dependency-light (no shaderc/glslang FetchContent); runtime libshaderc for
+    # hot-reload arrives with the material/shader-library port. The output dir is
+    # baked in as DIAMOND_VULKAN_SHADER_DIR so the loader needs no working-dir
+    # assumptions.
+    find_program(GLSLANG_VALIDATOR NAMES glslangValidator
+        HINTS $ENV{VULKAN_SDK}/Bin $ENV{VULKAN_SDK}/bin)
+    if(NOT GLSLANG_VALIDATOR)
+        message(FATAL_ERROR
+            "glslangValidator not found — install the Vulkan SDK (or set VULKAN_SDK). "
+            "Required to compile the Vulkan backend's shaders.")
+    endif()
+
+    set(_vk_shader_src ${CMAKE_SOURCE_DIR}/Assets/Shaders/Vulkan)
+    set(_vk_spv_dir    ${CMAKE_BINARY_DIR}/shaders)
+    file(MAKE_DIRECTORY ${_vk_spv_dir})
+    set(_vk_spv_outputs)
+    foreach(_shader triangle.vert triangle.frag)
+        add_custom_command(
+            OUTPUT  ${_vk_spv_dir}/${_shader}.spv
+            COMMAND ${GLSLANG_VALIDATOR} -V ${_vk_shader_src}/${_shader} -o ${_vk_spv_dir}/${_shader}.spv
+            DEPENDS ${_vk_shader_src}/${_shader}
+            COMMENT "Compiling Vulkan shader ${_shader} → SPIR-V"
+            VERBATIM)
+        list(APPEND _vk_spv_outputs ${_vk_spv_dir}/${_shader}.spv)
+    endforeach()
+    add_custom_target(VulkanShaders DEPENDS ${_vk_spv_outputs})
+    add_dependencies(MyEngine VulkanShaders)
+
     target_compile_definitions(MyEngine PRIVATE
         DIAMOND_ENABLE_VULKAN
         VK_NO_PROTOTYPES
+        DIAMOND_VULKAN_SHADER_DIR="${_vk_spv_dir}"
     )
 endif()
 

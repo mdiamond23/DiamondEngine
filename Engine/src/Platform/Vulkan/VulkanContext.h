@@ -2,6 +2,7 @@
 
 #include "Platform/Vulkan/VulkanCommon.h"
 #include <cstdint>
+#include <functional>
 
 struct GLFWwindow;
 
@@ -44,6 +45,12 @@ public:
 
     const VkPhysicalDeviceProperties& DeviceProperties() const { return m_DeviceProps; }
 
+    // Records 'record' into a transient command buffer, submits it to the
+    // graphics queue, and blocks until it retires. For one-off GPU work outside
+    // the frame loop — staging copies, layout transitions during resource
+    // creation. Synchronous and not for per-frame use.
+    void ImmediateSubmit(const std::function<void(VkCommandBuffer)>& record);
+
 private:
     void CreateInstance();
     void CreateDebugMessenger();
@@ -51,6 +58,7 @@ private:
     void SelectPhysicalDevice();
     void CreateLogicalDevice();
     void CreateAllocator();
+    void CreateImmediateContext();
 
     VkInstance               m_Instance       = VK_NULL_HANDLE;
     VkDebugUtilsMessengerEXT m_DebugMessenger = VK_NULL_HANDLE;
@@ -63,6 +71,10 @@ private:
     VkQueue            m_GraphicsQueue = VK_NULL_HANDLE;
     VkQueue            m_PresentQueue  = VK_NULL_HANDLE;
     VkQueue            m_TransferQueue = VK_NULL_HANDLE;
+
+    // Transient pool + fence backing ImmediateSubmit (one-off out-of-frame work).
+    VkCommandPool      m_ImmediatePool  = VK_NULL_HANDLE;
+    VkFence            m_ImmediateFence = VK_NULL_HANDLE;
 
     VkPhysicalDeviceProperties m_DeviceProps{};
     bool                       m_ValidationEnabled = false;

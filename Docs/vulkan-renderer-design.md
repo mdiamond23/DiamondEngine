@@ -1,6 +1,14 @@
 # Vulkan Renderer Design
 
-Status: **DESIGN** — no code yet. This doc precedes any porting work.
+Status: **M2.1 complete** — foundation (M0) + first triangle (M1) + the
+backend-neutral RHI seam are done and play-verified on Windows. M2.1: the RHI
+interfaces (`RHIDevice`/`RHICommandList`/`RHIBuffer`/`RHIShader`/`RHIPipeline`/
+`RHIResourceSet`/enums under `Engine/Include/Renderer/RHI/`) now exist with a
+Vulkan backend (`Engine/src/Platform/Vulkan/RHI/`), and the triangle is recorded
+*once* against the RHI. The M1 `VulkanRenderer` prototype was absorbed into
+`VulkanRHIDevice` and deleted. **Next: M2.2** = OpenGL RHI backend so the same
+pass code runs on both (the "write once, run on both" proof). The rest of this
+doc is the original design and remains the roadmap.
 
 ## Goal
 
