@@ -298,21 +298,22 @@ if(DIAMOND_ENABLE_VULKAN)
         src/Platform/Vulkan/VulkanContext.cpp
         src/Platform/Vulkan/VulkanSwapchain.cpp
         src/Platform/Vulkan/VulkanBuffer.cpp
+        src/Platform/Vulkan/VulkanImage.cpp
         src/Platform/Vulkan/RHI/VulkanRHIDevice.cpp
         src/Platform/Vulkan/RHI/VulkanRHIResources.cpp
-        src/Platform/Vulkan/VulkanTriangleDemo.cpp
+        src/Platform/Vulkan/VulkanMeshDemo.cpp
     )
     target_link_libraries(MyEngine PRIVATE
         volk
         VulkanMemoryAllocator
     )
 
-    # ── M1: compile triangle GLSL → SPIR-V at build time ─────────────────────
-    # glslangValidator ships with the Vulkan SDK. Offline compilation keeps M1
-    # dependency-light (no shaderc/glslang FetchContent); runtime libshaderc for
-    # hot-reload arrives with the material/shader-library port. The output dir is
-    # baked in as DIAMOND_VULKAN_SHADER_DIR so the loader needs no working-dir
-    # assumptions.
+    # ── Compile the Vulkan backend's GLSL → SPIR-V at build time ─────────────
+    # glslangValidator ships with the Vulkan SDK. Offline compilation keeps the
+    # dependency footprint light (no shaderc/glslang FetchContent); runtime
+    # libshaderc for hot-reload arrives with the material/shader-library port. The
+    # output dir is baked in as DIAMOND_VULKAN_SHADER_DIR so the loader needs no
+    # working-dir assumptions.
     find_program(GLSLANG_VALIDATOR NAMES glslangValidator
         HINTS $ENV{VULKAN_SDK}/Bin $ENV{VULKAN_SDK}/bin)
     if(NOT GLSLANG_VALIDATOR)
@@ -325,7 +326,7 @@ if(DIAMOND_ENABLE_VULKAN)
     set(_vk_spv_dir    ${CMAKE_BINARY_DIR}/shaders)
     file(MAKE_DIRECTORY ${_vk_spv_dir})
     set(_vk_spv_outputs)
-    foreach(_shader triangle.vert triangle.frag)
+    foreach(_shader mesh.vert mesh.frag)
         add_custom_command(
             OUTPUT  ${_vk_spv_dir}/${_shader}.spv
             COMMAND ${GLSLANG_VALIDATOR} -V ${_vk_shader_src}/${_shader} -o ${_vk_spv_dir}/${_shader}.spv

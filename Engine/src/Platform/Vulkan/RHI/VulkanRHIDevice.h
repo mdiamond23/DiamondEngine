@@ -4,6 +4,7 @@
 #include "Renderer/RHI/RHICommandList.h"
 #include "Platform/Vulkan/VulkanContext.h"
 #include "Platform/Vulkan/VulkanSwapchain.h"
+#include "Platform/Vulkan/VulkanImage.h"
 
 #include <array>
 #include <cstdint>
@@ -55,15 +56,22 @@ public:
     // RHIDevice interface.
     std::unique_ptr<RHIBuffer>   CreateBuffer(const RHIBufferDesc& desc) override;
     std::unique_ptr<RHIShader>   CreateShader(const RHIShaderDesc& desc) override;
+    std::unique_ptr<RHITexture>  CreateTexture(const RHITextureDesc& desc) override;
     std::unique_ptr<RHIPipeline> CreatePipeline(const RHIPipelineDesc& desc) override;
     std::unique_ptr<RHIResourceSet> CreateResourceSet(
         RHIPipeline* pipeline, uint32_t setIndex,
-        const std::vector<RHIBufferBinding>& buffers) override;
+        const std::vector<RHIBufferBinding>&  buffers,
+        const std::vector<RHITextureBinding>& textures) override;
     RHIFormat SwapchainFormat() const override;
+    RHIFormat DepthFormat() const override;
     RHICommandList* BeginFrame(const std::array<float, 4>& clearColor) override;
     void EndFrame() override;
     void NotifyResize() override { m_FramebufferResized = true; }
     void WaitIdle() override { vkDeviceWaitIdle(m_Ctx.Device()); }
+
+    // Per-frame depth attachment format (D32_SFLOAT); also surfaced through the
+    // RHI DepthFormat() so pipelines match.
+    static constexpr VkFormat kDepthFormat = VK_FORMAT_D32_SFLOAT;
 
     // Backend-internal accessors used by the resource classes.
     VulkanContext&  Ctx()             { return m_Ctx; }
@@ -73,6 +81,8 @@ public:
 private:
     void CreateFrameResources();
     void DestroyFrameResources();
+    void CreateDepthResources();
+    void DestroyDepthResources();
     void CreateDescriptorPool();
     void RecreateSwapchain();
     void RecreateRenderFinishedSemaphores();
@@ -88,6 +98,11 @@ private:
         VkFence         inFlight       = VK_NULL_HANDLE;
     };
     std::array<Frame, kFramesInFlight> m_Frames;
+
+    // One depth image per frame-in-flight (a single shared depth buffer would be
+    // raced by two concurrent frames). Sized to the swapchain extent and
+    // recreated with it. Cleared every frame (loadOp CLEAR), never stored.
+    std::array<VulkanImage, kFramesInFlight> m_DepthImages;
 
     // One render-finished semaphore per swapchain image (present waits can't be
     // reused while still pending; acquisition order isn't ours to control).

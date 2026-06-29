@@ -2,6 +2,7 @@
 
 #include "Renderer/RHI/RHIResources.h"
 #include "Platform/Vulkan/VulkanBuffer.h"
+#include "Platform/Vulkan/VulkanImage.h"
 #include "Platform/Vulkan/RHI/VulkanRHIDevice.h"
 
 #include <array>
@@ -31,6 +32,24 @@ private:
     VulkanBuffer m_Static;   // dynamic == false
     std::array<VulkanBuffer, VulkanRHIDevice::kFramesInFlight> m_Ring{};   // dynamic == true
     std::array<void*,        VulkanRHIDevice::kFramesInFlight> m_Mapped{};
+};
+
+// Sampled texture behind RHITexture: a device-local image uploaded once from CPU
+// pixels (staging copy + layout transitions) plus its sampler. Static — read-only
+// on the GPU after creation, so a single image/view/sampler is shared by every
+// frame's descriptor set.
+class VulkanRHITexture : public RHITexture {
+public:
+    VulkanRHITexture(VulkanRHIDevice* device, const RHITextureDesc& desc);
+    ~VulkanRHITexture() override;
+
+    VkImageView View()    const { return m_Image.view; }
+    VkSampler   Sampler() const { return m_Sampler; }
+
+private:
+    VulkanRHIDevice* m_Device;
+    VulkanImage      m_Image;
+    VkSampler        m_Sampler = VK_NULL_HANDLE;
 };
 
 // A compiled SPIR-V module + the stage it feeds.
@@ -72,7 +91,8 @@ private:
 class VulkanRHIResourceSet : public RHIResourceSet {
 public:
     VulkanRHIResourceSet(VulkanRHIDevice* device, VulkanRHIPipeline* pipeline,
-                         uint32_t setIndex, const std::vector<RHIBufferBinding>& buffers);
+                         uint32_t setIndex, const std::vector<RHIBufferBinding>& buffers,
+                         const std::vector<RHITextureBinding>& textures);
     ~VulkanRHIResourceSet() override = default;   // sets are freed with the device pool
 
     VkDescriptorSet Handle(uint32_t frame) const { return m_Sets[frame]; }

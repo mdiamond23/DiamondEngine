@@ -32,6 +32,26 @@ public:
     virtual void Update(const void* data, uint64_t size) = 0;
 };
 
+// ── Texture ──────────────────────────────────────────────────────────────────
+struct RHITextureDesc {
+    uint32_t  width  = 0;
+    uint32_t  height = 0;
+    RHIFormat format = RHIFormat::RGBA8;
+
+    // Tightly-packed pixels matching 'format' (e.g. RGBA8 = 4 bytes/pixel),
+    // uploaded once through a staging buffer. Required — M3 textures are static.
+    const void* initialData = nullptr;
+
+    RHIFilter filter = RHIFilter::Linear;
+};
+
+// A sampled image + its sampler (a combined image-sampler in shader terms).
+// Static: uploaded once at creation, then read-only on the GPU.
+class RHITexture {
+public:
+    virtual ~RHITexture() = default;
+};
+
 // ── Shader ───────────────────────────────────────────────────────────────────
 struct RHIShaderDesc {
     RHIShaderStage  stage     = RHIShaderStage::None;
@@ -80,6 +100,13 @@ struct RHIPipelineDesc {
     RHIPrimitiveTopology topology    = RHIPrimitiveTopology::TriangleList;
     RHICullMode          cullMode    = RHICullMode::None;
     RHIFormat            colorFormat = RHIFormat::Undefined;   // render-target format
+
+    // Depth-buffer state. depthFormat == Undefined means the pipeline renders
+    // without a depth attachment (depthTest/depthWrite ignored). When set, it
+    // must match the device's DepthFormat() so dynamic rendering is compatible.
+    RHIFormat depthFormat = RHIFormat::Undefined;
+    bool      depthTest   = false;
+    bool      depthWrite  = false;
 };
 
 class RHIPipeline {
@@ -91,6 +118,11 @@ public:
 struct RHIBufferBinding {
     uint32_t   binding = 0;
     RHIBuffer* buffer  = nullptr;
+};
+
+struct RHITextureBinding {
+    uint32_t    binding = 0;
+    RHITexture* texture = nullptr;
 };
 
 class RHIResourceSet {

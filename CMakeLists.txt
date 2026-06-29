@@ -36,8 +36,8 @@ add_subdirectory(Sandbox)
 add_executable(GltfDump Tools/GltfDump.cpp)
 target_link_libraries(GltfDump PRIVATE MyEngine)
 
-# M1 Vulkan smoke test — draws a spinning triangle via the Vulkan backend.
+# Vulkan smoke test — draws a textured, lit, depth-tested cube via the RHI.
 if(DIAMOND_ENABLE_VULKAN)
-    add_executable(VulkanTriangle Tools/VulkanTriangle.cpp)
-    target_link_libraries(VulkanTriangle PRIVATE MyEngine)
+    add_executable(VulkanMesh Tools/VulkanMesh.cpp)
+    target_link_libraries(VulkanMesh PRIVATE MyEngine)
 endif()

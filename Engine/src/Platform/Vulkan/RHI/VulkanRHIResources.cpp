@@ -56,6 +56,74 @@ VkBuffer VulkanRHIBuffer::Handle(uint32_t frame) const {
     return m_Dynamic ? m_Ring[frame].handle : m_Static.handle;
 }
 
+// ── Texture ──────────────────────────────────────────────────────────────────
+
+namespace {
+// Bytes per pixel for the formats M3 can upload from CPU pixels.
+uint32_t BytesPerPixel(RHIFormat f) {
+    switch (f) {
+        case RHIFormat::RGBA8: return 4;
+        default:               return 4;   // only RGBA8 textures uploaded so far
+    }
+}
+} // namespace
+
+VulkanRHITexture::VulkanRHITexture(VulkanRHIDevice* device, const RHITextureDesc& desc)
+    : m_Device(device) {
+    VulkanContext& ctx       = m_Device->Ctx();
+    VmaAllocator   allocator = ctx.Allocator();
+    const VkDeviceSize bytes = static_cast<VkDeviceSize>(desc.width) * desc.height
+                             * BytesPerPixel(desc.format);
+
+    // Host-visible staging copy of the CPU pixels.
+    VmaAllocationInfo stagingInfo{};
+    VulkanBuffer staging = CreateBuffer(
+        allocator, bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_AUTO,
+        VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT,
+        &stagingInfo);
+    std::memcpy(stagingInfo.pMappedData, desc.initialData, static_cast<size_t>(bytes));
+
+    m_Image = CreateImage(ctx, desc.width, desc.height, ToVkFormat(desc.format),
+                          VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                          VK_IMAGE_ASPECT_COLOR_BIT);
+
+    ctx.ImmediateSubmit([&](VkCommandBuffer cmd) {
+        TransitionImageLayout(cmd, m_Image.image, VK_IMAGE_ASPECT_COLOR_BIT,
+                              VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                              VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                              VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+
+        VkBufferImageCopy copy{};
+        copy.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        copy.imageSubresource.layerCount = 1;
+        copy.imageExtent = { desc.width, desc.height, 1 };
+        vkCmdCopyBufferToImage(cmd, staging.handle, m_Image.image,
+                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+
+        TransitionImageLayout(cmd, m_Image.image, VK_IMAGE_ASPECT_COLOR_BIT,
+                              VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                              VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                              VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+    });
+    DestroyBuffer(allocator, staging);
+
+    VkSamplerCreateInfo samplerInfo{ VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO };
+    samplerInfo.magFilter    = ToVkFilter(desc.filter);
+    samplerInfo.minFilter    = ToVkFilter(desc.filter);
+    samplerInfo.mipmapMode   = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+    samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    samplerInfo.maxLod       = VK_LOD_CLAMP_NONE;
+    VK_CHECK(vkCreateSampler(ctx.Device(), &samplerInfo, nullptr, &m_Sampler));
+}
+
+VulkanRHITexture::~VulkanRHITexture() {
+    vkDestroySampler(m_Device->Ctx().Device(), m_Sampler, nullptr);
+    DestroyImage(m_Device->Ctx(), m_Image);
+}
+
 // ── Shader ───────────────────────────────────────────────────────────────────
 
 VulkanRHIShader::VulkanRHIShader(VulkanRHIDevice* device, const RHIShaderDesc& desc)
@@ -82,7 +150,7 @@ VulkanRHIPipeline::VulkanRHIPipeline(VulkanRHIDevice* device, const RHIPipelineD
     for (const RHIResourceBinding& b : desc.resourceBindings) {
         VkDescriptorSetLayoutBinding vb{};
         vb.binding         = b.binding;
-        vb.descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;   // only kind so far
+        vb.descriptorType  = ToVkDescriptorType(b.type);
         vb.descriptorCount = 1;
         vb.stageFlags      = ToVkShaderStages(b.stages);
         bindings.push_back(vb);
@@ -174,10 +242,21 @@ VulkanRHIPipeline::VulkanRHIPipeline(VulkanRHIDevice* device, const RHIPipelineD
     dynamicState.dynamicStateCount = 2;
     dynamicState.pDynamicStates    = dynamics;
 
+    // Depth test/write. Undefined depthFormat → no depth attachment for this
+    // pipeline (state disabled, format left UNDEFINED in the rendering info).
+    const bool hasDepth = desc.depthFormat != RHIFormat::Undefined;
+    VkPipelineDepthStencilStateCreateInfo depthStencil{ VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO };
+    depthStencil.depthTestEnable  = (hasDepth && desc.depthTest)  ? VK_TRUE : VK_FALSE;
+    depthStencil.depthWriteEnable = (hasDepth && desc.depthWrite) ? VK_TRUE : VK_FALSE;
+    depthStencil.depthCompareOp   = VK_COMPARE_OP_LESS;   // reversed-Z is a later optimization
+    depthStencil.minDepthBounds   = 0.0f;
+    depthStencil.maxDepthBounds   = 1.0f;
+
     VkFormat colorFormat = ToVkFormat(desc.colorFormat);
     VkPipelineRenderingCreateInfo renderingInfo{ VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO };
     renderingInfo.colorAttachmentCount    = 1;
     renderingInfo.pColorAttachmentFormats = &colorFormat;
+    renderingInfo.depthAttachmentFormat   = ToVkFormat(desc.depthFormat);
 
     VkGraphicsPipelineCreateInfo pipelineInfo{ VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO };
     pipelineInfo.pNext               = &renderingInfo;
@@ -188,6 +267,7 @@ VulkanRHIPipeline::VulkanRHIPipeline(VulkanRHIDevice* device, const RHIPipelineD
     pipelineInfo.pViewportState      = &viewportState;
     pipelineInfo.pRasterizationState = &raster;
     pipelineInfo.pMultisampleState   = &multisample;
+    pipelineInfo.pDepthStencilState  = &depthStencil;
     pipelineInfo.pColorBlendState    = &colorBlend;
     pipelineInfo.pDynamicState       = &dynamicState;
     pipelineInfo.layout              = m_Layout;
@@ -205,7 +285,8 @@ VulkanRHIPipeline::~VulkanRHIPipeline() {
 
 VulkanRHIResourceSet::VulkanRHIResourceSet(VulkanRHIDevice* device, VulkanRHIPipeline* pipeline,
                                            uint32_t /*setIndex*/,
-                                           const std::vector<RHIBufferBinding>& buffers)
+                                           const std::vector<RHIBufferBinding>& buffers,
+                                           const std::vector<RHITextureBinding>& textures)
     : m_Device(device) {
     VkDevice dev = m_Device->Ctx().Device();
 
@@ -219,10 +300,14 @@ VulkanRHIResourceSet::VulkanRHIResourceSet(VulkanRHIDevice* device, VulkanRHIPip
     alloc.pSetLayouts        = layouts.data();
     VK_CHECK(vkAllocateDescriptorSets(dev, &alloc, m_Sets.data()));
 
-    // Point each frame's set at that frame's copy of each bound buffer.
+    // Each frame's set points at that frame's copy of each bound buffer; textures
+    // are static, so the same image/sampler is written into every frame's set.
     for (uint32_t frame = 0; frame < VulkanRHIDevice::kFramesInFlight; ++frame) {
         std::vector<VkDescriptorBufferInfo> bufferInfos(buffers.size());
-        std::vector<VkWriteDescriptorSet>   writes(buffers.size());
+        std::vector<VkDescriptorImageInfo>  imageInfos(textures.size());
+        std::vector<VkWriteDescriptorSet>   writes;
+        writes.reserve(buffers.size() + textures.size());
+
         for (size_t i = 0; i < buffers.size(); ++i) {
             auto* buf = static_cast<VulkanRHIBuffer*>(buffers[i].buffer);
             bufferInfos[i] = {};
@@ -230,13 +315,31 @@ VulkanRHIResourceSet::VulkanRHIResourceSet(VulkanRHIDevice* device, VulkanRHIPip
             bufferInfos[i].offset = 0;
             bufferInfos[i].range  = VK_WHOLE_SIZE;
 
-            writes[i] = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
-            writes[i].dstSet          = m_Sets[frame];
-            writes[i].dstBinding      = buffers[i].binding;
-            writes[i].descriptorCount = 1;
-            writes[i].descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-            writes[i].pBufferInfo     = &bufferInfos[i];
+            VkWriteDescriptorSet w{ VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
+            w.dstSet          = m_Sets[frame];
+            w.dstBinding      = buffers[i].binding;
+            w.descriptorCount = 1;
+            w.descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            w.pBufferInfo     = &bufferInfos[i];
+            writes.push_back(w);
         }
+
+        for (size_t i = 0; i < textures.size(); ++i) {
+            auto* tex = static_cast<VulkanRHITexture*>(textures[i].texture);
+            imageInfos[i] = {};
+            imageInfos[i].sampler     = tex->Sampler();
+            imageInfos[i].imageView   = tex->View();
+            imageInfos[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+            VkWriteDescriptorSet w{ VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
+            w.dstSet          = m_Sets[frame];
+            w.dstBinding      = textures[i].binding;
+            w.descriptorCount = 1;
+            w.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            w.pImageInfo      = &imageInfos[i];
+            writes.push_back(w);
+        }
+
         vkUpdateDescriptorSets(dev, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
     }
 }

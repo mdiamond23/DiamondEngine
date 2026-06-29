@@ -33,8 +33,11 @@ enum class RHIPrimitiveTopology { TriangleList, TriangleStrip, LineList };
 
 enum class RHICullMode { None, Back, Front };
 
-// Resource kinds a descriptor binding can hold (grows with textures/storage).
-enum class RHIResourceType { UniformBuffer };
+// Resource kinds a descriptor binding can hold (grows with storage buffers etc).
+enum class RHIResourceType { UniformBuffer, CombinedImageSampler };
+
+// Texture sampling filter for minification/magnification.
+enum class RHIFilter { Nearest, Linear };
 
 // ── Bitmask enums ────────────────────────────────────────────────────────────
 // Which buffer roles a buffer may serve.

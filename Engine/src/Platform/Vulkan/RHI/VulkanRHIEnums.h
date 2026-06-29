@@ -69,4 +69,16 @@ inline VkIndexType ToVkIndexType(RHIIndexType t) {
     return t == RHIIndexType::U16 ? VK_INDEX_TYPE_UINT16 : VK_INDEX_TYPE_UINT32;
 }
 
+inline VkDescriptorType ToVkDescriptorType(RHIResourceType t) {
+    switch (t) {
+        case RHIResourceType::UniformBuffer:        return VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        case RHIResourceType::CombinedImageSampler: return VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    }
+    return VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+}
+
+inline VkFilter ToVkFilter(RHIFilter f) {
+    return f == RHIFilter::Nearest ? VK_FILTER_NEAREST : VK_FILTER_LINEAR;
+}
+
 } // namespace Diamond

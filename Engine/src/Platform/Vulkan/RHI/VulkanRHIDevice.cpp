@@ -7,33 +7,6 @@
 
 namespace Diamond {
 
-namespace {
-
-// synchronization2 image-layout transition, scoped to a color-attachment write.
-void TransitionImage(VkCommandBuffer cmd, VkImage image,
-                     VkImageLayout oldLayout, VkImageLayout newLayout,
-                     VkPipelineStageFlags2 srcStage, VkAccessFlags2 srcAccess,
-                     VkPipelineStageFlags2 dstStage, VkAccessFlags2 dstAccess) {
-    VkImageMemoryBarrier2 barrier{ VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2 };
-    barrier.srcStageMask  = srcStage;
-    barrier.srcAccessMask = srcAccess;
-    barrier.dstStageMask  = dstStage;
-    barrier.dstAccessMask = dstAccess;
-    barrier.oldLayout     = oldLayout;
-    barrier.newLayout     = newLayout;
-    barrier.image         = image;
-    barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    barrier.subresourceRange.levelCount = 1;
-    barrier.subresourceRange.layerCount = 1;
-
-    VkDependencyInfo dep{ VK_STRUCTURE_TYPE_DEPENDENCY_INFO };
-    dep.imageMemoryBarrierCount = 1;
-    dep.pImageMemoryBarriers    = &barrier;
-    vkCmdPipelineBarrier2(cmd, &dep);
-}
-
-} // namespace
-
 // ── Command list ─────────────────────────────────────────────────────────────
 
 void VulkanRHICommandList::BindPipeline(RHIPipeline* pipeline) {
@@ -77,12 +50,14 @@ VulkanRHIDevice::VulkanRHIDevice(GLFWwindow* window) : m_Window(window) {
     m_Ctx.Init(window);
     m_Swapchain.Init(&m_Ctx, window);
     CreateFrameResources();
+    CreateDepthResources();
     CreateDescriptorPool();
 }
 
 VulkanRHIDevice::~VulkanRHIDevice() {
     vkDeviceWaitIdle(m_Ctx.Device());
     if (m_DescriptorPool) vkDestroyDescriptorPool(m_Ctx.Device(), m_DescriptorPool, nullptr);
+    DestroyDepthResources();
     DestroyFrameResources();
     m_Swapchain.Destroy();
     m_Ctx.Shutdown();
@@ -113,17 +88,31 @@ void VulkanRHIDevice::CreateFrameResources() {
     RecreateRenderFinishedSemaphores();
 }
 
+void VulkanRHIDevice::CreateDepthResources() {
+    const VkExtent2D extent = m_Swapchain.Extent();
+    for (VulkanImage& img : m_DepthImages)
+        img = CreateImage(m_Ctx, extent.width, extent.height, kDepthFormat,
+                          VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+                          VK_IMAGE_ASPECT_DEPTH_BIT);
+}
+
+void VulkanRHIDevice::DestroyDepthResources() {
+    for (VulkanImage& img : m_DepthImages) DestroyImage(m_Ctx, img);
+}
+
 void VulkanRHIDevice::CreateDescriptorPool() {
-    // Generously sized for M2.1's handful of per-frame UBO sets; the per-frame
-    // reset / caching-allocator strategy is a later optimization.
-    VkDescriptorPoolSize poolSize{};
-    poolSize.type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    poolSize.descriptorCount = 64;
+    // Generously sized for the handful of per-frame sets M3 needs (UBOs +
+    // combined image samplers); the per-frame reset / caching-allocator strategy
+    // is a later optimization.
+    const VkDescriptorPoolSize poolSizes[] = {
+        { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,         64 },
+        { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 64 },
+    };
 
     VkDescriptorPoolCreateInfo poolInfo{ VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO };
     poolInfo.maxSets       = 64;
-    poolInfo.poolSizeCount = 1;
-    poolInfo.pPoolSizes    = &poolSize;
+    poolInfo.poolSizeCount = static_cast<uint32_t>(std::size(poolSizes));
+    poolInfo.pPoolSizes    = poolSizes;
     VK_CHECK(vkCreateDescriptorPool(m_Ctx.Device(), &poolInfo, nullptr, &m_DescriptorPool));
 }
 
@@ -146,6 +135,8 @@ void VulkanRHIDevice::RecreateSwapchain() {
     }
     m_Swapchain.Recreate();
     RecreateRenderFinishedSemaphores();
+    DestroyDepthResources();
+    CreateDepthResources();   // resize the depth buffers to the new extent
 }
 
 void VulkanRHIDevice::DestroyFrameResources() {
@@ -171,18 +162,28 @@ std::unique_ptr<RHIShader> VulkanRHIDevice::CreateShader(const RHIShaderDesc& de
     return std::make_unique<VulkanRHIShader>(this, desc);
 }
 
+std::unique_ptr<RHITexture> VulkanRHIDevice::CreateTexture(const RHITextureDesc& desc) {
+    return std::make_unique<VulkanRHITexture>(this, desc);
+}
+
 std::unique_ptr<RHIPipeline> VulkanRHIDevice::CreatePipeline(const RHIPipelineDesc& desc) {
     return std::make_unique<VulkanRHIPipeline>(this, desc);
 }
 
 std::unique_ptr<RHIResourceSet> VulkanRHIDevice::CreateResourceSet(
-    RHIPipeline* pipeline, uint32_t setIndex, const std::vector<RHIBufferBinding>& buffers) {
+    RHIPipeline* pipeline, uint32_t setIndex,
+    const std::vector<RHIBufferBinding>& buffers,
+    const std::vector<RHITextureBinding>& textures) {
     return std::make_unique<VulkanRHIResourceSet>(
-        this, static_cast<VulkanRHIPipeline*>(pipeline), setIndex, buffers);
+        this, static_cast<VulkanRHIPipeline*>(pipeline), setIndex, buffers, textures);
 }
 
 RHIFormat VulkanRHIDevice::SwapchainFormat() const {
     return FromVkFormat(m_Swapchain.ImageFormat());
+}
+
+RHIFormat VulkanRHIDevice::DepthFormat() const {
+    return FromVkFormat(kDepthFormat);
 }
 
 // ── Frame loop ───────────────────────────────────────────────────────────────
@@ -212,11 +213,22 @@ RHICommandList* VulkanRHIDevice::BeginFrame(const std::array<float, 4>& clearCol
     begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     VK_CHECK(vkBeginCommandBuffer(cmd, &begin));
 
-    TransitionImage(cmd, m_Swapchain.Image(m_AcquiredImageIndex),
-                    VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                    VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, 0,
-                    VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                    VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
+    TransitionImageLayout(cmd, m_Swapchain.Image(m_AcquiredImageIndex), VK_IMAGE_ASPECT_COLOR_BIT,
+                          VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                          VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, 0,
+                          VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                          VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
+
+    // Depth: discard last use (UNDEFINED) since loadOp CLEAR overwrites it.
+    VulkanImage& depth = m_DepthImages[m_CurrentFrame];
+    TransitionImageLayout(cmd, depth.image, VK_IMAGE_ASPECT_DEPTH_BIT,
+                          VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+                          VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT
+                              | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT, 0,
+                          VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT
+                              | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
+                          VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT
+                              | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT);
 
     VkRenderingAttachmentInfo color{ VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
     color.imageView   = m_Swapchain.ImageView(m_AcquiredImageIndex);
@@ -225,12 +237,20 @@ RHICommandList* VulkanRHIDevice::BeginFrame(const std::array<float, 4>& clearCol
     color.storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
     color.clearValue.color = { { clearColor[0], clearColor[1], clearColor[2], clearColor[3] } };
 
+    VkRenderingAttachmentInfo depthAttach{ VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
+    depthAttach.imageView   = depth.view;
+    depthAttach.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+    depthAttach.loadOp      = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    depthAttach.storeOp     = VK_ATTACHMENT_STORE_OP_DONT_CARE;   // not sampled afterwards
+    depthAttach.clearValue.depthStencil = { 1.0f, 0 };
+
     const VkExtent2D extent = m_Swapchain.Extent();
     VkRenderingInfo rendering{ VK_STRUCTURE_TYPE_RENDERING_INFO };
     rendering.renderArea.extent    = extent;
     rendering.layerCount           = 1;
     rendering.colorAttachmentCount = 1;
     rendering.pColorAttachments    = &color;
+    rendering.pDepthAttachment     = &depthAttach;
     vkCmdBeginRendering(cmd, &rendering);
 
     // Y-flipped viewport so GL-style clip space maps to Vulkan; pass code never
@@ -262,11 +282,11 @@ void VulkanRHIDevice::EndFrame() {
 
     vkCmdEndRendering(cmd);
 
-    TransitionImage(cmd, m_Swapchain.Image(m_AcquiredImageIndex),
-                    VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-                    VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                    VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-                    VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, 0);
+    TransitionImageLayout(cmd, m_Swapchain.Image(m_AcquiredImageIndex), VK_IMAGE_ASPECT_COLOR_BIT,
+                          VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+                          VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                          VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                          VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, 0);
 
     VK_CHECK(vkEndCommandBuffer(cmd));
 

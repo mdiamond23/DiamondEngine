@@ -28,14 +28,19 @@ public:
 
     virtual std::unique_ptr<RHIBuffer>   CreateBuffer(const RHIBufferDesc& desc) = 0;
     virtual std::unique_ptr<RHIShader>   CreateShader(const RHIShaderDesc& desc) = 0;
+    virtual std::unique_ptr<RHITexture>  CreateTexture(const RHITextureDesc& desc) = 0;
     virtual std::unique_ptr<RHIPipeline> CreatePipeline(const RHIPipelineDesc& desc) = 0;
     virtual std::unique_ptr<RHIResourceSet> CreateResourceSet(
         RHIPipeline* pipeline, uint32_t setIndex,
-        const std::vector<RHIBufferBinding>& buffers) = 0;
+        const std::vector<RHIBufferBinding>&  buffers,
+        const std::vector<RHITextureBinding>& textures = {}) = 0;
 
     // Format of the swapchain color target — feed into RHIPipelineDesc::colorFormat
     // so pipelines match the backbuffer they render to.
     virtual RHIFormat SwapchainFormat() const = 0;
+    // Format of the device's per-frame depth attachment — feed into
+    // RHIPipelineDesc::depthFormat for any pipeline that depth-tests.
+    virtual RHIFormat DepthFormat() const = 0;
 
     // Frame loop. BeginFrame acquires the next backbuffer image, clears it to
     // 'clearColor', and returns a recorder — or nullptr when the frame must be
