@@ -2,6 +2,10 @@
 #include "Renderer/RHI/RHIDevice.h"
 #include "Renderer/RHI/RHICommandList.h"
 #include "Renderer/RHI/RHIRenderGraph.h"
+#include "Platform/Vulkan/Passes/VulkanPassCommon.h"
+#include "Platform/Vulkan/Passes/PostProcess/VulkanTonemapPass.h"
+#include "Platform/Vulkan/Passes/PostProcess/VulkanFXAAPass.h"
+#include "Platform/Vulkan/Passes/PostProcess/VulkanBloomPass.h"
 #include "Renderer/MeshData.h"
 
 // Vulkan expects clip-space depth in [0, 1] (OpenGL uses [-1, 1]); make GLM's
@@ -16,7 +20,6 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
-#include <fstream>
 #include <vector>
 
 namespace Diamond {
@@ -41,23 +44,10 @@ struct PushConstants {
     glm::mat4 model;
 };
 
-// The offscreen scene is rendered at a fixed resolution and then sampled onto the
-// swapchain by the post pass, so the cube pass is independent of window size.
+// The offscreen scene is rendered at a fixed resolution and then tonemapped onto
+// the swapchain by the post pass, so the cube pass is independent of window size.
 constexpr uint32_t kOffscreenW = 1280;
 constexpr uint32_t kOffscreenH = 720;
-
-std::vector<uint32_t> ReadSpirv(const std::string& path) {
-    std::ifstream file(path, std::ios::binary | std::ios::ate);
-    if (!file) {
-        spdlog::critical("[RHI] failed to open SPIR-V '{}'", path);
-        std::abort();
-    }
-    const std::streamsize bytes = file.tellg();
-    std::vector<uint32_t> words(static_cast<size_t>(bytes) / sizeof(uint32_t));
-    file.seekg(0);
-    file.read(reinterpret_cast<char*>(words.data()), bytes);
-    return words;
-}
 
 std::vector<uint8_t> MakeCheckerboard(uint32_t size, uint32_t cell) {
     std::vector<uint8_t> pixels(static_cast<size_t>(size) * size * 4);
@@ -147,10 +137,18 @@ int RunVulkanMeshDemo() {
     // mid-frame) and, from the per-pass reads/writes, drives the layout barriers
     // that the manual two-pass version wrote by hand.
     RHIRenderGraph graph(device.get());
+    // HDR color so the tonemap pass has real high-range input to map down.
     const RGTextureHandle sceneColor = graph.DeclareTexture(
-        "SceneColor", { kOffscreenW, kOffscreenH, RHIFormat::RGBA8 });
+        "SceneColor", { kOffscreenW, kOffscreenH, RHIFormat::RGBA16F });
     const RGTextureHandle sceneDepth = graph.DeclareTexture(
         "SceneDepth", { kOffscreenW, kOffscreenH, RHIFormat::Depth32F });
+    // Bloom adds its blurred bright-pass back onto the scene, still in HDR; the
+    // tonemap pass then maps that to LDR. Post chain is:
+    //   HDR scene → bloom → HDR(scene+bloom) → tonemap → LDR → FXAA → backbuffer.
+    const RGTextureHandle sceneBloomed = graph.DeclareTexture(
+        "SceneBloomed", { kOffscreenW, kOffscreenH, RHIFormat::RGBA16F });
+    const RGTextureHandle ldrColor = graph.DeclareTexture(
+        "LdrColor", { kOffscreenW, kOffscreenH, RHIFormat::RGBA8 });
 
     // Per-frame UBO (dynamic).
     RHIBufferDesc uboDesc;
@@ -162,8 +160,8 @@ int RunVulkanMeshDemo() {
     const std::string shaderDir = DIAMOND_VULKAN_SHADER_DIR;
 
     // ── Cube pipeline (renders into the offscreen color + depth targets) ────────
-    const std::vector<uint32_t> meshVsSpv = ReadSpirv(shaderDir + "/mesh.vert.spv");
-    const std::vector<uint32_t> meshFsSpv = ReadSpirv(shaderDir + "/mesh.frag.spv");
+    const std::vector<uint32_t> meshVsSpv = LoadSpirv(shaderDir, "mesh.vert.spv");
+    const std::vector<uint32_t> meshFsSpv = LoadSpirv(shaderDir, "mesh.frag.spv");
     RHIShaderDesc meshVs{ RHIShaderStage::Vertex,   meshVsSpv.data(), meshVsSpv.size() };
     RHIShaderDesc meshFs{ RHIShaderStage::Fragment, meshFsSpv.data(), meshFsSpv.size() };
     auto meshVertShader = device->CreateShader(meshVs);
@@ -183,7 +181,7 @@ int RunVulkanMeshDemo() {
         { 1, RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment },
     };
     meshPipeDesc.pushConstants = { RHIShaderStage::Vertex, sizeof(PushConstants) };
-    meshPipeDesc.colorFormat   = RHIFormat::RGBA8;        // offscreen color format
+    meshPipeDesc.colorFormat   = RHIFormat::RGBA16F;      // offscreen HDR color format
     meshPipeDesc.depthFormat   = RHIFormat::Depth32F;     // offscreen depth format
     meshPipeDesc.depthTest     = true;
     meshPipeDesc.depthWrite    = true;
@@ -192,26 +190,15 @@ int RunVulkanMeshDemo() {
     auto meshSet = device->CreateResourceSet(
         meshPipeline.get(), 0, { { 0, uniformBuffer.get() } }, { { 1, checker.get() } });
 
-    // ── Post pipeline (fullscreen triangle, samples the offscreen scene → swapchain) ─
-    const std::vector<uint32_t> postVsSpv = ReadSpirv(shaderDir + "/fullscreen.vert.spv");
-    const std::vector<uint32_t> postFsSpv = ReadSpirv(shaderDir + "/post.frag.spv");
-    RHIShaderDesc postVs{ RHIShaderStage::Vertex,   postVsSpv.data(), postVsSpv.size() };
-    RHIShaderDesc postFs{ RHIShaderStage::Fragment, postFsSpv.data(), postFsSpv.size() };
-    auto postVertShader = device->CreateShader(postVs);
-    auto postFragShader = device->CreateShader(postFs);
-
-    RHIPipelineDesc postPipeDesc;
-    postPipeDesc.vertexShader    = postVertShader.get();
-    postPipeDesc.fragmentShader  = postFragShader.get();
-    // No vertex layout — positions come from gl_VertexIndex.
-    postPipeDesc.resourceBindings = {
-        { 0, RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment },
-    };
-    postPipeDesc.colorFormat = device->SwapchainFormat();
-    auto postPipeline = device->CreatePipeline(postPipeDesc);
-
-    auto postSet = device->CreateResourceSet(
-        postPipeline.get(), 0, {}, { { 0, graph.GetTexture(sceneColor) } });
+    // ── Post-process chain (each a self-contained ported Vulkan pass) ───────────
+    // Bloom adds a blurred bright-pass back onto the HDR scene; tonemap maps the
+    // result to LDR; FXAA anti-aliases that and writes the swapchain. Each pass
+    // owns its pipeline + shaders and wires itself into the graph with the
+    // reads/writes that drive ordering.
+    VulkanBloomPass   bloom(device.get(), shaderDir, kOffscreenW, kOffscreenH,
+                            RHIFormat::RGBA16F);
+    VulkanTonemapPass tonemap(device.get(), shaderDir, RHIFormat::RGBA8);
+    VulkanFXAAPass    fxaa(device.get(), shaderDir, device->SwapchainFormat());
 
     const float aspect = static_cast<float>(kOffscreenW) / kOffscreenH;
 
@@ -235,17 +222,17 @@ int RunVulkanMeshDemo() {
             cmd->DrawIndexed(indexCount);
         });
 
-    // Pass 2 — fullscreen post, sampling the offscreen scene, into the backbuffer.
-    // Reading sceneColor makes the graph (a) order this after the cube pass and
-    // (b) insert the ColorTarget→SampledRead barrier automatically.
-    graph.AddPass("Post")
-        .Read(sceneColor)
-        .WriteSwapchain()
-        .SetExecute([&](RHICommandList* cmd) {
-            cmd->BindPipeline(postPipeline.get());
-            cmd->BindResourceSet(0, postSet.get());
-            cmd->Draw(3);
-        });
+    // Pass 2 — bloom. Declares its own bright + ping-pong scratch on the graph and
+    // adds an extract → blur×N → composite sub-chain; reads sceneColor and writes
+    // the scene-plus-bloom HDR target. The graph orders the whole sub-chain after
+    // the cube pass and inserts every barrier from the reads/writes.
+    bloom.AddToGraph(graph, sceneColor, sceneBloomed);
+
+    // Pass 3 — tonemap the bloomed HDR scene into the LDR texture.
+    tonemap.AddToGraph(graph, sceneBloomed, ldrColor);
+
+    // Pass 4 — FXAA the LDR texture into the backbuffer.
+    fxaa.AddToGraph(graph, ldrColor);
 
     graph.Compile();
 

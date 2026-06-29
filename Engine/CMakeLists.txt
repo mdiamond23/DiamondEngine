@@ -302,6 +302,9 @@ if(DIAMOND_ENABLE_VULKAN)
         src/Platform/Vulkan/VulkanImage.cpp
         src/Platform/Vulkan/RHI/VulkanRHIDevice.cpp
         src/Platform/Vulkan/RHI/VulkanRHIResources.cpp
+        src/Platform/Vulkan/Passes/PostProcess/VulkanTonemapPass.cpp
+        src/Platform/Vulkan/Passes/PostProcess/VulkanFXAAPass.cpp
+        src/Platform/Vulkan/Passes/PostProcess/VulkanBloomPass.cpp
         src/Platform/Vulkan/VulkanMeshDemo.cpp
     )
     target_link_libraries(MyEngine PRIVATE
@@ -327,7 +330,8 @@ if(DIAMOND_ENABLE_VULKAN)
     set(_vk_spv_dir    ${CMAKE_BINARY_DIR}/shaders)
     file(MAKE_DIRECTORY ${_vk_spv_dir})
     set(_vk_spv_outputs)
-    foreach(_shader mesh.vert mesh.frag fullscreen.vert post.frag)
+    foreach(_shader mesh.vert mesh.frag fullscreen.vert tonemap.frag fxaa.frag
+                    bloom_extract.frag bloom_blur.frag bloom_composite.frag)
         add_custom_command(
             OUTPUT  ${_vk_spv_dir}/${_shader}.spv
             COMMAND ${GLSLANG_VALIDATOR} -V ${_vk_shader_src}/${_shader} -o ${_vk_spv_dir}/${_shader}.spv
