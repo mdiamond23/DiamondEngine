@@ -70,58 +70,85 @@ uint32_t BytesPerPixel(RHIFormat f) {
 
 VulkanRHITexture::VulkanRHITexture(VulkanRHIDevice* device, const RHITextureDesc& desc)
     : m_Device(device) {
-    VulkanContext& ctx       = m_Device->Ctx();
-    VmaAllocator   allocator = ctx.Allocator();
-    const VkDeviceSize bytes = static_cast<VkDeviceSize>(desc.width) * desc.height
-                             * BytesPerPixel(desc.format);
+    VulkanContext& ctx = m_Device->Ctx();
+    m_Format = ToVkFormat(desc.format);
+    m_Extent = { desc.width, desc.height };
 
-    // Host-visible staging copy of the CPU pixels.
-    VmaAllocationInfo stagingInfo{};
-    VulkanBuffer staging = CreateBuffer(
-        allocator, bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_AUTO,
-        VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT,
-        &stagingInfo);
-    std::memcpy(stagingInfo.pMappedData, desc.initialData, static_cast<size_t>(bytes));
+    const bool isColorTarget = HasFlag(desc.usage, RHITextureUsage::ColorAttachment);
+    const bool isDepthTarget = HasFlag(desc.usage, RHITextureUsage::DepthAttachment);
+    m_RenderTarget = isColorTarget || isDepthTarget;
+    m_Aspect       = isDepthTarget ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
 
-    m_Image = CreateImage(ctx, desc.width, desc.height, ToVkFormat(desc.format),
-                          VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-                          VK_IMAGE_ASPECT_COLOR_BIT);
+    VkImageUsageFlags usage = 0;
+    if (HasFlag(desc.usage, RHITextureUsage::Sampled)) usage |= VK_IMAGE_USAGE_SAMPLED_BIT;
+    if (isColorTarget)        usage |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+    if (isDepthTarget)        usage |= VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+    if (desc.initialData)     usage |= VK_IMAGE_USAGE_TRANSFER_DST_BIT;
 
-    ctx.ImmediateSubmit([&](VkCommandBuffer cmd) {
-        TransitionImageLayout(cmd, m_Image.image, VK_IMAGE_ASPECT_COLOR_BIT,
-                              VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                              VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-                              VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+    // Render targets keep one image per frame-in-flight; static textures use one.
+    const uint32_t count = m_RenderTarget ? VulkanRHIDevice::kFramesInFlight : 1;
+    for (uint32_t i = 0; i < count; ++i) {
+        m_Images[i]  = CreateImage(ctx, desc.width, desc.height, m_Format, usage, m_Aspect);
+        m_Layouts[i] = VK_IMAGE_LAYOUT_UNDEFINED;
+    }
 
-        VkBufferImageCopy copy{};
-        copy.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        copy.imageSubresource.layerCount = 1;
-        copy.imageExtent = { desc.width, desc.height, 1 };
-        vkCmdCopyBufferToImage(cmd, staging.handle, m_Image.image,
-                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+    // Static textures upload their pixels once and settle in SHADER_READ_ONLY.
+    if (desc.initialData) {
+        VmaAllocator allocator = ctx.Allocator();
+        const VkDeviceSize bytes = static_cast<VkDeviceSize>(desc.width) * desc.height
+                                 * BytesPerPixel(desc.format);
+        VmaAllocationInfo stagingInfo{};
+        VulkanBuffer staging = CreateBuffer(
+            allocator, bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_AUTO,
+            VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT,
+            &stagingInfo);
+        std::memcpy(stagingInfo.pMappedData, desc.initialData, static_cast<size_t>(bytes));
 
-        TransitionImageLayout(cmd, m_Image.image, VK_IMAGE_ASPECT_COLOR_BIT,
-                              VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                              VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                              VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
-    });
-    DestroyBuffer(allocator, staging);
+        ctx.ImmediateSubmit([&](VkCommandBuffer cmd) {
+            TransitionImageLayout(cmd, m_Images[0].image, VK_IMAGE_ASPECT_COLOR_BIT,
+                                  VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                  VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                                  VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
 
-    VkSamplerCreateInfo samplerInfo{ VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO };
-    samplerInfo.magFilter    = ToVkFilter(desc.filter);
-    samplerInfo.minFilter    = ToVkFilter(desc.filter);
-    samplerInfo.mipmapMode   = VK_SAMPLER_MIPMAP_MODE_LINEAR;
-    samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-    samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-    samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-    samplerInfo.maxLod       = VK_LOD_CLAMP_NONE;
-    VK_CHECK(vkCreateSampler(ctx.Device(), &samplerInfo, nullptr, &m_Sampler));
+            VkBufferImageCopy copy{};
+            copy.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            copy.imageSubresource.layerCount = 1;
+            copy.imageExtent = { desc.width, desc.height, 1 };
+            vkCmdCopyBufferToImage(cmd, staging.handle, m_Images[0].image,
+                                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+
+            TransitionImageLayout(cmd, m_Images[0].image, VK_IMAGE_ASPECT_COLOR_BIT,
+                                  VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                  VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                                  VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+        });
+        DestroyBuffer(allocator, staging);
+        m_Layouts[0] = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    }
+
+    // Sampled textures (static or sampled render targets) need a sampler.
+    if (HasFlag(desc.usage, RHITextureUsage::Sampled)) {
+        VkSamplerCreateInfo samplerInfo{ VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO };
+        samplerInfo.magFilter    = ToVkFilter(desc.filter);
+        samplerInfo.minFilter    = ToVkFilter(desc.filter);
+        samplerInfo.mipmapMode   = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+        // Render targets clamp (no wrap artifacts on a full-image sample); uploaded
+        // textures repeat so tiled UVs work.
+        const VkSamplerAddressMode addr = m_RenderTarget
+            ? VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE : VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        samplerInfo.addressModeU = addr;
+        samplerInfo.addressModeV = addr;
+        samplerInfo.addressModeW = addr;
+        samplerInfo.maxLod       = VK_LOD_CLAMP_NONE;
+        VK_CHECK(vkCreateSampler(ctx.Device(), &samplerInfo, nullptr, &m_Sampler));
+    }
 }
 
 VulkanRHITexture::~VulkanRHITexture() {
-    vkDestroySampler(m_Device->Ctx().Device(), m_Sampler, nullptr);
-    DestroyImage(m_Device->Ctx(), m_Image);
+    if (m_Sampler) vkDestroySampler(m_Device->Ctx().Device(), m_Sampler, nullptr);
+    for (VulkanImage& img : m_Images)
+        if (img.image) DestroyImage(m_Device->Ctx(), img);
 }
 
 // ── Shader ───────────────────────────────────────────────────────────────────
@@ -328,7 +355,7 @@ VulkanRHIResourceSet::VulkanRHIResourceSet(VulkanRHIDevice* device, VulkanRHIPip
             auto* tex = static_cast<VulkanRHITexture*>(textures[i].texture);
             imageInfos[i] = {};
             imageInfos[i].sampler     = tex->Sampler();
-            imageInfos[i].imageView   = tex->View();
+            imageInfos[i].imageView   = tex->View(frame);   // per-frame for render targets
             imageInfos[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
             VkWriteDescriptorSet w{ VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };

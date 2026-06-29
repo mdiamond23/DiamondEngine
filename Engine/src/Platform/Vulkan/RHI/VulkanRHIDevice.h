@@ -26,6 +26,10 @@ public:
     // Re-targets the recorder at a freshly-begun command buffer for a new frame.
     void Reset(VkCommandBuffer cmd) { m_Cmd = cmd; m_Layout = VK_NULL_HANDLE; }
 
+    void BeginRendering(const RHIRenderPass& pass) override;
+    void EndRendering() override;
+    void TransitionTexture(RHITexture* texture, RHITextureState state) override;
+
     void BindPipeline(RHIPipeline* pipeline) override;
     void BindResourceSet(uint32_t setIndex, RHIResourceSet* set) override;
     void PushConstants(RHIShaderStage stages, uint32_t offset,
@@ -34,6 +38,8 @@ public:
     void BindIndexBuffer(RHIBuffer* buffer, RHIIndexType type) override;
     void DrawIndexed(uint32_t indexCount, uint32_t instanceCount,
                      uint32_t firstIndex) override;
+    void Draw(uint32_t vertexCount, uint32_t instanceCount,
+              uint32_t firstVertex) override;
 
 private:
     VulkanRHIDevice* m_Device;
@@ -64,7 +70,7 @@ public:
         const std::vector<RHITextureBinding>& textures) override;
     RHIFormat SwapchainFormat() const override;
     RHIFormat DepthFormat() const override;
-    RHICommandList* BeginFrame(const std::array<float, 4>& clearColor) override;
+    RHICommandList* BeginFrame() override;
     void EndFrame() override;
     void NotifyResize() override { m_FramebufferResized = true; }
     void WaitIdle() override { vkDeviceWaitIdle(m_Ctx.Device()); }
@@ -77,6 +83,13 @@ public:
     VulkanContext&  Ctx()             { return m_Ctx; }
     uint32_t        CurrentFrame()    const { return m_CurrentFrame; }
     VkDescriptorPool DescriptorPool() const { return m_DescriptorPool; }
+
+    // Acquired backbuffer + the device depth buffer for the in-flight frame —
+    // used by the command list when a render pass targets the swapchain.
+    VkImage     SwapchainImage()     const { return m_Swapchain.Image(m_AcquiredImageIndex); }
+    VkImageView SwapchainImageView() const { return m_Swapchain.ImageView(m_AcquiredImageIndex); }
+    VkExtent2D  SwapchainExtent()    const { return m_Swapchain.Extent(); }
+    VkImageView DeviceDepthView()    const { return m_DepthImages[m_CurrentFrame].view; }
 
 private:
     void CreateFrameResources();

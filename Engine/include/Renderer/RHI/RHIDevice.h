@@ -42,11 +42,13 @@ public:
     // RHIPipelineDesc::depthFormat for any pipeline that depth-tests.
     virtual RHIFormat DepthFormat() const = 0;
 
-    // Frame loop. BeginFrame acquires the next backbuffer image, clears it to
-    // 'clearColor', and returns a recorder — or nullptr when the frame must be
-    // skipped (minimized / swapchain rebuilt), in which case EndFrame must NOT be
-    // called. EndFrame finishes recording, submits, and presents.
-    virtual RHICommandList* BeginFrame(const std::array<float, 4>& clearColor) = 0;
+    // Frame loop. BeginFrame acquires the next backbuffer image and returns a
+    // recorder — or nullptr when the frame must be skipped (minimized / swapchain
+    // rebuilt), in which case EndFrame must NOT be called. No rendering scope is
+    // open on return: pass code drives BeginRendering/EndRendering itself,
+    // including the final pass that targets the swapchain. EndFrame finishes
+    // recording, submits, and presents.
+    virtual RHICommandList* BeginFrame() = 0;
     virtual void EndFrame() = 0;
 
     // Call from the window framebuffer-resize callback.

@@ -39,6 +39,27 @@ enum class RHIResourceType { UniformBuffer, CombinedImageSampler };
 // Texture sampling filter for minification/magnification.
 enum class RHIFilter { Nearest, Linear };
 
+// Layout/usage state a texture can be transitioned to between render passes.
+// Drives the image-memory barriers the command list (and later the render graph)
+// inserts so a written attachment can be safely sampled by a later pass.
+enum class RHITextureState { SampledRead, ColorTarget, DepthTarget };
+
+// What roles a texture must support. A render target sampled by a later pass is
+// ColorAttachment | Sampled; a depth buffer is DepthAttachment; an uploaded
+// image read in shaders is Sampled.
+enum class RHITextureUsage : uint32_t {
+    None            = 0,
+    Sampled         = 1u << 0,
+    ColorAttachment = 1u << 1,
+    DepthAttachment = 1u << 2,
+};
+constexpr RHITextureUsage operator|(RHITextureUsage a, RHITextureUsage b) {
+    return static_cast<RHITextureUsage>(static_cast<uint32_t>(a) | static_cast<uint32_t>(b));
+}
+constexpr bool HasFlag(RHITextureUsage value, RHITextureUsage flag) {
+    return (static_cast<uint32_t>(value) & static_cast<uint32_t>(flag)) != 0;
+}
+
 // ── Bitmask enums ────────────────────────────────────────────────────────────
 // Which buffer roles a buffer may serve.
 enum class RHIBufferUsage : uint32_t {

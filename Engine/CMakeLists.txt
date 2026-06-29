@@ -261,6 +261,7 @@ add_library(MyEngine STATIC
     src/Scene/Physics/PhysicsSystem.cpp
     src/Scene/Physics/RagdollConfig.cpp
     src/Renderer/RHI/RHIDevice.cpp
+    src/Renderer/RHI/RHIRenderGraph.cpp
 )
 
 target_include_directories(MyEngine
@@ -326,7 +327,7 @@ if(DIAMOND_ENABLE_VULKAN)
     set(_vk_spv_dir    ${CMAKE_BINARY_DIR}/shaders)
     file(MAKE_DIRECTORY ${_vk_spv_dir})
     set(_vk_spv_outputs)
-    foreach(_shader mesh.vert mesh.frag)
+    foreach(_shader mesh.vert mesh.frag fullscreen.vert post.frag)
         add_custom_command(
             OUTPUT  ${_vk_spv_dir}/${_shader}.spv
             COMMAND ${GLSLANG_VALIDATOR} -V ${_vk_shader_src}/${_shader} -o ${_vk_spv_dir}/${_shader}.spv

@@ -44,6 +44,167 @@ void VulkanRHICommandList::DrawIndexed(uint32_t indexCount, uint32_t instanceCou
     vkCmdDrawIndexed(m_Cmd, indexCount, instanceCount, firstIndex, 0, 0);
 }
 
+void VulkanRHICommandList::Draw(uint32_t vertexCount, uint32_t instanceCount,
+                                uint32_t firstVertex) {
+    vkCmdDraw(m_Cmd, vertexCount, instanceCount, firstVertex, 0);
+}
+
+// ── Render-pass scoping + barriers ───────────────────────────────────────────
+
+namespace {
+
+// The synchronization2 stage/access scope for work that leaves an image in a
+// given layout — used as the *source* scope when transitioning away from it.
+void StageAccessForLayout(VkImageLayout layout,
+                          VkPipelineStageFlags2& stage, VkAccessFlags2& access) {
+    switch (layout) {
+        case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL:
+            stage  = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+            access = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT; break;
+        case VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL:
+            stage  = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT
+                   | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+            access = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT; break;
+        case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
+            stage  = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+            access = VK_ACCESS_2_SHADER_READ_BIT; break;
+        default:   // UNDEFINED and anything else: no prior work to wait on
+            stage  = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
+            access = 0; break;
+    }
+}
+
+// Target layout + the scope of work that will use it after the barrier.
+void StateTarget(RHITextureState state,
+                 VkImageLayout& layout, VkPipelineStageFlags2& stage, VkAccessFlags2& access) {
+    switch (state) {
+        case RHITextureState::ColorTarget:
+            layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            stage  = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+            access = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT; break;
+        case RHITextureState::DepthTarget:
+            layout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+            stage  = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT
+                   | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+            access = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT
+                   | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT; break;
+        case RHITextureState::SampledRead:
+            layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            stage  = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+            access = VK_ACCESS_2_SHADER_READ_BIT; break;
+    }
+}
+
+// Transitions one frame slot of a texture to 'state', emitting the barrier and
+// updating the texture's tracked layout.
+void TransitionTextureSlot(VkCommandBuffer cmd, VulkanRHITexture* tex,
+                           RHITextureState state, uint32_t frame) {
+    VkImageLayout& current = tex->LayoutRef(frame);
+
+    VkPipelineStageFlags2 srcStage; VkAccessFlags2 srcAccess;
+    StageAccessForLayout(current, srcStage, srcAccess);
+
+    VkImageLayout dstLayout; VkPipelineStageFlags2 dstStage; VkAccessFlags2 dstAccess;
+    StateTarget(state, dstLayout, dstStage, dstAccess);
+
+    TransitionImageLayout(cmd, tex->Image(frame), tex->Aspect(),
+                          current, dstLayout, srcStage, srcAccess, dstStage, dstAccess);
+    current = dstLayout;
+}
+
+} // namespace
+
+void VulkanRHICommandList::TransitionTexture(RHITexture* texture, RHITextureState state) {
+    TransitionTextureSlot(m_Cmd, static_cast<VulkanRHITexture*>(texture),
+                          state, m_Device->CurrentFrame());
+}
+
+void VulkanRHICommandList::BeginRendering(const RHIRenderPass& pass) {
+    const uint32_t frame = m_Device->CurrentFrame();
+
+    std::vector<VkRenderingAttachmentInfo> colors;
+    VkRenderingAttachmentInfo depth{ VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
+    bool       hasDepth = false;
+    VkExtent2D extent{ 0, 0 };
+
+    if (pass.toSwapchain) {
+        extent = m_Device->SwapchainExtent();
+
+        const RHIAttachment a = pass.colorAttachments.empty() ? RHIAttachment{}
+                                                              : pass.colorAttachments[0];
+        VkRenderingAttachmentInfo c{ VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
+        c.imageView   = m_Device->SwapchainImageView();   // already COLOR_ATTACHMENT (BeginFrame)
+        c.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        c.loadOp      = a.clear ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
+        c.storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
+        c.clearValue.color = { { a.clearColor[0], a.clearColor[1], a.clearColor[2], a.clearColor[3] } };
+        colors.push_back(c);
+
+        if (pass.useDeviceDepth) {
+            depth.imageView   = m_Device->DeviceDepthView();   // already DEPTH_ATTACHMENT (BeginFrame)
+            depth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+            depth.loadOp      = pass.clearDepth ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
+            depth.storeOp     = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+            depth.clearValue.depthStencil = { pass.depthClearValue, 0 };
+            hasDepth = true;
+        }
+    } else {
+        for (const RHIAttachment& a : pass.colorAttachments) {
+            auto* vt = static_cast<VulkanRHITexture*>(a.texture);
+            TransitionTextureSlot(m_Cmd, vt, RHITextureState::ColorTarget, frame);
+
+            VkRenderingAttachmentInfo c{ VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
+            c.imageView   = vt->View(frame);
+            c.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            c.loadOp      = a.clear ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
+            c.storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
+            c.clearValue.color = { { a.clearColor[0], a.clearColor[1], a.clearColor[2], a.clearColor[3] } };
+            colors.push_back(c);
+            extent = vt->Extent();
+        }
+
+        if (pass.depthTexture) {
+            auto* vd = static_cast<VulkanRHITexture*>(pass.depthTexture);
+            TransitionTextureSlot(m_Cmd, vd, RHITextureState::DepthTarget, frame);
+
+            depth.imageView   = vd->View(frame);
+            depth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+            depth.loadOp      = pass.clearDepth ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
+            depth.storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
+            depth.clearValue.depthStencil = { pass.depthClearValue, 0 };
+            hasDepth = true;
+            if (extent.width == 0) extent = vd->Extent();
+        }
+    }
+
+    VkRenderingInfo rendering{ VK_STRUCTURE_TYPE_RENDERING_INFO };
+    rendering.renderArea.extent    = extent;
+    rendering.layerCount           = 1;
+    rendering.colorAttachmentCount = static_cast<uint32_t>(colors.size());
+    rendering.pColorAttachments    = colors.data();
+    rendering.pDepthAttachment     = hasDepth ? &depth : nullptr;
+    vkCmdBeginRendering(m_Cmd, &rendering);
+
+    // Y-flipped viewport so GL-style clip space maps to Vulkan, uniformly for
+    // every target (offscreen and swapchain). Pass code never touches it.
+    VkViewport viewport{};
+    viewport.x        = 0.0f;
+    viewport.y        = static_cast<float>(extent.height);
+    viewport.width    = static_cast<float>(extent.width);
+    viewport.height   = -static_cast<float>(extent.height);
+    viewport.minDepth = 0.0f;
+    viewport.maxDepth = 1.0f;
+    vkCmdSetViewport(m_Cmd, 0, 1, &viewport);
+
+    VkRect2D scissor{};
+    scissor.extent = extent;
+    vkCmdSetScissor(m_Cmd, 0, 1, &scissor);
+}
+
+void VulkanRHICommandList::EndRendering() {
+    vkCmdEndRendering(m_Cmd);
+}
+
 // ── Device lifetime ──────────────────────────────────────────────────────────
 
 VulkanRHIDevice::VulkanRHIDevice(GLFWwindow* window) : m_Window(window) {
@@ -188,7 +349,7 @@ RHIFormat VulkanRHIDevice::DepthFormat() const {
 
 // ── Frame loop ───────────────────────────────────────────────────────────────
 
-RHICommandList* VulkanRHIDevice::BeginFrame(const std::array<float, 4>& clearColor) {
+RHICommandList* VulkanRHIDevice::BeginFrame() {
     if (m_Swapchain.IsZeroSize()) { RecreateSwapchain(); return nullptr; }
 
     VkDevice device = m_Ctx.Device();
@@ -213,13 +374,15 @@ RHICommandList* VulkanRHIDevice::BeginFrame(const std::array<float, 4>& clearCol
     begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     VK_CHECK(vkBeginCommandBuffer(cmd, &begin));
 
+    // Move the backbuffer + the device depth buffer into their attachment layouts
+    // up front (both discard via UNDEFINED; the swapchain pass clears or loads).
+    // Rendering itself is opened by pass code via the command list, not here.
     TransitionImageLayout(cmd, m_Swapchain.Image(m_AcquiredImageIndex), VK_IMAGE_ASPECT_COLOR_BIT,
                           VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                           VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, 0,
                           VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
                           VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
 
-    // Depth: discard last use (UNDEFINED) since loadOp CLEAR overwrites it.
     VulkanImage& depth = m_DepthImages[m_CurrentFrame];
     TransitionImageLayout(cmd, depth.image, VK_IMAGE_ASPECT_DEPTH_BIT,
                           VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
@@ -229,44 +392,6 @@ RHICommandList* VulkanRHIDevice::BeginFrame(const std::array<float, 4>& clearCol
                               | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
                           VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT
                               | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT);
-
-    VkRenderingAttachmentInfo color{ VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
-    color.imageView   = m_Swapchain.ImageView(m_AcquiredImageIndex);
-    color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    color.loadOp      = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    color.storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
-    color.clearValue.color = { { clearColor[0], clearColor[1], clearColor[2], clearColor[3] } };
-
-    VkRenderingAttachmentInfo depthAttach{ VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
-    depthAttach.imageView   = depth.view;
-    depthAttach.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
-    depthAttach.loadOp      = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    depthAttach.storeOp     = VK_ATTACHMENT_STORE_OP_DONT_CARE;   // not sampled afterwards
-    depthAttach.clearValue.depthStencil = { 1.0f, 0 };
-
-    const VkExtent2D extent = m_Swapchain.Extent();
-    VkRenderingInfo rendering{ VK_STRUCTURE_TYPE_RENDERING_INFO };
-    rendering.renderArea.extent    = extent;
-    rendering.layerCount           = 1;
-    rendering.colorAttachmentCount = 1;
-    rendering.pColorAttachments    = &color;
-    rendering.pDepthAttachment     = &depthAttach;
-    vkCmdBeginRendering(cmd, &rendering);
-
-    // Y-flipped viewport so GL-style clip space maps to Vulkan; pass code never
-    // touches the viewport.
-    VkViewport viewport{};
-    viewport.x        = 0.0f;
-    viewport.y        = static_cast<float>(extent.height);
-    viewport.width    = static_cast<float>(extent.width);
-    viewport.height   = -static_cast<float>(extent.height);
-    viewport.minDepth = 0.0f;
-    viewport.maxDepth = 1.0f;
-    vkCmdSetViewport(cmd, 0, 1, &viewport);
-
-    VkRect2D scissor{};
-    scissor.extent = extent;
-    vkCmdSetScissor(cmd, 0, 1, &scissor);
 
     m_CommandList.Reset(cmd);
     m_FrameActive = true;
@@ -280,8 +405,7 @@ void VulkanRHIDevice::EndFrame() {
     Frame&          frame = m_Frames[m_CurrentFrame];
     VkCommandBuffer cmd   = frame.commandBuffer;
 
-    vkCmdEndRendering(cmd);
-
+    // The swapchain pass's EndRendering already closed the dynamic-rendering scope.
     TransitionImageLayout(cmd, m_Swapchain.Image(m_AcquiredImageIndex), VK_IMAGE_ASPECT_COLOR_BIT,
                           VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
                           VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,

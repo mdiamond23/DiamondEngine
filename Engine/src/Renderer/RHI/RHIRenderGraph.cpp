@@ -1,0 +1,205 @@
+#include "Renderer/RHI/RHIRenderGraph.h"
+#include "Renderer/RHI/RHIDevice.h"
+#include "Renderer/RHI/RHICommandList.h"
+
+#include <spdlog/spdlog.h>
+#include <queue>
+
+namespace Diamond {
+
+RHIRenderGraph::RHIRenderGraph(RHIDevice* device) : m_Device(device) {}
+
+RGTextureHandle RHIRenderGraph::DeclareTexture(std::string_view name, const RGTextureDesc& desc)
+{
+    const bool isDepth = (desc.format == RHIFormat::Depth32F);
+
+    // Reuse the pooled image unless its size/format changed — transient textures
+    // are never freed mid-frame (they may be referenced by an in-flight frame), so
+    // the pool persists across rebuilds and only recreates on a real description
+    // change.
+    std::string key(name);
+    auto it = m_Pool.find(key);
+    if (it == m_Pool.end() ||
+        it->second.desc.width  != desc.width  ||
+        it->second.desc.height != desc.height ||
+        it->second.desc.format != desc.format)
+    {
+        RHITextureDesc td;
+        td.width  = desc.width;
+        td.height = desc.height;
+        td.format = desc.format;
+        td.usage  = isDepth ? RHITextureUsage::DepthAttachment
+                            : (RHITextureUsage::ColorAttachment | RHITextureUsage::Sampled);
+        it = m_Pool.insert_or_assign(key, PooledTexture{ desc, m_Device->CreateTexture(td) }).first;
+    }
+
+    m_Textures.push_back(TextureEntry{ key, desc, it->second.texture.get(), isDepth });
+    // id is 1-based so id=0 stays the "invalid" sentinel (matches IsValid())
+    return RGTextureHandle{ static_cast<uint32_t>(m_Textures.size()) };
+}
+
+RGPass& RHIRenderGraph::AddPass(std::string_view name)
+{
+    m_Passes.push_back(RGPass{ std::string(name) });
+    return m_Passes.back();
+}
+
+RHITexture* RHIRenderGraph::GetTexture(RGTextureHandle h) const
+{
+    return m_Textures[h.id - 1].texture;
+}
+
+// Compile phase — topological sort + dead-pass culling. Ported verbatim from the
+// GL RenderGraph: the reads/writes dependency model is backend-neutral.
+void RHIRenderGraph::Compile()
+{
+    // 1. Build a write map — texture handle id → index of the pass that writes it.
+
+    // -1 means no pass writes this texture
+    std::vector<int> writerMap(m_Textures.size() + 1, -1);
+
+    for (int i = 0; i < (int)m_Passes.size(); ++i)
+    {
+        for (const RGTextureHandle& h : m_Passes[i].writes)
+        {
+            writerMap[h.id] = i;
+        }
+    }
+
+    // 2. Topological sort using Kahn's algorithm
+
+    // inDegree[i] = number of passes that must run before pass i
+    std::vector<int> inDegree(m_Passes.size(), 0);
+
+    for (int i = 0; i < (int)m_Passes.size(); ++i)
+    {
+        for (const RGTextureHandle& h : m_Passes[i].reads)
+        {
+            if (writerMap[h.id] != -1) // someone writes this texture, so pass i depends on them
+                inDegree[i]++;
+        }
+    }
+
+    // Seed the queue with every pass that has no dependencies
+    std::queue<int> ready;
+    for (int i = 0; i < (int)m_Passes.size(); ++i)
+    {
+        if (inDegree[i] == 0)
+            ready.push(i);
+    }
+
+    std::vector<int> sorted;
+    sorted.reserve(m_Passes.size());
+
+    while (!ready.empty())
+    {
+        int i = ready.front();
+        ready.pop();
+        sorted.push_back(i);
+
+        // Pass i is done — decrement in-degree of every pass that reads what i writes
+        for (const RGTextureHandle& written : m_Passes[i].writes)
+        {
+            for (int j = 0; j < (int)m_Passes.size(); ++j)
+            {
+                for (const RGTextureHandle& r : m_Passes[j].reads)
+                {
+                    if (r.id == written.id)
+                    {
+                        if (--inDegree[j] == 0)
+                            ready.push(j); // j's last dependency is satisfied
+                    }
+                }
+            }
+        }
+    }
+
+    if ((int)sorted.size() != (int)m_Passes.size())
+        spdlog::error("RHIRenderGraph::Compile — cycle detected in pass dependencies!");
+
+    // 3. Dead pass culling — walk sorted in reverse, mark alive passes.
+    // Sink passes (no writes) are always alive — they write to the backbuffer.
+    std::vector<int> alive(m_Passes.size(), 0); // indexed by pass index, not sorted position
+
+    for (int i = (int)sorted.size() - 1; i >= 0; --i)
+    {
+        int passIdx = sorted[i];
+
+        if (m_Passes[passIdx].writes.empty())
+            alive[passIdx] = 1; // sink pass — always alive
+
+        if (alive[passIdx])
+        {
+            // Any pass that feeds an alive pass is also alive
+            for (const RGTextureHandle& h : m_Passes[passIdx].reads)
+            {
+                int writerIdx = writerMap[h.id];
+                if (writerIdx != -1)
+                    alive[writerIdx] = 1;
+            }
+        }
+    }
+
+    // 4. Store final execution order — only alive passes, in sorted order
+    m_SortedIndices.clear();
+    for (int passIdx : sorted)
+    {
+        if (alive[passIdx])
+            m_SortedIndices.push_back(passIdx);
+    }
+}
+
+// Execute phase — drive the command list. No GL-style transient allocation/free
+// here: textures are pooled (created at declare, owned for the graph's lifetime).
+void RHIRenderGraph::Execute(RHICommandList* cmd)
+{
+    for (int passIdx : m_SortedIndices)
+    {
+        RGPass& pass = m_Passes[passIdx];
+
+        // Auto-barrier: each read must be shader-readable before the pass runs.
+        // Writes are transitioned to their attachment layout by BeginRendering.
+        for (const RGTextureHandle& h : pass.reads)
+            cmd->TransitionTexture(m_Textures[h.id - 1].texture, RHITextureState::SampledRead);
+
+        // Build the render scope from the writes (or the swapchain backbuffer).
+        RHIRenderPass rp;
+        if (pass.toSwapchain)
+        {
+            rp.toSwapchain      = true;
+            rp.colorAttachments = { RHIAttachment{ nullptr, pass.clear, pass.clearColor } };
+        }
+        else
+        {
+            for (const RGTextureHandle& h : pass.writes)
+            {
+                TextureEntry& e = m_Textures[h.id - 1];
+                if (e.isDepth)
+                {
+                    rp.depthTexture = e.texture;
+                    rp.clearDepth   = pass.clear;
+                }
+                else
+                {
+                    rp.colorAttachments.push_back(
+                        RHIAttachment{ e.texture, pass.clear, pass.clearColor });
+                }
+            }
+        }
+
+        cmd->BeginRendering(rp);
+        if (pass.execute)
+            pass.execute(cmd);
+        cmd->EndRendering();
+    }
+}
+
+void RHIRenderGraph::ResetPasses()
+{
+    // Keep m_Pool — pooled textures outlive the per-frame pass/declaration tables.
+    m_Passes.clear();
+    m_Textures.clear();
+    m_SortedIndices.clear();
+}
+
+} // namespace Diamond

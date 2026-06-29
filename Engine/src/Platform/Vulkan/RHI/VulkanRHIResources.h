@@ -34,22 +34,41 @@ private:
     std::array<void*,        VulkanRHIDevice::kFramesInFlight> m_Mapped{};
 };
 
-// Sampled texture behind RHITexture: a device-local image uploaded once from CPU
-// pixels (staging copy + layout transitions) plus its sampler. Static — read-only
-// on the GPU after creation, so a single image/view/sampler is shared by every
-// frame's descriptor set.
+// Texture behind RHITexture. Two flavors share this class:
+//   * Static (initialData set): a single device-local image uploaded once from
+//     CPU pixels, left in SHADER_READ_ONLY. 'frame' is ignored on access.
+//   * Render target (Color/DepthAttachment usage): one image per frame-in-flight
+//     so two concurrent frames never write the same image. Layout is tracked per
+//     slot and transitioned by the command list between passes.
 class VulkanRHITexture : public RHITexture {
 public:
     VulkanRHITexture(VulkanRHIDevice* device, const RHITextureDesc& desc);
     ~VulkanRHITexture() override;
 
-    VkImageView View()    const { return m_Image.view; }
-    VkSampler   Sampler() const { return m_Sampler; }
+    bool               IsRenderTarget() const { return m_RenderTarget; }
+    VkSampler          Sampler() const { return m_Sampler; }
+    VkFormat           Format()  const { return m_Format; }
+    VkExtent2D         Extent()  const { return m_Extent; }
+    VkImageAspectFlags Aspect()  const { return m_Aspect; }
+
+    // Per-frame image/view/layout for render targets; static textures ignore
+    // 'frame' and always resolve to their single image.
+    VkImage        Image(uint32_t frame) const { return m_Images[Slot(frame)].image; }
+    VkImageView    View(uint32_t frame)  const { return m_Images[Slot(frame)].view; }
+    VkImageLayout& LayoutRef(uint32_t frame)   { return m_Layouts[Slot(frame)]; }
 
 private:
-    VulkanRHIDevice* m_Device;
-    VulkanImage      m_Image;
-    VkSampler        m_Sampler = VK_NULL_HANDLE;
+    uint32_t Slot(uint32_t frame) const { return m_RenderTarget ? frame : 0; }
+
+    VulkanRHIDevice*   m_Device;
+    bool               m_RenderTarget = false;
+    VkSampler          m_Sampler = VK_NULL_HANDLE;
+    VkFormat           m_Format  = VK_FORMAT_UNDEFINED;
+    VkExtent2D         m_Extent  { 0, 0 };
+    VkImageAspectFlags m_Aspect  = VK_IMAGE_ASPECT_COLOR_BIT;
+
+    std::array<VulkanImage,   VulkanRHIDevice::kFramesInFlight> m_Images{};
+    std::array<VkImageLayout, VulkanRHIDevice::kFramesInFlight> m_Layouts{};
 };
 
 // A compiled SPIR-V module + the stage it feeds.

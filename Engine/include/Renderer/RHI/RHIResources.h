@@ -2,6 +2,7 @@
 
 #include "Renderer/RHI/RHIEnums.h"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <vector>
@@ -38,18 +39,44 @@ struct RHITextureDesc {
     uint32_t  height = 0;
     RHIFormat format = RHIFormat::RGBA8;
 
+    RHITextureUsage usage = RHITextureUsage::Sampled;
+
     // Tightly-packed pixels matching 'format' (e.g. RGBA8 = 4 bytes/pixel),
-    // uploaded once through a staging buffer. Required — M3 textures are static.
+    // uploaded once through a staging buffer. Null for render targets, which are
+    // produced on the GPU rather than uploaded. When non-null the texture is
+    // static (single image); render targets are double-buffered internally so two
+    // in-flight frames never write the same image.
     const void* initialData = nullptr;
 
     RHIFilter filter = RHIFilter::Linear;
 };
 
-// A sampled image + its sampler (a combined image-sampler in shader terms).
-// Static: uploaded once at creation, then read-only on the GPU.
+// A texture usable as a sampled image and/or a render-pass attachment, depending
+// on its usage flags. Static (uploaded) textures are a single image; render
+// targets keep one image per frame-in-flight so the frame loop never races them.
 class RHITexture {
 public:
     virtual ~RHITexture() = default;
+};
+
+// ── Render pass (dynamic-rendering scope on the command list) ─────────────────
+struct RHIAttachment {
+    RHITexture*         texture    = nullptr;          // ignored for the swapchain color target
+    bool                clear      = true;             // CLEAR vs LOAD the existing contents
+    std::array<float, 4> clearColor { 0.0f, 0.0f, 0.0f, 1.0f };
+};
+
+// Describes the attachments a BeginRendering scope writes to. Either the
+// swapchain backbuffer (toSwapchain) or a set of offscreen textures.
+struct RHIRenderPass {
+    bool                       toSwapchain = false;
+    std::vector<RHIAttachment> colorAttachments;       // toSwapchain: [0] holds the backbuffer clear
+
+    // Offscreen depth target; ignored when toSwapchain (use useDeviceDepth there).
+    RHITexture* depthTexture    = nullptr;
+    bool        useDeviceDepth  = false;               // toSwapchain only
+    bool        clearDepth      = true;
+    float       depthClearValue = 1.0f;
 };
 
 // ── Shader ───────────────────────────────────────────────────────────────────
