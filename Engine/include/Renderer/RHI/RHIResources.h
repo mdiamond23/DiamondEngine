@@ -126,7 +126,12 @@ struct RHIPipelineDesc {
 
     RHIPrimitiveTopology topology    = RHIPrimitiveTopology::TriangleList;
     RHICullMode          cullMode    = RHICullMode::None;
-    RHIFormat            colorFormat = RHIFormat::Undefined;   // render-target format
+    RHIFormat            colorFormat = RHIFormat::Undefined;   // single render-target format
+
+    // MRT: one format per color attachment, in attachment (frag `location`) order.
+    // When non-empty this overrides colorFormat — a deferred G-buffer pass declares
+    // its targets here. Single-target passes keep using colorFormat.
+    std::vector<RHIFormat> colorFormats;
 
     // Depth-buffer state. depthFormat == Undefined means the pipeline renders
     // without a depth attachment (depthTest/depthWrite ignored). When set, it

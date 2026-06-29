@@ -255,14 +255,28 @@ VulkanRHIPipeline::VulkanRHIPipeline(VulkanRHIDevice* device, const RHIPipelineD
     VkPipelineMultisampleStateCreateInfo multisample{ VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO };
     multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
 
+    // Color-attachment formats: the MRT list when given (deferred G-buffer), else a
+    // single-element list from colorFormat. The render pass's color attachments,
+    // the blend state, and the dynamic-rendering formats must all agree in count.
+    // A depth-only pipeline (shadow/CSM depth pass) declares neither — it leaves the
+    // list empty so the render scope opens with zero color attachments.
+    std::vector<VkFormat> colorFormats;
+    if (!desc.colorFormats.empty())
+        for (RHIFormat f : desc.colorFormats) colorFormats.push_back(ToVkFormat(f));
+    else if (desc.colorFormat != RHIFormat::Undefined)
+        colorFormats.push_back(ToVkFormat(desc.colorFormat));
+
+    // One opaque (blend-disabled) attachment state per color target.
     VkPipelineColorBlendAttachmentState blendAttachment{};
     blendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT
                                    | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
     blendAttachment.blendEnable = VK_FALSE;
+    std::vector<VkPipelineColorBlendAttachmentState> blendAttachments(
+        colorFormats.size(), blendAttachment);
 
     VkPipelineColorBlendStateCreateInfo colorBlend{ VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO };
-    colorBlend.attachmentCount = 1;
-    colorBlend.pAttachments    = &blendAttachment;
+    colorBlend.attachmentCount = static_cast<uint32_t>(blendAttachments.size());
+    colorBlend.pAttachments    = blendAttachments.data();
 
     const VkDynamicState dynamics[] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
     VkPipelineDynamicStateCreateInfo dynamicState{ VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO };
@@ -279,10 +293,9 @@ VulkanRHIPipeline::VulkanRHIPipeline(VulkanRHIDevice* device, const RHIPipelineD
     depthStencil.minDepthBounds   = 0.0f;
     depthStencil.maxDepthBounds   = 1.0f;
 
-    VkFormat colorFormat = ToVkFormat(desc.colorFormat);
     VkPipelineRenderingCreateInfo renderingInfo{ VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO };
-    renderingInfo.colorAttachmentCount    = 1;
-    renderingInfo.pColorAttachmentFormats = &colorFormat;
+    renderingInfo.colorAttachmentCount    = static_cast<uint32_t>(colorFormats.size());
+    renderingInfo.pColorAttachmentFormats = colorFormats.data();
     renderingInfo.depthAttachmentFormat   = ToVkFormat(desc.depthFormat);
 
     VkGraphicsPipelineCreateInfo pipelineInfo{ VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO };

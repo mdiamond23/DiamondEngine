@@ -3,9 +3,11 @@
 #include "Renderer/RHI/RHICommandList.h"
 #include "Renderer/RHI/RHIRenderGraph.h"
 #include "Platform/Vulkan/Passes/VulkanPassCommon.h"
+#include "Platform/Vulkan/Passes/Deferred/VulkanGBufferPass.h"
+#include "Platform/Vulkan/Passes/Deferred/VulkanSSAOPass.h"
+#include "Platform/Vulkan/Passes/Deferred/VulkanDeferredLightingPass.h"
+#include "Platform/Vulkan/Passes/Shadows/VulkanCSMPass.h"
 #include "Platform/Vulkan/Passes/PostProcess/VulkanTonemapPass.h"
-#include "Platform/Vulkan/Passes/PostProcess/VulkanFXAAPass.h"
-#include "Platform/Vulkan/Passes/PostProcess/VulkanBloomPass.h"
 #include "Renderer/MeshData.h"
 
 // Vulkan expects clip-space depth in [0, 1] (OpenGL uses [-1, 1]); make GLM's
@@ -26,7 +28,7 @@ namespace Diamond {
 
 namespace {
 
-// Matches mesh.vert's vertex inputs — a repacked subset of the engine's full
+// Matches gbuffer.vert's vertex inputs — a repacked subset of the engine's full
 // MeshData::Vertex (position + normal + UV).
 struct MeshVertex {
     glm::vec3 pos;
@@ -34,18 +36,19 @@ struct MeshVertex {
     glm::vec2 uv;
 };
 
-struct FrameUBO {
+// Per-frame camera data for the G-buffer pass. view alone produces view-space
+// position/normal; viewProj transforms to clip space.
+struct GBufferUBO {
+    glm::mat4 view;
     glm::mat4 viewProj;
-    glm::vec4 lightDir;
-    float     time;
 };
 
 struct PushConstants {
     glm::mat4 model;
 };
 
-// The offscreen scene is rendered at a fixed resolution and then tonemapped onto
-// the swapchain by the post pass, so the cube pass is independent of window size.
+// The G-buffer is filled at a fixed offscreen resolution and then visualized onto
+// the swapchain by the debug pass, so the geometry pass is window-size independent.
 constexpr uint32_t kOffscreenW = 1280;
 constexpr uint32_t kOffscreenH = 720;
 
@@ -83,7 +86,7 @@ int RunVulkanMeshDemo() {
     }
 
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);   // Vulkan window
-    GLFWwindow* window = glfwCreateWindow(1280, 720, "DiamondEngine — Vulkan RHI Offscreen", nullptr, nullptr);
+    GLFWwindow* window = glfwCreateWindow(1280, 720, "DiamondEngine — Vulkan Deferred Lighting", nullptr, nullptr);
     if (!window) {
         spdlog::critical("[RHI] glfwCreateWindow failed");
         glfwTerminate();
@@ -122,7 +125,7 @@ int RunVulkanMeshDemo() {
     auto indexBuffer = device->CreateBuffer(ibDesc);
     const uint32_t indexCount = static_cast<uint32_t>(indices.size());
 
-    // Checkerboard texture for the cube (static, uploaded once).
+    // Checkerboard texture — the cube's albedo (static, uploaded once).
     const std::vector<uint8_t> texPixels = MakeCheckerboard(256, 32);
     RHITextureDesc texDesc;
     texDesc.width       = 256;
@@ -132,107 +135,117 @@ int RunVulkanMeshDemo() {
     texDesc.initialData = texPixels.data();
     auto checker = device->CreateTexture(texDesc);
 
-    // ── Render graph + its offscreen targets ────────────────────────────────────
-    // The graph owns the transient color/depth textures (pooled, never freed
-    // mid-frame) and, from the per-pass reads/writes, drives the layout barriers
-    // that the manual two-pass version wrote by hand.
+    // ── Render graph + its G-buffer targets ─────────────────────────────────────
+    // The graph owns the five transient G-buffer attachments (pooled, never freed
+    // mid-frame) + the shared depth target, and drives the layout barriers from the
+    // per-pass reads/writes. Formats mirror the GL G-buffer.
     RHIRenderGraph graph(device.get());
-    // HDR color so the tonemap pass has real high-range input to map down.
-    const RGTextureHandle sceneColor = graph.DeclareTexture(
-        "SceneColor", { kOffscreenW, kOffscreenH, RHIFormat::RGBA16F });
-    const RGTextureHandle sceneDepth = graph.DeclareTexture(
-        "SceneDepth", { kOffscreenW, kOffscreenH, RHIFormat::Depth32F });
-    // Bloom adds its blurred bright-pass back onto the scene, still in HDR; the
-    // tonemap pass then maps that to LDR. Post chain is:
-    //   HDR scene → bloom → HDR(scene+bloom) → tonemap → LDR → FXAA → backbuffer.
-    const RGTextureHandle sceneBloomed = graph.DeclareTexture(
-        "SceneBloomed", { kOffscreenW, kOffscreenH, RHIFormat::RGBA16F });
-    const RGTextureHandle ldrColor = graph.DeclareTexture(
-        "LdrColor", { kOffscreenW, kOffscreenH, RHIFormat::RGBA8 });
+    const RGTextureHandle gViewPos    = graph.DeclareTexture(
+        "gViewPos",    { kOffscreenW, kOffscreenH, RHIFormat::RGBA16F });
+    const RGTextureHandle gViewNormal = graph.DeclareTexture(
+        "gViewNormal", { kOffscreenW, kOffscreenH, RHIFormat::RGBA16F });
+    const RGTextureHandle gAlbedo     = graph.DeclareTexture(
+        "gAlbedo",     { kOffscreenW, kOffscreenH, RHIFormat::RGBA8 });
+    const RGTextureHandle gMaterial   = graph.DeclareTexture(
+        "gMaterial",   { kOffscreenW, kOffscreenH, RHIFormat::RGBA8 });
+    const RGTextureHandle gEmissive   = graph.DeclareTexture(
+        "gEmissive",   { kOffscreenW, kOffscreenH, RHIFormat::RGBA16F });
+    const RGTextureHandle gDepth      = graph.DeclareTexture(
+        "gDepth",      { kOffscreenW, kOffscreenH, RHIFormat::Depth32F });
+    // SSAO targets — single-channel occlusion (raw, then blurred). Declared at the
+    // top level (mirrors the GL graph) so the debug pass can also show the raw one.
+    const RGTextureHandle ssaoRaw     = graph.DeclareTexture(
+        "ssaoRaw",     { kOffscreenW, kOffscreenH, RHIFormat::R16F });
+    const RGTextureHandle ssaoBlurred = graph.DeclareTexture(
+        "ssaoBlurred", { kOffscreenW, kOffscreenH, RHIFormat::R16F });
+    // CSM cascade depth targets — one square depth map per cascade (Depth32F, which
+    // the graph now also makes Sampled so the debug pass / future lighting can read).
+    constexpr uint32_t kShadowRes = 2048;
+    std::array<RGTextureHandle, VulkanCSMPass::NUM_CASCADES> csmCascades;
+    for (int i = 0; i < VulkanCSMPass::NUM_CASCADES; ++i)
+        csmCascades[i] = graph.DeclareTexture(
+            "csmCascade" + std::to_string(i),
+            { kShadowRes, kShadowRes, RHIFormat::Depth32F });
+    // HDR scene color — the deferred lighting pass resolves the G-buffer into this,
+    // then tonemap maps it to the swapchain.
+    const RGTextureHandle hdrLit = graph.DeclareTexture(
+        "hdrLit", { kOffscreenW, kOffscreenH, RHIFormat::RGBA16F });
 
     // Per-frame UBO (dynamic).
     RHIBufferDesc uboDesc;
-    uboDesc.size    = sizeof(FrameUBO);
+    uboDesc.size    = sizeof(GBufferUBO);
     uboDesc.usage   = RHIBufferUsage::Uniform;
     uboDesc.dynamic = true;
     auto uniformBuffer = device->CreateBuffer(uboDesc);
 
     const std::string shaderDir = DIAMOND_VULKAN_SHADER_DIR;
 
-    // ── Cube pipeline (renders into the offscreen color + depth targets) ────────
-    const std::vector<uint32_t> meshVsSpv = LoadSpirv(shaderDir, "mesh.vert.spv");
-    const std::vector<uint32_t> meshFsSpv = LoadSpirv(shaderDir, "mesh.frag.spv");
-    RHIShaderDesc meshVs{ RHIShaderStage::Vertex,   meshVsSpv.data(), meshVsSpv.size() };
-    RHIShaderDesc meshFs{ RHIShaderStage::Fragment, meshFsSpv.data(), meshFsSpv.size() };
-    auto meshVertShader = device->CreateShader(meshVs);
-    auto meshFragShader = device->CreateShader(meshFs);
+    // ── Deferred passes (the ported passes under test) ──────────────────────────
+    VulkanGBufferPass          gbuffer(device.get(), shaderDir);
+    VulkanSSAOPass             ssao(device.get(), shaderDir, kOffscreenW, kOffscreenH);
+    VulkanCSMPass              csm(device.get(), shaderDir);
+    VulkanDeferredLightingPass lighting(device.get(), shaderDir);
+    VulkanTonemapPass          tonemap(device.get(), shaderDir, device->SwapchainFormat());
 
-    RHIPipelineDesc meshPipeDesc;
-    meshPipeDesc.vertexShader   = meshVertShader.get();
-    meshPipeDesc.fragmentShader = meshFragShader.get();
-    meshPipeDesc.vertexLayout.stride = sizeof(MeshVertex);
-    meshPipeDesc.vertexLayout.attributes = {
-        { 0, RHIVertexFormat::Float3, offsetof(MeshVertex, pos)    },
-        { 1, RHIVertexFormat::Float3, offsetof(MeshVertex, normal) },
-        { 2, RHIVertexFormat::Float2, offsetof(MeshVertex, uv)     },
-    };
-    meshPipeDesc.resourceBindings = {
-        { 0, RHIResourceType::UniformBuffer,        RHIShaderStage::Vertex | RHIShaderStage::Fragment },
-        { 1, RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment },
-    };
-    meshPipeDesc.pushConstants = { RHIShaderStage::Vertex, sizeof(PushConstants) };
-    meshPipeDesc.colorFormat   = RHIFormat::RGBA16F;      // offscreen HDR color format
-    meshPipeDesc.depthFormat   = RHIFormat::Depth32F;     // offscreen depth format
-    meshPipeDesc.depthTest     = true;
-    meshPipeDesc.depthWrite    = true;
-    auto meshPipeline = device->CreatePipeline(meshPipeDesc);
-
-    auto meshSet = device->CreateResourceSet(
-        meshPipeline.get(), 0, { { 0, uniformBuffer.get() } }, { { 1, checker.get() } });
-
-    // ── Post-process chain (each a self-contained ported Vulkan pass) ───────────
-    // Bloom adds a blurred bright-pass back onto the HDR scene; tonemap maps the
-    // result to LDR; FXAA anti-aliases that and writes the swapchain. Each pass
-    // owns its pipeline + shaders and wires itself into the graph with the
-    // reads/writes that drive ordering.
-    VulkanBloomPass   bloom(device.get(), shaderDir, kOffscreenW, kOffscreenH,
-                            RHIFormat::RGBA16F);
-    VulkanTonemapPass tonemap(device.get(), shaderDir, RHIFormat::RGBA8);
-    VulkanFXAAPass    fxaa(device.get(), shaderDir, device->SwapchainFormat());
+    // Scene lights consumed by the deferred-lighting pass. The sun drives the CSM
+    // shadow; a single warm point light (world space) shows the chain resolves more
+    // than just the directional term. Ambient stands in for IBL until that lands.
+    const glm::vec3 sunDir   = glm::normalize(glm::vec3(-0.5f, -1.0f, -0.3f));
+    const glm::vec3 sunColor = glm::vec3(3.0f, 2.9f, 2.7f);
+    const glm::vec3 ambient  = glm::vec3(0.04f);
+    const std::vector<glm::vec3> pointPositions = { glm::vec3(1.8f, 1.2f, 1.8f) };
+    const std::vector<glm::vec3> pointColors    = { glm::vec3(6.0f, 2.5f, 1.0f) };
 
     const float aspect = static_cast<float>(kOffscreenW) / kOffscreenH;
 
-    // Per-frame push constants, written before each Execute and read inside the
-    // cube pass's recorded body. The graph is built and compiled once; only this
-    // data and the UBO change per frame.
-    PushConstants push{};
+    // Per-draw model matrices. The cube spins (updated per frame); the floor is a
+    // flattened slab the cube sits on, giving SSAO a contact crease to darken (a lone
+    // convex cube self-occludes almost nothing). The graph is built + compiled once;
+    // only these matrices and the per-frame UBOs change.
+    glm::mat4 cubeModel{ 1.0f };
+    const glm::mat4 floorModel =
+        glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, -0.55f, 0.0f)) *
+        glm::scale(glm::mat4(1.0f), glm::vec3(6.0f, 0.1f, 6.0f));
 
-    // Pass 1 — cube into the offscreen color + depth targets. Writing both makes
-    // the graph open a color+depth render scope and clear them.
-    graph.AddPass("Cube")
-        .Write(sceneColor)
-        .Write(sceneDepth)
-        .SetClearColor({ 0.02f, 0.02f, 0.05f, 1.0f })
-        .SetExecute([&](RHICommandList* cmd) {
-            cmd->BindPipeline(meshPipeline.get());
-            cmd->BindResourceSet(0, meshSet.get());
-            cmd->PushConstants(RHIShaderStage::Vertex, 0, sizeof(push), &push);
-            cmd->BindVertexBuffer(vertexBuffer.get());
-            cmd->BindIndexBuffer(indexBuffer.get(), RHIIndexType::U32);
-            cmd->DrawIndexed(indexCount);
-        });
+    // Pass 1 — fill the G-buffer. The draw callback records the scene (floor + cube)
+    // inside the pass scope after the pass binds its pipeline + descriptor set.
+    gbuffer.AddToGraph(graph, gViewPos, gViewNormal, gAlbedo, gMaterial, gEmissive,
+                       gDepth, uniformBuffer.get(), checker.get(),
+                       [&](RHICommandList* cmd) {
+                           cmd->BindVertexBuffer(vertexBuffer.get());
+                           cmd->BindIndexBuffer(indexBuffer.get(), RHIIndexType::U32);
+                           cmd->PushConstants(RHIShaderStage::Vertex, 0, sizeof(floorModel), &floorModel);
+                           cmd->DrawIndexed(indexCount);
+                           cmd->PushConstants(RHIShaderStage::Vertex, 0, sizeof(cubeModel), &cubeModel);
+                           cmd->DrawIndexed(indexCount);
+                       });
 
-    // Pass 2 — bloom. Declares its own bright + ping-pong scratch on the graph and
-    // adds an extract → blur×N → composite sub-chain; reads sceneColor and writes
-    // the scene-plus-bloom HDR target. The graph orders the whole sub-chain after
-    // the cube pass and inserts every barrier from the reads/writes.
-    bloom.AddToGraph(graph, sceneColor, sceneBloomed);
+    // Pass 2+3 — SSAO occlusion + blur over the G-buffer's view-space pos/normal.
+    ssao.AddToGraph(graph, gViewPos, gViewNormal, ssaoRaw, ssaoBlurred);
 
-    // Pass 3 — tonemap the bloomed HDR scene into the LDR texture.
-    tonemap.AddToGraph(graph, sceneBloomed, ldrColor);
+    // Shadow passes — render the scene depth into each cascade from the sun. The
+    // callback receives the per-cascade light matrix and pushes lightSpace * model.
+    csm.AddToGraph(graph, csmCascades,
+                   [&](RHICommandList* cmd, const glm::mat4& lightSpace) {
+                       cmd->BindVertexBuffer(vertexBuffer.get());
+                       cmd->BindIndexBuffer(indexBuffer.get(), RHIIndexType::U32);
+                       glm::mat4 lm = lightSpace * floorModel;
+                       cmd->PushConstants(RHIShaderStage::Vertex, 0, sizeof(lm), &lm);
+                       cmd->DrawIndexed(indexCount);
+                       lm = lightSpace * cubeModel;
+                       cmd->PushConstants(RHIShaderStage::Vertex, 0, sizeof(lm), &lm);
+                       cmd->DrawIndexed(indexCount);
+                   });
 
-    // Pass 4 — FXAA the LDR texture into the backbuffer.
-    fxaa.AddToGraph(graph, ldrColor);
+    // Pass 4 — deferred lighting. Resolves the G-buffer + blurred SSAO + the four
+    // cascade shadow maps into the HDR target with Cook-Torrance PBR (sun + CSM
+    // shadow + the point light). Reading all four cascades also keeps cascades 1-3
+    // alive through dead-pass culling.
+    lighting.AddToGraph(graph, gViewPos, gViewNormal, gAlbedo, gMaterial,
+                        ssaoBlurred, gEmissive, csmCascades, hdrLit);
+
+    // Pass 5 — tonemap the HDR result onto the swapchain (ACES + gamma).
+    tonemap.AddToGraph(graph, hdrLit);
 
     graph.Compile();
 
@@ -248,13 +261,27 @@ int RunVulkanMeshDemo() {
         const glm::mat4 view = glm::lookAt(eye, glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
         const glm::mat4 proj = glm::perspective(glm::radians(55.0f), aspect, 0.1f, 100.0f);
 
-        FrameUBO ubo{};
+        GBufferUBO ubo{};
+        ubo.view     = view;
         ubo.viewProj = proj * view;
-        ubo.lightDir = glm::vec4(glm::normalize(glm::vec3(-0.4f, -1.0f, -0.3f)), 0.0f);
-        ubo.time     = t;
         uniformBuffer->Update(&ubo, sizeof(ubo));
 
-        push.model = glm::rotate(glm::mat4(1.0f), t * 0.5f, glm::vec3(0.0f, 1.0f, 0.0f));
+        // SSAO projects view-space samples into screen space — it needs this frame's
+        // projection (uploaded after BeginFrame idles the buffer slot).
+        ssao.SetProjection(proj);
+
+        cubeModel = glm::rotate(glm::mat4(1.0f), t * 0.5f, glm::vec3(0.0f, 1.0f, 0.0f));
+
+        // Refresh the cascade light matrices from this frame's camera + a fixed sun.
+        // The shadowed range (near..far) is tighter than the camera's 100-unit far so
+        // the cascades pack around the cube + floor.
+        csm.ComputeCascades(sunDir, view, proj, 0.1f, 25.0f);
+
+        // Feed the lighting pass this frame's camera + lights. It folds inverse(view)
+        // into each cascade matrix and transforms the sun/point lights to view space.
+        lighting.SetFrameData(view, sunDir, sunColor, ambient,
+                              csm.GetLightMatrices(), csm.GetSplitDepths(),
+                              pointPositions, pointColors);
 
         graph.Execute(cmd);
 

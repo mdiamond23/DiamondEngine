@@ -28,7 +28,9 @@ RGTextureHandle RHIRenderGraph::DeclareTexture(std::string_view name, const RGTe
         td.width  = desc.width;
         td.height = desc.height;
         td.format = desc.format;
-        td.usage  = isDepth ? RHITextureUsage::DepthAttachment
+        // Depth targets are also Sampled: shadow maps (CSM cascades) and depth
+        // pre-passes are written as a depth attachment, then read in a later pass.
+        td.usage  = isDepth ? (RHITextureUsage::DepthAttachment | RHITextureUsage::Sampled)
                             : (RHITextureUsage::ColorAttachment | RHITextureUsage::Sampled);
         it = m_Pool.insert_or_assign(key, PooledTexture{ desc, m_Device->CreateTexture(td) }).first;
     }

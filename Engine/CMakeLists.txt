@@ -305,6 +305,10 @@ if(DIAMOND_ENABLE_VULKAN)
         src/Platform/Vulkan/Passes/PostProcess/VulkanTonemapPass.cpp
         src/Platform/Vulkan/Passes/PostProcess/VulkanFXAAPass.cpp
         src/Platform/Vulkan/Passes/PostProcess/VulkanBloomPass.cpp
+        src/Platform/Vulkan/Passes/Deferred/VulkanGBufferPass.cpp
+        src/Platform/Vulkan/Passes/Deferred/VulkanSSAOPass.cpp
+        src/Platform/Vulkan/Passes/Deferred/VulkanDeferredLightingPass.cpp
+        src/Platform/Vulkan/Passes/Shadows/VulkanCSMPass.cpp
         src/Platform/Vulkan/VulkanMeshDemo.cpp
     )
     target_link_libraries(MyEngine PRIVATE
@@ -331,7 +335,11 @@ if(DIAMOND_ENABLE_VULKAN)
     file(MAKE_DIRECTORY ${_vk_spv_dir})
     set(_vk_spv_outputs)
     foreach(_shader mesh.vert mesh.frag fullscreen.vert tonemap.frag fxaa.frag
-                    bloom_extract.frag bloom_blur.frag bloom_composite.frag)
+                    bloom_extract.frag bloom_blur.frag bloom_composite.frag
+                    gbuffer.vert gbuffer.frag gbuffer_debug.frag
+                    ssao.frag ssao_blur.frag
+                    csm_depth.vert csm_depth.frag
+                    deferred_lighting.frag)
         add_custom_command(
             OUTPUT  ${_vk_spv_dir}/${_shader}.spv
             COMMAND ${GLSLANG_VALIDATOR} -V ${_vk_shader_src}/${_shader} -o ${_vk_spv_dir}/${_shader}.spv
