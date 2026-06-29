@@ -13,8 +13,11 @@
 // needs) is therefore unnecessary.
 //
 // Slice scope: directional sun with CSM shadows + point lights (unshadowed —
-// point cube-shadows aren't ported yet) + a constant ambient placeholder. The
-// ambient term stands in for IBL irradiance/specular until the IBL pass lands.
+// point cube-shadows aren't ported yet) + image-based lighting (diffuse irradiance
+// + specular prefilter/BRDF) replacing the old constant-ambient placeholder.
+//
+// The IBL maps are world-space cubemaps, but everything else here is view space, so
+// invView rotates the view-space normal/reflection into world space to sample them.
 
 layout(location = 0) in  vec2 vUV;
 layout(location = 0) out vec4 outColor;
@@ -32,14 +35,19 @@ layout(set = 0, binding = 9) uniform sampler2D shadowCascade3;
 
 layout(set = 0, binding = 10) uniform LightingUBO {
     mat4 lightFromView[4];   // per-cascade: view space → light clip
+    mat4 invView;            // view space → world space (for IBL cubemap sampling)
     vec4 cascadeSplits;      // x..w = cascade far view-depths (positive)
     vec4 sunDirView;         // .xyz sun direction in view space (normalized)
     vec4 sunColor;           // .xyz
-    vec4 ambient;            // .xyz ambient light color (IBL placeholder)
     vec4 pointPos[4];        // .xyz view-space position
     vec4 pointColor[4];      // .xyz radiant intensity
-    vec4 counts;             // x = numPointLights
+    vec4 counts;             // x = numPointLights, y = prefilter max LOD
 } u;
+
+// IBL maps (world space). Bound after the resource set is created (bake-time views).
+layout(set = 0, binding = 11) uniform samplerCube irradianceMap;
+layout(set = 0, binding = 12) uniform samplerCube prefilterMap;
+layout(set = 0, binding = 13) uniform sampler2D   brdfLUT;
 
 const float PI = 3.14159265359;
 
@@ -60,6 +68,11 @@ float GeometrySmith(vec3 N, vec3 V, vec3 L, float roughness) {
 }
 vec3 fresnelSchlick(float cosTheta, vec3 F0) {
     return F0 + (1.0 - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
+}
+// Roughness-aware Fresnel for the IBL ambient term (ported from the GL shader).
+vec3 fresnelSchlickRoughness(float cosTheta, vec3 F0, float roughness) {
+    return F0 + (max(vec3(1.0 - roughness), F0) - F0)
+              * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
 }
 
 // Single Cook-Torrance light contribution given an incoming radiance.
@@ -144,8 +157,24 @@ void main() {
         Lo += BRDF(N, V, L, albedo, F0, metallic, roughness, rad);
     }
 
-    // Ambient placeholder for IBL — attenuated by both baked AO and SSAO.
-    vec3 ambient  = u.ambient.xyz * albedo * ao * occlusion;
+    // Image-based ambient: diffuse irradiance + specular prefilter/BRDF. The maps
+    // are world-space cubemaps, so rotate the view-space normal/reflection to world
+    // (dot(N,V) is rotation-invariant, so the BRDF lookup stays in view space).
+    mat3 V2W   = mat3(u.invView);
+    vec3 worldN = normalize(V2W * N);
+    vec3 worldR = normalize(V2W * reflect(-V, N));
+    float NdotV = max(dot(N, V), 0.0);
+
+    vec3 F  = fresnelSchlickRoughness(NdotV, F0, roughness);
+    vec3 kD = (1.0 - F) * (1.0 - metallic);
+
+    vec3 diffuse         = texture(irradianceMap, worldN).rgb * albedo;
+    vec3 prefilteredColor = textureLod(prefilterMap, worldR, roughness * u.counts.y).rgb;
+    vec2 brdf            = texture(brdfLUT, vec2(NdotV, roughness)).rg;
+    vec3 specular        = prefilteredColor * (F * brdf.x + brdf.y);
+
+    // Both baked AO and SSAO attenuate the ambient term.
+    vec3 ambient  = (kD * diffuse + specular) * ao * occlusion;
     vec3 emissive = texture(gEmissive, vUV).rgb;
 
     outColor = vec4(ambient + Lo + emissive, 1.0);

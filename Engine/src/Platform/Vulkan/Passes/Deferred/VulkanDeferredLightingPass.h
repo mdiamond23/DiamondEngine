@@ -17,6 +17,7 @@ class RHIBuffer;
 class RHIShader;
 class RHIPipeline;
 class RHIResourceSet;
+class VulkanIBLPass;
 
 // Deferred lighting — Vulkan port of OpenGLDeferredLightingPass. A fullscreen
 // pass that resolves the G-buffer + SSAO + cascaded shadow maps into one HDR
@@ -51,13 +52,18 @@ public:
                     const std::array<RGTextureHandle, NUM_CASCADES>& cascades,
                     RGTextureHandle output);
 
+    // Bind the baked IBL maps (irradiance/prefilter cubemaps + BRDF LUT) into the
+    // resource set's IBL slots (bindings 11-13). The maps are world-space cubemaps,
+    // not RHITextures, so they're written raw. Call once after AddToGraph (which
+    // creates the set) and before the frame loop; the baked maps are static.
+    void BindIBL(const VulkanIBLPass& ibl);
+
     // Upload this frame's lighting data into the UBO. The sun direction + point
     // lights are given in WORLD space and transformed to view space here (the
     // shader works in view space). 'lightMatrices'/'splits' come from the CSM
     // pass. Call after RHIDevice::BeginFrame and before graph.Execute.
     void SetFrameData(const glm::mat4& view,
                       const glm::vec3& sunDirWorld, const glm::vec3& sunColor,
-                      const glm::vec3& ambient,
                       const std::array<glm::mat4, NUM_CASCADES>& lightMatrices,
                       const std::array<float, NUM_CASCADES>& splits,
                       const std::vector<glm::vec3>& pointPosWorld,
@@ -67,17 +73,18 @@ private:
     // std140 layout matching deferred_lighting.frag's LightingUBO.
     struct LightingUBO {
         glm::mat4 lightFromView[NUM_CASCADES];
+        glm::mat4 invView;
         glm::vec4 cascadeSplits;
         glm::vec4 sunDirView;
         glm::vec4 sunColor;
-        glm::vec4 ambient;
         glm::vec4 pointPos[4];
         glm::vec4 pointColor[4];
-        glm::vec4 counts;
+        glm::vec4 counts;        // x = numPointLights, y = prefilter max LOD
     };
 
     RHIDevice*                      m_Device;
     LightingUBO                     m_UBOData{};
+    float                           m_PrefilterMaxLod = 0.0f;
 
     std::unique_ptr<RHIShader>      m_Vert;
     std::unique_ptr<RHIShader>      m_Frag;

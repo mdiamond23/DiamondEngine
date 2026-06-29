@@ -8,6 +8,7 @@
 #include "Platform/Vulkan/Passes/Deferred/VulkanDeferredLightingPass.h"
 #include "Platform/Vulkan/Passes/Shadows/VulkanCSMPass.h"
 #include "Platform/Vulkan/Passes/PostProcess/VulkanTonemapPass.h"
+#include "Platform/Vulkan/Passes/IBL/VulkanIBLPass.h"
 #include "Renderer/MeshData.h"
 
 // Vulkan expects clip-space depth in [0, 1] (OpenGL uses [-1, 1]); make GLM's
@@ -187,12 +188,17 @@ int RunVulkanMeshDemo() {
     VulkanDeferredLightingPass lighting(device.get(), shaderDir);
     VulkanTonemapPass          tonemap(device.get(), shaderDir, device->SwapchainFormat());
 
+    // Bake the IBL maps once from an equirectangular HDR sky. The deferred-lighting
+    // pass samples the resulting irradiance/prefilter/BRDF maps for its ambient term
+    // (replacing the old constant placeholder).
+    VulkanIBLPass ibl(device.get(), shaderDir);
+    ibl.BakeEnvironment(DIAMOND_ASSETS_DIR "/Textures/citrus_orchard_road_puresky_4k.hdr");
+
     // Scene lights consumed by the deferred-lighting pass. The sun drives the CSM
     // shadow; a single warm point light (world space) shows the chain resolves more
-    // than just the directional term. Ambient stands in for IBL until that lands.
+    // than just the directional term. Ambient now comes from the baked IBL maps.
     const glm::vec3 sunDir   = glm::normalize(glm::vec3(-0.5f, -1.0f, -0.3f));
     const glm::vec3 sunColor = glm::vec3(3.0f, 2.9f, 2.7f);
-    const glm::vec3 ambient  = glm::vec3(0.04f);
     const std::vector<glm::vec3> pointPositions = { glm::vec3(1.8f, 1.2f, 1.8f) };
     const std::vector<glm::vec3> pointColors    = { glm::vec3(6.0f, 2.5f, 1.0f) };
 
@@ -243,6 +249,9 @@ int RunVulkanMeshDemo() {
     // alive through dead-pass culling.
     lighting.AddToGraph(graph, gViewPos, gViewNormal, gAlbedo, gMaterial,
                         ssaoBlurred, gEmissive, csmCascades, hdrLit);
+    // Bind the baked IBL maps into the lighting set (raw cube/2D views) now that the
+    // set exists. Static maps, so this is a one-time write.
+    lighting.BindIBL(ibl);
 
     // Pass 5 — tonemap the HDR result onto the swapchain (ACES + gamma).
     tonemap.AddToGraph(graph, hdrLit);
@@ -279,7 +288,7 @@ int RunVulkanMeshDemo() {
 
         // Feed the lighting pass this frame's camera + lights. It folds inverse(view)
         // into each cascade matrix and transforms the sun/point lights to view space.
-        lighting.SetFrameData(view, sunDir, sunColor, ambient,
+        lighting.SetFrameData(view, sunDir, sunColor,
                               csm.GetLightMatrices(), csm.GetSplitDepths(),
                               pointPositions, pointColors);
 

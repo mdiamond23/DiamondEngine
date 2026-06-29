@@ -309,6 +309,7 @@ if(DIAMOND_ENABLE_VULKAN)
         src/Platform/Vulkan/Passes/Deferred/VulkanSSAOPass.cpp
         src/Platform/Vulkan/Passes/Deferred/VulkanDeferredLightingPass.cpp
         src/Platform/Vulkan/Passes/Shadows/VulkanCSMPass.cpp
+        src/Platform/Vulkan/Passes/IBL/VulkanIBLPass.cpp
         src/Platform/Vulkan/VulkanMeshDemo.cpp
     )
     target_link_libraries(MyEngine PRIVATE
@@ -339,7 +340,9 @@ if(DIAMOND_ENABLE_VULKAN)
                     gbuffer.vert gbuffer.frag gbuffer_debug.frag
                     ssao.frag ssao_blur.frag
                     csm_depth.vert csm_depth.frag
-                    deferred_lighting.frag)
+                    deferred_lighting.frag
+                    cubemap.vert equirect_to_cubemap.frag
+                    irradiance_convolution.frag prefilter.frag brdf_lut.frag)
         add_custom_command(
             OUTPUT  ${_vk_spv_dir}/${_shader}.spv
             COMMAND ${GLSLANG_VALIDATOR} -V ${_vk_shader_src}/${_shader} -o ${_vk_spv_dir}/${_shader}.spv
@@ -355,6 +358,7 @@ if(DIAMOND_ENABLE_VULKAN)
         DIAMOND_ENABLE_VULKAN
         VK_NO_PROTOTYPES
         DIAMOND_VULKAN_SHADER_DIR="${_vk_spv_dir}"
+        DIAMOND_ASSETS_DIR="${CMAKE_SOURCE_DIR}/Assets"
     )
 endif()
 

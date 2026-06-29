@@ -1,9 +1,14 @@
 #include "Platform/Vulkan/Passes/Deferred/VulkanDeferredLightingPass.h"
 #include "Platform/Vulkan/Passes/VulkanPassCommon.h"
+#include "Platform/Vulkan/Passes/IBL/VulkanIBLPass.h"
+#include "Platform/Vulkan/RHI/VulkanRHIDevice.h"
+#include "Platform/Vulkan/RHI/VulkanRHIResources.h"
 #include "Renderer/RHI/RHIDevice.h"
 #include "Renderer/RHI/RHICommandList.h"
 
 #include <algorithm>
+#include <array>
+#include <utility>
 
 namespace Diamond {
 
@@ -43,6 +48,9 @@ VulkanDeferredLightingPass::VulkanDeferredLightingPass(RHIDevice* device,
         { 8,  RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment }, // shadowCascade2
         { 9,  RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment }, // shadowCascade3
         { 10, RHIResourceType::UniformBuffer,        RHIShaderStage::Fragment }, // LightingUBO
+        { 11, RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment }, // irradianceMap (cube)
+        { 12, RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment }, // prefilterMap (cube)
+        { 13, RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment }, // brdfLUT (2D)
     };
     desc.colorFormat = kHDRFormat;
     m_Pipeline = device->CreatePipeline(desc);
@@ -82,27 +90,63 @@ void VulkanDeferredLightingPass::AddToGraph(
         });
 }
 
+void VulkanDeferredLightingPass::BindIBL(const VulkanIBLPass& ibl)
+{
+    m_PrefilterMaxLod = static_cast<float>(ibl.NumPrefilterMips() - 1);
+
+    // The baked maps are world-space cubemaps (not RHITextures), so write bindings
+    // 11-13 into every frame slot of the resource set by hand. The maps are static,
+    // so the same view/sampler goes into both frames' sets.
+    auto* device = static_cast<VulkanRHIDevice*>(m_Device);
+    auto* set    = static_cast<VulkanRHIResourceSet*>(m_Set.get());
+    VkDevice  dev     = device->Ctx().Device();
+    VkSampler sampler = ibl.Sampler();
+
+    const std::array<std::pair<uint32_t, VkImageView>, 3> binds = { {
+        { 11, ibl.IrradianceView() }, { 12, ibl.PrefilterView() }, { 13, ibl.BrdfView() },
+    } };
+
+    for (uint32_t frame = 0; frame < VulkanRHIDevice::kFramesInFlight; ++frame) {
+        std::array<VkDescriptorImageInfo, 3> infos{};
+        std::array<VkWriteDescriptorSet, 3>  writes{};
+        for (size_t i = 0; i < binds.size(); ++i) {
+            infos[i].sampler     = sampler;
+            infos[i].imageView   = binds[i].second;
+            infos[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+            writes[i] = VkWriteDescriptorSet{ VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
+            writes[i].dstSet          = set->Handle(frame);
+            writes[i].dstBinding      = binds[i].first;
+            writes[i].descriptorCount = 1;
+            writes[i].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            writes[i].pImageInfo      = &infos[i];
+        }
+        vkUpdateDescriptorSets(dev, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
+    }
+}
+
 void VulkanDeferredLightingPass::SetFrameData(
         const glm::mat4& view,
         const glm::vec3& sunDirWorld, const glm::vec3& sunColor,
-        const glm::vec3& ambient,
         const std::array<glm::mat4, NUM_CASCADES>& lightMatrices,
         const std::array<float, NUM_CASCADES>& splits,
         const std::vector<glm::vec3>& pointPosWorld,
         const std::vector<glm::vec3>& pointColor)
 {
     // CSM: fold inverse(view) into each cascade matrix so the shader can go from a
-    // view-space position straight to light clip (matches the debug shader).
+    // view-space position straight to light clip (matches the debug shader). The
+    // same inverse(view) also rotates view-space normals/reflections to world space
+    // for the IBL cubemap lookups.
     const glm::mat4 invView = glm::inverse(view);
     const glm::mat3 viewRot(view);   // rigid view → direction transform
     for (int i = 0; i < NUM_CASCADES; ++i) {
         m_UBOData.lightFromView[i] = lightMatrices[i] * invView;
         m_UBOData.cascadeSplits[i] = splits[i];
     }
+    m_UBOData.invView = invView;
 
     m_UBOData.sunDirView = glm::vec4(glm::normalize(viewRot * sunDirWorld), 0.0f);
     m_UBOData.sunColor   = glm::vec4(sunColor, 0.0f);
-    m_UBOData.ambient    = glm::vec4(ambient, 0.0f);
 
     const int np = std::min<int>(static_cast<int>(pointPosWorld.size()), 4);
     for (int i = 0; i < np; ++i) {
@@ -110,7 +154,7 @@ void VulkanDeferredLightingPass::SetFrameData(
         m_UBOData.pointPos[i]   = view * glm::vec4(pointPosWorld[i], 1.0f);
         m_UBOData.pointColor[i] = glm::vec4(pointColor[i], 0.0f);
     }
-    m_UBOData.counts = glm::vec4(static_cast<float>(np), 0.0f, 0.0f, 0.0f);
+    m_UBOData.counts = glm::vec4(static_cast<float>(np), m_PrefilterMaxLod, 0.0f, 0.0f);
 
     m_UBO->Update(&m_UBOData, sizeof(LightingUBO));
 }
