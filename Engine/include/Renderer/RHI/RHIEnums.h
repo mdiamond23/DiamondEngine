@@ -33,6 +33,16 @@ enum class RHIPrimitiveTopology { TriangleList, TriangleStrip, LineList };
 
 enum class RHICullMode { None, Back, Front };
 
+// Color-blend mode for a pipeline's color attachments. Opaque overwrites (the
+// default for every geometry/post pass so far); Alpha is standard src-over
+// blending (src.a, 1-src.a) for forward transparency.
+enum class RHIBlendMode { Opaque, Alpha };
+
+// Depth comparison. Less is the default for opaque geometry; LessEqual lets a
+// skybox drawn at the far plane (depth == 1) pass against a depth buffer cleared
+// to 1, filling only the pixels no geometry wrote.
+enum class RHICompareOp { Less, LessEqual };
+
 // Resource kinds a descriptor binding can hold (grows with storage buffers etc).
 enum class RHIResourceType { UniformBuffer, CombinedImageSampler };
 

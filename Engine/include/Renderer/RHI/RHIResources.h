@@ -136,9 +136,14 @@ struct RHIPipelineDesc {
     // Depth-buffer state. depthFormat == Undefined means the pipeline renders
     // without a depth attachment (depthTest/depthWrite ignored). When set, it
     // must match the device's DepthFormat() so dynamic rendering is compatible.
-    RHIFormat depthFormat = RHIFormat::Undefined;
-    bool      depthTest   = false;
-    bool      depthWrite  = false;
+    RHIFormat    depthFormat  = RHIFormat::Undefined;
+    bool         depthTest    = false;
+    bool         depthWrite   = false;
+    RHICompareOp depthCompare = RHICompareOp::Less;
+
+    // Color blending. Opaque (overwrite) for every geometry/post pass; Alpha
+    // (src-over) for forward transparency. Applied to all color attachments.
+    RHIBlendMode blendMode = RHIBlendMode::Opaque;
 };
 
 class RHIPipeline {

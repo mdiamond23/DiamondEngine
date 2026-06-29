@@ -46,6 +46,9 @@ public:
     VkImageView IrradianceView() const { return m_Irradiance.cubeView; }
     VkImageView PrefilterView()  const { return m_Prefilter.cubeView; }
     VkImageView BrdfView()       const { return m_BrdfLUT.view; }
+    // The intermediate radiance cubemap — sampled as the skybox background
+    // (PBRSurfacePass::DrawSkybox's environmentMap in the GL renderer).
+    VkImageView EnvView()        const { return m_EnvCube.cubeView; }
     VkSampler   Sampler()        const { return m_Sampler; }
 
     // Mip count the prefilter map was baked with (deferred lighting scales roughness

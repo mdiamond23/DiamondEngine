@@ -6,6 +6,8 @@
 #include "Platform/Vulkan/Passes/Deferred/VulkanGBufferPass.h"
 #include "Platform/Vulkan/Passes/Deferred/VulkanSSAOPass.h"
 #include "Platform/Vulkan/Passes/Deferred/VulkanDeferredLightingPass.h"
+#include "Platform/Vulkan/Passes/Forward/VulkanPBRSurfacePass.h"
+#include "Platform/Vulkan/Passes/Forward/VulkanTransparencyPass.h"
 #include "Platform/Vulkan/Passes/Shadows/VulkanCSMPass.h"
 #include "Platform/Vulkan/Passes/PostProcess/VulkanTonemapPass.h"
 #include "Platform/Vulkan/Passes/IBL/VulkanIBLPass.h"
@@ -64,6 +66,18 @@ std::vector<uint8_t> MakeCheckerboard(uint32_t size, uint32_t cell) {
             p[2] = even ? 70  : 90;
             p[3] = 255;
         }
+    }
+    return pixels;
+}
+
+// Flat RGBA texture — the transparent object's material (alpha < 1 so it blends).
+std::vector<uint8_t> MakeSolid(uint32_t size, uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
+    std::vector<uint8_t> pixels(static_cast<size_t>(size) * size * 4);
+    for (size_t i = 0; i < static_cast<size_t>(size) * size; ++i) {
+        pixels[i * 4 + 0] = r;
+        pixels[i * 4 + 1] = g;
+        pixels[i * 4 + 2] = b;
+        pixels[i * 4 + 3] = a;
     }
     return pixels;
 }
@@ -136,6 +150,16 @@ int RunVulkanMeshDemo() {
     texDesc.initialData = texPixels.data();
     auto checker = device->CreateTexture(texDesc);
 
+    // Translucent material for the forward transparency pass (cyan glass, alpha 0.4).
+    const std::vector<uint8_t> glassPixels = MakeSolid(4, 90, 200, 230, 100);
+    RHITextureDesc glassDesc;
+    glassDesc.width       = 4;
+    glassDesc.height      = 4;
+    glassDesc.format      = RHIFormat::RGBA8;
+    glassDesc.usage       = RHITextureUsage::Sampled;
+    glassDesc.initialData = glassPixels.data();
+    auto glass = device->CreateTexture(glassDesc);
+
     // ── Render graph + its G-buffer targets ─────────────────────────────────────
     // The graph owns the five transient G-buffer attachments (pooled, never freed
     // mid-frame) + the shared depth target, and drives the layout barriers from the
@@ -171,6 +195,12 @@ int RunVulkanMeshDemo() {
     // then tonemap maps it to the swapchain.
     const RGTextureHandle hdrLit = graph.DeclareTexture(
         "hdrLit", { kOffscreenW, kOffscreenH, RHIFormat::RGBA16F });
+    // Forward stages compose over the deferred result into their own HDR targets
+    // (keeps the graph single-writer): deferred → hdrLit → forward → transparency.
+    const RGTextureHandle hdrForward = graph.DeclareTexture(
+        "hdrForward", { kOffscreenW, kOffscreenH, RHIFormat::RGBA16F });
+    const RGTextureHandle hdrFinal = graph.DeclareTexture(
+        "hdrFinal", { kOffscreenW, kOffscreenH, RHIFormat::RGBA16F });
 
     // Per-frame UBO (dynamic).
     RHIBufferDesc uboDesc;
@@ -186,6 +216,8 @@ int RunVulkanMeshDemo() {
     VulkanSSAOPass             ssao(device.get(), shaderDir, kOffscreenW, kOffscreenH);
     VulkanCSMPass              csm(device.get(), shaderDir);
     VulkanDeferredLightingPass lighting(device.get(), shaderDir);
+    VulkanPBRSurfacePass       pbrSurface(device.get(), shaderDir);   // skybox + forward object
+    VulkanTransparencyPass     transparency(device.get(), shaderDir);
     VulkanTonemapPass          tonemap(device.get(), shaderDir, device->SwapchainFormat());
 
     // Bake the IBL maps once from an equirectangular HDR sky. The deferred-lighting
@@ -212,6 +244,19 @@ int RunVulkanMeshDemo() {
     const glm::mat4 floorModel =
         glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, -0.55f, 0.0f)) *
         glm::scale(glm::mat4(1.0f), glm::vec3(6.0f, 0.1f, 6.0f));
+    // A forward-shaded metallic cube off to one side (its own pass, full Cook-Torrance
+    // + IBL) and a translucent cube in front of the scene for the transparency pass.
+    const glm::mat4 forwardModel =
+        glm::translate(glm::mat4(1.0f), glm::vec3(2.0f, 0.1f, 0.0f)) *
+        glm::scale(glm::mat4(1.0f), glm::vec3(0.7f));
+    const glm::mat4 glassModel =
+        glm::translate(glm::mat4(1.0f), glm::vec3(-1.4f, 0.2f, 1.2f)) *
+        glm::scale(glm::mat4(1.0f), glm::vec3(0.9f));
+
+    // Four point lights for the forward PBR shader (reuse the deferred point light,
+    // zero the rest so they contribute nothing).
+    glm::vec3 fwdLightPos[4] = { pointPositions[0], glm::vec3(0.0f), glm::vec3(0.0f), glm::vec3(0.0f) };
+    glm::vec3 fwdLightCol[4] = { pointColors[0],    glm::vec3(0.0f), glm::vec3(0.0f), glm::vec3(0.0f) };
 
     // Pass 1 — fill the G-buffer. The draw callback records the scene (floor + cube)
     // inside the pass scope after the pass binds its pipeline + descriptor set.
@@ -253,8 +298,34 @@ int RunVulkanMeshDemo() {
     // set exists. Static maps, so this is a one-time write.
     lighting.BindIBL(ibl);
 
-    // Pass 5 — tonemap the HDR result onto the swapchain (ACES + gamma).
-    tonemap.AddToGraph(graph, hdrLit);
+    // Pass 5 — forward PBR surface: copy the deferred HDR, draw the skybox background
+    // (env cubemap at the far plane) + a forward-lit metallic cube over it.
+    pbrSurface.AddToGraph(graph, hdrLit, hdrForward, gDepth,
+                          [&](RHICommandList* cmd) {   // skybox cube
+                              cmd->BindVertexBuffer(vertexBuffer.get());
+                              cmd->BindIndexBuffer(indexBuffer.get(), RHIIndexType::U32);
+                              cmd->DrawIndexed(indexCount);
+                          },
+                          [&](RHICommandList* cmd) {   // forward-lit object
+                              cmd->BindVertexBuffer(vertexBuffer.get());
+                              cmd->BindIndexBuffer(indexBuffer.get(), RHIIndexType::U32);
+                              cmd->PushConstants(RHIShaderStage::Vertex, 0, sizeof(forwardModel), &forwardModel);
+                              cmd->DrawIndexed(indexCount);
+                          });
+    pbrSurface.BindIBL(ibl);
+
+    // Pass 6 — forward transparency: copy the forward HDR, blend a translucent cube
+    // over it (depth-tested against the scene depth, no depth write).
+    transparency.AddToGraph(graph, hdrForward, hdrFinal, gDepth, glass.get(),
+                            [&](RHICommandList* cmd) {
+                                cmd->BindVertexBuffer(vertexBuffer.get());
+                                cmd->BindIndexBuffer(indexBuffer.get(), RHIIndexType::U32);
+                                cmd->PushConstants(RHIShaderStage::Vertex, 0, sizeof(glassModel), &glassModel);
+                                cmd->DrawIndexed(indexCount);
+                            });
+
+    // Pass 7 — tonemap the composited HDR result onto the swapchain (ACES + gamma).
+    tonemap.AddToGraph(graph, hdrFinal);
 
     graph.Compile();
 
@@ -291,6 +362,11 @@ int RunVulkanMeshDemo() {
         lighting.SetFrameData(view, sunDir, sunColor,
                               csm.GetLightMatrices(), csm.GetSplitDepths(),
                               pointPositions, pointColors);
+
+        // Forward passes: same camera. The PBR surface pass also needs the eye
+        // position + point lights for its world-space Cook-Torrance shading.
+        pbrSurface.SetFrameData(view, proj, eye, fwdLightPos, fwdLightCol);
+        transparency.SetCamera(view, proj);
 
         graph.Execute(cmd);
 

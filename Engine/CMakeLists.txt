@@ -308,6 +308,8 @@ if(DIAMOND_ENABLE_VULKAN)
         src/Platform/Vulkan/Passes/Deferred/VulkanGBufferPass.cpp
         src/Platform/Vulkan/Passes/Deferred/VulkanSSAOPass.cpp
         src/Platform/Vulkan/Passes/Deferred/VulkanDeferredLightingPass.cpp
+        src/Platform/Vulkan/Passes/Forward/VulkanPBRSurfacePass.cpp
+        src/Platform/Vulkan/Passes/Forward/VulkanTransparencyPass.cpp
         src/Platform/Vulkan/Passes/Shadows/VulkanCSMPass.cpp
         src/Platform/Vulkan/Passes/IBL/VulkanIBLPass.cpp
         src/Platform/Vulkan/VulkanMeshDemo.cpp
@@ -342,7 +344,10 @@ if(DIAMOND_ENABLE_VULKAN)
                     csm_depth.vert csm_depth.frag
                     deferred_lighting.frag
                     cubemap.vert equirect_to_cubemap.frag
-                    irradiance_convolution.frag prefilter.frag brdf_lut.frag)
+                    irradiance_convolution.frag prefilter.frag brdf_lut.frag
+                    copy.frag skybox.vert skybox.frag
+                    pbr_surface.vert pbr_surface.frag
+                    transparent.vert transparent.frag)
         add_custom_command(
             OUTPUT  ${_vk_spv_dir}/${_shader}.spv
             COMMAND ${GLSLANG_VALIDATOR} -V ${_vk_shader_src}/${_shader} -o ${_vk_spv_dir}/${_shader}.spv
