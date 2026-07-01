@@ -25,25 +25,25 @@ static void deriveFormatAndType(GLenum internal, GLenum& baseFormat, GLenum& typ
     }
 }
 
-RGTextureHandle RenderGraph::DeclareTexture(std::string_view name, const RGTextureDesc& desc)
+GLRGTextureHandle RenderGraph::DeclareTexture(std::string_view name, const GLRGTextureDesc& desc)
 {
     m_Textures.push_back(TextureEntry{ std::string(name), desc, 0, 0, 0 });
     // id is 1-based so that id=0 stays the "invalid" sentinel (matches IsValid())
-    return RGTextureHandle{ static_cast<uint32_t>(m_Textures.size()) };
+    return GLRGTextureHandle{ static_cast<uint32_t>(m_Textures.size()) };
 }
 
-RGPass& RenderGraph::AddPass(std::string_view name)
+GLRGPass& RenderGraph::AddPass(std::string_view name)
 {
-    m_Passes.push_back(RGPass{ std::string(name) });
+    m_Passes.push_back(GLRGPass{ std::string(name) });
     return m_Passes.back();
 }
 
-uint32_t RenderGraph::GetTexture(RGTextureHandle h) const
+uint32_t RenderGraph::GetTexture(GLRGTextureHandle h) const
 {
     return m_Textures[h.id - 1].glTexture;
 }
 
-uint32_t RenderGraph::GetFBO(RGTextureHandle h) const
+uint32_t RenderGraph::GetFBO(GLRGTextureHandle h) const
 {
     return m_Textures[h.id - 1].glFBO;
 }
@@ -58,7 +58,7 @@ void RenderGraph::Compile()
 
     for (int i = 0; i < (int)m_Passes.size(); ++i)
     {
-        for (const RGTextureHandle& h: m_Passes[i].writes)
+        for (const GLRGTextureHandle& h: m_Passes[i].writes)
         {
             writerMap[h.id] = i;
         }
@@ -71,7 +71,7 @@ void RenderGraph::Compile()
 
     for (int i = 0; i < (int)m_Passes.size(); ++i)
     {
-        for (const RGTextureHandle& h : m_Passes[i].reads)
+        for (const GLRGTextureHandle& h : m_Passes[i].reads)
         {
             if (writerMap[h.id] != -1) // someone writes this texture, so pass i depends on them
                 inDegree[i]++;
@@ -96,11 +96,11 @@ void RenderGraph::Compile()
         sorted.push_back(i);
 
         // Pass i is done — decrement in-degree of every pass that reads what i writes
-        for (const RGTextureHandle& written : m_Passes[i].writes)
+        for (const GLRGTextureHandle& written : m_Passes[i].writes)
         {
             for (int j = 0; j < (int)m_Passes.size(); ++j)
             {
-                for (const RGTextureHandle& r : m_Passes[j].reads)
+                for (const GLRGTextureHandle& r : m_Passes[j].reads)
                 {
                     if (r.id == written.id)
                     {
@@ -129,7 +129,7 @@ void RenderGraph::Compile()
         if (alive[passIdx])
         {
             // Any pass that feeds an alive pass is also alive
-            for (const RGTextureHandle& h : m_Passes[passIdx].reads)
+            for (const GLRGTextureHandle& h : m_Passes[passIdx].reads)
             {
                 int writerIdx = writerMap[h.id];
                 if (writerIdx != -1)
@@ -169,10 +169,10 @@ void RenderGraph::Execute()
     for (int i = 0; i < (int)m_SortedIndices.size(); ++i)
     {
         int passIdx = m_SortedIndices[i];
-        RGPass& pass = m_Passes[passIdx];
+        GLRGPass& pass = m_Passes[passIdx];
 
         // Allocate GL texture + FBO for each write target that doesn't exist yet
-        for (const RGTextureHandle& h : pass.writes)
+        for (const GLRGTextureHandle& h : pass.writes)
         {
             TextureEntry& entry = m_Textures[h.id - 1]; // -1 because ids are 1-based
             if (entry.glTexture != 0)

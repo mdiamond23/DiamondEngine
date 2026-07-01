@@ -102,8 +102,9 @@ std::vector<uint8_t> MakeParticleDot(uint32_t size) {
 // ── Concrete Vulkan implementation ───────────────────────────────────────────
 class SceneRendererVk final : public SceneRenderer {
 public:
-    SceneRendererVk(RHIDevice* device, uint32_t width, uint32_t height)
-        : m_Device(device), m_Width(width), m_Height(height), m_Graph(device) {
+    SceneRendererVk(RHIDevice* device, uint32_t width, uint32_t height, bool offscreen)
+        : m_Device(device), m_Width(width), m_Height(height), m_Offscreen(offscreen),
+          m_Graph(device) {
         BuildResources();
         BuildGraph();
     }
@@ -138,6 +139,35 @@ public:
         m_Lighting->BindIBL(*m_IBL);
     }
 
+    RHITexture* OutputColor() const override {
+        return m_Offscreen ? m_Graph.GetTexture(m_OutputColor) : nullptr;
+    }
+
+    void SetUIOverlay(const OverlayFn& fn) override { m_UIFn = fn; }
+
+    void Resize(uint32_t width, uint32_t height) override {
+        if (!m_Offscreen || width == 0 || height == 0) return;
+        if (width == m_Width && height == m_Height) return;
+
+        // Nothing referencing the old targets may be in flight while the pool
+        // recreates them and the size-dependent passes rebuild their sets.
+        m_Device->WaitIdle();
+        m_Width  = width;
+        m_Height = height;
+
+        // Recreate the passes whose descriptor sets sample graph textures (the
+        // pooled textures are about to be recreated at the new size). The other
+        // passes (G-buffer, CSM, particles) hold no graph-texture sets and their
+        // pipelines are size-independent, so they re-wire as-is.
+        const std::string shaderDir = DIAMOND_VULKAN_SHADER_DIR;
+        m_SSAO     = std::make_unique<VulkanSSAOPass>(m_Device, shaderDir, m_Width, m_Height);
+        m_Lighting = std::make_unique<VulkanDeferredLightingPass>(m_Device, shaderDir);
+        m_Tonemap  = std::make_unique<VulkanTonemapPass>(m_Device, shaderDir, RHIFormat::RGBA8);
+
+        m_Graph.ResetPasses();
+        BuildGraph();   // re-declares textures (pool recreates changed sizes) + re-binds IBL
+    }
+
     void RenderToSwapchain(Scene& scene, const Camera& camera,
                            const OverlayFn& overlay) override {
         // Refresh world transforms, then gather this frame's draws + lights from
@@ -168,12 +198,18 @@ public:
                                  m_CSM->GetLightMatrices(), m_CSM->GetSplitDepths(),
                                  m_PointPos, m_PointColor);
 
+        // Offscreen mode routes the overlay through the graph's EditorOverlay
+        // pass (which owns the backbuffer and has already transitioned the scene
+        // output for sampling); the pass callback reads this member per frame.
+        m_Overlay = overlay;
+
         m_Graph.Execute(cmd);
 
-        // Composite an optional overlay (ImGui) over the tonemapped swapchain,
-        // loading its contents so the scene shows through. The backbuffer is still
-        // in COLOR_ATTACHMENT layout here; EndFrame transitions it to present.
-        if (overlay) {
+        // Swapchain mode: composite an optional overlay (ImGui) over the
+        // tonemapped backbuffer, loading its contents so the scene shows through.
+        // The backbuffer is still in COLOR_ATTACHMENT layout here; EndFrame
+        // transitions it to present.
+        if (!m_Offscreen && overlay) {
             RHIRenderPass pass;
             pass.toSwapchain = true;
             RHIAttachment color;
@@ -227,7 +263,11 @@ private:
         m_SSAO     = std::make_unique<VulkanSSAOPass>(m_Device, shaderDir, m_Width, m_Height);
         m_CSM      = std::make_unique<VulkanCSMPass>(m_Device, shaderDir);
         m_Lighting = std::make_unique<VulkanDeferredLightingPass>(m_Device, shaderDir);
-        m_Tonemap  = std::make_unique<VulkanTonemapPass>(m_Device, shaderDir, m_Device->SwapchainFormat());
+        // Offscreen mode tonemaps into an LDR texture ImGui can sample; swapchain
+        // mode tonemaps straight into the backbuffer.
+        m_Tonemap  = std::make_unique<VulkanTonemapPass>(
+            m_Device, shaderDir,
+            m_Offscreen ? RHIFormat::RGBA8 : m_Device->SwapchainFormat());
 
         m_Particles = std::make_unique<VulkanParticleRenderer>(m_Device, shaderDir, RHIFormat::RGBA16F);
         const std::vector<uint8_t> dotPixels = MakeParticleDot(64);
@@ -297,8 +337,36 @@ private:
                 particles.End();
             });
 
-        // Tonemap HDR → swapchain (ACES + gamma).
-        m_Tonemap->AddToGraph(m_Graph, hdrLit);
+        // Tonemap HDR → swapchain (ACES + gamma), or → the LDR output texture in
+        // offscreen mode.
+        if (m_Offscreen)
+            m_OutputColor = m_Graph.DeclareTexture("outputColor", { m_Width, m_Height, RHIFormat::RGBA8 });
+        m_Tonemap->AddToGraph(m_Graph, hdrLit, m_OutputColor);
+
+        // In-game UI — a 2D pass over the tonemapped LDR scene. Loads (doesn't
+        // clear) so widgets composite on top. Ordering: inserted after Tonemap so
+        // the write-after-write on the shared target resolves by insertion order.
+        {
+            RGPass& ui = m_Graph.AddPass("UI2D");
+            if (m_Offscreen) ui.Write(m_OutputColor);
+            else             ui.WriteSwapchain();
+            ui.Load().SetExecute([this](RHICommandList* cmd) {
+                if (m_UIFn) m_UIFn(cmd);
+            });
+        }
+
+        // Editor composite — the only backbuffer owner in offscreen mode. Reading
+        // outputColor transitions it to SampledRead, so the overlay (ImGui) can
+        // sample it as a viewport image while drawing over a cleared swapchain.
+        if (m_Offscreen) {
+            m_Graph.AddPass("EditorOverlay")
+                .Read(m_OutputColor)
+                .WriteSwapchain()
+                .SetClearColor({ 0.1f, 0.1f, 0.1f, 1.0f })
+                .SetExecute([this](RHICommandList* cmd) {
+                    if (m_Overlay) m_Overlay(cmd);
+                });
+        }
 
         m_Graph.Compile();
     }
@@ -394,7 +462,12 @@ private:
     RHIDevice*      m_Device;
     uint32_t        m_Width;
     uint32_t        m_Height;
+    bool            m_Offscreen;
     RHIRenderGraph  m_Graph;
+
+    RGTextureHandle m_OutputColor;   // offscreen mode's LDR target; invalid otherwise
+    OverlayFn       m_UIFn;          // in-game UI pass body (may be empty)
+    OverlayFn       m_Overlay;       // per-frame editor overlay (ImGui), offscreen mode
 
     std::unique_ptr<RHIBuffer>  m_CameraUBO;
     std::unique_ptr<RHITexture> m_Albedo;
@@ -424,9 +497,10 @@ private:
 };
 
 std::unique_ptr<SceneRenderer> SceneRenderer::Create(RHIDevice* device,
-                                                     uint32_t width, uint32_t height) {
+                                                     uint32_t width, uint32_t height,
+                                                     bool offscreen) {
     if (!device) return nullptr;
-    return std::make_unique<SceneRendererVk>(device, width, height);
+    return std::make_unique<SceneRendererVk>(device, width, height, offscreen);
 }
 
 } // namespace Diamond
@@ -434,7 +508,7 @@ std::unique_ptr<SceneRenderer> SceneRenderer::Create(RHIDevice* device,
 #else  // !DIAMOND_ENABLE_VULKAN — no backend to render through.
 
 namespace Diamond {
-std::unique_ptr<SceneRenderer> SceneRenderer::Create(RHIDevice*, uint32_t, uint32_t) {
+std::unique_ptr<SceneRenderer> SceneRenderer::Create(RHIDevice*, uint32_t, uint32_t, bool) {
     return nullptr;
 }
 } // namespace Diamond

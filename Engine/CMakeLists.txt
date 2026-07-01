@@ -263,6 +263,9 @@ add_library(MyEngine STATIC
     src/Scene/Physics/RagdollConfig.cpp
     src/Renderer/RHI/RHIDevice.cpp
     src/Renderer/RHI/RHIRenderGraph.cpp
+    # Compiled in every build (like SceneRenderer.cpp): collapses to a stub
+    # without DIAMOND_ENABLE_VULKAN so Sandbox's --vulkan dispatch always links.
+    src/Platform/Vulkan/VulkanEditorApp.cpp
 )
 
 target_include_directories(MyEngine

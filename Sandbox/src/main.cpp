@@ -58,6 +58,8 @@
 #include "Platform/OpenGL/Passes/Forward/OpenGLTransparencyPass.h"
 #include "Assets/ModelImporter.h"
 #include "Assets/GltfImporter.h"
+#include "Platform/VulkanDemo.h"
+#include <cstring>
 #include "Animation/AnimationComponents.h"
 #include "Animation/AnimationSystem.h"
 #include "Animation/AnimationSampler.h"
@@ -260,8 +262,23 @@ static void processInput(GLFWwindow* window)
         g_camera.ProcessKeyboard(CameraMovement::Right,    g_deltaTime);
 }
 
-int main()
+int main(int argc, char** argv)
 {
+    // Renderer backend flag. `--vulkan` runs the editor through the Vulkan
+    // SceneRenderer path (RunVulkanEditor owns its own window + loop; everything
+    // below stays the untouched GL editor). macOS is GL-only — ignore the flag.
+    for (int i = 1; i < argc; ++i) {
+        if (std::strcmp(argv[i], "--vulkan") == 0) {
+#ifdef __APPLE__
+            std::fprintf(stderr, "--vulkan is unsupported on macOS (GL only); "
+                                 "continuing with OpenGL.\n");
+            break;
+#else
+            return Diamond::RunVulkanEditor();
+#endif
+        }
+    }
+
     glfwInit();
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 1);
@@ -596,11 +613,11 @@ int main()
 
     // --- Render graph ---
     RenderGraph     graph;
-    RGTextureHandle gViewPos, gViewNormal, gAlbedo, gMaterial, gEmissive;
-    RGTextureHandle hSsaoRaw, hSsaoBlur;
-    RGTextureHandle hdrBuffer, brightBuffer;
-    RGTextureHandle pingPong[2];
-    RGTextureHandle ldrBuffer;
+    GLRGTextureHandle gViewPos, gViewNormal, gAlbedo, gMaterial, gEmissive;
+    GLRGTextureHandle hSsaoRaw, hSsaoBlur;
+    GLRGTextureHandle hdrBuffer, brightBuffer;
+    GLRGTextureHandle pingPong[2];
+    GLRGTextureHandle ldrBuffer;
 
     // Viewport FBOs — managed outside the render graph so they aren't freed between frames
     uint32_t viewportFBO      = 0;

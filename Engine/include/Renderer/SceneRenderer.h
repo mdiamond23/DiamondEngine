@@ -15,6 +15,7 @@ class Mesh;
 struct MeshData;
 class RHIDevice;
 class RHICommandList;
+class RHITexture;
 
 // Backend-neutral bridge from the engine's Scene/ECS to the RHI render graph.
 //
@@ -32,8 +33,17 @@ public:
     // Builds the render graph + deferred passes sized to width x height (the
     // offscreen resolution; window-independent). Returns nullptr if the Vulkan
     // backend isn't compiled into this build.
+    //
+    // Two output modes, chosen at construction:
+    //   * offscreen == false (default): Tonemap writes the swapchain backbuffer —
+    //     the scene fills the window (the VulkanScene demo / a shipped game).
+    //   * offscreen == true: Tonemap writes an LDR color texture (OutputColor())
+    //     instead, and a final graph pass clears the swapchain and invokes the
+    //     RenderToSwapchain overlay over it. Made for an editor: ImGui samples
+    //     OutputColor() inside a viewport panel while owning the backbuffer.
     static std::unique_ptr<SceneRenderer> Create(RHIDevice* device,
-                                                 uint32_t width, uint32_t height);
+                                                 uint32_t width, uint32_t height,
+                                                 bool offscreen = false);
 
     virtual ~SceneRenderer() = default;
 
@@ -56,8 +66,29 @@ public:
     // Owns BeginFrame/EndFrame; rebuilds the draw list + lights from the ECS each
     // call. A no-op for the frame if the swapchain is unavailable (minimized) —
     // in which case 'overlay' is not invoked. 'overlay' may be empty.
+    //
+    // In offscreen mode the scene lands in OutputColor() and 'overlay' runs inside
+    // a graph pass that owns (and clears) the backbuffer, with OutputColor()
+    // already transitioned for sampling — so ImGui can show it as a viewport image.
     virtual void RenderToSwapchain(Scene& scene, const Camera& camera,
                                    const OverlayFn& overlay = {}) = 0;
+
+    // The scene's tonemapped LDR output texture (offscreen mode only; nullptr in
+    // swapchain mode). Invalidated by Resize — re-query (and re-register with
+    // ImGui) after any resize.
+    virtual RHITexture* OutputColor() const = 0;
+
+    // Rebuild the graph's render targets at a new resolution (offscreen mode
+    // only; a no-op otherwise or when the size is unchanged). Waits for the GPU
+    // to go idle and recreates the size-dependent passes — call it between
+    // frames, not mid-record, and expect it to be a hitch, not a per-frame op.
+    virtual void Resize(uint32_t width, uint32_t height) = 0;
+
+    // An optional 2D pass drawn over the tonemapped scene (into OutputColor() in
+    // offscreen mode, the backbuffer otherwise) — the in-game UI hook. Runs
+    // inside an LDR render scope that loads the scene, once per frame, before
+    // the swapchain overlay. Set once; capture what it draws by reference.
+    virtual void SetUIOverlay(const OverlayFn& fn) = 0;
 };
 
 } // namespace Diamond
