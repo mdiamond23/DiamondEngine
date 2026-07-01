@@ -40,4 +40,8 @@ target_link_libraries(GltfDump PRIVATE MyEngine)
 if(DIAMOND_ENABLE_VULKAN)
     add_executable(VulkanMesh Tools/VulkanMesh.cpp)
     target_link_libraries(VulkanMesh PRIVATE MyEngine)
+
+    # Wiring Slice 1 — drives a real Scene/ECS through SceneRenderer's deferred chain.
+    add_executable(VulkanScene Tools/VulkanScene.cpp)
+    target_link_libraries(VulkanScene PRIVATE MyEngine)
 endif()

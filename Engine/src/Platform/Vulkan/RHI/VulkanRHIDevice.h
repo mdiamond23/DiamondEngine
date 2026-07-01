@@ -26,6 +26,10 @@ public:
     // Re-targets the recorder at a freshly-begun command buffer for a new frame.
     void Reset(VkCommandBuffer cmd) { m_Cmd = cmd; m_Layout = VK_NULL_HANDLE; }
 
+    // The frame's raw command buffer — for Vulkan-only overlays (e.g. ImGui) that
+    // record directly rather than through the RHI. Valid between BeginFrame/EndFrame.
+    VkCommandBuffer Handle() const { return m_Cmd; }
+
     void BeginRendering(const RHIRenderPass& pass) override;
     void EndRendering() override;
     void TransitionTexture(RHITexture* texture, RHITextureState state) override;
@@ -83,6 +87,10 @@ public:
     VulkanContext&  Ctx()             { return m_Ctx; }
     uint32_t        CurrentFrame()    const { return m_CurrentFrame; }
     VkDescriptorPool DescriptorPool() const { return m_DescriptorPool; }
+
+    // Swapchain properties an ImGui/overlay backend needs to build its pipeline.
+    VkFormat SwapchainVkFormat()   const { return m_Swapchain.ImageFormat(); }
+    uint32_t SwapchainImageCount() const { return m_Swapchain.ImageCount(); }
 
     // Acquired backbuffer + the device depth buffer for the in-flight frame —
     // used by the command list when a render pass targets the swapchain.

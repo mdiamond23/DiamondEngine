@@ -247,6 +247,7 @@ add_library(MyEngine STATIC
     src/Renderer/MeshData.cpp
     src/Renderer/Renderer2D.cpp
     src/Renderer/RendererAPI.cpp
+    src/Renderer/SceneRenderer.cpp
     src/Renderer/Shader.cpp
     src/Renderer/TextureData.cpp
     src/Scene/Scene.cpp
@@ -312,7 +313,15 @@ if(DIAMOND_ENABLE_VULKAN)
         src/Platform/Vulkan/Passes/Forward/VulkanTransparencyPass.cpp
         src/Platform/Vulkan/Passes/Shadows/VulkanCSMPass.cpp
         src/Platform/Vulkan/Passes/IBL/VulkanIBLPass.cpp
+        src/Platform/Vulkan/Resources/VulkanRenderer2D.cpp
+        src/Platform/Vulkan/Resources/VulkanTexture2D.cpp
+        src/Platform/Vulkan/VulkanImGuiLayer.cpp
         src/Platform/Vulkan/VulkanMeshDemo.cpp
+        src/Platform/Vulkan/VulkanSceneDemo.cpp
+        # ImGui's Vulkan renderer backend. Compiled into MyEngine (not the imgui
+        # static lib) so it inherits VK_NO_PROTOTYPES + the volk include path; USE_VOLK
+        # makes it call volk's already-loaded function pointers (no LoadFunctions dance).
+        ${imgui_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp
     )
     target_link_libraries(MyEngine PRIVATE
         volk
@@ -347,7 +356,8 @@ if(DIAMOND_ENABLE_VULKAN)
                     irradiance_convolution.frag prefilter.frag brdf_lut.frag
                     copy.frag skybox.vert skybox.frag
                     pbr_surface.vert pbr_surface.frag
-                    transparent.vert transparent.frag)
+                    transparent.vert transparent.frag
+                    renderer2d.vert renderer2d.frag)
         add_custom_command(
             OUTPUT  ${_vk_spv_dir}/${_shader}.spv
             COMMAND ${GLSLANG_VALIDATOR} -V ${_vk_shader_src}/${_shader} -o ${_vk_spv_dir}/${_shader}.spv
@@ -362,6 +372,7 @@ if(DIAMOND_ENABLE_VULKAN)
     target_compile_definitions(MyEngine PRIVATE
         DIAMOND_ENABLE_VULKAN
         VK_NO_PROTOTYPES
+        IMGUI_IMPL_VULKAN_USE_VOLK   # imgui_impl_vulkan calls volk's loaded pointers
         DIAMOND_VULKAN_SHADER_DIR="${_vk_spv_dir}"
         DIAMOND_ASSETS_DIR="${CMAKE_SOURCE_DIR}/Assets"
     )

@@ -10,4 +10,10 @@ namespace Diamond {
 // MyEngine's Platform/Vulkan TUs.
 int RunVulkanMeshDemo();
 
+// Wiring Slice 1 smoke test: builds a real Scene (floor + sphere + cubes + point
+// lights + sun) and an orbit camera, then drives it through SceneRenderer's
+// deferred chain into a Vulkan window — proving the Scene/ECS → RHI bridge end to
+// end (no editor, no ImGui yet). Returns 0 on clean exit.
+int RunVulkanSceneDemo();
+
 } // namespace Diamond
