@@ -36,7 +36,7 @@ enum class RHICullMode { None, Back, Front };
 // Color-blend mode for a pipeline's color attachments. Opaque overwrites (the
 // default for every geometry/post pass so far); Alpha is standard src-over
 // blending (src.a, 1-src.a) for forward transparency.
-enum class RHIBlendMode { Opaque, Alpha };
+enum class RHIBlendMode { Opaque, Alpha, Additive };
 
 // Depth comparison. Less is the default for opaque geometry; LessEqual lets a
 // skybox drawn at the far plane (depth == 1) pass against a depth buffer cleared

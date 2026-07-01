@@ -20,6 +20,8 @@
 #include "Platform/Vulkan/Passes/Shadows/VulkanCSMPass.h"
 #include "Platform/Vulkan/Passes/PostProcess/VulkanTonemapPass.h"
 #include "Platform/Vulkan/Passes/IBL/VulkanIBLPass.h"
+#include "Platform/Vulkan/Resources/VulkanParticleRenderer.h"
+#include "Platform/Vulkan/Resources/VulkanTexture2D.h"
 
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -67,6 +69,29 @@ std::vector<uint8_t> MakeCheckerboard(uint32_t size, uint32_t cell) {
             p[1] = even ? 210 : 150;
             p[2] = even ? 215 : 160;
             p[3] = 255;
+        }
+    }
+    return pixels;
+}
+
+std::vector<uint8_t> MakeParticleDot(uint32_t size) {
+    std::vector<uint8_t> pixels(static_cast<size_t>(size) * size * 4);
+    const float center = (static_cast<float>(size) - 1.0f) * 0.5f;
+    const float radius = center > 0.0f ? center : 1.0f;
+
+    for (uint32_t y = 0; y < size; ++y) {
+        for (uint32_t x = 0; x < size; ++x) {
+            const float dx = (static_cast<float>(x) - center) / radius;
+            const float dy = (static_cast<float>(y) - center) / radius;
+            const float d2 = dx * dx + dy * dy;
+            const float alpha = glm::clamp(1.0f - d2, 0.0f, 1.0f);
+            const uint8_t a = static_cast<uint8_t>(alpha * alpha * 255.0f);
+
+            uint8_t* p = &pixels[(static_cast<size_t>(y) * size + x) * 4];
+            p[0] = 255;
+            p[1] = 255;
+            p[2] = 255;
+            p[3] = a;
         }
     }
     return pixels;
@@ -120,6 +145,7 @@ public:
         scene.GetTransformSystem().Update(scene.GetRegistry());
         RebuildDrawList(scene);
         GatherLights(scene);
+        GatherParticles(scene);
 
         RHICommandList* cmd = m_Device->BeginFrame();
         if (!cmd) return;   // swapchain unavailable (minimized / rebuilding)
@@ -127,6 +153,8 @@ public:
         const float aspect = static_cast<float>(m_Width) / static_cast<float>(m_Height);
         const glm::mat4 view = camera.GetViewMatrix();
         const glm::mat4 proj = glm::perspective(glm::radians(camera.Zoom), aspect, kNear, kFar);
+        m_FrameView = view;
+        m_FrameProj = proj;
 
         CameraUBO ubo{};
         ubo.view     = view;
@@ -169,6 +197,12 @@ private:
         const GpuMesh* mesh;
         glm::mat4      world;
     };
+    struct PBatch {
+        RHITexture* tex = nullptr;
+        std::shared_ptr<Texture> texAsset;
+        ParticleBlend blend = ParticleBlend::Alpha;
+        std::vector<RenderParticle> parts;
+    };
 
     void BuildResources() {
         // Per-frame camera UBO (dynamic — rewritten every frame).
@@ -194,6 +228,22 @@ private:
         m_CSM      = std::make_unique<VulkanCSMPass>(m_Device, shaderDir);
         m_Lighting = std::make_unique<VulkanDeferredLightingPass>(m_Device, shaderDir);
         m_Tonemap  = std::make_unique<VulkanTonemapPass>(m_Device, shaderDir, m_Device->SwapchainFormat());
+
+        m_Particles = std::make_unique<VulkanParticleRenderer>(m_Device, shaderDir, RHIFormat::RGBA16F);
+        const std::vector<uint8_t> dotPixels = MakeParticleDot(64);
+
+        RHITextureDesc particleTex;
+        particleTex.width       = 64;
+        particleTex.height      = 64;
+        particleTex.format      = RHIFormat::RGBA8;
+        particleTex.usage       = RHITextureUsage::Sampled;
+        particleTex.initialData = dotPixels.data();
+        particleTex.filter      = RHIFilter::Linear;
+
+        m_DefaultParticleRHI = m_Device->CreateTexture(particleTex);
+
+        m_DefaultParticleTexture = std::make_shared<VulkanTexture2D>(
+            m_Device, dotPixels.data(), 64, 64, 4, RHIFilter::Linear);
 
         // Bake a default environment so the deferred ambient term is valid even if
         // the caller never sets one. SetEnvironment can re-bake later.
@@ -235,6 +285,17 @@ private:
         m_Lighting->AddToGraph(m_Graph, gViewPos, gViewNormal, gAlbedo, gMaterial,
                                ssaoBlurred, gEmissive, cascades, hdrLit);
         m_Lighting->BindIBL(*m_IBL);
+
+        // Particles composite over the lit HDR scene (before tonemap).
+        m_Particles->AddToGraph(m_Graph, hdrLit, gDepth,
+            [this](VulkanParticleRenderer& particles) {
+                particles.Begin(m_FrameView, m_FrameProj);
+                for (PBatch& b : m_ParticleBatches) {
+                    if (!b.texAsset || b.parts.empty()) continue;
+                    particles.Draw(b.parts, *b.texAsset, b.blend);
+                }
+                particles.End();
+            });
 
         // Tonemap HDR → swapchain (ACES + gamma).
         m_Tonemap->AddToGraph(m_Graph, hdrLit);
@@ -297,6 +358,39 @@ private:
         }
     }
 
+    void GatherParticles(Scene& scene) {
+        m_ParticleBatches.clear();
+        for (auto [entity, em] : scene.GetRegistry().view<ParticleEmitterComponent>().each()) {
+            if (em.liveCount == 0) continue;
+
+            std::shared_ptr<Texture> texture = em.texture ? em.texture : m_DefaultParticleTexture;
+            const auto* vkTexture = dynamic_cast<const VulkanTexture2D*>(texture.get());
+            if (!vkTexture || !vkTexture->Rhi()) {
+                texture = m_DefaultParticleTexture;
+                vkTexture = dynamic_cast<const VulkanTexture2D*>(texture.get());
+            }
+            if (!vkTexture || !vkTexture->Rhi()) continue;
+
+            PBatch* batch = nullptr;
+            for (PBatch& b : m_ParticleBatches) {
+                if (b.tex == vkTexture->Rhi() && b.blend == em.blend) {
+                    batch = &b;
+                    break;
+                }
+            }
+            if (!batch) {
+                m_ParticleBatches.push_back({ vkTexture->Rhi(), texture, em.blend, {} });
+                batch = &m_ParticleBatches.back();
+            }
+
+            batch->parts.reserve(batch->parts.size() + em.liveCount);
+            for (std::size_t i = 0; i < em.liveCount; ++i) {
+                const auto& p = em.pool[i];
+                batch->parts.push_back({ p.pos, p.size, p.color, p.rotation });
+            }
+        }
+    }
+
     RHIDevice*      m_Device;
     uint32_t        m_Width;
     uint32_t        m_Height;
@@ -319,6 +413,14 @@ private:
     glm::vec3              m_SunColor { 0.0f };
     std::vector<glm::vec3> m_PointPos;
     std::vector<glm::vec3> m_PointColor;
+
+    glm::mat4 m_FrameView { 1.0f };
+    glm::mat4 m_FrameProj { 1.0f };
+
+    std::unique_ptr<VulkanParticleRenderer> m_Particles;
+    std::unique_ptr<RHITexture>             m_DefaultParticleRHI;
+    std::shared_ptr<Texture>                m_DefaultParticleTexture;
+    std::vector<PBatch>                     m_ParticleBatches;
 };
 
 std::unique_ptr<SceneRenderer> SceneRenderer::Create(RHIDevice* device,

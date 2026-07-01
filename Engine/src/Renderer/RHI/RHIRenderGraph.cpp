@@ -4,6 +4,7 @@
 
 #include <spdlog/spdlog.h>
 #include <queue>
+#include <set>
 
 namespace Diamond {
 
@@ -51,47 +52,72 @@ RHITexture* RHIRenderGraph::GetTexture(RGTextureHandle h) const
     return m_Textures[h.id - 1].texture;
 }
 
-// Compile phase — topological sort + dead-pass culling. Ported verbatim from the
-// GL RenderGraph: the reads/writes dependency model is backend-neutral.
+// Compile phase — topological sort + dead-pass culling. Based on the GL
+// RenderGraph's model, generalized to support MULTIPLE writers per texture: a
+// compositing pass (particles/forward/UI) writes an already-produced target with
+// .Load(), so the graph must order such writers in insertion order (write-after-
+// write), point readers at the LAST writer, and keep every writer of a live
+// target alive. The single-writer GL version culled the earlier writer.
 void RHIRenderGraph::Compile()
 {
-    // 1. Build a write map — texture handle id → index of the pass that writes it.
+    const int nPasses  = (int)m_Passes.size();
+    const int nTexSlot = (int)m_Textures.size() + 1;
 
-    // -1 means no pass writes this texture
-    std::vector<int> writerMap(m_Textures.size() + 1, -1);
+    // 1. Group the writers of each texture in pass-insertion order, and record the
+    //    LAST writer (the "producer" a reader depends on).
 
-    for (int i = 0; i < (int)m_Passes.size(); ++i)
+    // writerMap[id] = -1 means no pass writes this texture
+    std::vector<int>              writerMap(nTexSlot, -1);
+    std::vector<std::vector<int>> writersOf(nTexSlot);
+
+    for (int i = 0; i < nPasses; ++i)
     {
         for (const RGTextureHandle& h : m_Passes[i].writes)
         {
-            writerMap[h.id] = i;
+            writersOf[h.id].push_back(i);
+            writerMap[h.id] = i; // last write wins
         }
     }
 
-    // 2. Topological sort using Kahn's algorithm
+    // 2. Build the dependency edges (deduplicated) as a predecessor set per pass:
+    //    - write-after-write: each writer of a texture depends on the previous one.
+    //    - read-after-write: a reader depends on that texture's LAST writer.
+    std::vector<std::set<int>> preds(nPasses);
 
-    // inDegree[i] = number of passes that must run before pass i
-    std::vector<int> inDegree(m_Passes.size(), 0);
-
-    for (int i = 0; i < (int)m_Passes.size(); ++i)
+    for (int id = 1; id < nTexSlot; ++id)
     {
-        for (const RGTextureHandle& h : m_Passes[i].reads)
+        const std::vector<int>& w = writersOf[id];
+        for (size_t k = 1; k < w.size(); ++k)
+            if (w[k - 1] != w[k])
+                preds[w[k]].insert(w[k - 1]);
+    }
+    for (int j = 0; j < nPasses; ++j)
+    {
+        for (const RGTextureHandle& r : m_Passes[j].reads)
         {
-            if (writerMap[h.id] != -1) // someone writes this texture, so pass i depends on them
-                inDegree[i]++;
+            const int w = writerMap[r.id];
+            if (w != -1 && w != j) // ignore self read-modify-write of an own target
+                preds[j].insert(w);
         }
     }
 
-    // Seed the queue with every pass that has no dependencies
-    std::queue<int> ready;
-    for (int i = 0; i < (int)m_Passes.size(); ++i)
+    // 3. Topological sort using Kahn's algorithm over the edge set.
+    std::vector<int>              inDegree(nPasses, 0);
+    std::vector<std::vector<int>> succ(nPasses);
+    for (int j = 0; j < nPasses; ++j)
     {
+        inDegree[j] = (int)preds[j].size();
+        for (int p : preds[j])
+            succ[p].push_back(j);
+    }
+
+    std::queue<int> ready;
+    for (int i = 0; i < nPasses; ++i)
         if (inDegree[i] == 0)
             ready.push(i);
-    }
 
     std::vector<int> sorted;
-    sorted.reserve(m_Passes.size());
+    sorted.reserve(nPasses);
 
     while (!ready.empty())
     {
@@ -99,29 +125,19 @@ void RHIRenderGraph::Compile()
         ready.pop();
         sorted.push_back(i);
 
-        // Pass i is done — decrement in-degree of every pass that reads what i writes
-        for (const RGTextureHandle& written : m_Passes[i].writes)
-        {
-            for (int j = 0; j < (int)m_Passes.size(); ++j)
-            {
-                for (const RGTextureHandle& r : m_Passes[j].reads)
-                {
-                    if (r.id == written.id)
-                    {
-                        if (--inDegree[j] == 0)
-                            ready.push(j); // j's last dependency is satisfied
-                    }
-                }
-            }
-        }
+        for (int j : succ[i])
+            if (--inDegree[j] == 0)
+                ready.push(j); // j's last dependency is satisfied
     }
 
-    if ((int)sorted.size() != (int)m_Passes.size())
+    if ((int)sorted.size() != nPasses)
         spdlog::error("RHIRenderGraph::Compile — cycle detected in pass dependencies!");
 
-    // 3. Dead pass culling — walk sorted in reverse, mark alive passes.
+    // 4. Dead pass culling — walk sorted in reverse, mark alive passes.
     // Sink passes (no writes) are always alive — they write to the backbuffer.
-    std::vector<int> alive(m_Passes.size(), 0); // indexed by pass index, not sorted position
+    // Marking a live pass's predecessors alive keeps EVERY writer of a needed
+    // target (not just the last) and its whole upstream chain.
+    std::vector<int> alive(nPasses, 0); // indexed by pass index, not sorted position
 
     for (int i = (int)sorted.size() - 1; i >= 0; --i)
     {
@@ -132,17 +148,13 @@ void RHIRenderGraph::Compile()
 
         if (alive[passIdx])
         {
-            // Any pass that feeds an alive pass is also alive
-            for (const RGTextureHandle& h : m_Passes[passIdx].reads)
-            {
-                int writerIdx = writerMap[h.id];
-                if (writerIdx != -1)
-                    alive[writerIdx] = 1;
-            }
+            // Any pass this one depends on is also alive.
+            for (int p : preds[passIdx])
+                alive[p] = 1;
         }
     }
 
-    // 4. Store final execution order — only alive passes, in sorted order
+    // 5. Store final execution order — only alive passes, in sorted order
     m_SortedIndices.clear();
     for (int passIdx : sorted)
     {

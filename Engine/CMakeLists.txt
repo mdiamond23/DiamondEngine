@@ -313,6 +313,7 @@ if(DIAMOND_ENABLE_VULKAN)
         src/Platform/Vulkan/Passes/Forward/VulkanTransparencyPass.cpp
         src/Platform/Vulkan/Passes/Shadows/VulkanCSMPass.cpp
         src/Platform/Vulkan/Passes/IBL/VulkanIBLPass.cpp
+        src/Platform/Vulkan/Resources/VulkanParticleRenderer.cpp
         src/Platform/Vulkan/Resources/VulkanRenderer2D.cpp
         src/Platform/Vulkan/Resources/VulkanTexture2D.cpp
         src/Platform/Vulkan/VulkanImGuiLayer.cpp
@@ -357,7 +358,8 @@ if(DIAMOND_ENABLE_VULKAN)
                     copy.frag skybox.vert skybox.frag
                     pbr_surface.vert pbr_surface.frag
                     transparent.vert transparent.frag
-                    renderer2d.vert renderer2d.frag)
+                    renderer2d.vert renderer2d.frag
+                    particle.vert particle.frag)
         add_custom_command(
             OUTPUT  ${_vk_spv_dir}/${_shader}.spv
             COMMAND ${GLSLANG_VALIDATOR} -V ${_vk_shader_src}/${_shader} -o ${_vk_spv_dir}/${_shader}.spv

@@ -6,6 +6,7 @@
 #include "Core/Camera.h"
 #include "Scene/Scene.h"
 #include "Scene/Components.h"
+#include "Scene/ParticleSim.h"
 
 #include "Platform/Vulkan/VulkanImGuiLayer.h"
 #include "Platform/Vulkan/RHI/VulkanRHIDevice.h"
@@ -183,6 +184,26 @@ int RunVulkanSceneDemo() {
         lc.type = LightType::Sun;  lc.color = { 1.0f, 0.97f, 0.9f };  lc.intensity = 3.0f;
     }
 
+    {
+        entt::entity e = scene.CreateEntity("Additive Sparks");
+        scene.Get<TransformComponent>(e).position = { 0.0f, -0.35f, 0.85f };
+        auto& em = scene.Add<ParticleEmitterComponent>(e);
+        em.spawnRate     = 90.0f;
+        em.maxParticles  = 512;
+        em.shape         = EmissionShape::Cone;
+        em.coneAngle     = 18.0f;
+        em.coneRadius    = 0.08f;
+        em.speedRange    = { 1.4f, 2.6f };
+        em.lifetimeRange = { 0.8f, 1.4f };
+        em.sizeRange     = { 0.08f, 0.18f };
+        em.gravity       = { 0.0f, -1.8f, 0.0f };
+        em.startColor    = { 1.0f, 0.72f, 0.22f, 0.95f };
+        em.endColor      = { 1.0f, 0.08f, 0.0f, 0.0f };
+        em.endSize       = 0.02f;
+        em.blend         = ParticleBlend::Additive;
+        ParticleSim::Reset(em);
+    }
+
     // Hand the geometry to the renderer once (keyed by the StubMesh pointers).
     renderer->RegisterMesh(cubeMesh.get(),   MeshData::UnitCube());
     renderer->RegisterMesh(sphereMesh.get(), MeshData::UVSphere());
@@ -196,6 +217,14 @@ int RunVulkanSceneDemo() {
         const float t = static_cast<float>(glfwGetTime());
         camera.Position = glm::vec3(std::sin(t * 0.3f) * 5.0f, 2.6f, std::cos(t * 0.3f) * 5.0f);
         camera.LookAt(glm::vec3(0.0f, 0.2f, 0.0f));
+
+        static double lastParticleTime = glfwGetTime();
+        const double nowParticleTime = glfwGetTime();
+        const float particleDt = static_cast<float>(nowParticleTime - lastParticleTime);
+        lastParticleTime = nowParticleTime;
+        scene.GetTransformSystem().Update(scene.GetRegistry());
+        for (auto [e, em] : scene.GetRegistry().view<ParticleEmitterComponent>().each())
+            ParticleSim::Step(em, particleDt, scene.GetTransformSystem().GetWorldMatrix(e));
 
         // Build the UI, finalize its draw data, then let the renderer composite it
         // over the tonemapped scene via the swapchain overlay hook.

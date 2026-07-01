@@ -280,7 +280,16 @@ VulkanRHIPipeline::VulkanRHIPipeline(VulkanRHIDevice* device, const RHIPipelineD
         blendAttachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
         blendAttachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
         blendAttachment.alphaBlendOp        = VK_BLEND_OP_ADD;
-    } else {
+    } else if (desc.blendMode == RHIBlendMode::Additive) {
+        blendAttachment.blendEnable         = VK_TRUE;
+        blendAttachment.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+        blendAttachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
+        blendAttachment.colorBlendOp        = VK_BLEND_OP_ADD;
+        blendAttachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+        blendAttachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+        blendAttachment.alphaBlendOp        = VK_BLEND_OP_ADD;
+    }
+    else {
         blendAttachment.blendEnable = VK_FALSE;
     }
     std::vector<VkPipelineColorBlendAttachmentState> blendAttachments(
