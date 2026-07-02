@@ -14,9 +14,9 @@ namespace Diamond {
 namespace {
 constexpr RHIFormat kHDRFormat   = RHIFormat::RGBA16F;
 constexpr RHIFormat kDepthFormat = RHIFormat::Depth32F;
-// Shared interleaved mesh vertex: position + normal + UV (matches the demo's
-// MeshVertex). The skybox + copy pipelines read a subset of these attributes.
-constexpr uint32_t kVertexStride = sizeof(glm::vec3) * 2 + sizeof(glm::vec2);  // 32
+// Shared interleaved mesh vertex: position + normal + UV + tangent (matches the
+// SceneRenderer's MeshVertex). These pipelines read a subset of the attributes.
+constexpr uint32_t kVertexStride = sizeof(glm::vec3) * 3 + sizeof(glm::vec2);  // 44
 
 struct ForwardPush { glm::mat4 model; };
 

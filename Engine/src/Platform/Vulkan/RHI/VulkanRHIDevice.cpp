@@ -262,16 +262,16 @@ void VulkanRHIDevice::DestroyDepthResources() {
 }
 
 void VulkanRHIDevice::CreateDescriptorPool() {
-    // Generously sized for the handful of per-frame sets M3 needs (UBOs +
-    // combined image samplers); the per-frame reset / caching-allocator strategy
-    // is a later optimization.
+    // Sized for the pass sets plus per-material sets (each material = one set per
+    // frame slot holding 6 samplers + 2 UBOs); the per-frame reset /
+    // caching-allocator strategy is a later optimization.
     const VkDescriptorPoolSize poolSizes[] = {
-        { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,         64 },
-        { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 64 },
+        { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,         256 },
+        { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 512 },
     };
 
     VkDescriptorPoolCreateInfo poolInfo{ VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO };
-    poolInfo.maxSets       = 64;
+    poolInfo.maxSets       = 256;
     poolInfo.poolSizeCount = static_cast<uint32_t>(std::size(poolSizes));
     poolInfo.pPoolSizes    = poolSizes;
     VK_CHECK(vkCreateDescriptorPool(m_Ctx.Device(), &poolInfo, nullptr, &m_DescriptorPool));

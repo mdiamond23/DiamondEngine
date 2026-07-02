@@ -30,9 +30,10 @@ struct Frustum {
     glm::vec4 planes[6]; // left, right, bottom, top, near, far — plane eq: ax+by+cz+d=0
 
     // Gribb-Hartmann extraction from a combined VP matrix.
-    // OpenGL NDC (-1..1 depth): near = row3 + row2.
-    // Vulkan NDC (0..1 depth):  near = row2 only — change planes[4] accordingly.
-    static Frustum Extract(const glm::mat4& vp) {
+    // OpenGL NDC (-1..1 depth): near = row3 + row2 (the default).
+    // Vulkan NDC (0..1 depth):  near = row2 only — pass zeroToOneDepth = true when
+    // 'vp' was built under GLM_FORCE_DEPTH_ZERO_TO_ONE (the RHI/Vulkan path).
+    static Frustum Extract(const glm::mat4& vp, bool zeroToOneDepth = false) {
         // Build row vectors from column-major storage
         auto row = [&](int r) {
             return glm::vec4(vp[0][r], vp[1][r], vp[2][r], vp[3][r]);
@@ -43,7 +44,7 @@ struct Frustum {
         f.planes[1] = r3 - r0; // right
         f.planes[2] = r3 + r1; // bottom
         f.planes[3] = r3 - r1; // top
-        f.planes[4] = r3 + r2; // near
+        f.planes[4] = zeroToOneDepth ? r2 : r3 + r2; // near
         f.planes[5] = r3 - r2; // far
         for (auto& p : f.planes)
             p /= glm::length(glm::vec3(p)); // normalize so distance is in world-space units

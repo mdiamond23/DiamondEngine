@@ -4,6 +4,7 @@
 
 #ifdef DIAMOND_ENABLE_VULKAN
 #include "Platform/Vulkan/Resources/VulkanTexture2D.h"
+#include "Assets/ImageLoader.h"
 #include <spdlog/spdlog.h>
 #endif
 
@@ -29,11 +30,17 @@ std::shared_ptr<Texture> Texture::Create(const std::string& path, bool flipVerti
 {
 #ifdef DIAMOND_ENABLE_VULKAN
     if (s_ResourceDevice) {
-        // File decode for the Vulkan backend isn't wired yet (CreateFromPixels is
-        // all the font/2D path needs). Returning null keeps us off the GL path,
-        // which would issue GL calls with no context.
-        spdlog::warn("[Texture] Create(path) not implemented for the Vulkan backend: '{}'", path);
-        return nullptr;
+        // Same decode + flip convention as the GL path (texel (0,0) maps to v=0 in
+        // both APIs, so the pixels must be identical for mesh UVs to match), with
+        // mips generated at upload like GL's glGenerateMipmap.
+        ImageData img = ImageLoader::Load(path, flipVertically);
+        if (img.Pixels.empty()) {
+            spdlog::error("[Texture] no pixel data for '{}'", path);
+            return nullptr;
+        }
+        return std::make_shared<VulkanTexture2D>(
+            s_ResourceDevice, img.Pixels.data(), img.Width, img.Height, img.Channels,
+            RHIFilter::Linear, /*generateMips*/ true);
     }
 #endif
     switch (RendererAPI::GetAPI()) {

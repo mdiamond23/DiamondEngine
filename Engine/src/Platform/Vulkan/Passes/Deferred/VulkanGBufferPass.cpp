@@ -8,14 +8,15 @@
 namespace Diamond {
 
 namespace {
-// Per-draw push constant — the model matrix, matching gbuffer.vert's Push block.
+// Per-draw push constant — the model matrix, matching gbuffer.vert's Push block
+// (the normal matrix is derived from it in-shader).
 struct GBufferPush {
     glm::mat4 model;
 };
 
 // Vertex layout the G-buffer pipeline reads: interleaved position + normal + UV
-// (the demo's MeshVertex). Tangents arrive with tangent-space normal mapping.
-constexpr uint32_t kVertexStride = sizeof(glm::vec3) * 2 + sizeof(glm::vec2);  // 32
+// + tangent (the SceneRenderer's MeshVertex repack of the engine Vertex).
+constexpr uint32_t kVertexStride = sizeof(glm::vec3) * 3 + sizeof(glm::vec2);  // 44
 } // namespace
 
 VulkanGBufferPass::VulkanGBufferPass(RHIDevice* device, const std::string& shaderDir)
@@ -33,13 +34,23 @@ VulkanGBufferPass::VulkanGBufferPass(RHIDevice* device, const std::string& shade
     desc.fragmentShader = m_Frag.get();
     desc.vertexLayout.stride = kVertexStride;
     desc.vertexLayout.attributes = {
-        { 0, RHIVertexFormat::Float3, 0  },                       // position
-        { 1, RHIVertexFormat::Float3, sizeof(glm::vec3) },        // normal
-        { 2, RHIVertexFormat::Float2, sizeof(glm::vec3) * 2 },    // uv
+        { 0, RHIVertexFormat::Float3, 0  },                                          // position
+        { 1, RHIVertexFormat::Float3, sizeof(glm::vec3) },                           // normal
+        { 2, RHIVertexFormat::Float2, sizeof(glm::vec3) * 2 },                       // uv
+        { 3, RHIVertexFormat::Float3, sizeof(glm::vec3) * 2 + sizeof(glm::vec2) },   // tangent
     };
+    // Binding 0 = per-frame camera UBO; 1-6 = the material maps in MaterialMap
+    // order; 7 = the per-material params UBO. One set holds all of them, so a
+    // material is a single BindResourceSet per draw.
     desc.resourceBindings = {
         { 0, RHIResourceType::UniformBuffer,        RHIShaderStage::Vertex },
         { 1, RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment },
+        { 2, RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment },
+        { 3, RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment },
+        { 4, RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment },
+        { 5, RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment },
+        { 6, RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment },
+        { 7, RHIResourceType::UniformBuffer,        RHIShaderStage::Fragment },
     };
     desc.pushConstants = { RHIShaderStage::Vertex, sizeof(GBufferPush) };
     // Five color attachments, in frag `location` order — the MRT the graph opens a
@@ -60,17 +71,27 @@ VulkanGBufferPass::VulkanGBufferPass(RHIDevice* device, const std::string& shade
 
 VulkanGBufferPass::~VulkanGBufferPass() = default;
 
+std::unique_ptr<RHIResourceSet> VulkanGBufferPass::CreateMaterialSet(
+    RHIBuffer* frameUBO,
+    const std::array<RHITexture*, MapCount>& maps,
+    RHIBuffer* materialUBO) const
+{
+    std::vector<RHITextureBinding> textures;
+    textures.reserve(MapCount);
+    for (size_t i = 0; i < MapCount; ++i)
+        textures.push_back({ static_cast<uint32_t>(i + 1), maps[i] });
+
+    return m_Device->CreateResourceSet(
+        m_Pipeline.get(), 0,
+        { { 0, frameUBO }, { 7, materialUBO } }, textures);
+}
+
 void VulkanGBufferPass::AddToGraph(RHIRenderGraph& graph,
                                    RGTextureHandle viewPos, RGTextureHandle viewNormal,
                                    RGTextureHandle albedo,  RGTextureHandle material,
                                    RGTextureHandle emissive, RGTextureHandle depth,
-                                   RHIBuffer* frameUBO, RHITexture* albedoTexture,
                                    std::function<void(RHICommandList*)> drawScene)
 {
-    if (!m_Set)
-        m_Set = m_Device->CreateResourceSet(
-            m_Pipeline.get(), 0, { { 0, frameUBO } }, { { 1, albedoTexture } });
-
     // Writes added in attachment order — the graph forwards them to BeginRendering
     // in this order, so colorAttachments[N] matches the frag's `location = N`. Depth
     // is split out by format (Depth32F) into the depth attachment.
@@ -84,7 +105,6 @@ void VulkanGBufferPass::AddToGraph(RHIRenderGraph& graph,
         .SetClearColor({ 0.0f, 0.0f, 0.0f, 1.0f })
         .SetExecute([this, drawScene = std::move(drawScene)](RHICommandList* cmd) {
             cmd->BindPipeline(m_Pipeline.get());
-            cmd->BindResourceSet(0, m_Set.get());
             drawScene(cmd);
         });
 }

@@ -5,7 +5,7 @@ namespace Diamond {
 
 VulkanImage CreateImage(VulkanContext& ctx, uint32_t width, uint32_t height,
                         VkFormat format, VkImageUsageFlags usage,
-                        VkImageAspectFlags aspect) {
+                        VkImageAspectFlags aspect, uint32_t mipLevels) {
     VulkanImage img;
     img.format = format;
     img.extent = { width, height };
@@ -14,7 +14,7 @@ VulkanImage CreateImage(VulkanContext& ctx, uint32_t width, uint32_t height,
     imageInfo.imageType     = VK_IMAGE_TYPE_2D;
     imageInfo.format        = format;
     imageInfo.extent        = { width, height, 1 };
-    imageInfo.mipLevels     = 1;
+    imageInfo.mipLevels     = mipLevels;
     imageInfo.arrayLayers   = 1;
     imageInfo.samples       = VK_SAMPLE_COUNT_1_BIT;
     imageInfo.tiling        = VK_IMAGE_TILING_OPTIMAL;
@@ -34,7 +34,7 @@ VulkanImage CreateImage(VulkanContext& ctx, uint32_t width, uint32_t height,
     viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
     viewInfo.format   = format;
     viewInfo.subresourceRange.aspectMask = aspect;
-    viewInfo.subresourceRange.levelCount = 1;
+    viewInfo.subresourceRange.levelCount = mipLevels;
     viewInfo.subresourceRange.layerCount = 1;
     VK_CHECK(vkCreateImageView(ctx.Device(), &viewInfo, nullptr, &img.view));
 
@@ -60,7 +60,7 @@ void TransitionImageLayout(VkCommandBuffer cmd, VkImage image, VkImageAspectFlag
     barrier.newLayout     = newLayout;
     barrier.image         = image;
     barrier.subresourceRange.aspectMask = aspect;
-    barrier.subresourceRange.levelCount = 1;
+    barrier.subresourceRange.levelCount = VK_REMAINING_MIP_LEVELS;
     barrier.subresourceRange.layerCount = 1;
 
     VkDependencyInfo dep{ VK_STRUCTURE_TYPE_DEPENDENCY_INFO };

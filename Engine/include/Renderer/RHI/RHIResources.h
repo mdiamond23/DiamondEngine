@@ -49,6 +49,11 @@ struct RHITextureDesc {
     const void* initialData = nullptr;
 
     RHIFilter filter = RHIFilter::Linear;
+
+    // Uploaded textures only: build the full mip chain from initialData at upload
+    // (blit downsample), sampled trilinearly. Material textures want this — the GL
+    // texture path always generates mipmaps; render targets ignore it.
+    bool generateMips = false;
 };
 
 // A texture usable as a sampled image and/or a render-pass attachment, depending

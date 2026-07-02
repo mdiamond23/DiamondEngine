@@ -26,10 +26,13 @@ class RHITexture;
 class VulkanTexture2D : public Texture {
 public:
     // channels: 1 = R8, 3 = RGB8, 4 = RGBA8. 'filter' is Nearest for pixel-exact
-    // sprites/atlases, Linear otherwise.
+    // sprites/atlases, Linear otherwise. 'generateMips' builds the full mip chain
+    // at upload — on for file-loaded material textures (matching the GL texture
+    // path's glGenerateMipmap), off for the font/2D atlases baked at native size.
     VulkanTexture2D(RHIDevice* device, const uint8_t* pixels,
                     int width, int height, int channels,
-                    RHIFilter filter = RHIFilter::Linear);
+                    RHIFilter filter = RHIFilter::Linear,
+                    bool generateMips = false);
     ~VulkanTexture2D() override;
 
     void     Bind(uint32_t slot = 0) const override;   // no-op: Vulkan binds via sets

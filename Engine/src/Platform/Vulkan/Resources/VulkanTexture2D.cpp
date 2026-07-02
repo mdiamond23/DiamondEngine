@@ -6,7 +6,8 @@
 namespace Diamond {
 
 VulkanTexture2D::VulkanTexture2D(RHIDevice* device, const uint8_t* pixels,
-                                 int width, int height, int channels, RHIFilter filter)
+                                 int width, int height, int channels, RHIFilter filter,
+                                 bool generateMips)
     : m_Width(static_cast<uint32_t>(width)),
       m_Height(static_cast<uint32_t>(height))
 {
@@ -34,8 +35,9 @@ VulkanTexture2D::VulkanTexture2D(RHIDevice* device, const uint8_t* pixels,
     desc.height      = m_Height;
     desc.format      = RHIFormat::RGBA8;
     desc.usage       = RHITextureUsage::Sampled;
-    desc.initialData = rgba.data();
-    desc.filter      = filter;
+    desc.initialData  = rgba.data();
+    desc.filter       = filter;
+    desc.generateMips = generateMips;
     m_Texture = device->CreateTexture(desc);
 }
 

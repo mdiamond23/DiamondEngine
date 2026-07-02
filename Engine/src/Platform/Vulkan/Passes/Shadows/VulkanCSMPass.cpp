@@ -11,9 +11,9 @@
 namespace Diamond {
 
 namespace {
-// The vertex buffer is the demo's MeshVertex (pos/normal/uv, stride 32); the depth
-// pass only reads position at location 0.
-constexpr uint32_t kVertexStride = sizeof(glm::vec3) * 2 + sizeof(glm::vec2);  // 32
+// The vertex buffer is the shared MeshVertex (pos/normal/uv/tangent, stride 44);
+// the depth pass only reads position at location 0.
+constexpr uint32_t kVertexStride = sizeof(glm::vec3) * 3 + sizeof(glm::vec2);  // 44
 } // namespace
 
 VulkanCSMPass::VulkanCSMPass(RHIDevice* device, const std::string& shaderDir)

@@ -32,11 +32,19 @@ namespace Diamond {
 namespace {
 
 // Matches gbuffer.vert's vertex inputs — a repacked subset of the engine's full
-// MeshData::Vertex (position + normal + UV).
+// MeshData::Vertex (position + normal + UV + tangent).
 struct MeshVertex {
     glm::vec3 pos;
     glm::vec3 normal;
     glm::vec2 uv;
+    glm::vec3 tangent;
+};
+
+// std140 layout of gbuffer.frag's per-material MaterialUBO.
+struct MaterialParams {
+    float uvScale          = 1.0f;
+    float emissiveStrength = 0.0f;
+    float _pad0 = 0.0f, _pad1 = 0.0f;
 };
 
 // Per-frame camera data for the G-buffer pass. view alone produces view-space
@@ -124,7 +132,7 @@ int RunVulkanMeshDemo() {
     std::vector<MeshVertex> vertices;
     vertices.reserve(cube.Vertices.size());
     for (const Vertex& v : cube.Vertices)
-        vertices.push_back({ v.Position, v.Normal, v.TexCoords });
+        vertices.push_back({ v.Position, v.Normal, v.TexCoords, v.Tangent });
     const std::vector<uint32_t>& indices = cube.Indices;
 
     RHIBufferDesc vbDesc;
@@ -258,11 +266,42 @@ int RunVulkanMeshDemo() {
     glm::vec3 fwdLightPos[4] = { pointPositions[0], glm::vec3(0.0f), glm::vec3(0.0f), glm::vec3(0.0f) };
     glm::vec3 fwdLightCol[4] = { pointColors[0],    glm::vec3(0.0f), glm::vec3(0.0f), glm::vec3(0.0f) };
 
+    // One demo-wide material for the G-buffer's per-material descriptor set:
+    // checkerboard albedo, neutral 1×1s for the other five maps.
+    auto makePixel = [&](uint8_t r, uint8_t g, uint8_t b) {
+        const uint8_t px[4] = { r, g, b, 255 };
+        RHITextureDesc one;
+        one.width       = 1;
+        one.height      = 1;
+        one.format      = RHIFormat::RGBA8;
+        one.usage       = RHITextureUsage::Sampled;
+        one.initialData = px;
+        return device->CreateTexture(one);
+    };
+    auto flatNormal = makePixel(128, 128, 255);   // tangent-space +Z
+    auto black      = makePixel(0, 0, 0);         // metallic 0, emissive off
+    auto gray       = makePixel(128, 128, 128);   // roughness 0.5
+    auto white      = makePixel(255, 255, 255);   // AO 1
+
+    const MaterialParams matParams;   // uvScale 1, emissive off
+    RHIBufferDesc matDesc;
+    matDesc.size        = sizeof(MaterialParams);
+    matDesc.usage       = RHIBufferUsage::Uniform;
+    matDesc.initialData = &matParams;
+    auto materialUBO = device->CreateBuffer(matDesc);
+
+    auto materialSet = gbuffer.CreateMaterialSet(
+        uniformBuffer.get(),
+        { checker.get(), flatNormal.get(), black.get(), gray.get(), white.get(), black.get() },
+        materialUBO.get());
+
     // Pass 1 — fill the G-buffer. The draw callback records the scene (floor + cube)
-    // inside the pass scope after the pass binds its pipeline + descriptor set.
+    // inside the pass scope after the pass binds its pipeline; each draw run binds
+    // its material set (one shared material here).
     gbuffer.AddToGraph(graph, gViewPos, gViewNormal, gAlbedo, gMaterial, gEmissive,
-                       gDepth, uniformBuffer.get(), checker.get(),
+                       gDepth,
                        [&](RHICommandList* cmd) {
+                           cmd->BindResourceSet(0, materialSet.get());
                            cmd->BindVertexBuffer(vertexBuffer.get());
                            cmd->BindIndexBuffer(indexBuffer.get(), RHIIndexType::U32);
                            cmd->PushConstants(RHIShaderStage::Vertex, 0, sizeof(floorModel), &floorModel);

@@ -67,14 +67,52 @@ void OnFramebufferResize(GLFWwindow* window, int /*w*/, int /*h*/) {
 
 entt::entity SpawnMesh(Scene& scene, std::string_view name,
                        const std::shared_ptr<Mesh>& mesh,
-                       const glm::vec3& pos, const glm::vec3& scale) {
+                       const glm::vec3& pos, const glm::vec3& scale,
+                       const std::shared_ptr<PBRMaterial>& material = nullptr) {
     entt::entity e = scene.CreateEntity(name);
     auto& t = scene.Get<TransformComponent>(e);
     t.position = pos;
     t.scale    = scale;
     auto& mc = scene.Add<MeshComponent>(e);
-    mc.mesh = mesh;
+    mc.mesh     = mesh;
+    mc.material = material;
     return e;
+}
+
+// Slice 3's per-material proof: two real PBR texture sets from the asset library
+// (loaded through Texture::Create, which is Vulkan-backed here). Diamond plate on
+// the hard surfaces, emissive lava on the sphere; the floor gets its own material
+// instance so the plate tiles instead of stretching (distinct uvScale = a second
+// MaterialCache entry over the same textures).
+struct SceneMaterials {
+    std::shared_ptr<PBRMaterial> plate;
+    std::shared_ptr<PBRMaterial> floorPlate;
+    std::shared_ptr<PBRMaterial> lava;
+};
+
+SceneMaterials LoadMaterials() {
+    const std::string plateDir = DIAMOND_ASSETS_DIR "/Materials/DiamondPlate006C_2K-PNG/";
+    const std::string lavaDir  = DIAMOND_ASSETS_DIR "/Materials/Lava004_2K-PNG/";
+
+    SceneMaterials m;
+    m.plate = std::make_shared<PBRMaterial>();
+    m.plate->Albedo    = Texture::Create(plateDir + "DiamondPlate006C_2K-PNG_Color.png");
+    m.plate->Normal    = Texture::Create(plateDir + "DiamondPlate006C_2K-PNG_NormalGL.png");
+    m.plate->Metallic  = Texture::Create(plateDir + "DiamondPlate006C_2K-PNG_Metalness.png");
+    m.plate->Roughness = Texture::Create(plateDir + "DiamondPlate006C_2K-PNG_Roughness.png");
+    m.plate->AO        = Texture::Create(plateDir + "DiamondPlate006C_2K-PNG_AmbientOcclusion.png");
+
+    m.floorPlate  = std::make_shared<PBRMaterial>(*m.plate);   // shares the textures
+    m.floorPlate->UVScale = 4.0f;
+
+    m.lava = std::make_shared<PBRMaterial>();
+    m.lava->Albedo           = Texture::Create(lavaDir + "Lava004_2K-PNG_Color.png");
+    m.lava->Normal           = Texture::Create(lavaDir + "Lava004_2K-PNG_NormalGL.png");
+    m.lava->Roughness        = Texture::Create(lavaDir + "Lava004_2K-PNG_Roughness.png");
+    m.lava->Emissive         = Texture::Create(lavaDir + "Lava004_2K-PNG_Emission.png");
+    m.lava->EmissiveStrength = 2.5f;
+    m.lava->UVScale          = 2.0f;
+    return m;
 }
 
 // The same lit test scene the VulkanScene demo uses (floor + sphere + cubes +
@@ -82,11 +120,12 @@ entt::entity SpawnMesh(Scene& scene, std::string_view name,
 void BuildScene(Scene& scene, const std::shared_ptr<Mesh>& cubeMesh,
                 const std::shared_ptr<Mesh>& sphereMesh,
                 const std::shared_ptr<Font>& font) {
-    SpawnMesh(scene, "Floor",  cubeMesh,   { 0.0f, -0.55f, 0.0f }, { 6.0f, 0.1f, 6.0f });
-    SpawnMesh(scene, "Sphere", sphereMesh, { 0.0f,  0.3f,  0.0f }, { 0.8f, 0.8f, 0.8f });
-    SpawnMesh(scene, "CubeA",  cubeMesh,   {  1.8f, 0.0f,  0.0f }, { 0.6f, 0.6f, 0.6f });
-    SpawnMesh(scene, "CubeB",  cubeMesh,   { -1.8f, 0.0f,  0.6f }, { 0.6f, 0.6f, 0.6f });
-    SpawnMesh(scene, "CubeC",  cubeMesh,   {  0.4f, 0.0f, -1.9f }, { 0.6f, 0.6f, 0.6f });
+    const SceneMaterials mats = LoadMaterials();
+    SpawnMesh(scene, "Floor",  cubeMesh,   { 0.0f, -0.55f, 0.0f }, { 6.0f, 0.1f, 6.0f }, mats.floorPlate);
+    SpawnMesh(scene, "Sphere", sphereMesh, { 0.0f,  0.3f,  0.0f }, { 0.8f, 0.8f, 0.8f }, mats.lava);
+    SpawnMesh(scene, "CubeA",  cubeMesh,   {  1.8f, 0.0f,  0.0f }, { 0.6f, 0.6f, 0.6f }, mats.plate);
+    SpawnMesh(scene, "CubeB",  cubeMesh,   { -1.8f, 0.0f,  0.6f }, { 0.6f, 0.6f, 0.6f }, mats.plate);
+    SpawnMesh(scene, "CubeC",  cubeMesh,   {  0.4f, 0.0f, -1.9f }, { 0.6f, 0.6f, 0.6f });   // default checkerboard
 
     {
         entt::entity e = scene.CreateEntity("PointWarm");

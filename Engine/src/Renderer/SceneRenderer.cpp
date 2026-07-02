@@ -10,6 +10,7 @@
 #include "Renderer/RHI/RHICommandList.h"
 #include "Renderer/RHI/RHIRenderGraph.h"
 #include "Renderer/MeshData.h"
+#include "Renderer/Frustum.h"
 #include "Core/Camera.h"
 #include "Scene/Scene.h"
 #include "Scene/Components.h"
@@ -27,6 +28,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <spdlog/spdlog.h>
 
+#include <algorithm>
 #include <array>
 #include <unordered_map>
 #include <vector>
@@ -36,11 +38,13 @@ namespace Diamond {
 namespace {
 
 // gbuffer.vert's vertex inputs — a repacked subset of the engine's full Vertex
-// (position + normal + UV). MeshCache repacks into this layout on upload.
+// (position + normal + UV + tangent; the bitangent is rebuilt in-shader from
+// N×T like the GL vertex stage). MeshCache repacks into this layout on upload.
 struct MeshVertex {
     glm::vec3 pos;
     glm::vec3 normal;
     glm::vec2 uv;
+    glm::vec3 tangent;
 };
 
 // Per-frame camera data for the G-buffer pass. view → view-space pos/normal;
@@ -57,7 +61,15 @@ constexpr float kFar       = 100.0f;
 constexpr float kShadowFar = 25.0f;
 constexpr uint32_t kShadowRes = 2048;
 
-// Default albedo until per-material textures land (Slice 3): a checkerboard so
+// Per-material params, std140 layout matching gbuffer.frag's MaterialUBO
+// (scalars at offsets 0/4, padded to 16).
+struct MaterialParams {
+    float uvScale          = 1.0f;
+    float emissiveStrength = 0.0f;
+    float _pad0 = 0.0f, _pad1 = 0.0f;
+};
+
+// Fallback albedo for meshes with no material assigned: a checkerboard so
 // unlit surface detail is still visible.
 std::vector<uint8_t> MakeCheckerboard(uint32_t size, uint32_t cell) {
     std::vector<uint8_t> pixels(static_cast<size_t>(size) * size * 4);
@@ -115,7 +127,7 @@ public:
         std::vector<MeshVertex> verts;
         verts.reserve(data.Vertices.size());
         for (const Vertex& v : data.Vertices)
-            verts.push_back({ v.Position, v.Normal, v.TexCoords });
+            verts.push_back({ v.Position, v.Normal, v.TexCoords, v.Tangent });
 
         GpuMesh gm;
         RHIBufferDesc vb;
@@ -130,6 +142,7 @@ public:
         ib.initialData = data.Indices.data();
         gm.indexBuffer = m_Device->CreateBuffer(ib);
         gm.indexCount  = static_cast<uint32_t>(data.Indices.size());
+        gm.bounds      = data.ComputeAABB();   // local-space; culled against per draw
 
         m_Meshes.emplace(key, std::move(gm));
     }
@@ -170,21 +183,24 @@ public:
 
     void RenderToSwapchain(Scene& scene, const Camera& camera,
                            const OverlayFn& overlay) override {
-        // Refresh world transforms, then gather this frame's draws + lights from
-        // the ECS (the pass draw-callbacks iterate m_DrawList captured at build).
-        scene.GetTransformSystem().Update(scene.GetRegistry());
-        RebuildDrawList(scene);
-        GatherLights(scene);
-        GatherParticles(scene);
-
-        RHICommandList* cmd = m_Device->BeginFrame();
-        if (!cmd) return;   // swapchain unavailable (minimized / rebuilding)
-
         const float aspect = static_cast<float>(m_Width) / static_cast<float>(m_Height);
         const glm::mat4 view = camera.GetViewMatrix();
         const glm::mat4 proj = glm::perspective(glm::radians(camera.Zoom), aspect, kNear, kFar);
         m_FrameView = view;
         m_FrameProj = proj;
+
+        // Refresh world transforms, then gather this frame's draws + lights from
+        // the ECS (the pass draw-callbacks iterate m_DrawList captured at build).
+        // Geometry draws are frustum-culled ([0,1]-depth planes — this TU builds
+        // proj under GLM_FORCE_DEPTH_ZERO_TO_ONE); shadow draws are not, so
+        // off-screen casters still cast into the view (mirrors the GL editor).
+        scene.GetTransformSystem().Update(scene.GetRegistry());
+        RebuildDrawList(scene, Frustum::Extract(proj * view, /*zeroToOneDepth*/ true));
+        GatherLights(scene);
+        GatherParticles(scene);
+
+        RHICommandList* cmd = m_Device->BeginFrame();
+        if (!cmd) return;   // swapchain unavailable (minimized / rebuilding)
 
         CameraUBO ubo{};
         ubo.view     = view;
@@ -228,10 +244,22 @@ private:
         std::unique_ptr<RHIBuffer> vertexBuffer;
         std::unique_ptr<RHIBuffer> indexBuffer;
         uint32_t                   indexCount = 0;
+        AABB                       bounds;
+    };
+    // A cached material: its descriptor set against the G-buffer pipeline (camera
+    // UBO + 6 maps + params UBO), the static params buffer behind it, and the
+    // engine textures kept alive for as long as the set references them. Baked
+    // once per PBRMaterial pointer — a material edited after first use keeps its
+    // baked look until re-registered (live material editing is a later slice).
+    struct GpuMaterial {
+        std::unique_ptr<RHIBuffer>      params;
+        std::unique_ptr<RHIResourceSet> set;
+        std::array<std::shared_ptr<Texture>, VulkanGBufferPass::MapCount> keepAlive{};
     };
     struct DrawItem {
-        const GpuMesh* mesh;
-        glm::mat4      world;
+        const GpuMesh*  mesh;
+        RHIResourceSet* material;   // G-buffer set 0 for this draw
+        glm::mat4       world;
     };
     struct PBatch {
         RHITexture* tex = nullptr;
@@ -248,7 +276,9 @@ private:
         ubo.dynamic = true;
         m_CameraUBO = m_Device->CreateBuffer(ubo);
 
-        // Shared default albedo (per-material textures = Slice 3).
+        // Default material maps: checkerboard albedo for meshes with no material,
+        // plus 1×1 neutral fallbacks for any slot a material leaves empty (flat
+        // normal, non-metallic, mid roughness, full AO, no emissive).
         const std::vector<uint8_t> pixels = MakeCheckerboard(256, 32);
         RHITextureDesc tex;
         tex.width       = 256;
@@ -257,6 +287,21 @@ private:
         tex.usage       = RHITextureUsage::Sampled;
         tex.initialData = pixels.data();
         m_Albedo = m_Device->CreateTexture(tex);
+
+        auto makePixel = [this](uint8_t r, uint8_t g, uint8_t b) {
+            const uint8_t px[4] = { r, g, b, 255 };
+            RHITextureDesc one;
+            one.width       = 1;
+            one.height      = 1;
+            one.format      = RHIFormat::RGBA8;
+            one.usage       = RHITextureUsage::Sampled;
+            one.initialData = px;
+            return m_Device->CreateTexture(one);
+        };
+        m_DefaultWhite  = makePixel(255, 255, 255);   // albedo fallback, AO = 1
+        m_DefaultNormal = makePixel(128, 128, 255);   // tangent-space +Z
+        m_DefaultBlack  = makePixel(0, 0, 0);         // metallic = 0, emissive off
+        m_DefaultGray   = makePixel(128, 128, 128);   // roughness = 0.5
 
         const std::string shaderDir = DIAMOND_VULKAN_SHADER_DIR;
         m_GBuffer  = std::make_unique<VulkanGBufferPass>(m_Device, shaderDir);
@@ -307,9 +352,10 @@ private:
             cascades[i] = m_Graph.DeclareTexture("csmCascade" + std::to_string(i),
                                                  { kShadowRes, kShadowRes, RHIFormat::Depth32F });
 
-        // G-buffer — fill from the per-frame draw list.
+        // G-buffer — fill from the per-frame draw list; each draw binds its
+        // material's descriptor set (built lazily by GetOrCreateMaterial).
         m_GBuffer->AddToGraph(m_Graph, gViewPos, gViewNormal, gAlbedo, gMaterial, gEmissive,
-                              gDepth, m_CameraUBO.get(), m_Albedo.get(),
+                              gDepth,
                               [this](RHICommandList* cmd) { DrawGeometry(cmd); });
 
         // SSAO occlusion + blur over the G-buffer.
@@ -372,7 +418,13 @@ private:
     }
 
     void DrawGeometry(RHICommandList* cmd) {
+        // The list is sorted by material, so the set rebind only fires on runs.
+        RHIResourceSet* bound = nullptr;
         for (const DrawItem& d : m_DrawList) {
+            if (d.material != bound) {
+                cmd->BindResourceSet(0, d.material);
+                bound = d.material;
+            }
             cmd->BindVertexBuffer(d.mesh->vertexBuffer.get());
             cmd->BindIndexBuffer(d.mesh->indexBuffer.get(), RHIIndexType::U32);
             cmd->PushConstants(RHIShaderStage::Vertex, 0, sizeof(glm::mat4), &d.world);
@@ -381,7 +433,7 @@ private:
     }
 
     void DrawShadow(RHICommandList* cmd, const glm::mat4& lightSpace) {
-        for (const DrawItem& d : m_DrawList) {
+        for (const DrawItem& d : m_ShadowDraws) {
             const glm::mat4 lm = lightSpace * d.world;
             cmd->BindVertexBuffer(d.mesh->vertexBuffer.get());
             cmd->BindIndexBuffer(d.mesh->indexBuffer.get(), RHIIndexType::U32);
@@ -390,15 +442,77 @@ private:
         }
     }
 
-    void RebuildDrawList(Scene& scene) {
+    void RebuildDrawList(Scene& scene, const Frustum& frustum) {
         m_DrawList.clear();
+        m_ShadowDraws.clear();
         const TransformSystem& ts = scene.GetTransformSystem();
         for (auto [entity, mc] : scene.GetRegistry().view<MeshComponent>().each()) {
             if (!mc.visible || !mc.mesh) continue;
             auto it = m_Meshes.find(mc.mesh.get());
             if (it == m_Meshes.end()) continue;   // geometry not registered
-            m_DrawList.push_back({ &it->second, ts.GetWorldMatrix(entity) });
+
+            const glm::mat4& world = ts.GetWorldMatrix(entity);
+            const DrawItem item{ &it->second, GetOrCreateMaterial(mc.material.get()).set.get(), world };
+            if (mc.castsShadow)
+                m_ShadowDraws.push_back(item);
+            if (frustum.TestAABB(it->second.bounds.Transform(world)))
+                m_DrawList.push_back(item);
         }
+
+        // Group draws by material so DrawGeometry rebinds each set once per run.
+        std::sort(m_DrawList.begin(), m_DrawList.end(),
+                  [](const DrawItem& a, const DrawItem& b) { return a.material < b.material; });
+    }
+
+    // Resolve one engine texture slot to its RHI texture, or a neutral default
+    // when the slot is empty (or holds a non-Vulkan texture).
+    RHITexture* RhiOrDefault(const std::shared_ptr<Texture>& tex, RHITexture* fallback) const {
+        if (const auto* vk = dynamic_cast<const VulkanTexture2D*>(tex.get()); vk && vk->Rhi())
+            return vk->Rhi();
+        return fallback;
+    }
+
+    // Look up (or bake) the G-buffer descriptor set for a material. Null material
+    // = the checkerboard default. Sets are built lazily on the first frame a
+    // material appears and live for the renderer's lifetime.
+    const GpuMaterial& GetOrCreateMaterial(const PBRMaterial* mat) {
+        auto it = m_Materials.find(mat);
+        if (it != m_Materials.end()) return it->second;
+
+        GpuMaterial gm;
+
+        MaterialParams params;
+        std::array<RHITexture*, VulkanGBufferPass::MapCount> maps;
+        maps[VulkanGBufferPass::Albedo]    = m_Albedo.get();          // checkerboard
+        maps[VulkanGBufferPass::Normal]    = m_DefaultNormal.get();
+        maps[VulkanGBufferPass::Metallic]  = m_DefaultBlack.get();
+        maps[VulkanGBufferPass::Roughness] = m_DefaultGray.get();
+        maps[VulkanGBufferPass::AO]        = m_DefaultWhite.get();
+        maps[VulkanGBufferPass::Emissive]  = m_DefaultBlack.get();
+
+        if (mat) {
+            maps[VulkanGBufferPass::Albedo]    = RhiOrDefault(mat->Albedo,    m_DefaultWhite.get());
+            maps[VulkanGBufferPass::Normal]    = RhiOrDefault(mat->Normal,    m_DefaultNormal.get());
+            maps[VulkanGBufferPass::Metallic]  = RhiOrDefault(mat->Metallic,  m_DefaultBlack.get());
+            maps[VulkanGBufferPass::Roughness] = RhiOrDefault(mat->Roughness, m_DefaultGray.get());
+            maps[VulkanGBufferPass::AO]        = RhiOrDefault(mat->AO,        m_DefaultWhite.get());
+            maps[VulkanGBufferPass::Emissive]  = RhiOrDefault(mat->Emissive,  m_DefaultBlack.get());
+            gm.keepAlive = { mat->Albedo, mat->Normal, mat->Metallic,
+                             mat->Roughness, mat->AO, mat->Emissive };
+
+            params.uvScale = mat->UVScale;
+            // Strength 0 disables the contribution when no map is bound (GL parity).
+            params.emissiveStrength = mat->Emissive ? mat->EmissiveStrength : 0.0f;
+        }
+
+        RHIBufferDesc pb;
+        pb.size        = sizeof(MaterialParams);
+        pb.usage       = RHIBufferUsage::Uniform;
+        pb.initialData = &params;
+        gm.params = m_Device->CreateBuffer(pb);
+
+        gm.set = m_GBuffer->CreateMaterialSet(m_CameraUBO.get(), maps, gm.params.get());
+        return m_Materials.emplace(mat, std::move(gm)).first->second;
     }
 
     void GatherLights(Scene& scene) {
@@ -470,7 +584,11 @@ private:
     OverlayFn       m_Overlay;       // per-frame editor overlay (ImGui), offscreen mode
 
     std::unique_ptr<RHIBuffer>  m_CameraUBO;
-    std::unique_ptr<RHITexture> m_Albedo;
+    std::unique_ptr<RHITexture> m_Albedo;          // checkerboard — null-material albedo
+    std::unique_ptr<RHITexture> m_DefaultWhite;    // 1×1 fallbacks for empty slots
+    std::unique_ptr<RHITexture> m_DefaultNormal;
+    std::unique_ptr<RHITexture> m_DefaultBlack;
+    std::unique_ptr<RHITexture> m_DefaultGray;
 
     std::unique_ptr<VulkanGBufferPass>          m_GBuffer;
     std::unique_ptr<VulkanSSAOPass>             m_SSAO;
@@ -479,8 +597,10 @@ private:
     std::unique_ptr<VulkanTonemapPass>          m_Tonemap;
     std::unique_ptr<VulkanIBLPass>              m_IBL;
 
-    std::unordered_map<Mesh*, GpuMesh> m_Meshes;
-    std::vector<DrawItem>              m_DrawList;
+    std::unordered_map<Mesh*, GpuMesh>                     m_Meshes;
+    std::unordered_map<const PBRMaterial*, GpuMaterial>    m_Materials;
+    std::vector<DrawItem>              m_DrawList;      // frustum-culled — geometry pass
+    std::vector<DrawItem>              m_ShadowDraws;   // unculled casters — CSM pass
 
     glm::vec3              m_SunDir   { 0.0f, -1.0f, 0.0f };
     glm::vec3              m_SunColor { 0.0f };

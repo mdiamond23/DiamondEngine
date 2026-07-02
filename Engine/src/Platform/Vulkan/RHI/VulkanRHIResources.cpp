@@ -66,6 +66,33 @@ uint32_t BytesPerPixel(RHIFormat f) {
         default:               return 4;   // only RGBA8 textures uploaded so far
     }
 }
+
+// Barrier over a contiguous mip range of a single-layer color image — the mip
+// blit chain below needs per-level transitions, which the full-subresource
+// TransitionImageLayout can't express.
+void MipRangeBarrier(VkCommandBuffer cmd, VkImage image,
+                     uint32_t baseMip, uint32_t mipCount,
+                     VkImageLayout oldLayout, VkImageLayout newLayout,
+                     VkPipelineStageFlags2 srcStage, VkAccessFlags2 srcAccess,
+                     VkPipelineStageFlags2 dstStage, VkAccessFlags2 dstAccess) {
+    VkImageMemoryBarrier2 barrier{ VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2 };
+    barrier.srcStageMask  = srcStage;
+    barrier.srcAccessMask = srcAccess;
+    barrier.dstStageMask  = dstStage;
+    barrier.dstAccessMask = dstAccess;
+    barrier.oldLayout     = oldLayout;
+    barrier.newLayout     = newLayout;
+    barrier.image         = image;
+    barrier.subresourceRange.aspectMask   = VK_IMAGE_ASPECT_COLOR_BIT;
+    barrier.subresourceRange.baseMipLevel = baseMip;
+    barrier.subresourceRange.levelCount   = mipCount;
+    barrier.subresourceRange.layerCount   = 1;
+
+    VkDependencyInfo dep{ VK_STRUCTURE_TYPE_DEPENDENCY_INFO };
+    dep.imageMemoryBarrierCount = 1;
+    dep.pImageMemoryBarriers    = &barrier;
+    vkCmdPipelineBarrier2(cmd, &dep);
+}
 } // namespace
 
 VulkanRHITexture::VulkanRHITexture(VulkanRHIDevice* device, const RHITextureDesc& desc)
@@ -79,16 +106,25 @@ VulkanRHITexture::VulkanRHITexture(VulkanRHIDevice* device, const RHITextureDesc
     m_RenderTarget = isColorTarget || isDepthTarget;
     m_Aspect       = isDepthTarget ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
 
+    // Uploaded textures may carry a full mip chain, blit-downsampled from mip 0
+    // below (render targets stay single-mip).
+    uint32_t mipLevels = 1;
+    if (desc.initialData && desc.generateMips) {
+        uint32_t extent = desc.width > desc.height ? desc.width : desc.height;
+        while (extent >>= 1) ++mipLevels;
+    }
+
     VkImageUsageFlags usage = 0;
     if (HasFlag(desc.usage, RHITextureUsage::Sampled)) usage |= VK_IMAGE_USAGE_SAMPLED_BIT;
     if (isColorTarget)        usage |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
     if (isDepthTarget)        usage |= VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
     if (desc.initialData)     usage |= VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    if (mipLevels > 1)        usage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;   // blit source
 
     // Render targets keep one image per frame-in-flight; static textures use one.
     const uint32_t count = m_RenderTarget ? VulkanRHIDevice::kFramesInFlight : 1;
     for (uint32_t i = 0; i < count; ++i) {
-        m_Images[i]  = CreateImage(ctx, desc.width, desc.height, m_Format, usage, m_Aspect);
+        m_Images[i]  = CreateImage(ctx, desc.width, desc.height, m_Format, usage, m_Aspect, mipLevels);
         m_Layouts[i] = VK_IMAGE_LAYOUT_UNDEFINED;
     }
 
@@ -117,11 +153,55 @@ VulkanRHITexture::VulkanRHITexture(VulkanRHIDevice* device, const RHITextureDesc
             vkCmdCopyBufferToImage(cmd, staging.handle, m_Images[0].image,
                                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
 
-            TransitionImageLayout(cmd, m_Images[0].image, VK_IMAGE_ASPECT_COLOR_BIT,
-                                  VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                                  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                                  VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                                  VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+            // Walk the mip chain, blitting each level from the one above. The
+            // initial transition put every level in TRANSFER_DST; each source
+            // level moves to TRANSFER_SRC just before its blit.
+            for (uint32_t mip = 1; mip < mipLevels; ++mip) {
+                MipRangeBarrier(cmd, m_Images[0].image, mip - 1, 1,
+                                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                VK_PIPELINE_STAGE_2_BLIT_BIT | VK_PIPELINE_STAGE_2_COPY_BIT,
+                                VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                                VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
+
+                const auto mipExtent = [](uint32_t full, uint32_t level) {
+                    const uint32_t e = full >> level;
+                    return static_cast<int32_t>(e ? e : 1);
+                };
+                const int32_t srcW = mipExtent(desc.width,  mip - 1);
+                const int32_t srcH = mipExtent(desc.height, mip - 1);
+                const int32_t dstW = mipExtent(desc.width,  mip);
+                const int32_t dstH = mipExtent(desc.height, mip);
+
+                VkImageBlit blit{};
+                blit.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                blit.srcSubresource.mipLevel   = mip - 1;
+                blit.srcSubresource.layerCount = 1;
+                blit.srcOffsets[1] = { srcW, srcH, 1 };
+                blit.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                blit.dstSubresource.mipLevel   = mip;
+                blit.dstSubresource.layerCount = 1;
+                blit.dstOffsets[1] = { dstW, dstH, 1 };
+                vkCmdBlitImage(cmd, m_Images[0].image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                               m_Images[0].image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                               1, &blit, VK_FILTER_LINEAR);
+            }
+
+            // Settle every level in SHADER_READ_ONLY: blit sources are in
+            // TRANSFER_SRC, the last level (or the whole image when mips are off)
+            // still in TRANSFER_DST.
+            if (mipLevels > 1)
+                MipRangeBarrier(cmd, m_Images[0].image, 0, mipLevels - 1,
+                                VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
+                                VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+            MipRangeBarrier(cmd, m_Images[0].image, mipLevels - 1, 1,
+                            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                            VK_PIPELINE_STAGE_2_BLIT_BIT | VK_PIPELINE_STAGE_2_COPY_BIT,
+                            VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                            VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
         });
         DestroyBuffer(allocator, staging);
         m_Layouts[0] = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;

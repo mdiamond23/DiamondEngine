@@ -10,7 +10,7 @@ namespace Diamond {
 namespace {
 constexpr RHIFormat kHDRFormat   = RHIFormat::RGBA16F;
 constexpr RHIFormat kDepthFormat = RHIFormat::Depth32F;
-constexpr uint32_t  kVertexStride = sizeof(glm::vec3) * 2 + sizeof(glm::vec2);  // 32
+constexpr uint32_t  kVertexStride = sizeof(glm::vec3) * 3 + sizeof(glm::vec2);  // 44 (pos/normal/uv/tangent)
 
 struct TransparentPush { glm::mat4 model; };
 

@@ -1,21 +1,20 @@
 #version 450
 
-// Deferred G-buffer fragment stage — the MRT slice. Writes five color attachments
-// in one pass (the capability this milestone proves out): the dynamic-rendering
-// scope binds all five and each `location` maps to one. Layout mirrors the GL
-// Deferred/gbuffer.frag:
-//   0 gViewPos   RGBA16F  view-space position
-//   1 gViewNormal RGBA16F view-space normal
-//   2 gAlbedo    RGBA8    base color (linear)
-//   3 gMaterial  RGBA8    r=metallic g=roughness b=ao
-//   4 gEmissive  RGBA16F  emissive (HDR)
-// The slice fills albedo from one texture and writes sensible constants for the
-// metallic/roughness/ao/emissive channels; the full PBR material binding (and
-// tangent-space normal mapping) arrives alongside the deferred-lighting pass.
+// Deferred G-buffer fragment stage — full port of Engine/Shaders/Deferred/
+// gbuffer.frag: the complete 6-texture PBR material (albedo/normal/metallic/
+// roughness/ao/emissive) with tangent-space normal mapping. Writes five color
+// attachments in one pass; each `location` maps to one target:
+//   0 gViewPos    RGBA16F  view-space position
+//   1 gViewNormal RGBA16F  view-space normal (normal-mapped)
+//   2 gAlbedo     RGBA8    base color (linear)
+//   3 gMaterial   RGBA8    r=metallic g=roughness b=ao
+//   4 gEmissive   RGBA16F  emissive (HDR)
+// Bindings 1-6 + the params UBO live in the per-material descriptor set the
+// SceneRenderer's MaterialCache builds (binding 0 is the shared camera UBO).
 
 layout(location = 0) in vec3 vViewPos;
-layout(location = 1) in vec3 vViewNormal;
-layout(location = 2) in vec2 vUV;
+layout(location = 1) in vec2 vUV;
+layout(location = 2) in mat3 vTBN;
 
 layout(location = 0) out vec4 gViewPos;
 layout(location = 1) out vec4 gViewNormal;
@@ -24,13 +23,35 @@ layout(location = 3) out vec4 gMaterial;
 layout(location = 4) out vec4 gEmissive;
 
 layout(set = 0, binding = 1) uniform sampler2D albedoMap;
+layout(set = 0, binding = 2) uniform sampler2D normalMap;
+layout(set = 0, binding = 3) uniform sampler2D metallicMap;
+layout(set = 0, binding = 4) uniform sampler2D roughnessMap;
+layout(set = 0, binding = 5) uniform sampler2D aoMap;
+layout(set = 0, binding = 6) uniform sampler2D emissiveMap;
+
+layout(set = 0, binding = 7) uniform MaterialUBO {
+    float uvScale;
+    float emissiveStrength;
+} mtl;
 
 void main() {
-    vec3 albedo = pow(texture(albedoMap, vUV).rgb, vec3(2.2));   // sRGB → linear (matches GL)
+    vec2 uv = vUV * mtl.uvScale;
+
+    vec3  albedo    = pow(texture(albedoMap, uv).rgb, vec3(2.2));   // sRGB → linear (matches GL)
+    float metallic  = texture(metallicMap,  uv).r;
+    float roughness = texture(roughnessMap, uv).r;
+    float ao        = texture(aoMap,        uv).r;
+
+    // Normal map (tangent space) → view space
+    vec3 N = texture(normalMap, uv).rgb * 2.0 - 1.0;
+    N = normalize(vTBN * N);
+
+    // Emissive — already in linear space, scaled by per-material strength
+    vec3 emissive = texture(emissiveMap, uv).rgb * mtl.emissiveStrength;
 
     gViewPos    = vec4(vViewPos, 1.0);
-    gViewNormal = vec4(normalize(vViewNormal), 0.0);
+    gViewNormal = vec4(N, 0.0);
     gAlbedo     = vec4(albedo, 1.0);
-    gMaterial   = vec4(0.0, 0.5, 1.0, 1.0);   // metallic=0, roughness=0.5, ao=1 (slice defaults)
-    gEmissive   = vec4(0.0, 0.0, 0.0, 1.0);
+    gMaterial   = vec4(metallic, roughness, ao, 1.0);
+    gEmissive   = vec4(emissive, 1.0);
 }

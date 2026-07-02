@@ -19,17 +19,19 @@ struct VulkanImage {
     VkExtent2D    extent     { 0, 0 };
 };
 
-// Creates a device-local 2D image plus a matching view over its single mip/layer.
-// 'aspect' selects the view aspect (COLOR for textures, DEPTH for depth buffers).
+// Creates a device-local 2D image plus a matching view over all its mips/single
+// layer. 'aspect' selects the view aspect (COLOR for textures, DEPTH for depth
+// buffers); 'mipLevels' > 1 allocates a mip chain (filled by the caller, e.g. the
+// RHI texture upload's blit-downsample).
 VulkanImage CreateImage(VulkanContext& ctx, uint32_t width, uint32_t height,
                         VkFormat format, VkImageUsageFlags usage,
-                        VkImageAspectFlags aspect);
+                        VkImageAspectFlags aspect, uint32_t mipLevels = 1);
 
 void DestroyImage(VulkanContext& ctx, VulkanImage& image);
 
-// synchronization2 image-layout transition over a full single-mip/layer
-// subresource. Generic across aspects (color/depth) so depth attachments and
-// texture uploads share one barrier path.
+// synchronization2 image-layout transition over a full-subresource range (all
+// mips, single layer). Generic across aspects (color/depth) so depth attachments
+// and texture uploads share one barrier path.
 void TransitionImageLayout(VkCommandBuffer cmd, VkImage image, VkImageAspectFlags aspect,
                            VkImageLayout oldLayout, VkImageLayout newLayout,
                            VkPipelineStageFlags2 srcStage, VkAccessFlags2 srcAccess,
