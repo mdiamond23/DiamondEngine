@@ -13,7 +13,8 @@ enum class RHIBackend { OpenGL, Vulkan };
 enum class RHIFormat {
     Undefined = 0,
     RGBA8,
-    BGRA8_SRGB,   // common swapchain format
+    BGRA8,        // swapchain format (UNORM — shaders apply gamma manually, GL parity)
+    BGRA8_SRGB,   // sRGB variant (hardware-encoded; unused by the swapchain, see BGRA8)
     RGBA16F,
     R16F,
     Depth32F,

@@ -9,6 +9,8 @@
 #include "Platform/Vulkan/Passes/Forward/VulkanPBRSurfacePass.h"
 #include "Platform/Vulkan/Passes/Forward/VulkanTransparencyPass.h"
 #include "Platform/Vulkan/Passes/Shadows/VulkanCSMPass.h"
+#include "Platform/Vulkan/Passes/Shadows/VulkanSpotShadowPass.h"
+#include "Platform/Vulkan/Passes/Shadows/VulkanPointShadowPass.h"
 #include "Platform/Vulkan/Passes/PostProcess/VulkanTonemapPass.h"
 #include "Platform/Vulkan/Passes/IBL/VulkanIBLPass.h"
 #include "Renderer/MeshData.h"
@@ -199,6 +201,14 @@ int RunVulkanMeshDemo() {
         csmCascades[i] = graph.DeclareTexture(
             "csmCascade" + std::to_string(i),
             { kShadowRes, kShadowRes, RHIFormat::Depth32F });
+    // Spot shadow maps — required inputs of the lighting set. The demo has no spot
+    // lights (numSpot stays 0, so they're never sampled), so they're declared tiny
+    // and never written; the lighting pass's reads still transition them to a valid
+    // sampleable state.
+    std::array<RGTextureHandle, VulkanSpotShadowPass::MAX_SPOTS> spotMaps;
+    for (int i = 0; i < VulkanSpotShadowPass::MAX_SPOTS; ++i)
+        spotMaps[i] = graph.DeclareTexture("spotShadow" + std::to_string(i),
+                                           { 4, 4, RHIFormat::Depth32F });
     // HDR scene color — the deferred lighting pass resolves the G-buffer into this,
     // then tonemap maps it to the swapchain.
     const RGTextureHandle hdrLit = graph.DeclareTexture(
@@ -223,6 +233,7 @@ int RunVulkanMeshDemo() {
     VulkanGBufferPass          gbuffer(device.get(), shaderDir);
     VulkanSSAOPass             ssao(device.get(), shaderDir, kOffscreenW, kOffscreenH);
     VulkanCSMPass              csm(device.get(), shaderDir);
+    VulkanPointShadowPass      pointShadow(device.get(), shaderDir);   // cubes only bound, never rendered here
     VulkanDeferredLightingPass lighting(device.get(), shaderDir);
     VulkanPBRSurfacePass       pbrSurface(device.get(), shaderDir);   // skybox + forward object
     VulkanTransparencyPass     transparency(device.get(), shaderDir);
@@ -332,10 +343,13 @@ int RunVulkanMeshDemo() {
     // shadow + the point light). Reading all four cascades also keeps cascades 1-3
     // alive through dead-pass culling.
     lighting.AddToGraph(graph, gViewPos, gViewNormal, gAlbedo, gMaterial,
-                        ssaoBlurred, gEmissive, csmCascades, hdrLit);
+                        ssaoBlurred, gEmissive, csmCascades, spotMaps, hdrLit);
     // Bind the baked IBL maps into the lighting set (raw cube/2D views) now that the
-    // set exists. Static maps, so this is a one-time write.
+    // set exists. Static maps, so this is a one-time write. The point-shadow cubes
+    // bind the same way; the demo never records them, so they keep their creation-
+    // time clear (depth 1 = no occluder) and the point light stays unshadowed.
     lighting.BindIBL(ibl);
+    lighting.BindPointShadows(pointShadow);
 
     // Pass 5 — forward PBR surface: copy the deferred HDR, draw the skybox background
     // (env cubemap at the far plane) + a forward-lit metallic cube over it.

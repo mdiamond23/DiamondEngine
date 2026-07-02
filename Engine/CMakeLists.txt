@@ -316,6 +316,8 @@ if(DIAMOND_ENABLE_VULKAN)
         src/Platform/Vulkan/Passes/Forward/VulkanPBRSurfacePass.cpp
         src/Platform/Vulkan/Passes/Forward/VulkanTransparencyPass.cpp
         src/Platform/Vulkan/Passes/Shadows/VulkanCSMPass.cpp
+        src/Platform/Vulkan/Passes/Shadows/VulkanSpotShadowPass.cpp
+        src/Platform/Vulkan/Passes/Shadows/VulkanPointShadowPass.cpp
         src/Platform/Vulkan/Passes/IBL/VulkanIBLPass.cpp
         src/Platform/Vulkan/Resources/VulkanParticleRenderer.cpp
         src/Platform/Vulkan/Resources/VulkanRenderer2D.cpp
@@ -356,6 +358,7 @@ if(DIAMOND_ENABLE_VULKAN)
                     gbuffer.vert gbuffer.frag gbuffer_debug.frag
                     ssao.frag ssao_blur.frag
                     csm_depth.vert csm_depth.frag
+                    point_shadow.vert point_shadow.frag
                     deferred_lighting.frag
                     cubemap.vert equirect_to_cubemap.frag
                     irradiance_convolution.frag prefilter.frag brdf_lut.frag

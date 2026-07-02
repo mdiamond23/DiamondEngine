@@ -10,6 +10,7 @@ namespace Diamond {
 inline VkFormat ToVkFormat(RHIFormat f) {
     switch (f) {
         case RHIFormat::RGBA8:      return VK_FORMAT_R8G8B8A8_UNORM;
+        case RHIFormat::BGRA8:      return VK_FORMAT_B8G8R8A8_UNORM;
         case RHIFormat::BGRA8_SRGB: return VK_FORMAT_B8G8R8A8_SRGB;
         case RHIFormat::RGBA16F:    return VK_FORMAT_R16G16B16A16_SFLOAT;
         case RHIFormat::R16F:       return VK_FORMAT_R16_SFLOAT;
@@ -22,6 +23,7 @@ inline VkFormat ToVkFormat(RHIFormat f) {
 inline RHIFormat FromVkFormat(VkFormat f) {
     switch (f) {
         case VK_FORMAT_R8G8B8A8_UNORM:      return RHIFormat::RGBA8;
+        case VK_FORMAT_B8G8R8A8_UNORM:      return RHIFormat::BGRA8;
         case VK_FORMAT_B8G8R8A8_SRGB:       return RHIFormat::BGRA8_SRGB;
         case VK_FORMAT_R16G16B16A16_SFLOAT: return RHIFormat::RGBA16F;
         case VK_FORMAT_R16_SFLOAT:          return RHIFormat::R16F;

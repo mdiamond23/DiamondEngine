@@ -12,12 +12,13 @@
 // proved out. World-space reconstruction (and the camPos uniform the GL shader
 // needs) is therefore unnecessary.
 //
-// Slice scope: directional sun with CSM shadows + point lights (unshadowed —
-// point cube-shadows aren't ported yet) + image-based lighting (diffuse irradiance
-// + specular prefilter/BRDF) replacing the old constant-ambient placeholder.
+// Scope: directional sun with CSM shadows + point lights with distance-cubemap
+// shadows + spot lights with perspective shadow maps + image-based lighting
+// (diffuse irradiance + specular prefilter/BRDF).
 //
-// The IBL maps are world-space cubemaps, but everything else here is view space, so
-// invView rotates the view-space normal/reflection into world space to sample them.
+// The IBL maps and the point-shadow cubes are world-space cubemaps, but everything
+// else here is view space, so invView rotates view-space vectors to world space to
+// sample them (and reconstructs the world position for the cube-shadow lookups).
 
 layout(location = 0) in  vec2 vUV;
 layout(location = 0) out vec4 outColor;
@@ -35,19 +36,38 @@ layout(set = 0, binding = 9) uniform sampler2D shadowCascade3;
 
 layout(set = 0, binding = 10) uniform LightingUBO {
     mat4 lightFromView[4];   // per-cascade: view space → light clip
-    mat4 invView;            // view space → world space (for IBL cubemap sampling)
+    mat4 invView;            // view space → world space (IBL + cube-shadow sampling)
     vec4 cascadeSplits;      // x..w = cascade far view-depths (positive)
     vec4 sunDirView;         // .xyz sun direction in view space (normalized)
     vec4 sunColor;           // .xyz
     vec4 pointPos[4];        // .xyz view-space position
     vec4 pointColor[4];      // .xyz radiant intensity
-    vec4 counts;             // x = numPointLights, y = prefilter max LOD
+    vec4 pointPosWorld[4];   // .xyz world-space position (cube shadows sample by world direction)
+    mat4 spotFromView[4];    // per-spot: view space → spot light clip
+    vec4 spotPosView[4];     // .xyz view-space position, .w = cos(outer cone)
+    vec4 spotDirView[4];     // .xyz view-space direction (normalized), .w = cos(inner cone)
+    vec4 spotColor[4];       // .xyz radiant intensity
+    vec4 counts;             // x = numPointLights, y = prefilter max LOD,
+                             // z = numSpotLights, w = point-shadow far plane
 } u;
 
 // IBL maps (world space). Bound after the resource set is created (bake-time views).
 layout(set = 0, binding = 11) uniform samplerCube irradianceMap;
 layout(set = 0, binding = 12) uniform samplerCube prefilterMap;
 layout(set = 0, binding = 13) uniform sampler2D   brdfLUT;
+
+// Spot shadow maps (graph-owned perspective depth targets, one per spot light).
+layout(set = 0, binding = 14) uniform sampler2D spotShadow0;
+layout(set = 0, binding = 15) uniform sampler2D spotShadow1;
+layout(set = 0, binding = 16) uniform sampler2D spotShadow2;
+layout(set = 0, binding = 17) uniform sampler2D spotShadow3;
+
+// Point shadow cubes (raw views bound like the IBL maps — one distance cubemap per
+// point light, storing length(frag - light) / farPlane).
+layout(set = 0, binding = 18) uniform samplerCube pointShadow0;
+layout(set = 0, binding = 19) uniform samplerCube pointShadow1;
+layout(set = 0, binding = 20) uniform samplerCube pointShadow2;
+layout(set = 0, binding = 21) uniform samplerCube pointShadow3;
 
 const float PI = 3.14159265359;
 
@@ -123,6 +143,49 @@ float SunShadow(vec3 viewPos, vec3 N, vec3 L) {
     else             return PCF(shadowCascade3, suv, current, bias);
 }
 
+// ── Spot shadow (3×3 PCF on the light's perspective depth map) ───────────────
+float SpotShadow(int i, vec3 viewPos, vec3 N, vec3 L) {
+    vec4 lc = u.spotFromView[i] * vec4(viewPos, 1.0);
+    if (lc.w <= 0.0) return 0.0;               // behind the light's near plane
+    vec3  p    = lc.xyz / lc.w;
+    vec2  suv  = vec2(0.5 * p.x + 0.5, 0.5 - 0.5 * p.y);   // v flipped like the CSM lookup
+    float bias = max(0.0025 * (1.0 - dot(N, L)), 0.0005);
+    if      (i == 0) return PCF(spotShadow0, suv, p.z, bias);
+    else if (i == 1) return PCF(spotShadow1, suv, p.z, bias);
+    else if (i == 2) return PCF(spotShadow2, suv, p.z, bias);
+    else             return PCF(spotShadow3, suv, p.z, bias);
+}
+
+// ── Point shadow (20-tap disk PCF, ported from the GL lighting shader) ───────
+// The cubes store length(frag - light) / farPlane and follow the IBL bake's face
+// orientation, so a world-space direction samples them exactly like GL.
+const vec3 g_SampleDisk[20] = vec3[](
+    vec3( 1, 1, 1), vec3( 1,-1, 1), vec3(-1,-1, 1), vec3(-1, 1, 1),
+    vec3( 1, 1,-1), vec3( 1,-1,-1), vec3(-1,-1,-1), vec3(-1, 1,-1),
+    vec3( 1, 1, 0), vec3( 1,-1, 0), vec3(-1,-1, 0), vec3(-1, 1, 0),
+    vec3( 1, 0, 1), vec3(-1, 0, 1), vec3( 1, 0,-1), vec3(-1, 0,-1),
+    vec3( 0, 1, 1), vec3( 0,-1, 1), vec3( 0,-1,-1), vec3( 0, 1,-1)
+);
+float PointDepth(int i, vec3 dir) {
+    if      (i == 0) return texture(pointShadow0, dir).r;
+    else if (i == 1) return texture(pointShadow1, dir).r;
+    else if (i == 2) return texture(pointShadow2, dir).r;
+    else             return texture(pointShadow3, dir).r;
+}
+float PointShadow(int i, vec3 worldPos, vec3 camPosW) {
+    vec3  fragToLight  = worldPos - u.pointPosWorld[i].xyz;
+    float currentDepth = length(fragToLight);
+    float far          = u.counts.w;
+    float bias         = 0.15;
+    float diskRadius   = (1.0 + length(camPosW - worldPos) / far) / 25.0;
+    float shadow = 0.0;
+    for (int s = 0; s < 20; ++s) {
+        float closest = PointDepth(i, fragToLight + g_SampleDisk[s] * diskRadius) * far;
+        if (currentDepth - bias > closest) shadow += 1.0;
+    }
+    return shadow / 20.0;
+}
+
 void main() {
     vec3 viewPos = texture(gViewPos, vUV).xyz;
     // Background pixel — no geometry written (gViewPos cleared to 0).
@@ -149,14 +212,36 @@ void main() {
               * (1.0 - shadow);
     }
 
-    // Point lights (inverse-square falloff, unshadowed).
+    // World-space position + camera for the cube-shadow lookups (the cubes are
+    // world-space, like the IBL maps).
+    vec3 worldPos = vec3(u.invView * vec4(viewPos, 1.0));
+    vec3 camPosW  = u.invView[3].xyz;
+
+    // Point lights (inverse-square falloff + distance-cubemap shadow).
     int np = int(u.counts.x);
     for (int i = 0; i < np; ++i) {
-        vec3  d    = u.pointPos[i].xyz - viewPos;
-        vec3  L    = normalize(d);
-        float dist = length(d);
-        vec3  rad  = u.pointColor[i].xyz / (dist * dist);
-        Lo += BRDF(N, V, L, albedo, F0, metallic, roughness, rad);
+        vec3  d      = u.pointPos[i].xyz - viewPos;
+        vec3  L      = normalize(d);
+        float dist   = length(d);
+        vec3  rad    = u.pointColor[i].xyz / (dist * dist);
+        float shadow = PointShadow(i, worldPos, camPosW);
+        Lo += BRDF(N, V, L, albedo, F0, metallic, roughness, rad) * (1.0 - shadow);
+    }
+
+    // Spot lights (inverse-square falloff × smooth cone attenuation + 2D shadow).
+    int ns = int(u.counts.z);
+    for (int i = 0; i < ns; ++i) {
+        vec3  d        = u.spotPosView[i].xyz - viewPos;
+        vec3  L        = normalize(d);
+        float cosTheta = dot(-L, u.spotDirView[i].xyz);
+        float cosInner = u.spotDirView[i].w;
+        float cosOuter = u.spotPosView[i].w;
+        float ang      = clamp((cosTheta - cosOuter) / max(cosInner - cosOuter, 1e-4), 0.0, 1.0);
+        if (ang <= 0.0) continue;
+        float dist   = length(d);
+        vec3  rad    = u.spotColor[i].xyz / (dist * dist) * ang;
+        float shadow = SpotShadow(i, viewPos, N, L);
+        Lo += BRDF(N, V, L, albedo, F0, metallic, roughness, rad) * (1.0 - shadow);
     }
 
     // Image-based ambient: diffuse irradiance + specular prefilter/BRDF. The maps

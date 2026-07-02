@@ -11,11 +11,14 @@ namespace Diamond {
 
 namespace {
 
-// Prefer 8-bit BGRA sRGB (the de-facto desktop default); otherwise take whatever
-// the surface offers first.
+// Prefer 8-bit BGRA UNORM: the shaders apply gamma manually (the tonemap pass's
+// pow(1/2.2), matching the GL renderer, which presents to a non-sRGB default
+// framebuffer). An _SRGB swapchain would have the hardware encode those already-
+// gamma-corrected values a second time — the whole frame washes out bright and
+// desaturated. Fall back to whatever the surface offers first.
 VkSurfaceFormatKHR ChooseSurfaceFormat(const std::vector<VkSurfaceFormatKHR>& formats) {
     for (const auto& f : formats)
-        if (f.format == VK_FORMAT_B8G8R8A8_SRGB &&
+        if (f.format == VK_FORMAT_B8G8R8A8_UNORM &&
             f.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR)
             return f;
     return formats[0];

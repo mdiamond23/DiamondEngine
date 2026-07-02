@@ -1,6 +1,7 @@
 #include "Platform/Vulkan/Passes/Deferred/VulkanDeferredLightingPass.h"
 #include "Platform/Vulkan/Passes/VulkanPassCommon.h"
 #include "Platform/Vulkan/Passes/IBL/VulkanIBLPass.h"
+#include "Platform/Vulkan/Passes/Shadows/VulkanPointShadowPass.h"
 #include "Platform/Vulkan/RHI/VulkanRHIDevice.h"
 #include "Platform/Vulkan/RHI/VulkanRHIResources.h"
 #include "Renderer/RHI/RHIDevice.h"
@@ -8,6 +9,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <utility>
 
 namespace Diamond {
@@ -51,6 +53,14 @@ VulkanDeferredLightingPass::VulkanDeferredLightingPass(RHIDevice* device,
         { 11, RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment }, // irradianceMap (cube)
         { 12, RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment }, // prefilterMap (cube)
         { 13, RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment }, // brdfLUT (2D)
+        { 14, RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment }, // spotShadow0
+        { 15, RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment }, // spotShadow1
+        { 16, RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment }, // spotShadow2
+        { 17, RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment }, // spotShadow3
+        { 18, RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment }, // pointShadow0 (cube)
+        { 19, RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment }, // pointShadow1 (cube)
+        { 20, RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment }, // pointShadow2 (cube)
+        { 21, RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment }, // pointShadow3 (cube)
     };
     desc.colorFormat = kHDRFormat;
     m_Pipeline = device->CreatePipeline(desc);
@@ -64,24 +74,28 @@ void VulkanDeferredLightingPass::AddToGraph(
         RGTextureHandle albedo,  RGTextureHandle material,
         RGTextureHandle ssao,    RGTextureHandle emissive,
         const std::array<RGTextureHandle, NUM_CASCADES>& cascades,
+        const std::array<RGTextureHandle, NUM_SPOTS>& spotShadows,
         RGTextureHandle output)
 {
     if (!m_Set)
         m_Set = m_Device->CreateResourceSet(
             m_Pipeline.get(), 0, { { 10, m_UBO.get() } },
-            { { 0, graph.GetTexture(viewPos) },     { 1, graph.GetTexture(viewNormal) },
-              { 2, graph.GetTexture(albedo) },      { 3, graph.GetTexture(material) },
-              { 4, graph.GetTexture(ssao) },        { 5, graph.GetTexture(emissive) },
-              { 6, graph.GetTexture(cascades[0]) }, { 7, graph.GetTexture(cascades[1]) },
-              { 8, graph.GetTexture(cascades[2]) }, { 9, graph.GetTexture(cascades[3]) } });
+            { { 0,  graph.GetTexture(viewPos) },        { 1,  graph.GetTexture(viewNormal) },
+              { 2,  graph.GetTexture(albedo) },         { 3,  graph.GetTexture(material) },
+              { 4,  graph.GetTexture(ssao) },           { 5,  graph.GetTexture(emissive) },
+              { 6,  graph.GetTexture(cascades[0]) },    { 7,  graph.GetTexture(cascades[1]) },
+              { 8,  graph.GetTexture(cascades[2]) },    { 9,  graph.GetTexture(cascades[3]) },
+              { 14, graph.GetTexture(spotShadows[0]) }, { 15, graph.GetTexture(spotShadows[1]) },
+              { 16, graph.GetTexture(spotShadows[2]) }, { 17, graph.GetTexture(spotShadows[3]) } });
 
     // Read every input so the graph barriers each to SampledRead and orders this
-    // pass after the G-buffer/SSAO/CSM producers. Reading all four cascades also
-    // keeps cascades 1-3 alive through dead-pass culling.
+    // pass after the G-buffer/SSAO/CSM/spot-shadow producers. Reading all cascade
+    // and spot maps also keeps them alive through dead-pass culling.
     graph.AddPass("DeferredLighting")
         .Read(viewPos).Read(viewNormal).Read(albedo).Read(material)
         .Read(ssao).Read(emissive)
         .Read(cascades[0]).Read(cascades[1]).Read(cascades[2]).Read(cascades[3])
+        .Read(spotShadows[0]).Read(spotShadows[1]).Read(spotShadows[2]).Read(spotShadows[3])
         .Write(output)
         .SetExecute([this](RHICommandList* cmd) {
             cmd->BindPipeline(m_Pipeline.get());
@@ -125,18 +139,52 @@ void VulkanDeferredLightingPass::BindIBL(const VulkanIBLPass& ibl)
     }
 }
 
+void VulkanDeferredLightingPass::BindPointShadows(const VulkanPointShadowPass& shadows)
+{
+    // Same raw-write pattern as BindIBL, but the cubes are per-frame-in-flight, so
+    // each frame slot's set gets that slot's views. The views never change (only
+    // the cube contents do), so this is a one-time write per set build.
+    auto* device = static_cast<VulkanRHIDevice*>(m_Device);
+    auto* set    = static_cast<VulkanRHIResourceSet*>(m_Set.get());
+    VkDevice  dev     = device->Ctx().Device();
+    VkSampler sampler = shadows.Sampler();
+
+    constexpr int kLights = VulkanPointShadowPass::MAX_LIGHTS;
+    for (uint32_t frame = 0; frame < VulkanRHIDevice::kFramesInFlight; ++frame) {
+        std::array<VkDescriptorImageInfo, kLights> infos{};
+        std::array<VkWriteDescriptorSet, kLights>  writes{};
+        for (int i = 0; i < kLights; ++i) {
+            infos[i].sampler     = sampler;
+            infos[i].imageView   = shadows.CubeView(frame, i);
+            infos[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+            writes[i] = VkWriteDescriptorSet{ VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
+            writes[i].dstSet          = set->Handle(frame);
+            writes[i].dstBinding      = 18 + static_cast<uint32_t>(i);
+            writes[i].descriptorCount = 1;
+            writes[i].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            writes[i].pImageInfo      = &infos[i];
+        }
+        vkUpdateDescriptorSets(dev, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
+    }
+}
+
 void VulkanDeferredLightingPass::SetFrameData(
         const glm::mat4& view,
         const glm::vec3& sunDirWorld, const glm::vec3& sunColor,
         const std::array<glm::mat4, NUM_CASCADES>& lightMatrices,
         const std::array<float, NUM_CASCADES>& splits,
         const std::vector<glm::vec3>& pointPosWorld,
-        const std::vector<glm::vec3>& pointColor)
+        const std::vector<glm::vec3>& pointColor,
+        float pointShadowFar,
+        const std::vector<SpotLightInfo>& spots,
+        const std::array<glm::mat4, NUM_SPOTS>& spotMatrices)
 {
     // CSM: fold inverse(view) into each cascade matrix so the shader can go from a
     // view-space position straight to light clip (matches the debug shader). The
     // same inverse(view) also rotates view-space normals/reflections to world space
-    // for the IBL cubemap lookups.
+    // for the IBL cubemap lookups and reconstructs the world position the point
+    // cube-shadow lookups need.
     const glm::mat4 invView = glm::inverse(view);
     const glm::mat3 viewRot(view);   // rigid view → direction transform
     for (int i = 0; i < NUM_CASCADES; ++i) {
@@ -150,11 +198,28 @@ void VulkanDeferredLightingPass::SetFrameData(
 
     const int np = std::min<int>(static_cast<int>(pointPosWorld.size()), 4);
     for (int i = 0; i < np; ++i) {
-        // Point positions live in world space → transform to view space.
-        m_UBOData.pointPos[i]   = view * glm::vec4(pointPosWorld[i], 1.0f);
-        m_UBOData.pointColor[i] = glm::vec4(pointColor[i], 0.0f);
+        // Point positions live in world space → transform to view space (the world
+        // position is kept too — the shadow cubes sample by world direction).
+        m_UBOData.pointPos[i]      = view * glm::vec4(pointPosWorld[i], 1.0f);
+        m_UBOData.pointColor[i]    = glm::vec4(pointColor[i], 0.0f);
+        m_UBOData.pointPosWorld[i] = glm::vec4(pointPosWorld[i], 0.0f);
     }
-    m_UBOData.counts = glm::vec4(static_cast<float>(np), m_PrefilterMaxLod, 0.0f, 0.0f);
+
+    const int ns = std::min<int>(static_cast<int>(spots.size()), NUM_SPOTS);
+    for (int i = 0; i < ns; ++i) {
+        const SpotLightInfo& s = spots[i];
+        // Fold inverse(view) like the cascades so the shader projects view-space
+        // positions straight into the spot's shadow clip.
+        m_UBOData.spotFromView[i] = spotMatrices[i] * invView;
+        m_UBOData.spotPosView[i]  = glm::vec4(glm::vec3(view * glm::vec4(s.position, 1.0f)),
+                                              std::cos(glm::radians(s.outerDeg)));
+        m_UBOData.spotDirView[i]  = glm::vec4(glm::normalize(viewRot * s.direction),
+                                              std::cos(glm::radians(s.innerDeg)));
+        m_UBOData.spotColor[i]    = glm::vec4(s.color, 0.0f);
+    }
+
+    m_UBOData.counts = glm::vec4(static_cast<float>(np), m_PrefilterMaxLod,
+                                 static_cast<float>(ns), pointShadowFar);
 
     m_UBO->Update(&m_UBOData, sizeof(LightingUBO));
 }

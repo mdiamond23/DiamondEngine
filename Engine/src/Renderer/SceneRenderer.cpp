@@ -20,6 +20,8 @@
 #include "Platform/Vulkan/Passes/Deferred/VulkanDeferredLightingPass.h"
 #include "Platform/Vulkan/Passes/Deferred/VulkanSkyboxPass.h"
 #include "Platform/Vulkan/Passes/Shadows/VulkanCSMPass.h"
+#include "Platform/Vulkan/Passes/Shadows/VulkanSpotShadowPass.h"
+#include "Platform/Vulkan/Passes/Shadows/VulkanPointShadowPass.h"
 #include "Platform/Vulkan/Passes/PostProcess/VulkanTonemapPass.h"
 #include "Platform/Vulkan/Passes/IBL/VulkanIBLPass.h"
 #include "Platform/Vulkan/Resources/VulkanParticleRenderer.h"
@@ -60,7 +62,8 @@ struct CameraUBO {
 constexpr float kNear      = 0.1f;
 constexpr float kFar       = 100.0f;
 constexpr float kShadowFar = 25.0f;
-constexpr uint32_t kShadowRes = 2048;
+constexpr uint32_t kShadowRes     = 2048;
+constexpr uint32_t kSpotShadowRes = 1024;
 
 // Per-material params, std140 layout matching gbuffer.frag's MaterialUBO
 // (scalars at offsets 0/4, padded to 16).
@@ -216,9 +219,26 @@ public:
         m_SSAO->SetProjection(proj);
         m_Skybox->SetFrameData(view, proj);
         m_CSM->ComputeCascades(m_SunDir, view, proj, kNear, kShadowFar);
+        m_SpotShadow->ComputeMatrices(m_SpotLights);
+        m_PointShadow->SetLights(m_PointPos);
         m_Lighting->SetFrameData(view, m_SunDir, m_SunColor,
                                  m_CSM->GetLightMatrices(), m_CSM->GetSplitDepths(),
-                                 m_PointPos, m_PointColor);
+                                 m_PointPos, m_PointColor,
+                                 m_PointShadow->FarPlane(),
+                                 m_SpotLights, m_SpotShadow->GetLightMatrices());
+
+        // Point-light cube shadows record raw per-face scopes the graph can't
+        // express — put them in the command buffer before Execute so the deferred
+        // read sees this frame's maps. Same unculled caster list as the CSM pass;
+        // the model matrix goes at push offset 0 (the pass pushes the face index).
+        m_PointShadow->Record(cmd, [this](RHICommandList* c) {
+            for (const DrawItem& d : m_ShadowDraws) {
+                c->BindVertexBuffer(d.mesh->vertexBuffer.get());
+                c->BindIndexBuffer(d.mesh->indexBuffer.get(), RHIIndexType::U32);
+                c->PushConstants(RHIShaderStage::Vertex, 0, sizeof(glm::mat4), &d.world);
+                c->DrawIndexed(d.mesh->indexCount);
+            }
+        });
 
         // Offscreen mode routes the overlay through the graph's EditorOverlay
         // pass (which owns the backbuffer and has already transitioned the scene
@@ -310,10 +330,12 @@ private:
         m_DefaultGray   = makePixel(128, 128, 128);   // roughness = 0.5
 
         const std::string shaderDir = DIAMOND_VULKAN_SHADER_DIR;
-        m_GBuffer  = std::make_unique<VulkanGBufferPass>(m_Device, shaderDir);
-        m_SSAO     = std::make_unique<VulkanSSAOPass>(m_Device, shaderDir, m_Width, m_Height);
-        m_CSM      = std::make_unique<VulkanCSMPass>(m_Device, shaderDir);
-        m_Lighting = std::make_unique<VulkanDeferredLightingPass>(m_Device, shaderDir);
+        m_GBuffer     = std::make_unique<VulkanGBufferPass>(m_Device, shaderDir);
+        m_SSAO        = std::make_unique<VulkanSSAOPass>(m_Device, shaderDir, m_Width, m_Height);
+        m_CSM         = std::make_unique<VulkanCSMPass>(m_Device, shaderDir);
+        m_SpotShadow  = std::make_unique<VulkanSpotShadowPass>(m_Device, shaderDir);
+        m_PointShadow = std::make_unique<VulkanPointShadowPass>(m_Device, shaderDir);
+        m_Lighting    = std::make_unique<VulkanDeferredLightingPass>(m_Device, shaderDir);
         m_Skybox   = std::make_unique<VulkanSkyboxPass>(m_Device, shaderDir);
         // Offscreen mode tonemaps into an LDR texture ImGui can sample; swapchain
         // mode tonemaps straight into the backbuffer.
@@ -359,6 +381,11 @@ private:
             cascades[i] = m_Graph.DeclareTexture("csmCascade" + std::to_string(i),
                                                  { kShadowRes, kShadowRes, RHIFormat::Depth32F });
 
+        std::array<RGTextureHandle, VulkanSpotShadowPass::MAX_SPOTS> spotMaps;
+        for (int i = 0; i < VulkanSpotShadowPass::MAX_SPOTS; ++i)
+            spotMaps[i] = m_Graph.DeclareTexture("spotShadow" + std::to_string(i),
+                                                 { kSpotShadowRes, kSpotShadowRes, RHIFormat::Depth32F });
+
         // G-buffer — fill from the per-frame draw list; each draw binds its
         // material's descriptor set (built lazily by GetOrCreateMaterial).
         m_GBuffer->AddToGraph(m_Graph, gViewPos, gViewNormal, gAlbedo, gMaterial, gEmissive,
@@ -374,10 +401,20 @@ private:
                               DrawShadow(cmd, lightSpace);
                           });
 
-        // Deferred resolve → HDR. Reads all four cascades (also keeps 1-3 alive).
+        // Spot shadows — one perspective depth map per spot light, same push /
+        // draw callback shape as the cascades.
+        m_SpotShadow->AddToGraph(m_Graph, spotMaps,
+                                 [this](RHICommandList* cmd, const glm::mat4& lightSpace) {
+                                     DrawShadow(cmd, lightSpace);
+                                 });
+
+        // Deferred resolve → HDR. Reads all cascade + spot maps (also keeps the
+        // unlit ones alive). The point-shadow cubes aren't graph textures — they
+        // render pre-graph in RenderToSwapchain and bind raw below.
         m_Lighting->AddToGraph(m_Graph, gViewPos, gViewNormal, gAlbedo, gMaterial,
-                               ssaoBlurred, gEmissive, cascades, hdrLit);
+                               ssaoBlurred, gEmissive, cascades, spotMaps, hdrLit);
         m_Lighting->BindIBL(*m_IBL);
+        m_Lighting->BindPointShadows(*m_PointShadow);
 
         // Skybox fills the background pixels (far plane, LessEqual against the
         // G-buffer depth) with the baked env cube — the same map the IBL ambient
@@ -533,6 +570,7 @@ private:
     void GatherLights(Scene& scene) {
         m_PointPos.clear();
         m_PointColor.clear();
+        m_SpotLights.clear();
         m_SunDir   = glm::vec3(0.0f, -1.0f, 0.0f);
         m_SunColor = glm::vec3(0.0f);
         bool foundSun = false;
@@ -546,12 +584,15 @@ private:
             if (lc.type == LightType::Point && m_PointPos.size() < 4) {
                 m_PointPos.push_back(pos);
                 m_PointColor.push_back(lc.color * lc.intensity);
+            } else if (lc.type == LightType::Spot
+                       && m_SpotLights.size() < VulkanSpotShadowPass::MAX_SPOTS) {
+                m_SpotLights.push_back({ pos, dir, lc.color * lc.intensity,
+                                         lc.innerConeAngle, lc.outerConeAngle, lc.radius });
             } else if (lc.type == LightType::Sun && !foundSun) {
                 m_SunDir   = dir;
                 m_SunColor = lc.color * lc.intensity;
                 foundSun   = true;
             }
-            // Spot lights aren't in the deferred-lighting shader's scope yet.
         }
     }
 
@@ -608,6 +649,8 @@ private:
     std::unique_ptr<VulkanGBufferPass>          m_GBuffer;
     std::unique_ptr<VulkanSSAOPass>             m_SSAO;
     std::unique_ptr<VulkanCSMPass>              m_CSM;
+    std::unique_ptr<VulkanSpotShadowPass>       m_SpotShadow;
+    std::unique_ptr<VulkanPointShadowPass>      m_PointShadow;
     std::unique_ptr<VulkanDeferredLightingPass> m_Lighting;
     std::unique_ptr<VulkanSkyboxPass>           m_Skybox;
     std::unique_ptr<VulkanTonemapPass>          m_Tonemap;
@@ -620,8 +663,9 @@ private:
 
     glm::vec3              m_SunDir   { 0.0f, -1.0f, 0.0f };
     glm::vec3              m_SunColor { 0.0f };
-    std::vector<glm::vec3> m_PointPos;
+    std::vector<glm::vec3> m_PointPos;      // world space
     std::vector<glm::vec3> m_PointColor;
+    std::vector<SpotLightInfo> m_SpotLights;
 
     glm::mat4 m_FrameView { 1.0f };
     glm::mat4 m_FrameProj { 1.0f };
