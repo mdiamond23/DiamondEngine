@@ -7,6 +7,10 @@
 layout(location = 0) out vec2 vUV;
 
 void main() {
-    vUV = vec2((gl_VertexIndex << 1) & 2, gl_VertexIndex & 2);
-    gl_Position = vec4(vUV * 2.0 - 1.0, 0.0, 1.0);
+    vec2 pos = vec2((gl_VertexIndex << 1) & 2, gl_VertexIndex & 2);
+    // vUV.y runs opposite to NDC y: the backend's negative-height viewport puts
+    // NDC y=+1 at texel row 0, and sampler v=0 reads row 0 — so v must decrease
+    // as NDC y increases, or every fullscreen pass mirrors its input vertically.
+    vUV = vec2(pos.x, 1.0 - pos.y);
+    gl_Position = vec4(pos * 2.0 - 1.0, 0.0, 1.0);
 }

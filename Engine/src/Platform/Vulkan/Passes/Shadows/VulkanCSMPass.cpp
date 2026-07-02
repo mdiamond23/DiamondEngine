@@ -58,15 +58,18 @@ void VulkanCSMPass::ComputeCascades(const glm::vec3& lightDir,
         m_SplitDepths[i - 1] = glm::mix(lin_i, log_i, lambda);
     }
 
-    // 2. Unproject the full camera frustum to world space. z inner loop → pairs
-    // (even = near z=-1, odd = far z=+1): (0,1),(2,3),(4,5),(6,7).
+    // 2. Unproject the full camera frustum to world space. The camera projection
+    // is a Vulkan [0,1]-depth matrix (perspectiveRH_ZO), so the NDC corners are
+    // z = 0 (near) and z = 1 (far) — NOT GL's ±1: unprojecting z = -1 through a
+    // ZO matrix lands off the frustum entirely and skews every cascade fit as
+    // the camera moves. z inner loop → pairs (even = near, odd = far).
     glm::mat4 invVP = glm::inverse(cameraProj * cameraView);
     std::array<glm::vec3, 8> frustumCorners;
     {
         int idx = 0;
         for (float x : {-1.0f, 1.0f})
             for (float y : {-1.0f, 1.0f})
-                for (float z : {-1.0f, 1.0f}) {
+                for (float z : {0.0f, 1.0f}) {
                     glm::vec4 pt = invVP * glm::vec4(x, y, z, 1.0f);
                     frustumCorners[idx++] = glm::vec3(pt) / pt.w;
                 }
@@ -105,10 +108,15 @@ void VulkanCSMPass::ComputeCascades(const glm::vec3& lightDir,
             lsMax = glm::max(lsMax, ls);
         }
 
-        // Pull the near plane back to catch casters behind the slice.
+        // Pull the near plane back to catch casters behind the slice. The _ZO
+        // variant is named explicitly: plain glm::ortho picks its depth range
+        // from a per-TU define, and identical inline instantiations COMDAT-fold
+        // across TUs (the RGPass ODR lesson) — the GL-depth version here would
+        // clip half of each cascade volume out of the shadow map and break the
+        // [0,1] comparison deferred_lighting.frag does.
         float zPad = (lsMax.z - lsMin.z) * 0.1f;
-        glm::mat4 lightProj = glm::ortho(lsMin.x, lsMax.x, lsMin.y, lsMax.y,
-                                         lsMin.z - zPad, lsMax.z);
+        glm::mat4 lightProj = glm::orthoRH_ZO(lsMin.x, lsMax.x, lsMin.y, lsMax.y,
+                                              lsMin.z - zPad, lsMax.z);
         m_LightMatrices[i] = lightProj * lightView;
         prevSplit = nextSplit;
     }

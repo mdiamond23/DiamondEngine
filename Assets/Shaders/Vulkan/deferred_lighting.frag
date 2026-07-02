@@ -111,7 +111,9 @@ float SunShadow(vec3 viewPos, vec3 N, vec3 L) {
 
     vec4  lc      = u.lightFromView[c] * vec4(viewPos, 1.0);
     vec3  p       = lc.xyz / lc.w;          // ortho → w == 1
-    vec2  suv     = p.xy * 0.5 + 0.5;       // light NDC → [0,1]
+    // Light NDC → [0,1]; v flipped: the negative-height viewport wrote light
+    // NDC y=+1 to shadow-map row 0, which the sampler addresses as v=0.
+    vec2  suv     = vec2(0.5 * p.x + 0.5, 0.5 - 0.5 * p.y);
     float current = p.z;                    // [0,1] (GLM_FORCE_DEPTH_ZERO_TO_ONE)
     float bias    = max(0.0025 * (1.0 - dot(N, L)), 0.0005);
 

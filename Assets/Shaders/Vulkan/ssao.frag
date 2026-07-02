@@ -50,7 +50,8 @@ void main() {
         // Project the sample to find the UV where the real geometry depth lives.
         vec4 offset = ubo.projection * vec4(samplePos, 1.0);
         offset.xyz /= offset.w;
-        offset.xyz  = offset.xyz * 0.5 + 0.5;
+        // v flipped: the negative-height viewport wrote NDC y=+1 to texel row 0.
+        offset.xy   = vec2(0.5 * offset.x + 0.5, 0.5 - 0.5 * offset.y);
 
         float sampleDepth = texture(gViewPos, offset.xy).z;
 

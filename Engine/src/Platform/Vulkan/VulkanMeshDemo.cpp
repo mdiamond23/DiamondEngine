@@ -378,7 +378,7 @@ int RunVulkanMeshDemo() {
 
         const glm::vec3 eye  = glm::vec3(std::sin(t) * 4.0f, 2.5f, std::cos(t) * 4.0f);
         const glm::mat4 view = glm::lookAt(eye, glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
-        const glm::mat4 proj = glm::perspective(glm::radians(55.0f), aspect, 0.1f, 100.0f);
+        const glm::mat4 proj = glm::perspectiveRH_ZO(glm::radians(55.0f), aspect, 0.1f, 100.0f);
 
         GBufferUBO ubo{};
         ubo.view     = view;

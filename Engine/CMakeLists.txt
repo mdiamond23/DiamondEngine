@@ -312,6 +312,7 @@ if(DIAMOND_ENABLE_VULKAN)
         src/Platform/Vulkan/Passes/Deferred/VulkanGBufferPass.cpp
         src/Platform/Vulkan/Passes/Deferred/VulkanSSAOPass.cpp
         src/Platform/Vulkan/Passes/Deferred/VulkanDeferredLightingPass.cpp
+        src/Platform/Vulkan/Passes/Deferred/VulkanSkyboxPass.cpp
         src/Platform/Vulkan/Passes/Forward/VulkanPBRSurfacePass.cpp
         src/Platform/Vulkan/Passes/Forward/VulkanTransparencyPass.cpp
         src/Platform/Vulkan/Passes/Shadows/VulkanCSMPass.cpp

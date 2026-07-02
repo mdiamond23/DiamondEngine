@@ -18,6 +18,7 @@
 #include "Platform/Vulkan/Passes/Deferred/VulkanGBufferPass.h"
 #include "Platform/Vulkan/Passes/Deferred/VulkanSSAOPass.h"
 #include "Platform/Vulkan/Passes/Deferred/VulkanDeferredLightingPass.h"
+#include "Platform/Vulkan/Passes/Deferred/VulkanSkyboxPass.h"
 #include "Platform/Vulkan/Passes/Shadows/VulkanCSMPass.h"
 #include "Platform/Vulkan/Passes/PostProcess/VulkanTonemapPass.h"
 #include "Platform/Vulkan/Passes/IBL/VulkanIBLPass.h"
@@ -150,6 +151,7 @@ public:
     void SetEnvironment(const std::string& hdrPath) override {
         m_IBL->BakeEnvironment(hdrPath);
         m_Lighting->BindIBL(*m_IBL);
+        m_Skybox->BindIBL(*m_IBL);
     }
 
     RHITexture* OutputColor() const override {
@@ -185,7 +187,10 @@ public:
                            const OverlayFn& overlay) override {
         const float aspect = static_cast<float>(m_Width) / static_cast<float>(m_Height);
         const glm::mat4 view = camera.GetViewMatrix();
-        const glm::mat4 proj = glm::perspective(glm::radians(camera.Zoom), aspect, kNear, kFar);
+        // Explicitly the [0,1]-depth variant: plain glm::perspective resolves its
+        // depth range from a per-TU define, and its inline instantiations
+        // COMDAT-fold across TUs — a GL TU's [-1,1] version can silently win.
+        const glm::mat4 proj = glm::perspectiveRH_ZO(glm::radians(camera.Zoom), aspect, kNear, kFar);
         m_FrameView = view;
         m_FrameProj = proj;
 
@@ -209,6 +214,7 @@ public:
 
         // Per-frame pass data (uploaded after BeginFrame frees the frame's slot).
         m_SSAO->SetProjection(proj);
+        m_Skybox->SetFrameData(view, proj);
         m_CSM->ComputeCascades(m_SunDir, view, proj, kNear, kShadowFar);
         m_Lighting->SetFrameData(view, m_SunDir, m_SunColor,
                                  m_CSM->GetLightMatrices(), m_CSM->GetSplitDepths(),
@@ -308,6 +314,7 @@ private:
         m_SSAO     = std::make_unique<VulkanSSAOPass>(m_Device, shaderDir, m_Width, m_Height);
         m_CSM      = std::make_unique<VulkanCSMPass>(m_Device, shaderDir);
         m_Lighting = std::make_unique<VulkanDeferredLightingPass>(m_Device, shaderDir);
+        m_Skybox   = std::make_unique<VulkanSkyboxPass>(m_Device, shaderDir);
         // Offscreen mode tonemaps into an LDR texture ImGui can sample; swapchain
         // mode tonemaps straight into the backbuffer.
         m_Tonemap  = std::make_unique<VulkanTonemapPass>(
@@ -371,6 +378,14 @@ private:
         m_Lighting->AddToGraph(m_Graph, gViewPos, gViewNormal, gAlbedo, gMaterial,
                                ssaoBlurred, gEmissive, cascades, hdrLit);
         m_Lighting->BindIBL(*m_IBL);
+
+        // Skybox fills the background pixels (far plane, LessEqual against the
+        // G-buffer depth) with the baked env cube — the same map the IBL ambient
+        // samples, so reflections have a visible source. Inserted after the
+        // lighting resolve and before particles; the writes on the shared HDR
+        // target resolve by insertion order.
+        m_Skybox->AddToGraph(m_Graph, hdrLit, gDepth);
+        m_Skybox->BindIBL(*m_IBL);
 
         // Particles composite over the lit HDR scene (before tonemap).
         m_Particles->AddToGraph(m_Graph, hdrLit, gDepth,
@@ -594,6 +609,7 @@ private:
     std::unique_ptr<VulkanSSAOPass>             m_SSAO;
     std::unique_ptr<VulkanCSMPass>              m_CSM;
     std::unique_ptr<VulkanDeferredLightingPass> m_Lighting;
+    std::unique_ptr<VulkanSkyboxPass>           m_Skybox;
     std::unique_ptr<VulkanTonemapPass>          m_Tonemap;
     std::unique_ptr<VulkanIBLPass>              m_IBL;
 
