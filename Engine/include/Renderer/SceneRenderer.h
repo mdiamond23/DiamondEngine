@@ -89,6 +89,11 @@ public:
     // inside an LDR render scope that loads the scene, once per frame, before
     // the swapchain overlay. Set once; capture what it draws by reference.
     virtual void SetUIOverlay(const OverlayFn& fn) = 0;
+
+    // Global exposure: scales the HDR scene color before the ACES tonemap curve.
+    // 1.0 (the default) matches the GL renderer's tonemap exactly; lower values
+    // darken the whole frame. Takes effect next frame; survives Resize.
+    virtual void SetExposure(float exposure) = 0;
 };
 
 } // namespace Diamond

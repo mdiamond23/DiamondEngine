@@ -23,6 +23,7 @@ VulkanTonemapPass::VulkanTonemapPass(RHIDevice* device, const std::string& shade
     desc.resourceBindings = {
         { 0, RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment },
     };
+    desc.pushConstants = { RHIShaderStage::Fragment, sizeof(float) };   // exposure
     desc.colorFormat = outputFormat;   // backbuffer, or an LDR texture for FXAA to read
     m_Pipeline = device->CreatePipeline(desc);
 }
@@ -45,6 +46,7 @@ void VulkanTonemapPass::AddToGraph(RHIRenderGraph& graph, RGTextureHandle hdrInp
     pass.SetExecute([this](RHICommandList* cmd) {
         cmd->BindPipeline(m_Pipeline.get());
         cmd->BindResourceSet(0, m_Set.get());
+        cmd->PushConstants(RHIShaderStage::Fragment, 0, sizeof(float), &m_Exposure);
         cmd->Draw(3);
     });
 }

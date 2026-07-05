@@ -43,8 +43,13 @@ public:
     void AddToGraph(RHIRenderGraph& graph, RGTextureHandle hdrInput,
                     RGTextureHandle output = {});
 
+    // Scales the HDR input before the ACES curve (pushed per frame). 1.0 (the
+    // default) reproduces the GL tonemap exactly; lower to darken the frame.
+    void SetExposure(float exposure) { m_Exposure = exposure; }
+
 private:
     RHIDevice*                      m_Device;
+    float                           m_Exposure = 1.0f;
     std::unique_ptr<RHIShader>      m_Vert;
     std::unique_ptr<RHIShader>      m_Frag;
     std::unique_ptr<RHIPipeline>    m_Pipeline;

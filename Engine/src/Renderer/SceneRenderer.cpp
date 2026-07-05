@@ -163,6 +163,11 @@ public:
 
     void SetUIOverlay(const OverlayFn& fn) override { m_UIFn = fn; }
 
+    void SetExposure(float exposure) override {
+        m_Exposure = exposure;
+        m_Tonemap->SetExposure(exposure);
+    }
+
     void Resize(uint32_t width, uint32_t height) override {
         if (!m_Offscreen || width == 0 || height == 0) return;
         if (width == m_Width && height == m_Height) return;
@@ -181,6 +186,7 @@ public:
         m_SSAO     = std::make_unique<VulkanSSAOPass>(m_Device, shaderDir, m_Width, m_Height);
         m_Lighting = std::make_unique<VulkanDeferredLightingPass>(m_Device, shaderDir);
         m_Tonemap  = std::make_unique<VulkanTonemapPass>(m_Device, shaderDir, RHIFormat::RGBA8);
+        m_Tonemap->SetExposure(m_Exposure);   // the recreated pass defaults to 1.0
 
         m_Graph.ResetPasses();
         BuildGraph();   // re-declares textures (pool recreates changed sizes) + re-binds IBL
@@ -661,6 +667,7 @@ private:
     std::vector<DrawItem>              m_DrawList;      // frustum-culled — geometry pass
     std::vector<DrawItem>              m_ShadowDraws;   // unculled casters — CSM pass
 
+    float                  m_Exposure = 1.0f;   // re-applied when Resize recreates the tonemap pass
     glm::vec3              m_SunDir   { 0.0f, -1.0f, 0.0f };
     glm::vec3              m_SunColor { 0.0f };
     std::vector<glm::vec3> m_PointPos;      // world space

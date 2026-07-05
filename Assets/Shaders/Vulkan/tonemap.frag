@@ -10,6 +10,12 @@ layout(location = 0) out vec4 outColor;
 
 layout(set = 0, binding = 0) uniform sampler2D uHDR;
 
+// Exposure scales the HDR input before the ACES curve. 1.0 reproduces the GL
+// tonemap exactly (GL has no exposure control); lower to darken the whole frame.
+layout(push_constant) uniform Push {
+    float exposure;
+} pc;
+
 vec3 ACESFilmic(vec3 x)
 {
     const float a = 2.51;
@@ -23,7 +29,7 @@ vec3 ACESFilmic(vec3 x)
 void main()
 {
     vec3 hdr    = texture(uHDR, vUV).rgb;
-    vec3 mapped = ACESFilmic(hdr);
+    vec3 mapped = ACESFilmic(hdr * pc.exposure);
     vec3 gamma  = pow(mapped, vec3(1.0 / 2.2));
     outColor    = vec4(gamma, 1.0);
 }

@@ -401,6 +401,11 @@ int RunVulkanEditor() {
                         1000.0f / ImGui::GetIO().Framerate);
             ImGui::Text("Scene output: %ux%u", sceneW, sceneH);
             ImGui::Separator();
+            // Global exposure (HDR scale before the ACES tonemap; 1.0 = GL parity).
+            static float exposure = 1.0f;
+            if (ImGui::SliderFloat("Exposure", &exposure, 0.1f, 2.0f, "%.2f"))
+                renderer->SetExposure(exposure);
+            ImGui::Separator();
             ImGui::TextWrapped("RMB-drag in the viewport to look, WASD to fly. "
                                "The HUD (bar/text/button) is the in-game UI pass.");
         }
