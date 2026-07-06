@@ -101,6 +101,32 @@ void VulkanTransparencyPass::AddToGraph(RHIRenderGraph& graph,
         });
 }
 
+void VulkanTransparencyPass::AddToGraph(RHIRenderGraph& graph,
+                                        RGTextureHandle hdr, RGTextureHandle depth,
+                                        std::function<void(RHICommandList*)> drawMeshes)
+{
+    // Write-after-write on the shared HDR target: ordering comes from insertion
+    // order (added after the skybox, before particles), exactly like those passes.
+    graph.AddPass("Transparency")
+        .Write(hdr)
+        .Write(depth)
+        .Load()
+        .SetExecute([this, drawMeshes = std::move(drawMeshes)](RHICommandList* cmd) {
+            cmd->BindPipeline(m_Pipeline.get());
+            drawMeshes(cmd);
+        });
+}
+
+RHIResourceSet* VulkanTransparencyPass::GetOrCreateAlbedoSet(RHITexture* albedo)
+{
+    auto it = m_AlbedoSets.find(albedo);
+    if (it != m_AlbedoSets.end()) return it->second.get();
+
+    auto set = m_Device->CreateResourceSet(
+        m_Pipeline.get(), 0, { { 0, m_UBO.get() } }, { { 1, albedo } });
+    return m_AlbedoSets.emplace(albedo, std::move(set)).first->second.get();
+}
+
 void VulkanTransparencyPass::SetCamera(const glm::mat4& view, const glm::mat4& projection)
 {
     m_CamData.view       = view;

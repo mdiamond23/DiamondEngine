@@ -573,6 +573,13 @@ void InspectorPanel::OnImGuiRender() {
                     [scene, entity](const bool& x) { scene->GetRegistry().get<MeshComponent>(entity).receivesShadow = x; },
                     !v, v, "Toggle Receive Shadows"));
             }
+            ImGui::SameLine();
+            if (ImGui::Checkbox("Transparent", &mc.transparent)) {
+                bool v = mc.transparent;
+                m_Context->Commands.ExecuteCommand(std::make_unique<ValueChangeCommand<bool>>(
+                    [scene, entity](const bool& x) { scene->GetRegistry().get<MeshComponent>(entity).transparent = x; },
+                    !v, v, "Toggle Transparent"));
+            }
 
             // -- Mesh slot --
             ImGui::Spacing();
@@ -2773,6 +2780,11 @@ void InspectorPanel::DrawMultiInspector(const std::vector<entt::entity>& ents)
             FieldGet(&MeshComponent::receivesShadow), FieldSet(&MeshComponent::receivesShadow),
             [](bool& v, bool mixed) { return MixedCheckbox("Recv Shadows", v, mixed); },
             "Toggle Receive Shadows", true);
+        ImGui::SameLine();
+        MultiEdit<bool>(ed, scene, ents,
+            FieldGet(&MeshComponent::transparent), FieldSet(&MeshComponent::transparent),
+            [](bool& v, bool mixed) { return MixedCheckbox("Transparent", v, mixed); },
+            "Toggle Transparent", true);
 
         ImGui::TextDisabled("(mesh & material: select a single entity)");
     }

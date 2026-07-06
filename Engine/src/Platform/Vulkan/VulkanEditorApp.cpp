@@ -28,6 +28,7 @@
 #include "Platform/Vulkan/RHI/VulkanRHIDevice.h"
 #include "Platform/Vulkan/RHI/VulkanRHIResources.h"
 #include "Platform/Vulkan/Resources/VulkanRenderer2D.h"
+#include "Platform/Vulkan/Resources/VulkanThumbnailRenderer.h"
 
 #include "imgui.h"
 #include "backends/imgui_impl_vulkan.h"
@@ -119,13 +120,32 @@ SceneMaterials LoadMaterials() {
 // lights + a spark emitter), plus a HUD canvas exercising every widget type.
 void BuildScene(Scene& scene, const std::shared_ptr<Mesh>& cubeMesh,
                 const std::shared_ptr<Mesh>& sphereMesh,
-                const std::shared_ptr<Font>& font) {
-    const SceneMaterials mats = LoadMaterials();
+                const std::shared_ptr<Mesh>& quadMesh,
+                const std::shared_ptr<Font>& font,
+                const SceneMaterials& mats) {
     SpawnMesh(scene, "Floor",  cubeMesh,   { 0.0f, -0.55f, 0.0f }, { 6.0f, 0.1f, 6.0f }, mats.floorPlate);
     SpawnMesh(scene, "Sphere", sphereMesh, { 0.0f,  0.3f,  0.0f }, { 0.8f, 0.8f, 0.8f }, mats.lava);
     SpawnMesh(scene, "CubeA",  cubeMesh,   {  1.8f, 0.0f,  0.0f }, { 0.6f, 0.6f, 0.6f }, mats.plate);
     SpawnMesh(scene, "CubeB",  cubeMesh,   { -1.8f, 0.0f,  0.6f }, { 0.6f, 0.6f, 0.6f }, mats.plate);
     SpawnMesh(scene, "CubeC",  cubeMesh,   {  0.4f, 0.0f, -1.9f }, { 0.6f, 0.6f, 0.6f });   // default checkerboard
+
+    // Glass windows for the forward transparency pass — the GL editor's window
+    // quads, ECS-driven: a blue-glass 1×1 albedo (alpha 160/255), three panes at
+    // staggered depths so the back-to-front sort is visibly exercised.
+    {
+        auto glass = std::make_shared<PBRMaterial>();
+        const uint8_t glassPixel[4] = { 100, 180, 230, 160 };
+        glass->Albedo = Texture::CreateFromPixels(glassPixel, 1, 1, 4);
+
+        const glm::vec3 panePos[] = {
+            { 0.0f, 0.35f, 2.2f }, { 1.3f, 0.40f, 1.0f }, { -1.5f, 0.55f, 1.5f } };
+        for (int i = 0; i < 3; ++i) {
+            entt::entity e = SpawnMesh(scene, "GlassPane" + std::to_string(i),
+                                       quadMesh, panePos[i], glm::vec3(0.55f), glass);
+            auto& mc = scene.Get<MeshComponent>(e);
+            mc.transparent = true;
+        }
+    }
 
     {
         entt::entity e = scene.CreateEntity("PointWarm");
@@ -282,9 +302,12 @@ int RunVulkanEditor() {
     Scene scene;
     auto cubeMesh   = std::make_shared<StubMesh>();
     auto sphereMesh = std::make_shared<StubMesh>();
-    BuildScene(scene, cubeMesh, sphereMesh, font);
+    auto quadMesh   = std::make_shared<StubMesh>();   // glass panes (transparency pass)
+    const SceneMaterials mats = LoadMaterials();
+    BuildScene(scene, cubeMesh, sphereMesh, quadMesh, font, mats);
     renderer->RegisterMesh(cubeMesh.get(),   MeshData::UnitCube());
     renderer->RegisterMesh(sphereMesh.get(), MeshData::UVSphere());
+    renderer->RegisterMesh(quadMesh.get(),   MeshData::FullscreenQuad());
 
     // UI2D pass body — shared state below is written during ImGui widget building
     // and consumed when the graph pass executes later the same frame.
@@ -300,6 +323,26 @@ int RunVulkanEditor() {
 
     VulkanImGuiLayer imgui;
     imgui.Init(window, vkDevice);
+
+    // Asset previews — one-shot bakes (mesh studio renders + material balls),
+    // registered once with ImGui and shown in a Thumbnails panel. This is the
+    // content-browser preview path proven end-to-end; the full ContentPanel
+    // arrives with the editor-wiring slice.
+    auto thumbs = std::make_unique<VulkanThumbnailRenderer>(
+        device.get(), DIAMOND_VULKAN_SHADER_DIR);
+    struct NamedThumb { const char* label; VkDescriptorSet set; };
+    std::vector<NamedThumb> thumbSets;
+    {
+        auto add = [&](const char* label, VulkanThumbnailRenderer::Thumb t) {
+            if (!t.view) return;
+            thumbSets.push_back({ label, ImGui_ImplVulkan_AddTexture(
+                t.sampler, t.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) });
+        };
+        add("Cube (mesh)",    thumbs->RenderMesh({ MeshData::UnitCube() }));
+        add("Sphere (mesh)",  thumbs->RenderMesh({ MeshData::UVSphere() }));
+        add("Diamond plate",  thumbs->RenderMaterial(*mats.plate));
+        add("Lava (emissive)",thumbs->RenderMaterial(*mats.lava));
+    }
 
     // One viewport descriptor per frame-in-flight: the offscreen target is a
     // per-frame image internally, and each frame ImGui must sample the copy the
@@ -395,6 +438,18 @@ int RunVulkanEditor() {
         }
         ImGui::End();
 
+        if (ImGui::Begin("Thumbnails")) {
+            const float cell = (float)VulkanThumbnailRenderer::kSize;
+            for (size_t i = 0; i < thumbSets.size(); ++i) {
+                ImGui::BeginGroup();
+                ImGui::Image((ImTextureID)(uintptr_t)thumbSets[i].set, ImVec2(cell, cell));
+                ImGui::TextUnformatted(thumbSets[i].label);
+                ImGui::EndGroup();
+                if (i + 1 < thumbSets.size()) ImGui::SameLine();
+            }
+        }
+        ImGui::End();
+
         if (ImGui::Begin("Stats")) {
             ImGui::Text("Backend: Vulkan (RTX-class, deferred)");
             ImGui::Text("FPS: %.1f (%.2f ms)", ImGui::GetIO().Framerate,
@@ -420,7 +475,8 @@ int RunVulkanEditor() {
     // Teardown: everything VMA-backed dies before the device; ImGui's descriptors
     // (viewport sets included) die with its own pool in Shutdown.
     device->WaitIdle();
-    imgui.Shutdown();
+    imgui.Shutdown();          // frees the thumb + viewport descriptors with its pool
+    thumbs.reset();            // then the baked images they pointed at
     r2d.reset();
     font.reset();
     Texture::SetResourceDevice(nullptr);

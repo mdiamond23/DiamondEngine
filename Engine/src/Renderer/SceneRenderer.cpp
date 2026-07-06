@@ -22,6 +22,7 @@
 #include "Platform/Vulkan/Passes/Shadows/VulkanCSMPass.h"
 #include "Platform/Vulkan/Passes/Shadows/VulkanSpotShadowPass.h"
 #include "Platform/Vulkan/Passes/Shadows/VulkanPointShadowPass.h"
+#include "Platform/Vulkan/Passes/Forward/VulkanTransparencyPass.h"
 #include "Platform/Vulkan/Passes/PostProcess/VulkanTonemapPass.h"
 #include "Platform/Vulkan/Passes/IBL/VulkanIBLPass.h"
 #include "Platform/Vulkan/Resources/VulkanParticleRenderer.h"
@@ -209,7 +210,8 @@ public:
         // proj under GLM_FORCE_DEPTH_ZERO_TO_ONE); shadow draws are not, so
         // off-screen casters still cast into the view (mirrors the GL editor).
         scene.GetTransformSystem().Update(scene.GetRegistry());
-        RebuildDrawList(scene, Frustum::Extract(proj * view, /*zeroToOneDepth*/ true));
+        RebuildDrawList(scene, Frustum::Extract(proj * view, /*zeroToOneDepth*/ true),
+                        camera.Position);
         GatherLights(scene);
         GatherParticles(scene);
 
@@ -224,6 +226,7 @@ public:
         // Per-frame pass data (uploaded after BeginFrame frees the frame's slot).
         m_SSAO->SetProjection(proj);
         m_Skybox->SetFrameData(view, proj);
+        m_Transparency->SetCamera(view, proj);
         m_CSM->ComputeCascades(m_SunDir, view, proj, kNear, kShadowFar);
         m_SpotShadow->ComputeMatrices(m_SpotLights);
         m_PointShadow->SetLights(m_PointPos);
@@ -293,6 +296,12 @@ private:
         RHIResourceSet* material;   // G-buffer set 0 for this draw
         glm::mat4       world;
     };
+    struct TransparentDraw {
+        const GpuMesh*  mesh;
+        RHIResourceSet* set;        // transparency set 0 (camera UBO + albedo)
+        glm::mat4       world;
+        float           dist;       // camera distance — back-to-front sort key
+    };
     struct PBatch {
         RHITexture* tex = nullptr;
         std::shared_ptr<Texture> texAsset;
@@ -343,6 +352,7 @@ private:
         m_PointShadow = std::make_unique<VulkanPointShadowPass>(m_Device, shaderDir);
         m_Lighting    = std::make_unique<VulkanDeferredLightingPass>(m_Device, shaderDir);
         m_Skybox   = std::make_unique<VulkanSkyboxPass>(m_Device, shaderDir);
+        m_Transparency = std::make_unique<VulkanTransparencyPass>(m_Device, shaderDir);
         // Offscreen mode tonemaps into an LDR texture ImGui can sample; swapchain
         // mode tonemaps straight into the backbuffer.
         m_Tonemap  = std::make_unique<VulkanTonemapPass>(
@@ -430,6 +440,12 @@ private:
         m_Skybox->AddToGraph(m_Graph, hdrLit, gDepth);
         m_Skybox->BindIBL(*m_IBL);
 
+        // Forward transparency blends over the lit scene + skybox, depth-testing
+        // (not writing) against the G-buffer depth — before particles, matching
+        // the GL frame order (lighting → skybox → transparency → particles).
+        m_Transparency->AddToGraph(m_Graph, hdrLit, gDepth,
+            [this](RHICommandList* cmd) { DrawTransparent(cmd); });
+
         // Particles composite over the lit HDR scene (before tonemap).
         m_Particles->AddToGraph(m_Graph, hdrLit, gDepth,
             [this](VulkanParticleRenderer& particles) {
@@ -490,6 +506,18 @@ private:
         }
     }
 
+    void DrawTransparent(RHICommandList* cmd) {
+        // Pipeline is already bound by the pass; each draw binds its albedo set
+        // (list is back-to-front sorted, so blending composites correctly).
+        for (const TransparentDraw& d : m_TransparentDraws) {
+            cmd->BindResourceSet(0, d.set);
+            cmd->BindVertexBuffer(d.mesh->vertexBuffer.get());
+            cmd->BindIndexBuffer(d.mesh->indexBuffer.get(), RHIIndexType::U32);
+            cmd->PushConstants(RHIShaderStage::Vertex, 0, sizeof(glm::mat4), &d.world);
+            cmd->DrawIndexed(d.mesh->indexCount);
+        }
+    }
+
     void DrawShadow(RHICommandList* cmd, const glm::mat4& lightSpace) {
         for (const DrawItem& d : m_ShadowDraws) {
             const glm::mat4 lm = lightSpace * d.world;
@@ -500,9 +528,10 @@ private:
         }
     }
 
-    void RebuildDrawList(Scene& scene, const Frustum& frustum) {
+    void RebuildDrawList(Scene& scene, const Frustum& frustum, const glm::vec3& cameraPos) {
         m_DrawList.clear();
         m_ShadowDraws.clear();
+        m_TransparentDraws.clear();
         const TransformSystem& ts = scene.GetTransformSystem();
         for (auto [entity, mc] : scene.GetRegistry().view<MeshComponent>().each()) {
             if (!mc.visible || !mc.mesh) continue;
@@ -510,6 +539,18 @@ private:
             if (it == m_Meshes.end()) continue;   // geometry not registered
 
             const glm::mat4& world = ts.GetWorldMatrix(entity);
+
+            // Transparent meshes route to the forward pass: no G-buffer entry and
+            // no shadow casting (an alpha surface throwing a solid shadow reads
+            // wrong — matches the GL editor, whose windows never cast).
+            if (mc.transparent) {
+                if (!frustum.TestAABB(it->second.bounds.Transform(world))) continue;
+                m_TransparentDraws.push_back({
+                    &it->second, GetOrCreateTransparentSet(mc.material.get()), world,
+                    glm::length(glm::vec3(world[3]) - cameraPos) });
+                continue;
+            }
+
             const DrawItem item{ &it->second, GetOrCreateMaterial(mc.material.get()).set.get(), world };
             if (mc.castsShadow)
                 m_ShadowDraws.push_back(item);
@@ -520,6 +561,22 @@ private:
         // Group draws by material so DrawGeometry rebinds each set once per run.
         std::sort(m_DrawList.begin(), m_DrawList.end(),
                   [](const DrawItem& a, const DrawItem& b) { return a.material < b.material; });
+
+        // Farther first, so nearer transparents blend over them.
+        std::sort(m_TransparentDraws.begin(), m_TransparentDraws.end(),
+                  [](const TransparentDraw& a, const TransparentDraw& b) { return a.dist > b.dist; });
+    }
+
+    // Transparency set for a material's albedo map (white when absent). Cached by
+    // the pass per RHI texture; the engine texture is pinned alongside.
+    RHIResourceSet* GetOrCreateTransparentSet(const PBRMaterial* mat) {
+        RHITexture* albedo = m_DefaultWhite.get();
+        if (mat) {
+            albedo = RhiOrDefault(mat->Albedo, m_DefaultWhite.get());
+            if (albedo != m_DefaultWhite.get())
+                m_TransparentAlbedos.emplace(albedo, mat->Albedo);
+        }
+        return m_Transparency->GetOrCreateAlbedoSet(albedo);
     }
 
     // Resolve one engine texture slot to its RHI texture, or a neutral default
@@ -659,6 +716,7 @@ private:
     std::unique_ptr<VulkanPointShadowPass>      m_PointShadow;
     std::unique_ptr<VulkanDeferredLightingPass> m_Lighting;
     std::unique_ptr<VulkanSkyboxPass>           m_Skybox;
+    std::unique_ptr<VulkanTransparencyPass>     m_Transparency;
     std::unique_ptr<VulkanTonemapPass>          m_Tonemap;
     std::unique_ptr<VulkanIBLPass>              m_IBL;
 
@@ -666,6 +724,9 @@ private:
     std::unordered_map<const PBRMaterial*, GpuMaterial>    m_Materials;
     std::vector<DrawItem>              m_DrawList;      // frustum-culled — geometry pass
     std::vector<DrawItem>              m_ShadowDraws;   // unculled casters — CSM pass
+    std::vector<TransparentDraw>       m_TransparentDraws;   // back-to-front — forward pass
+    // Albedo textures behind cached transparency sets, kept alive with them.
+    std::unordered_map<RHITexture*, std::shared_ptr<Texture>> m_TransparentAlbedos;
 
     float                  m_Exposure = 1.0f;   // re-applied when Resize recreates the tonemap pass
     glm::vec3              m_SunDir   { 0.0f, -1.0f, 0.0f };

@@ -116,7 +116,8 @@ static json ToJson(Scene& scene)
                 { "materialPath",    mc.materialPath    },
                 { "visible",         mc.visible         },
                 { "castsShadow",     mc.castsShadow     },
-                { "receivesShadow",  mc.receivesShadow  }
+                { "receivesShadow",  mc.receivesShadow  },
+                { "transparent",     mc.transparent     }
             };
             // Inline material is only serialized when the mesh has no .mat asset;
             // an asset-backed material lives in its own file, referenced by path.
@@ -501,6 +502,7 @@ static bool FromJson(Scene& scene, const json& root)
             mc.visible        = mj.value("visible",        true);
             mc.castsShadow    = mj.value("castsShadow",    true);
             mc.receivesShadow = mj.value("receivesShadow", true);
+            mc.transparent    = mj.value("transparent",    false);
         }
 
         if (ej.contains("light")) {

@@ -322,6 +322,7 @@ if(DIAMOND_ENABLE_VULKAN)
         src/Platform/Vulkan/Resources/VulkanParticleRenderer.cpp
         src/Platform/Vulkan/Resources/VulkanRenderer2D.cpp
         src/Platform/Vulkan/Resources/VulkanTexture2D.cpp
+        src/Platform/Vulkan/Resources/VulkanThumbnailRenderer.cpp
         src/Platform/Vulkan/VulkanImGuiLayer.cpp
         src/Platform/Vulkan/VulkanMeshDemo.cpp
         src/Platform/Vulkan/VulkanSceneDemo.cpp
@@ -366,7 +367,9 @@ if(DIAMOND_ENABLE_VULKAN)
                     pbr_surface.vert pbr_surface.frag
                     transparent.vert transparent.frag
                     renderer2d.vert renderer2d.frag
-                    particle.vert particle.frag)
+                    particle.vert particle.frag
+                    thumbnail.vert thumbnail.frag
+                    material_preview.vert material_preview.frag)
         add_custom_command(
             OUTPUT  ${_vk_spv_dir}/${_shader}.spv
             COMMAND ${GLSLANG_VALIDATOR} -V ${_vk_shader_src}/${_shader} -o ${_vk_spv_dir}/${_shader}.spv

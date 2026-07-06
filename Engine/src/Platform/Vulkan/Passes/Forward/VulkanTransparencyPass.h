@@ -7,6 +7,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <unordered_map>
 
 namespace Diamond {
 
@@ -46,6 +47,18 @@ public:
                     RHITexture* albedo,
                     std::function<void(RHICommandList*)> drawMeshes);
 
+    // In-place variant for SceneRenderer's graph: blends straight over 'hdr' with
+    // LOAD (no copy pipeline, no fresh target) — the same insertion-order
+    // write-after-write composition the skybox and particle passes use. The pass
+    // binds only the transparent pipeline; 'drawMeshes' binds a per-albedo set
+    // from GetOrCreateAlbedoSet per draw, so each material samples its own map.
+    void AddToGraph(RHIRenderGraph& graph, RGTextureHandle hdr, RGTextureHandle depth,
+                    std::function<void(RHICommandList*)> drawMeshes);
+
+    // Descriptor set (camera UBO + this albedo) against the transparent pipeline,
+    // cached per texture for the pass's lifetime. The caller keeps 'albedo' alive.
+    RHIResourceSet* GetOrCreateAlbedoSet(RHITexture* albedo);
+
     // Upload this frame's camera. Call after BeginFrame, before graph.Execute.
     void SetCamera(const glm::mat4& view, const glm::mat4& projection);
 
@@ -70,6 +83,9 @@ private:
     std::unique_ptr<RHIPipeline>    m_Pipeline;
     std::unique_ptr<RHIBuffer>      m_UBO;
     std::unique_ptr<RHIResourceSet> m_Set;
+
+    // Per-albedo sets for the in-place path (material textures outlive the pass).
+    std::unordered_map<RHITexture*, std::unique_ptr<RHIResourceSet>> m_AlbedoSets;
 };
 
 } // namespace Diamond

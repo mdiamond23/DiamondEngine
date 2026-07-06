@@ -47,6 +47,10 @@ struct MeshComponent
     bool visible        = true;
     bool castsShadow    = true;
     bool receivesShadow = true;
+    // Forward alpha-blended instead of deferred-opaque: the mesh skips the
+    // G-buffer and renders in the transparency pass (albedo map's alpha, sorted
+    // back-to-front, depth-tested but not written).
+    bool transparent    = false;
 
     std::string meshPath;
     int         meshSubIndex = 0;
