@@ -18,8 +18,11 @@ public:
     explicit EditorLayer(Scene* scene, ImFont* iconFont = nullptr);
     void SetupDockspace();
     void OnImGuiRender();
-    void SetViewportTexture(uint32_t textureID);
-    void SetGameViewportTexture(uint32_t textureID);
+    // Opaque backend image handles for the scene/game viewport panels (a GL
+    // texture id or a Vulkan descriptor set, pre-cast to ImTextureID). flipY:
+    // true for GL FBO textures (bottom-up), false for Vulkan offscreen targets.
+    void SetViewportTexture(ImTextureID textureID, bool flipY);
+    void SetGameViewportTexture(ImTextureID textureID, bool flipY);
     void SetEditorCamera(Diamond::Camera* cam) { m_Context.EditorCamera = cam; }
     void UpdateCamera(const glm::mat4& view, const glm::mat4& proj, const glm::vec3& camPos);
     EditorContext& GetContext() { return m_Context; }

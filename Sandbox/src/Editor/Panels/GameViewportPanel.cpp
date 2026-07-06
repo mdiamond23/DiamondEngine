@@ -26,7 +26,9 @@ void GameViewportPanel::OnImGuiRender()
 
     if (playing && m_TextureID != 0)
     {
-        ImGui::Image((ImTextureID)(uintptr_t)m_TextureID, size, {0, 1}, {1, 0});
+        ImGui::Image(m_TextureID, size,
+                     m_FlipY ? ImVec2{0, 1} : ImVec2{0, 0},
+                     m_FlipY ? ImVec2{1, 0} : ImVec2{1, 1});
 
         if (!m_IsActive)
         {

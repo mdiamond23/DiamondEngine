@@ -52,6 +52,12 @@ RHITexture* RHIRenderGraph::GetTexture(RGTextureHandle h) const
     return m_Textures[h.id - 1].texture;
 }
 
+void RHIRenderGraph::MarkOutput(RGTextureHandle h)
+{
+    if (h.IsValid())
+        m_OutputIds.push_back(h.id);
+}
+
 // Compile phase — topological sort + dead-pass culling. Based on the GL
 // RenderGraph's model, generalized to support MULTIPLE writers per texture: a
 // compositing pass (particles/forward/UI) writes an already-produced target with
@@ -135,16 +141,25 @@ void RHIRenderGraph::Compile()
 
     // 4. Dead pass culling — walk sorted in reverse, mark alive passes.
     // Sink passes (no writes) are always alive — they write to the backbuffer.
-    // Marking a live pass's predecessors alive keeps EVERY writer of a needed
-    // target (not just the last) and its whole upstream chain.
+    // Writers of a marked output are alive too: their reader lives outside this
+    // graph. Marking a live pass's predecessors alive keeps EVERY writer of a
+    // needed target (not just the last) and its whole upstream chain.
+    std::set<uint32_t> outputs(m_OutputIds.begin(), m_OutputIds.end());
+    auto writesOutput = [&](const RGPass& p) {
+        for (const RGTextureHandle& h : p.writes)
+            if (outputs.count(h.id))
+                return true;
+        return false;
+    };
+
     std::vector<int> alive(nPasses, 0); // indexed by pass index, not sorted position
 
     for (int i = (int)sorted.size() - 1; i >= 0; --i)
     {
         int passIdx = sorted[i];
 
-        if (m_Passes[passIdx].writes.empty())
-            alive[passIdx] = 1; // sink pass — always alive
+        if (m_Passes[passIdx].writes.empty() || writesOutput(m_Passes[passIdx]))
+            alive[passIdx] = 1; // sink pass or external output — always alive
 
         if (alive[passIdx])
         {
@@ -213,6 +228,7 @@ void RHIRenderGraph::ResetPasses()
     // Keep m_Pool — pooled textures outlive the per-frame pass/declaration tables.
     m_Passes.clear();
     m_Textures.clear();
+    m_OutputIds.clear();
     m_SortedIndices.clear();
 }
 

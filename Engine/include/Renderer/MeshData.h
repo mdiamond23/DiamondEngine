@@ -46,6 +46,12 @@ public:
     virtual ~Mesh() = default;
     virtual void Draw(const Shader& shader) const = 0;
 
+    // CPU-side geometry retained by meshes whose GPU upload is deferred to the
+    // SceneRenderer (Vulkan): the renderer registers an unseen Mesh* lazily from
+    // this data on first draw. Null for meshes that upload in their constructor
+    // (OpenGL), and for externally-registered geometry.
+    virtual const MeshData* CPUData() const { return nullptr; }
+
     static std::shared_ptr<Mesh> Create(const MeshData& data);
 };
 

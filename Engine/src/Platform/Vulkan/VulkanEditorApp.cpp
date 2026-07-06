@@ -10,6 +10,7 @@
 #ifdef DIAMOND_ENABLE_VULKAN
 
 #include "Renderer/SceneRenderer.h"
+#include "Renderer/RendererAPI.h"
 #include "Renderer/RHI/RHIDevice.h"
 #include "Renderer/RHI/RHIEnums.h"
 #include "Renderer/MeshData.h"
@@ -51,16 +52,6 @@ namespace Diamond {
 
 namespace {
 
-// A GPU-free Mesh handle (see VulkanSceneDemo): the engine's Mesh::Create issues
-// GL calls, which would crash in this GL-less window. The MeshComponent only
-// needs a stable pointer identity to key SceneRenderer's mesh cache; the real
-// geometry is handed over via RegisterMesh. Real asset meshes under Vulkan are
-// the material/asset-pipeline slice.
-class StubMesh final : public Mesh {
-public:
-    void Draw(const Shader&) const override {}
-};
-
 void OnFramebufferResize(GLFWwindow* window, int /*w*/, int /*h*/) {
     auto* device = static_cast<RHIDevice*>(glfwGetWindowUserPointer(window));
     if (device) device->NotifyResize();
@@ -69,7 +60,8 @@ void OnFramebufferResize(GLFWwindow* window, int /*w*/, int /*h*/) {
 entt::entity SpawnMesh(Scene& scene, std::string_view name,
                        const std::shared_ptr<Mesh>& mesh,
                        const glm::vec3& pos, const glm::vec3& scale,
-                       const std::shared_ptr<PBRMaterial>& material = nullptr) {
+                       const std::shared_ptr<PBRMaterial>& material = nullptr,
+                       const char* meshPath = "") {
     entt::entity e = scene.CreateEntity(name);
     auto& t = scene.Get<TransformComponent>(e);
     t.position = pos;
@@ -77,6 +69,7 @@ entt::entity SpawnMesh(Scene& scene, std::string_view name,
     auto& mc = scene.Add<MeshComponent>(e);
     mc.mesh     = mesh;
     mc.material = material;
+    mc.meshPath = meshPath;   // serializer token ("__cube"/"__sphere") or asset path
     return e;
 }
 
@@ -123,11 +116,11 @@ void BuildScene(Scene& scene, const std::shared_ptr<Mesh>& cubeMesh,
                 const std::shared_ptr<Mesh>& quadMesh,
                 const std::shared_ptr<Font>& font,
                 const SceneMaterials& mats) {
-    SpawnMesh(scene, "Floor",  cubeMesh,   { 0.0f, -0.55f, 0.0f }, { 6.0f, 0.1f, 6.0f }, mats.floorPlate);
-    SpawnMesh(scene, "Sphere", sphereMesh, { 0.0f,  0.3f,  0.0f }, { 0.8f, 0.8f, 0.8f }, mats.lava);
-    SpawnMesh(scene, "CubeA",  cubeMesh,   {  1.8f, 0.0f,  0.0f }, { 0.6f, 0.6f, 0.6f }, mats.plate);
-    SpawnMesh(scene, "CubeB",  cubeMesh,   { -1.8f, 0.0f,  0.6f }, { 0.6f, 0.6f, 0.6f }, mats.plate);
-    SpawnMesh(scene, "CubeC",  cubeMesh,   {  0.4f, 0.0f, -1.9f }, { 0.6f, 0.6f, 0.6f });   // default checkerboard
+    SpawnMesh(scene, "Floor",  cubeMesh,   { 0.0f, -0.55f, 0.0f }, { 6.0f, 0.1f, 6.0f }, mats.floorPlate, "__cube");
+    SpawnMesh(scene, "Sphere", sphereMesh, { 0.0f,  0.3f,  0.0f }, { 0.8f, 0.8f, 0.8f }, mats.lava, "__sphere");
+    SpawnMesh(scene, "CubeA",  cubeMesh,   {  1.8f, 0.0f,  0.0f }, { 0.6f, 0.6f, 0.6f }, mats.plate, "__cube");
+    SpawnMesh(scene, "CubeB",  cubeMesh,   { -1.8f, 0.0f,  0.6f }, { 0.6f, 0.6f, 0.6f }, mats.plate, "__cube");
+    SpawnMesh(scene, "CubeC",  cubeMesh,   {  0.4f, 0.0f, -1.9f }, { 0.6f, 0.6f, 0.6f }, nullptr, "__cube");   // default checkerboard
 
     // Glass windows for the forward transparency pass — the GL editor's window
     // quads, ECS-driven: a blue-glass 1×1 albedo (alpha 160/255), three panes at
@@ -165,6 +158,20 @@ void BuildScene(Scene& scene, const std::shared_ptr<Mesh>& cubeMesh,
             glm::quat(glm::radians(glm::vec3(55.0f, -25.0f, 0.0f)));
         auto& lc = scene.Add<LightComponent>(e);
         lc.type = LightType::Sun;  lc.color = { 1.0f, 0.97f, 0.9f };  lc.intensity = 3.0f;
+    }
+
+    // Primary game camera — drives the SceneRenderer's second render view (the
+    // Game panel). A fixed low-angle framing, deliberately different from the
+    // editor camera so the two images are visibly two views of one scene.
+    {
+        entt::entity e = scene.CreateEntity("GameCamera");
+        auto& t = scene.Get<TransformComponent>(e);
+        t.position = { -3.0f, 1.4f, 4.2f };
+        const glm::vec3 target { 0.0f, 0.2f, 0.0f };
+        t.rotation = glm::quatLookAt(glm::normalize(target - t.position),
+                                     glm::vec3(0.0f, 1.0f, 0.0f));
+        auto& cc = scene.Add<CameraComponent>(e);   // isPrimary defaults to true
+        cc.fov = 55.0f;
     }
 
     {
@@ -272,8 +279,11 @@ int RunVulkanEditor() {
     glfwSetWindowUserPointer(window, device.get());
     glfwSetFramebufferSizeCallback(window, OnFramebufferResize);
 
-    // Route the Texture factory through this device before any font/UI texture
-    // bakes, so they come out Vulkan-backed.
+    // Route the static factories to the Vulkan backend before any resource is
+    // created: Mesh::Create hands out CPU-retained meshes the SceneRenderer
+    // uploads lazily, and the Texture factory goes through this device so
+    // font/UI bakes come out Vulkan-backed.
+    RendererAPI::SetAPI(RendererAPI::API::Vulkan);
     Texture::SetResourceDevice(device.get());
     std::shared_ptr<Font> font =
         Font::Create(DIAMOND_ASSETS_DIR "/Fonts/OpenSans-Regular.ttf", 32.0f);
@@ -294,20 +304,23 @@ int RunVulkanEditor() {
         return 1;
     }
 
-    // In-game UI batcher, recorded by the SceneRenderer's UI2D pass into the
-    // RGBA8 scene output (not the swapchain — that's ImGui's).
+    // In-game UI batchers, recorded by the SceneRenderer's UI2D passes into the
+    // RGBA8 scene outputs (not the swapchain — that's ImGui's). One per render
+    // view: both overlays run in the same frame, and a Renderer2D's dynamic
+    // vertex stream is written once per frame slot.
     auto r2d = std::make_unique<VulkanRenderer2D>(
+        device.get(), DIAMOND_VULKAN_SHADER_DIR, RHIFormat::RGBA8);
+    auto r2dGame = std::make_unique<VulkanRenderer2D>(
         device.get(), DIAMOND_VULKAN_SHADER_DIR, RHIFormat::RGBA8);
 
     Scene scene;
-    auto cubeMesh   = std::make_shared<StubMesh>();
-    auto sphereMesh = std::make_shared<StubMesh>();
-    auto quadMesh   = std::make_shared<StubMesh>();   // glass panes (transparency pass)
+    // CPU-retained meshes (Vulkan mode): the SceneRenderer uploads each one
+    // lazily the first frame it's drawn — no RegisterMesh calls needed.
+    auto cubeMesh   = Mesh::Create(MeshData::UnitCube());
+    auto sphereMesh = Mesh::Create(MeshData::UVSphere());
+    auto quadMesh   = Mesh::Create(MeshData::FullscreenQuad());   // glass panes (transparency pass)
     const SceneMaterials mats = LoadMaterials();
     BuildScene(scene, cubeMesh, sphereMesh, quadMesh, font, mats);
-    renderer->RegisterMesh(cubeMesh.get(),   MeshData::UnitCube());
-    renderer->RegisterMesh(sphereMesh.get(), MeshData::UVSphere());
-    renderer->RegisterMesh(quadMesh.get(),   MeshData::FullscreenQuad());
 
     // UI2D pass body — shared state below is written during ImGui widget building
     // and consumed when the graph pass executes later the same frame.
@@ -319,6 +332,19 @@ int RunVulkanEditor() {
         UISystem::Resolve(scene.GetRegistry(), uiScreen);
         UIInputSystem::Update(scene.GetRegistry(), uiPointer, uiDown);
         UIRenderSystem::Render(scene.GetRegistry(), *r2d, uiScreen);
+    });
+
+    // Second render view: the scene's primary camera into the Game panel. Its
+    // HUD overlay re-resolves the canvases at the game view's size and draws
+    // them visual-only (interaction stays on the main viewport's pass, which
+    // runs after this one and re-resolves at its own size).
+    uint32_t gameW = sceneW, gameH = sceneH;   // created at the main view's size
+    glm::vec2 gameUIScreen { (float)gameW, (float)gameH };
+    renderer->SetGameViewEnabled(true);
+    renderer->SetGameUIOverlay([&](RHICommandList* cmd) {
+        r2dGame->SetCommandList(cmd);
+        UISystem::Resolve(scene.GetRegistry(), gameUIScreen);
+        UIRenderSystem::Render(scene.GetRegistry(), *r2dGame, gameUIScreen);
     });
 
     VulkanImGuiLayer imgui;
@@ -344,28 +370,34 @@ int RunVulkanEditor() {
         add("Lava (emissive)",thumbs->RenderMaterial(*mats.lava));
     }
 
-    // One viewport descriptor per frame-in-flight: the offscreen target is a
-    // per-frame image internally, and each frame ImGui must sample the copy the
-    // graph is writing this frame (transitioned to SHADER_READ_ONLY by the
-    // EditorOverlay pass's read before ImGui draws).
-    std::array<VkDescriptorSet, VulkanRHIDevice::kFramesInFlight> viewportSets{};
-    auto registerViewportTexture = [&] {
-        auto* tex = static_cast<VulkanRHITexture*>(renderer->OutputColor());
+    // One descriptor per frame-in-flight per scene image: the offscreen targets
+    // are per-frame images internally, and each frame ImGui must sample the copy
+    // the graph is writing this frame (transitioned to SHADER_READ_ONLY before
+    // ImGui draws — by the EditorOverlay pass's read for the main viewport, by
+    // the SceneRenderer's post-execute transition for the game view).
+    using ImageSets = std::array<VkDescriptorSet, VulkanRHIDevice::kFramesInFlight>;
+    auto registerSceneTexture = [&](ImageSets& sets, RHITexture* rhiTex) {
+        auto* tex = static_cast<VulkanRHITexture*>(rhiTex);
         for (uint32_t i = 0; i < VulkanRHIDevice::kFramesInFlight; ++i) {
-            if (viewportSets[i]) ImGui_ImplVulkan_RemoveTexture(viewportSets[i]);
-            viewportSets[i] = ImGui_ImplVulkan_AddTexture(
+            if (sets[i]) ImGui_ImplVulkan_RemoveTexture(sets[i]);
+            sets[i] = ImGui_ImplVulkan_AddTexture(
                 tex->Sampler(), tex->View(i), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         }
     };
-    registerViewportTexture();
+    ImageSets viewportSets{};
+    ImageSets gameSets{};
+    registerSceneTexture(viewportSets, renderer->OutputColor());
+    registerSceneTexture(gameSets,     renderer->GameViewColor());
 
     Camera camera(glm::vec3(4.0f, 2.6f, 5.0f));
     camera.LookAt(glm::vec3(0.0f, 0.2f, 0.0f));
 
-    // Debounced viewport resize: panels resize every frame of a drag, but Resize
-    // is a WaitIdle + pass rebuild — only fire once the size has settled.
+    // Debounced viewport resizes: panels resize every frame of a drag, but a
+    // Resize is a WaitIdle + pass rebuild — only fire once the size has settled.
     glm::ivec2 wantSize { (int)sceneW, (int)sceneH };
     int        wantStableFrames = 0;
+    glm::ivec2 gameWantSize { (int)gameW, (int)gameH };
+    int        gameStableFrames = 0;
     constexpr int kResizeSettleFrames = 15;
 
     double lastTime = glfwGetTime();
@@ -376,15 +408,23 @@ int RunVulkanEditor() {
         const float  dt      = (float)(nowTime - lastTime);
         lastTime = nowTime;
 
-        // Apply a settled viewport resize before any ImGui state references the
-        // old target (WaitIdle inside Resize makes the descriptor swap safe).
+        // Apply settled viewport resizes before any ImGui state references the
+        // old targets (WaitIdle inside Resize makes the descriptor swap safe).
         if (((uint32_t)wantSize.x != sceneW || (uint32_t)wantSize.y != sceneH) &&
             wantStableFrames >= kResizeSettleFrames) {
             sceneW = (uint32_t)wantSize.x;
             sceneH = (uint32_t)wantSize.y;
             renderer->Resize(sceneW, sceneH);
-            registerViewportTexture();
+            registerSceneTexture(viewportSets, renderer->OutputColor());
             uiScreen = { (float)sceneW, (float)sceneH };
+        }
+        if (((uint32_t)gameWantSize.x != gameW || (uint32_t)gameWantSize.y != gameH) &&
+            gameStableFrames >= kResizeSettleFrames) {
+            gameW = (uint32_t)gameWantSize.x;
+            gameH = (uint32_t)gameWantSize.y;
+            renderer->ResizeGameView(gameW, gameH);
+            registerSceneTexture(gameSets, renderer->GameViewColor());
+            gameUIScreen = { (float)gameW, (float)gameH };
         }
 
         scene.GetTransformSystem().Update(scene.GetRegistry());
@@ -438,6 +478,30 @@ int RunVulkanEditor() {
         }
         ImGui::End();
 
+        // Game panel — the second render view, from the scene's primary camera.
+        ImGui::SetNextWindowSize(ImVec2(640, 360), ImGuiCond_FirstUseEver);
+        if (ImGui::Begin("Game")) {
+            const ImVec2 avail = ImGui::GetContentRegionAvail();
+            const glm::ivec2 size { std::max((int)avail.x, 64), std::max((int)avail.y, 64) };
+            if (size == gameWantSize) ++gameStableFrames;
+            else                      { gameWantSize = size; gameStableFrames = 0; }
+
+            // GameViewActive reflects the last rendered frame; on the frames it
+            // is false (startup, no primary camera) the image holds no valid
+            // frame, so show a hint instead — like the GL Game panel.
+            if (renderer->GameViewActive()) {
+                ImGui::Image((ImTextureID)(uintptr_t)gameSets[vkDevice->CurrentFrame()],
+                             avail);
+            } else {
+                const char* msg = "No primary camera in scene";
+                const ImVec2 textSz = ImGui::CalcTextSize(msg);
+                ImGui::SetCursorPos({ (avail.x - textSz.x) * 0.5f,
+                                      (avail.y - textSz.y) * 0.5f });
+                ImGui::TextDisabled("%s", msg);
+            }
+        }
+        ImGui::End();
+
         if (ImGui::Begin("Thumbnails")) {
             const float cell = (float)VulkanThumbnailRenderer::kSize;
             for (size_t i = 0; i < thumbSets.size(); ++i) {
@@ -475,8 +539,9 @@ int RunVulkanEditor() {
     // Teardown: everything VMA-backed dies before the device; ImGui's descriptors
     // (viewport sets included) die with its own pool in Shutdown.
     device->WaitIdle();
-    imgui.Shutdown();          // frees the thumb + viewport descriptors with its pool
+    imgui.Shutdown();          // frees the thumb + viewport/game descriptors with its pool
     thumbs.reset();            // then the baked images they pointed at
+    r2dGame.reset();
     r2d.reset();
     font.reset();
     Texture::SetResourceDevice(nullptr);

@@ -19,6 +19,10 @@ public:
     virtual void SetViewport(uint32_t x, uint32_t y, uint32_t width, uint32_t height) = 0;
 
     static API                         GetAPI()  { return s_API; }
+    // Selects which backend the static factories (Mesh::Create, Texture::Create's
+    // GL fallback, Shader::Create, ...) dispatch to. Call once at startup, before
+    // any resource is created; defaults to OpenGL.
+    static void                        SetAPI(API api) { s_API = api; }
     static std::unique_ptr<RendererAPI> Create();
 
 private:

@@ -117,13 +117,25 @@ std::vector<uint8_t> MakeParticleDot(uint32_t size) {
 } // namespace
 
 // ── Concrete Vulkan implementation ───────────────────────────────────────────
+//
+// Renders up to two VIEWS of the same scene per frame: the main view (editor
+// camera → OutputColor or the swapchain) and an optional game view (the scene's
+// primary CameraComponent → GameViewColor). Both views execute inside one
+// BeginFrame/EndFrame, so anything camera-dependent that lives in a dynamic GPU
+// buffer (written once per frame slot) is duplicated per view: the camera UBO,
+// the SSAO/lighting/skybox/transparency passes, the particle vertex stream, and
+// the per-material descriptor sets that embed the camera UBO. Record-time state
+// (push constants, draw lists, the CSM cascade fit) is simply re-set between the
+// two graph executions, so the G-buffer/CSM/spot-shadow passes stay shared.
 class SceneRendererVk final : public SceneRenderer {
 public:
     SceneRendererVk(RHIDevice* device, uint32_t width, uint32_t height, bool offscreen)
-        : m_Device(device), m_Width(width), m_Height(height), m_Offscreen(offscreen),
-          m_Graph(device) {
-        BuildResources();
-        BuildGraph();
+        : m_Device(device), m_Offscreen(offscreen) {
+        BuildShared();
+        m_Views[kMainView] = CreateView(width, height,
+                                        /*offscreen*/ m_Offscreen,
+                                        /*editorComposite*/ m_Offscreen,
+                                        /*external*/ false, kMainView);
     }
 
     void RegisterMesh(Mesh* key, const MeshData& data) override {
@@ -154,92 +166,110 @@ public:
 
     void SetEnvironment(const std::string& hdrPath) override {
         m_IBL->BakeEnvironment(hdrPath);
-        m_Lighting->BindIBL(*m_IBL);
-        m_Skybox->BindIBL(*m_IBL);
+        for (auto& v : m_Views) {
+            if (!v) continue;
+            v->lighting->BindIBL(*m_IBL);
+            v->skybox->BindIBL(*m_IBL);
+        }
     }
 
     RHITexture* OutputColor() const override {
-        return m_Offscreen ? m_Graph.GetTexture(m_OutputColor) : nullptr;
+        const View& main = *m_Views[kMainView];
+        return m_Offscreen ? main.graph.GetTexture(main.outputColor) : nullptr;
     }
 
-    void SetUIOverlay(const OverlayFn& fn) override { m_UIFn = fn; }
+    void SetUIOverlay(const OverlayFn& fn) override     { m_UIFn = fn; }
+    void SetGameUIOverlay(const OverlayFn& fn) override { m_GameUIFn = fn; }
 
     void SetExposure(float exposure) override {
         m_Exposure = exposure;
-        m_Tonemap->SetExposure(exposure);
+        for (auto& v : m_Views)
+            if (v) v->tonemap->SetExposure(exposure);
     }
 
     void Resize(uint32_t width, uint32_t height) override {
-        if (!m_Offscreen || width == 0 || height == 0) return;
-        if (width == m_Width && height == m_Height) return;
+        if (!m_Offscreen) return;
+        ResizeView(*m_Views[kMainView], kMainView, width, height);
+    }
 
-        // Nothing referencing the old targets may be in flight while the pool
-        // recreates them and the size-dependent passes rebuild their sets.
-        m_Device->WaitIdle();
-        m_Width  = width;
-        m_Height = height;
+    void SetGameViewEnabled(bool enabled) override {
+        m_GameViewEnabled = enabled && m_Offscreen;
+        if (m_GameViewEnabled && !m_Views[kGameView]) {
+            // First enable: build the second view at the main view's size. Sized
+            // independently afterwards via ResizeGameView. Do this between
+            // frames, like Resize.
+            const View& main = *m_Views[kMainView];
+            m_Views[kGameView] = CreateView(main.width, main.height,
+                                            /*offscreen*/ true,
+                                            /*editorComposite*/ false,
+                                            /*external*/ true, kGameView);
+        }
+    }
 
-        // Recreate the passes whose descriptor sets sample graph textures (the
-        // pooled textures are about to be recreated at the new size). The other
-        // passes (G-buffer, CSM, particles) hold no graph-texture sets and their
-        // pipelines are size-independent, so they re-wire as-is.
-        const std::string shaderDir = DIAMOND_VULKAN_SHADER_DIR;
-        m_SSAO     = std::make_unique<VulkanSSAOPass>(m_Device, shaderDir, m_Width, m_Height);
-        m_Lighting = std::make_unique<VulkanDeferredLightingPass>(m_Device, shaderDir);
-        m_Tonemap  = std::make_unique<VulkanTonemapPass>(m_Device, shaderDir, RHIFormat::RGBA8);
-        m_Tonemap->SetExposure(m_Exposure);   // the recreated pass defaults to 1.0
+    RHITexture* GameViewColor() const override {
+        const View* game = m_Views[kGameView].get();
+        return game ? game->graph.GetTexture(game->outputColor) : nullptr;
+    }
 
-        m_Graph.ResetPasses();
-        BuildGraph();   // re-declares textures (pool recreates changed sizes) + re-binds IBL
+    bool GameViewActive() const override { return m_GameViewActive; }
+
+    void ResizeGameView(uint32_t width, uint32_t height) override {
+        if (m_Views[kGameView])
+            ResizeView(*m_Views[kGameView], kGameView, width, height);
     }
 
     void RenderToSwapchain(Scene& scene, const Camera& camera,
                            const OverlayFn& overlay) override {
-        const float aspect = static_cast<float>(m_Width) / static_cast<float>(m_Height);
+        View& main = *m_Views[kMainView];
+        const float aspect = static_cast<float>(main.width) / static_cast<float>(main.height);
         const glm::mat4 view = camera.GetViewMatrix();
         // Explicitly the [0,1]-depth variant: plain glm::perspective resolves its
         // depth range from a per-TU define, and its inline instantiations
         // COMDAT-fold across TUs — a GL TU's [-1,1] version can silently win.
         const glm::mat4 proj = glm::perspectiveRH_ZO(glm::radians(camera.Zoom), aspect, kNear, kFar);
-        m_FrameView = view;
-        m_FrameProj = proj;
 
-        // Refresh world transforms, then gather this frame's draws + lights from
-        // the ECS (the pass draw-callbacks iterate m_DrawList captured at build).
-        // Geometry draws are frustum-culled ([0,1]-depth planes — this TU builds
-        // proj under GLM_FORCE_DEPTH_ZERO_TO_ONE); shadow draws are not, so
-        // off-screen casters still cast into the view (mirrors the GL editor).
+        // Refresh world transforms, then gather this frame's shared (view-
+        // independent) scene data: lights and particle batches.
         scene.GetTransformSystem().Update(scene.GetRegistry());
-        RebuildDrawList(scene, Frustum::Extract(proj * view, /*zeroToOneDepth*/ true),
-                        camera.Position);
         GatherLights(scene);
         GatherParticles(scene);
+
+        // Game view: rendered only when enabled AND the scene has a primary
+        // camera to render from (mirrors the GL editor's game viewport).
+        m_GameViewActive = false;
+        View* game = (m_GameViewEnabled && m_Views[kGameView]) ? m_Views[kGameView].get() : nullptr;
+        glm::mat4 gameView(1.0f), gameProj(1.0f);
+        if (game) {
+            const entt::entity camEntity = scene.GetPrimaryCamera();
+            if (camEntity != entt::null) {
+                const auto& cc = scene.GetRegistry().get<CameraComponent>(camEntity);
+                gameView = glm::inverse(scene.GetTransformSystem().GetWorldMatrix(camEntity));
+                gameProj = glm::perspectiveRH_ZO(
+                    glm::radians(cc.fov),
+                    static_cast<float>(game->width) / static_cast<float>(game->height),
+                    cc.nearClip, cc.farClip);
+                m_GameViewActive = true;
+            }
+        }
+
+        // Per-view draw lists (frustum-culled per camera). Built before
+        // BeginFrame so lazy mesh/material uploads keep their pre-frame timing.
+        // The unculled shadow list is view-independent and shared.
+        RebuildDrawList(scene, Frustum::Extract(proj * view, /*zeroToOneDepth*/ true),
+                        camera.Position, main, kMainView);
+        if (m_GameViewActive)
+            RebuildDrawList(scene, Frustum::Extract(gameProj * gameView, /*zeroToOneDepth*/ true),
+                            glm::vec3(glm::inverse(gameView)[3]), *game, kGameView);
 
         RHICommandList* cmd = m_Device->BeginFrame();
         if (!cmd) return;   // swapchain unavailable (minimized / rebuilding)
 
-        CameraUBO ubo{};
-        ubo.view     = view;
-        ubo.viewProj = proj * view;
-        m_CameraUBO->Update(&ubo, sizeof(ubo));
-
-        // Per-frame pass data (uploaded after BeginFrame frees the frame's slot).
-        m_SSAO->SetProjection(proj);
-        m_Skybox->SetFrameData(view, proj);
-        m_Transparency->SetCamera(view, proj);
-        m_CSM->ComputeCascades(m_SunDir, view, proj, kNear, kShadowFar);
+        // View-independent shadow work, once per frame: spot matrices are
+        // light-space, and the point-light cube shadows record raw per-face
+        // scopes the graph can't express — put them in the command buffer before
+        // either view's graph so both lighting reads see this frame's maps.
         m_SpotShadow->ComputeMatrices(m_SpotLights);
         m_PointShadow->SetLights(m_PointPos);
-        m_Lighting->SetFrameData(view, m_SunDir, m_SunColor,
-                                 m_CSM->GetLightMatrices(), m_CSM->GetSplitDepths(),
-                                 m_PointPos, m_PointColor,
-                                 m_PointShadow->FarPlane(),
-                                 m_SpotLights, m_SpotShadow->GetLightMatrices());
-
-        // Point-light cube shadows record raw per-face scopes the graph can't
-        // express — put them in the command buffer before Execute so the deferred
-        // read sees this frame's maps. Same unculled caster list as the CSM pass;
-        // the model matrix goes at push offset 0 (the pass pushes the face index).
         m_PointShadow->Record(cmd, [this](RHICommandList* c) {
             for (const DrawItem& d : m_ShadowDraws) {
                 c->BindVertexBuffer(d.mesh->vertexBuffer.get());
@@ -254,7 +284,11 @@ public:
         // output for sampling); the pass callback reads this member per frame.
         m_Overlay = overlay;
 
-        m_Graph.Execute(cmd);
+        // Game view first: the main view's editor overlay (ImGui) samples the
+        // game output, so it must be rendered — and transitioned — before then.
+        if (m_GameViewActive)
+            RenderView(*game, gameView, gameProj, cmd);
+        RenderView(main, view, proj, cmd);
 
         // Swapchain mode: composite an optional overlay (ImGui) over the
         // tonemapped backbuffer, loading its contents so the scene shows through.
@@ -275,25 +309,30 @@ public:
     }
 
 private:
+    static constexpr int kMainView = 0;
+    static constexpr int kGameView = 1;
+    static constexpr int kMaxViews = 2;
+
     struct GpuMesh {
         std::unique_ptr<RHIBuffer> vertexBuffer;
         std::unique_ptr<RHIBuffer> indexBuffer;
         uint32_t                   indexCount = 0;
         AABB                       bounds;
     };
-    // A cached material: its descriptor set against the G-buffer pipeline (camera
-    // UBO + 6 maps + params UBO), the static params buffer behind it, and the
-    // engine textures kept alive for as long as the set references them. Baked
-    // once per PBRMaterial pointer — a material edited after first use keeps its
-    // baked look until re-registered (live material editing is a later slice).
+    // A cached material: the static params buffer, the engine textures kept
+    // alive, and one descriptor set PER VIEW against the G-buffer pipeline
+    // (each set embeds that view's camera UBO — no RHI multi-set support).
+    // Baked lazily per (PBRMaterial pointer, view) — a material edited after
+    // first use keeps its baked look until re-registered (live material editing
+    // is a later slice).
     struct GpuMaterial {
-        std::unique_ptr<RHIBuffer>      params;
-        std::unique_ptr<RHIResourceSet> set;
+        std::unique_ptr<RHIBuffer> params;
+        std::array<std::unique_ptr<RHIResourceSet>, kMaxViews> sets{};
         std::array<std::shared_ptr<Texture>, VulkanGBufferPass::MapCount> keepAlive{};
     };
     struct DrawItem {
         const GpuMesh*  mesh;
-        RHIResourceSet* material;   // G-buffer set 0 for this draw
+        RHIResourceSet* material;   // G-buffer set 0 for this draw (view-specific)
         glm::mat4       world;
     };
     struct TransparentDraw {
@@ -309,14 +348,37 @@ private:
         std::vector<RenderParticle> parts;
     };
 
-    void BuildResources() {
-        // Per-frame camera UBO (dynamic — rewritten every frame).
-        RHIBufferDesc ubo;
-        ubo.size    = sizeof(CameraUBO);
-        ubo.usage   = RHIBufferUsage::Uniform;
-        ubo.dynamic = true;
-        m_CameraUBO = m_Device->CreateBuffer(ubo);
+    // One render view: a full deferred chain from one camera into one output.
+    // Holds everything camera-dependent that lives in a dynamic GPU buffer (see
+    // the class comment); the stateless/record-time passes (G-buffer, CSM, spot
+    // and point shadows) are shared across views.
+    struct View {
+        explicit View(RHIDevice* device) : graph(device) {}
 
+        uint32_t width  = 0;
+        uint32_t height = 0;
+        bool offscreen       = false;  // tonemap → outputColor instead of the swapchain
+        bool editorComposite = false;  // owns/clears the backbuffer + runs m_Overlay
+        bool external        = false;  // output sampled outside this graph (game view)
+
+        RHIRenderGraph  graph;
+        RGTextureHandle outputColor;   // valid when offscreen
+
+        std::unique_ptr<RHIBuffer>                  cameraUBO;
+        std::unique_ptr<VulkanSSAOPass>             ssao;
+        std::unique_ptr<VulkanDeferredLightingPass> lighting;
+        std::unique_ptr<VulkanSkyboxPass>           skybox;
+        std::unique_ptr<VulkanTransparencyPass>     transparency;
+        std::unique_ptr<VulkanTonemapPass>          tonemap;
+        std::unique_ptr<VulkanParticleRenderer>     particles;
+
+        std::vector<DrawItem>        drawList;          // frustum-culled — geometry pass
+        std::vector<TransparentDraw> transparentDraws;  // back-to-front — forward pass
+    };
+
+    // Shared, view-independent resources: default textures, the stateless
+    // passes, the IBL bake, and the particle fallback texture.
+    void BuildShared() {
         // Default material maps: checkerboard albedo for meshes with no material,
         // plus 1×1 neutral fallbacks for any slot a material leaves empty (flat
         // normal, non-metallic, mid roughness, full AO, no emissive).
@@ -346,20 +408,10 @@ private:
 
         const std::string shaderDir = DIAMOND_VULKAN_SHADER_DIR;
         m_GBuffer     = std::make_unique<VulkanGBufferPass>(m_Device, shaderDir);
-        m_SSAO        = std::make_unique<VulkanSSAOPass>(m_Device, shaderDir, m_Width, m_Height);
         m_CSM         = std::make_unique<VulkanCSMPass>(m_Device, shaderDir);
         m_SpotShadow  = std::make_unique<VulkanSpotShadowPass>(m_Device, shaderDir);
         m_PointShadow = std::make_unique<VulkanPointShadowPass>(m_Device, shaderDir);
-        m_Lighting    = std::make_unique<VulkanDeferredLightingPass>(m_Device, shaderDir);
-        m_Skybox   = std::make_unique<VulkanSkyboxPass>(m_Device, shaderDir);
-        m_Transparency = std::make_unique<VulkanTransparencyPass>(m_Device, shaderDir);
-        // Offscreen mode tonemaps into an LDR texture ImGui can sample; swapchain
-        // mode tonemaps straight into the backbuffer.
-        m_Tonemap  = std::make_unique<VulkanTonemapPass>(
-            m_Device, shaderDir,
-            m_Offscreen ? RHIFormat::RGBA8 : m_Device->SwapchainFormat());
 
-        m_Particles = std::make_unique<VulkanParticleRenderer>(m_Device, shaderDir, RHIFormat::RGBA16F);
         const std::vector<uint8_t> dotPixels = MakeParticleDot(64);
 
         RHITextureDesc particleTex;
@@ -381,45 +433,109 @@ private:
         m_IBL->BakeEnvironment(DIAMOND_ASSETS_DIR "/Textures/citrus_orchard_road_puresky_4k.hdr");
     }
 
-    void BuildGraph() {
-        const RGTextureHandle gViewPos    = m_Graph.DeclareTexture("gViewPos",    { m_Width, m_Height, RHIFormat::RGBA16F });
-        const RGTextureHandle gViewNormal = m_Graph.DeclareTexture("gViewNormal", { m_Width, m_Height, RHIFormat::RGBA16F });
-        const RGTextureHandle gAlbedo     = m_Graph.DeclareTexture("gAlbedo",     { m_Width, m_Height, RHIFormat::RGBA8   });
-        const RGTextureHandle gMaterial   = m_Graph.DeclareTexture("gMaterial",   { m_Width, m_Height, RHIFormat::RGBA8   });
-        const RGTextureHandle gEmissive   = m_Graph.DeclareTexture("gEmissive",   { m_Width, m_Height, RHIFormat::RGBA16F });
-        const RGTextureHandle gDepth      = m_Graph.DeclareTexture("gDepth",      { m_Width, m_Height, RHIFormat::Depth32F });
-        const RGTextureHandle ssaoRaw     = m_Graph.DeclareTexture("ssaoRaw",     { m_Width, m_Height, RHIFormat::R16F     });
-        const RGTextureHandle ssaoBlurred = m_Graph.DeclareTexture("ssaoBlurred", { m_Width, m_Height, RHIFormat::R16F     });
-        const RGTextureHandle hdrLit      = m_Graph.DeclareTexture("hdrLit",      { m_Width, m_Height, RHIFormat::RGBA16F });
+    std::unique_ptr<View> CreateView(uint32_t width, uint32_t height,
+                                     bool offscreen, bool editorComposite,
+                                     bool external, int viewIdx) {
+        auto v = std::make_unique<View>(m_Device);
+        v->width           = width;
+        v->height          = height;
+        v->offscreen       = offscreen;
+        v->editorComposite = editorComposite;
+        v->external        = external;
+
+        // Per-view camera UBO (dynamic — rewritten every frame), embedded in the
+        // view's material descriptor sets.
+        RHIBufferDesc ubo;
+        ubo.size    = sizeof(CameraUBO);
+        ubo.usage   = RHIBufferUsage::Uniform;
+        ubo.dynamic = true;
+        v->cameraUBO = m_Device->CreateBuffer(ubo);
+
+        const std::string shaderDir = DIAMOND_VULKAN_SHADER_DIR;
+        v->ssao         = std::make_unique<VulkanSSAOPass>(m_Device, shaderDir, width, height);
+        v->lighting     = std::make_unique<VulkanDeferredLightingPass>(m_Device, shaderDir);
+        v->skybox       = std::make_unique<VulkanSkyboxPass>(m_Device, shaderDir);
+        v->transparency = std::make_unique<VulkanTransparencyPass>(m_Device, shaderDir);
+        // Offscreen views tonemap into an LDR texture ImGui can sample; the
+        // swapchain-mode main view tonemaps straight into the backbuffer.
+        v->tonemap = std::make_unique<VulkanTonemapPass>(
+            m_Device, shaderDir,
+            offscreen ? RHIFormat::RGBA8 : m_Device->SwapchainFormat());
+        v->tonemap->SetExposure(m_Exposure);
+        v->particles = std::make_unique<VulkanParticleRenderer>(m_Device, shaderDir, RHIFormat::RGBA16F);
+
+        BuildViewGraph(*v, viewIdx);
+        return v;
+    }
+
+    void ResizeView(View& v, int viewIdx, uint32_t width, uint32_t height) {
+        if (!v.offscreen || width == 0 || height == 0) return;
+        if (width == v.width && height == v.height) return;
+
+        // Nothing referencing the old targets may be in flight while the pool
+        // recreates them and the size-dependent passes rebuild their sets.
+        m_Device->WaitIdle();
+        v.width  = width;
+        v.height = height;
+
+        // Recreate the passes whose descriptor sets sample graph textures (the
+        // pooled textures are about to be recreated at the new size). The other
+        // passes (G-buffer, shadows, skybox, transparency, particles) hold no
+        // graph-texture sets and their pipelines are size-independent, so they
+        // re-wire as-is.
+        const std::string shaderDir = DIAMOND_VULKAN_SHADER_DIR;
+        v.ssao     = std::make_unique<VulkanSSAOPass>(m_Device, shaderDir, width, height);
+        v.lighting = std::make_unique<VulkanDeferredLightingPass>(m_Device, shaderDir);
+        v.tonemap  = std::make_unique<VulkanTonemapPass>(m_Device, shaderDir, RHIFormat::RGBA8);
+        v.tonemap->SetExposure(m_Exposure);   // the recreated pass defaults to 1.0
+
+        v.graph.ResetPasses();
+        BuildViewGraph(v, viewIdx);   // re-declares textures + re-binds IBL/point shadows
+    }
+
+    void BuildViewGraph(View& v, int viewIdx) {
+        RHIRenderGraph& g = v.graph;
+        const RGTextureHandle gViewPos    = g.DeclareTexture("gViewPos",    { v.width, v.height, RHIFormat::RGBA16F });
+        const RGTextureHandle gViewNormal = g.DeclareTexture("gViewNormal", { v.width, v.height, RHIFormat::RGBA16F });
+        const RGTextureHandle gAlbedo     = g.DeclareTexture("gAlbedo",     { v.width, v.height, RHIFormat::RGBA8   });
+        const RGTextureHandle gMaterial   = g.DeclareTexture("gMaterial",   { v.width, v.height, RHIFormat::RGBA8   });
+        const RGTextureHandle gEmissive   = g.DeclareTexture("gEmissive",   { v.width, v.height, RHIFormat::RGBA16F });
+        const RGTextureHandle gDepth      = g.DeclareTexture("gDepth",      { v.width, v.height, RHIFormat::Depth32F });
+        const RGTextureHandle ssaoRaw     = g.DeclareTexture("ssaoRaw",     { v.width, v.height, RHIFormat::R16F     });
+        const RGTextureHandle ssaoBlurred = g.DeclareTexture("ssaoBlurred", { v.width, v.height, RHIFormat::R16F     });
+        const RGTextureHandle hdrLit      = g.DeclareTexture("hdrLit",      { v.width, v.height, RHIFormat::RGBA16F });
 
         std::array<RGTextureHandle, VulkanCSMPass::NUM_CASCADES> cascades;
         for (int i = 0; i < VulkanCSMPass::NUM_CASCADES; ++i)
-            cascades[i] = m_Graph.DeclareTexture("csmCascade" + std::to_string(i),
-                                                 { kShadowRes, kShadowRes, RHIFormat::Depth32F });
+            cascades[i] = g.DeclareTexture("csmCascade" + std::to_string(i),
+                                           { kShadowRes, kShadowRes, RHIFormat::Depth32F });
 
         std::array<RGTextureHandle, VulkanSpotShadowPass::MAX_SPOTS> spotMaps;
         for (int i = 0; i < VulkanSpotShadowPass::MAX_SPOTS; ++i)
-            spotMaps[i] = m_Graph.DeclareTexture("spotShadow" + std::to_string(i),
-                                                 { kSpotShadowRes, kSpotShadowRes, RHIFormat::Depth32F });
+            spotMaps[i] = g.DeclareTexture("spotShadow" + std::to_string(i),
+                                           { kSpotShadowRes, kSpotShadowRes, RHIFormat::Depth32F });
 
-        // G-buffer — fill from the per-frame draw list; each draw binds its
-        // material's descriptor set (built lazily by GetOrCreateMaterial).
-        m_GBuffer->AddToGraph(m_Graph, gViewPos, gViewNormal, gAlbedo, gMaterial, gEmissive,
+        // G-buffer — fill from the view's draw list; each draw binds its
+        // material's descriptor set (built lazily by GetOrCreateMaterialSet).
+        m_GBuffer->AddToGraph(g, gViewPos, gViewNormal, gAlbedo, gMaterial, gEmissive,
                               gDepth,
-                              [this](RHICommandList* cmd) { DrawGeometry(cmd); });
+                              [this, &v](RHICommandList* cmd) { DrawGeometry(cmd, v); });
 
         // SSAO occlusion + blur over the G-buffer.
-        m_SSAO->AddToGraph(m_Graph, gViewPos, gViewNormal, ssaoRaw, ssaoBlurred);
+        v.ssao->AddToGraph(g, gViewPos, gViewNormal, ssaoRaw, ssaoBlurred);
 
         // Shadow cascades — scene depth from the sun; push lightSpace * model.
-        m_CSM->AddToGraph(m_Graph, cascades,
+        // The pass is shared across views: its light matrices are read at record
+        // time, refreshed by ComputeCascades right before each view executes.
+        m_CSM->AddToGraph(g, cascades,
                           [this](RHICommandList* cmd, const glm::mat4& lightSpace) {
                               DrawShadow(cmd, lightSpace);
                           });
 
         // Spot shadows — one perspective depth map per spot light, same push /
-        // draw callback shape as the cascades.
-        m_SpotShadow->AddToGraph(m_Graph, spotMaps,
+        // draw callback shape as the cascades (also shared; light-space is
+        // view-independent, so both views record the same maps).
+        m_SpotShadow->AddToGraph(g, spotMaps,
                                  [this](RHICommandList* cmd, const glm::mat4& lightSpace) {
                                      DrawShadow(cmd, lightSpace);
                                  });
@@ -427,27 +543,28 @@ private:
         // Deferred resolve → HDR. Reads all cascade + spot maps (also keeps the
         // unlit ones alive). The point-shadow cubes aren't graph textures — they
         // render pre-graph in RenderToSwapchain and bind raw below.
-        m_Lighting->AddToGraph(m_Graph, gViewPos, gViewNormal, gAlbedo, gMaterial,
+        v.lighting->AddToGraph(g, gViewPos, gViewNormal, gAlbedo, gMaterial,
                                ssaoBlurred, gEmissive, cascades, spotMaps, hdrLit);
-        m_Lighting->BindIBL(*m_IBL);
-        m_Lighting->BindPointShadows(*m_PointShadow);
+        v.lighting->BindIBL(*m_IBL);
+        v.lighting->BindPointShadows(*m_PointShadow);
 
         // Skybox fills the background pixels (far plane, LessEqual against the
         // G-buffer depth) with the baked env cube — the same map the IBL ambient
         // samples, so reflections have a visible source. Inserted after the
         // lighting resolve and before particles; the writes on the shared HDR
         // target resolve by insertion order.
-        m_Skybox->AddToGraph(m_Graph, hdrLit, gDepth);
-        m_Skybox->BindIBL(*m_IBL);
+        v.skybox->AddToGraph(g, hdrLit, gDepth);
+        v.skybox->BindIBL(*m_IBL);
 
         // Forward transparency blends over the lit scene + skybox, depth-testing
         // (not writing) against the G-buffer depth — before particles, matching
         // the GL frame order (lighting → skybox → transparency → particles).
-        m_Transparency->AddToGraph(m_Graph, hdrLit, gDepth,
-            [this](RHICommandList* cmd) { DrawTransparent(cmd); });
+        v.transparency->AddToGraph(g, hdrLit, gDepth,
+            [this, &v](RHICommandList* cmd) { DrawTransparent(cmd, v); });
 
-        // Particles composite over the lit HDR scene (before tonemap).
-        m_Particles->AddToGraph(m_Graph, hdrLit, gDepth,
+        // Particles composite over the lit HDR scene (before tonemap). The
+        // frame view/proj members are re-set per view before its Execute.
+        v.particles->AddToGraph(g, hdrLit, gDepth,
             [this](VulkanParticleRenderer& particles) {
                 particles.Begin(m_FrameView, m_FrameProj);
                 for (PBatch& b : m_ParticleBatches) {
@@ -457,30 +574,31 @@ private:
                 particles.End();
             });
 
-        // Tonemap HDR → swapchain (ACES + gamma), or → the LDR output texture in
-        // offscreen mode.
-        if (m_Offscreen)
-            m_OutputColor = m_Graph.DeclareTexture("outputColor", { m_Width, m_Height, RHIFormat::RGBA8 });
-        m_Tonemap->AddToGraph(m_Graph, hdrLit, m_OutputColor);
+        // Tonemap HDR → swapchain (ACES + gamma), or → the LDR output texture
+        // for offscreen views.
+        if (v.offscreen)
+            v.outputColor = g.DeclareTexture("outputColor", { v.width, v.height, RHIFormat::RGBA8 });
+        v.tonemap->AddToGraph(g, hdrLit, v.offscreen ? v.outputColor : RGTextureHandle{});
 
         // In-game UI — a 2D pass over the tonemapped LDR scene. Loads (doesn't
         // clear) so widgets composite on top. Ordering: inserted after Tonemap so
         // the write-after-write on the shared target resolves by insertion order.
         {
-            RGPass& ui = m_Graph.AddPass("UI2D");
-            if (m_Offscreen) ui.Write(m_OutputColor);
+            RGPass& ui = g.AddPass("UI2D");
+            if (v.offscreen) ui.Write(v.outputColor);
             else             ui.WriteSwapchain();
-            ui.Load().SetExecute([this](RHICommandList* cmd) {
-                if (m_UIFn) m_UIFn(cmd);
+            ui.Load().SetExecute([this, viewIdx](RHICommandList* cmd) {
+                const OverlayFn& fn = viewIdx == kGameView ? m_GameUIFn : m_UIFn;
+                if (fn) fn(cmd);
             });
         }
 
         // Editor composite — the only backbuffer owner in offscreen mode. Reading
         // outputColor transitions it to SampledRead, so the overlay (ImGui) can
         // sample it as a viewport image while drawing over a cleared swapchain.
-        if (m_Offscreen) {
-            m_Graph.AddPass("EditorOverlay")
-                .Read(m_OutputColor)
+        if (v.editorComposite) {
+            g.AddPass("EditorOverlay")
+                .Read(v.outputColor)
                 .WriteSwapchain()
                 .SetClearColor({ 0.1f, 0.1f, 0.1f, 1.0f })
                 .SetExecute([this](RHICommandList* cmd) {
@@ -488,13 +606,52 @@ private:
                 });
         }
 
-        m_Graph.Compile();
+        // The game view's output is consumed by the main view's editor overlay
+        // (ImGui) — no reader in THIS graph, so keep its writers from culling.
+        if (v.external)
+            g.MarkOutput(v.outputColor);
+
+        g.Compile();
     }
 
-    void DrawGeometry(RHICommandList* cmd) {
+    // Record one view: refresh its dynamic UBOs + the shared CSM cascade fit for
+    // this camera, then execute its graph. Runs between BeginFrame and EndFrame;
+    // each view's dynamic buffers are its own, so two views in one frame never
+    // clobber each other's data.
+    void RenderView(View& v, const glm::mat4& view, const glm::mat4& proj,
+                    RHICommandList* cmd) {
+        // Read at record time by the particle pass callback during Execute.
+        m_FrameView = view;
+        m_FrameProj = proj;
+
+        CameraUBO ubo{};
+        ubo.view     = view;
+        ubo.viewProj = proj * view;
+        v.cameraUBO->Update(&ubo, sizeof(ubo));
+
+        v.ssao->SetProjection(proj);
+        v.skybox->SetFrameData(view, proj);
+        v.transparency->SetCamera(view, proj);
+        m_CSM->ComputeCascades(m_SunDir, view, proj, kNear, kShadowFar);
+        v.lighting->SetFrameData(view, m_SunDir, m_SunColor,
+                                 m_CSM->GetLightMatrices(), m_CSM->GetSplitDepths(),
+                                 m_PointPos, m_PointColor,
+                                 m_PointShadow->FarPlane(),
+                                 m_SpotLights, m_SpotShadow->GetLightMatrices());
+
+        v.graph.Execute(cmd);
+
+        // Hand an externally-consumed output (the game image) to its sampler —
+        // inside this graph nothing reads it, so nothing else transitions it.
+        if (v.external)
+            cmd->TransitionTexture(v.graph.GetTexture(v.outputColor),
+                                   RHITextureState::SampledRead);
+    }
+
+    void DrawGeometry(RHICommandList* cmd, const View& v) {
         // The list is sorted by material, so the set rebind only fires on runs.
         RHIResourceSet* bound = nullptr;
-        for (const DrawItem& d : m_DrawList) {
+        for (const DrawItem& d : v.drawList) {
             if (d.material != bound) {
                 cmd->BindResourceSet(0, d.material);
                 bound = d.material;
@@ -506,10 +663,10 @@ private:
         }
     }
 
-    void DrawTransparent(RHICommandList* cmd) {
+    void DrawTransparent(RHICommandList* cmd, const View& v) {
         // Pipeline is already bound by the pass; each draw binds its albedo set
         // (list is back-to-front sorted, so blending composites correctly).
-        for (const TransparentDraw& d : m_TransparentDraws) {
+        for (const TransparentDraw& d : v.transparentDraws) {
             cmd->BindResourceSet(0, d.set);
             cmd->BindVertexBuffer(d.mesh->vertexBuffer.get());
             cmd->BindIndexBuffer(d.mesh->indexBuffer.get(), RHIIndexType::U32);
@@ -528,15 +685,26 @@ private:
         }
     }
 
-    void RebuildDrawList(Scene& scene, const Frustum& frustum, const glm::vec3& cameraPos) {
-        m_DrawList.clear();
-        m_ShadowDraws.clear();
-        m_TransparentDraws.clear();
+    void RebuildDrawList(Scene& scene, const Frustum& frustum, const glm::vec3& cameraPos,
+                         View& v, int viewIdx) {
+        v.drawList.clear();
+        v.transparentDraws.clear();
+        m_ShadowDraws.clear();   // unculled + view-independent; refilling is idempotent
         const TransformSystem& ts = scene.GetTransformSystem();
         for (auto [entity, mc] : scene.GetRegistry().view<MeshComponent>().each()) {
             if (!mc.visible || !mc.mesh) continue;
             auto it = m_Meshes.find(mc.mesh.get());
-            if (it == m_Meshes.end()) continue;   // geometry not registered
+            if (it == m_Meshes.end()) {
+                // Unseen mesh: if it retains its CPU geometry (Mesh::Create in
+                // Vulkan mode), upload it now — this runs pre-BeginFrame, same
+                // timing as the lazy material bake below. Otherwise skip the draw
+                // (geometry was never registered).
+                if (const MeshData* cpu = mc.mesh->CPUData()) {
+                    RegisterMesh(mc.mesh.get(), *cpu);
+                    it = m_Meshes.find(mc.mesh.get());
+                }
+                if (it == m_Meshes.end()) continue;
+            }
 
             const glm::mat4& world = ts.GetWorldMatrix(entity);
 
@@ -545,38 +713,40 @@ private:
             // wrong — matches the GL editor, whose windows never cast).
             if (mc.transparent) {
                 if (!frustum.TestAABB(it->second.bounds.Transform(world))) continue;
-                m_TransparentDraws.push_back({
-                    &it->second, GetOrCreateTransparentSet(mc.material.get()), world,
+                v.transparentDraws.push_back({
+                    &it->second, GetOrCreateTransparentSet(mc.material.get(), v), world,
                     glm::length(glm::vec3(world[3]) - cameraPos) });
                 continue;
             }
 
-            const DrawItem item{ &it->second, GetOrCreateMaterial(mc.material.get()).set.get(), world };
+            const DrawItem item{ &it->second,
+                                 GetOrCreateMaterialSet(mc.material.get(), viewIdx), world };
             if (mc.castsShadow)
                 m_ShadowDraws.push_back(item);
             if (frustum.TestAABB(it->second.bounds.Transform(world)))
-                m_DrawList.push_back(item);
+                v.drawList.push_back(item);
         }
 
         // Group draws by material so DrawGeometry rebinds each set once per run.
-        std::sort(m_DrawList.begin(), m_DrawList.end(),
+        std::sort(v.drawList.begin(), v.drawList.end(),
                   [](const DrawItem& a, const DrawItem& b) { return a.material < b.material; });
 
         // Farther first, so nearer transparents blend over them.
-        std::sort(m_TransparentDraws.begin(), m_TransparentDraws.end(),
+        std::sort(v.transparentDraws.begin(), v.transparentDraws.end(),
                   [](const TransparentDraw& a, const TransparentDraw& b) { return a.dist > b.dist; });
     }
 
     // Transparency set for a material's albedo map (white when absent). Cached by
-    // the pass per RHI texture; the engine texture is pinned alongside.
-    RHIResourceSet* GetOrCreateTransparentSet(const PBRMaterial* mat) {
+    // the view's transparency pass per RHI texture; the engine texture is pinned
+    // alongside.
+    RHIResourceSet* GetOrCreateTransparentSet(const PBRMaterial* mat, View& v) {
         RHITexture* albedo = m_DefaultWhite.get();
         if (mat) {
             albedo = RhiOrDefault(mat->Albedo, m_DefaultWhite.get());
             if (albedo != m_DefaultWhite.get())
                 m_TransparentAlbedos.emplace(albedo, mat->Albedo);
         }
-        return m_Transparency->GetOrCreateAlbedoSet(albedo);
+        return v.transparency->GetOrCreateAlbedoSet(albedo);
     }
 
     // Resolve one engine texture slot to its RHI texture, or a neutral default
@@ -587,16 +757,9 @@ private:
         return fallback;
     }
 
-    // Look up (or bake) the G-buffer descriptor set for a material. Null material
-    // = the checkerboard default. Sets are built lazily on the first frame a
-    // material appears and live for the renderer's lifetime.
-    const GpuMaterial& GetOrCreateMaterial(const PBRMaterial* mat) {
-        auto it = m_Materials.find(mat);
-        if (it != m_Materials.end()) return it->second;
-
-        GpuMaterial gm;
-
-        MaterialParams params;
+    // Resolve a material's texture slots (defaults for empty ones), in
+    // VulkanGBufferPass::MaterialMap order. Null material = the checkerboard.
+    std::array<RHITexture*, VulkanGBufferPass::MapCount> ResolveMaps(const PBRMaterial* mat) const {
         std::array<RHITexture*, VulkanGBufferPass::MapCount> maps;
         maps[VulkanGBufferPass::Albedo]    = m_Albedo.get();          // checkerboard
         maps[VulkanGBufferPass::Normal]    = m_DefaultNormal.get();
@@ -604,7 +767,6 @@ private:
         maps[VulkanGBufferPass::Roughness] = m_DefaultGray.get();
         maps[VulkanGBufferPass::AO]        = m_DefaultWhite.get();
         maps[VulkanGBufferPass::Emissive]  = m_DefaultBlack.get();
-
         if (mat) {
             maps[VulkanGBufferPass::Albedo]    = RhiOrDefault(mat->Albedo,    m_DefaultWhite.get());
             maps[VulkanGBufferPass::Normal]    = RhiOrDefault(mat->Normal,    m_DefaultNormal.get());
@@ -612,22 +774,40 @@ private:
             maps[VulkanGBufferPass::Roughness] = RhiOrDefault(mat->Roughness, m_DefaultGray.get());
             maps[VulkanGBufferPass::AO]        = RhiOrDefault(mat->AO,        m_DefaultWhite.get());
             maps[VulkanGBufferPass::Emissive]  = RhiOrDefault(mat->Emissive,  m_DefaultBlack.get());
-            gm.keepAlive = { mat->Albedo, mat->Normal, mat->Metallic,
-                             mat->Roughness, mat->AO, mat->Emissive };
+        }
+        return maps;
+    }
 
-            params.uvScale = mat->UVScale;
-            // Strength 0 disables the contribution when no map is bound (GL parity).
-            params.emissiveStrength = mat->Emissive ? mat->EmissiveStrength : 0.0f;
+    // Look up (or bake) the G-buffer descriptor set for a material in one view.
+    // The material entry (params + pinned textures) is baked once; each view's
+    // set is baked lazily the first frame the material appears in that view, and
+    // lives for the renderer's lifetime.
+    RHIResourceSet* GetOrCreateMaterialSet(const PBRMaterial* mat, int viewIdx) {
+        auto it = m_Materials.find(mat);
+        if (it == m_Materials.end()) {
+            GpuMaterial gm;
+            MaterialParams params;
+            if (mat) {
+                gm.keepAlive = { mat->Albedo, mat->Normal, mat->Metallic,
+                                 mat->Roughness, mat->AO, mat->Emissive };
+                params.uvScale = mat->UVScale;
+                // Strength 0 disables the contribution when no map is bound (GL parity).
+                params.emissiveStrength = mat->Emissive ? mat->EmissiveStrength : 0.0f;
+            }
+
+            RHIBufferDesc pb;
+            pb.size        = sizeof(MaterialParams);
+            pb.usage       = RHIBufferUsage::Uniform;
+            pb.initialData = &params;
+            gm.params = m_Device->CreateBuffer(pb);
+            it = m_Materials.emplace(mat, std::move(gm)).first;
         }
 
-        RHIBufferDesc pb;
-        pb.size        = sizeof(MaterialParams);
-        pb.usage       = RHIBufferUsage::Uniform;
-        pb.initialData = &params;
-        gm.params = m_Device->CreateBuffer(pb);
-
-        gm.set = m_GBuffer->CreateMaterialSet(m_CameraUBO.get(), maps, gm.params.get());
-        return m_Materials.emplace(mat, std::move(gm)).first->second;
+        GpuMaterial& gm = it->second;
+        if (!gm.sets[viewIdx])
+            gm.sets[viewIdx] = m_GBuffer->CreateMaterialSet(
+                m_Views[viewIdx]->cameraUBO.get(), ResolveMaps(mat), gm.params.get());
+        return gm.sets[viewIdx].get();
     }
 
     void GatherLights(Scene& scene) {
@@ -692,56 +872,54 @@ private:
         }
     }
 
-    RHIDevice*      m_Device;
-    uint32_t        m_Width;
-    uint32_t        m_Height;
-    bool            m_Offscreen;
-    RHIRenderGraph  m_Graph;
+    RHIDevice* m_Device;
+    bool       m_Offscreen;
 
-    RGTextureHandle m_OutputColor;   // offscreen mode's LDR target; invalid otherwise
-    OverlayFn       m_UIFn;          // in-game UI pass body (may be empty)
-    OverlayFn       m_Overlay;       // per-frame editor overlay (ImGui), offscreen mode
+    // m_Views[kMainView] always exists; the game view is created on first
+    // SetGameViewEnabled(true). unique_ptr keeps addresses stable — the graph
+    // draw callbacks capture View&.
+    std::array<std::unique_ptr<View>, kMaxViews> m_Views;
+    bool m_GameViewEnabled = false;
+    bool m_GameViewActive  = false;   // last frame actually rendered the game view
 
-    std::unique_ptr<RHIBuffer>  m_CameraUBO;
+    OverlayFn m_UIFn;       // in-game UI pass body, main view (may be empty)
+    OverlayFn m_GameUIFn;   // in-game UI pass body, game view (may be empty)
+    OverlayFn m_Overlay;    // per-frame editor overlay (ImGui), offscreen mode
+
     std::unique_ptr<RHITexture> m_Albedo;          // checkerboard — null-material albedo
     std::unique_ptr<RHITexture> m_DefaultWhite;    // 1×1 fallbacks for empty slots
     std::unique_ptr<RHITexture> m_DefaultNormal;
     std::unique_ptr<RHITexture> m_DefaultBlack;
     std::unique_ptr<RHITexture> m_DefaultGray;
 
-    std::unique_ptr<VulkanGBufferPass>          m_GBuffer;
-    std::unique_ptr<VulkanSSAOPass>             m_SSAO;
-    std::unique_ptr<VulkanCSMPass>              m_CSM;
-    std::unique_ptr<VulkanSpotShadowPass>       m_SpotShadow;
-    std::unique_ptr<VulkanPointShadowPass>      m_PointShadow;
-    std::unique_ptr<VulkanDeferredLightingPass> m_Lighting;
-    std::unique_ptr<VulkanSkyboxPass>           m_Skybox;
-    std::unique_ptr<VulkanTransparencyPass>     m_Transparency;
-    std::unique_ptr<VulkanTonemapPass>          m_Tonemap;
-    std::unique_ptr<VulkanIBLPass>              m_IBL;
+    // Shared, view-independent passes (record-time state only — see class comment).
+    std::unique_ptr<VulkanGBufferPass>     m_GBuffer;
+    std::unique_ptr<VulkanCSMPass>         m_CSM;
+    std::unique_ptr<VulkanSpotShadowPass>  m_SpotShadow;
+    std::unique_ptr<VulkanPointShadowPass> m_PointShadow;
+    std::unique_ptr<VulkanIBLPass>         m_IBL;
 
-    std::unordered_map<Mesh*, GpuMesh>                     m_Meshes;
-    std::unordered_map<const PBRMaterial*, GpuMaterial>    m_Materials;
-    std::vector<DrawItem>              m_DrawList;      // frustum-culled — geometry pass
-    std::vector<DrawItem>              m_ShadowDraws;   // unculled casters — CSM pass
-    std::vector<TransparentDraw>       m_TransparentDraws;   // back-to-front — forward pass
+    std::unordered_map<Mesh*, GpuMesh>                  m_Meshes;
+    std::unordered_map<const PBRMaterial*, GpuMaterial> m_Materials;
+    std::vector<DrawItem> m_ShadowDraws;   // unculled casters — CSM/spot/point passes
     // Albedo textures behind cached transparency sets, kept alive with them.
     std::unordered_map<RHITexture*, std::shared_ptr<Texture>> m_TransparentAlbedos;
 
-    float                  m_Exposure = 1.0f;   // re-applied when Resize recreates the tonemap pass
+    float                  m_Exposure = 1.0f;   // re-applied when a resize recreates a tonemap pass
     glm::vec3              m_SunDir   { 0.0f, -1.0f, 0.0f };
     glm::vec3              m_SunColor { 0.0f };
     std::vector<glm::vec3> m_PointPos;      // world space
     std::vector<glm::vec3> m_PointColor;
     std::vector<SpotLightInfo> m_SpotLights;
 
+    // The camera the graph's particle callback billboards against — set per view
+    // right before that view's Execute (read at record time).
     glm::mat4 m_FrameView { 1.0f };
     glm::mat4 m_FrameProj { 1.0f };
 
-    std::unique_ptr<VulkanParticleRenderer> m_Particles;
-    std::unique_ptr<RHITexture>             m_DefaultParticleRHI;
-    std::shared_ptr<Texture>                m_DefaultParticleTexture;
-    std::vector<PBatch>                     m_ParticleBatches;
+    std::unique_ptr<RHITexture> m_DefaultParticleRHI;
+    std::shared_ptr<Texture>    m_DefaultParticleTexture;
+    std::vector<PBatch>         m_ParticleBatches;
 };
 
 std::unique_ptr<SceneRenderer> SceneRenderer::Create(RHIDevice* device,

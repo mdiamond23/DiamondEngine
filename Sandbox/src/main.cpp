@@ -1085,11 +1085,11 @@ int main(int argc, char** argv)
                 UIRenderSystem::Render(scene.GetRegistry(), *uiRenderer, { (float)fbW, (float)fbH });
             }
 
-            editorLayer.SetGameViewportTexture(gameViewportTex);
+            editorLayer.SetGameViewportTexture((ImTextureID)(uintptr_t)gameViewportTex, /*flipY*/ true);
         }
         else
         {
-            editorLayer.SetGameViewportTexture(0);
+            editorLayer.SetGameViewportTexture(0, /*flipY*/ true);
         }
 
         // Restore editor camera matrices for ImGuizmo / editor systems
@@ -1148,7 +1148,8 @@ int main(int argc, char** argv)
         ImGui::NewFrame();
         ImGuizmo::BeginFrame();
 
-        editorLayer.SetViewportTexture(viewportTexture);
+        // GL FBO textures are bottom-up — the panel flips the UVs (Vulkan won't).
+        editorLayer.SetViewportTexture((ImTextureID)(uintptr_t)viewportTexture, /*flipY*/ true);
         editorLayer.UpdateCamera(view, proj, g_camera.Position);
         editorLayer.OnImGuiRender();
 

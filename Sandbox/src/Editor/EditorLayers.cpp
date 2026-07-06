@@ -181,14 +181,14 @@ void EditorLayer::SetupDockspace()
     ImGui::DockBuilderFinish(id);
 }
 
-void EditorLayer::SetViewportTexture(uint32_t textureID)
+void EditorLayer::SetViewportTexture(ImTextureID textureID, bool flipY)
 {
-    m_Viewport.SetTexture(textureID);
+    m_Viewport.SetTexture(textureID, flipY);
 }
 
-void EditorLayer::SetGameViewportTexture(uint32_t textureID)
+void EditorLayer::SetGameViewportTexture(ImTextureID textureID, bool flipY)
 {
-    m_GameViewport.SetTexture(textureID);
+    m_GameViewport.SetTexture(textureID, flipY);
 }
 
 void EditorLayer::UpdateCamera(const glm::mat4& view, const glm::mat4& proj,

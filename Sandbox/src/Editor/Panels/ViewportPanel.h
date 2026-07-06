@@ -12,12 +12,16 @@
 class ViewportPanel : public Panel {
 public:
     void OnImGuiRender() override;
-    void SetTexture(uint32_t textureID) { m_TextureID = textureID; }
+    // Opaque backend image handle (GL texture id or Vulkan descriptor set, both
+    // cast to ImTextureID by the caller). flipY: GL FBO textures are bottom-up
+    // and need flipped UVs; Vulkan offscreen targets are top-down and must not.
+    void SetTexture(ImTextureID textureID, bool flipY) { m_TextureID = textureID; m_FlipY = flipY; }
     void SetContext(EditorContext* ctx)  { m_Context = ctx; }
     bool IsActive() const { return m_IsViewportActive; }
 
 private:
-    uint32_t            m_TextureID        = 0;
+    ImTextureID         m_TextureID        = 0;
+    bool                m_FlipY            = false;
     bool                m_IsViewportActive = false;
     bool                m_OrbitActive      = false;  // middle-mouse orbit/pan drag
     EditorContext*       m_Context         = nullptr;

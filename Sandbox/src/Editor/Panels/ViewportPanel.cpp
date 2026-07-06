@@ -32,9 +32,10 @@ void ViewportPanel::OnImGuiRender() {
 
     if (m_TextureID != 0) {
         ImGui::Image(
-            (ImTextureID)(intptr_t)m_TextureID,
+            m_TextureID,
             vpSize,
-            {0, 1}, {1, 0}
+            m_FlipY ? ImVec2{0, 1} : ImVec2{0, 0},
+            m_FlipY ? ImVec2{1, 0} : ImVec2{1, 1}
         );
     }
 

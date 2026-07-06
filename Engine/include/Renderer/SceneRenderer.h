@@ -84,6 +84,32 @@ public:
     // frames, not mid-record, and expect it to be a hitch, not a per-frame op.
     virtual void Resize(uint32_t width, uint32_t height) = 0;
 
+    // ── Second render view: the game viewport ────────────────────────────────
+    // An editor shows two images of the same scene per frame: the editor camera
+    // (OutputColor) and the scene's primary CameraComponent (GameViewColor). The
+    // game view is offscreen-mode only, created on first enable at the main
+    // view's size, and rendered inside the same RenderToSwapchain frame — its
+    // whole deferred chain runs again from the game camera, so expect roughly
+    // double the GPU cost while it's on.
+    virtual void SetGameViewEnabled(bool enabled) = 0;
+
+    // The game view's LDR output. Non-null once SetGameViewEnabled(true) has run
+    // (offscreen mode); invalidated by ResizeGameView — re-query after a resize.
+    virtual RHITexture* GameViewColor() const = 0;
+
+    // Whether the last RenderToSwapchain actually rendered the game view (it is
+    // skipped when disabled or the scene has no primary camera — in which case
+    // GameViewColor holds a stale frame that shouldn't be shown).
+    virtual bool GameViewActive() const = 0;
+
+    // Resize's counterpart for the game view (same idle-wait + pass rebuild).
+    virtual void ResizeGameView(uint32_t width, uint32_t height) = 0;
+
+    // The game view's in-game UI pass — SetUIOverlay's counterpart, drawn over
+    // the game image. The two overlays run in the same frame, so they must not
+    // share dynamic GPU resources (use a second Renderer2D, not the main view's).
+    virtual void SetGameUIOverlay(const OverlayFn& fn) = 0;
+
     // An optional 2D pass drawn over the tonemapped scene (into OutputColor() in
     // offscreen mode, the backbuffer otherwise) — the in-game UI hook. Runs
     // inside an LDR render scope that loads the scene, once per frame, before

@@ -107,10 +107,26 @@ MeshData MeshData::UVSphere()
     return data;
 }
 
+namespace {
+// Vulkan-mode mesh: no GPU upload here — the SceneRenderer owns the vertex and
+// index buffers, keyed on this object's address, and uploads lazily from the
+// retained copy the first frame the mesh is drawn. Draw() is the GL immediate
+// path and never runs under Vulkan.
+class CPUMesh final : public Mesh {
+public:
+    explicit CPUMesh(const MeshData& data) : m_Data(data) {}
+    void Draw(const Shader&) const override {}
+    const MeshData* CPUData() const override { return &m_Data; }
+private:
+    MeshData m_Data;
+};
+} // namespace
+
 std::shared_ptr<Mesh> Mesh::Create(const MeshData& data)
 {
     switch (RendererAPI::GetAPI()) {
         case RendererAPI::API::OpenGL: return std::make_shared<OpenGLMesh>(data);
+        case RendererAPI::API::Vulkan: return std::make_shared<CPUMesh>(data);
         default:                       return nullptr;
     }
 }

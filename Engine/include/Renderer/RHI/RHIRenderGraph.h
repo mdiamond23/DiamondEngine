@@ -71,6 +71,13 @@ public:
     RGTextureHandle DeclareTexture(std::string_view name, const RGTextureDesc& desc);
     RGPass&         AddPass(std::string_view name);
 
+    // Declare 'h' an output consumed OUTSIDE this graph (another graph's frame, an
+    // ImGui image, ...). Its writers have no reader here, so culling would drop
+    // them; marking keeps them (and their upstream chain) alive. The external
+    // consumer is responsible for transitioning the texture to SampledRead after
+    // Execute. Cleared by ResetPasses, like the pass list.
+    void MarkOutput(RGTextureHandle h);
+
     // Compile — topological sort (Kahn) + dead-pass culling. Ported verbatim from
     // the GL RenderGraph; the dependency model is unchanged.
     void Compile();
@@ -103,6 +110,7 @@ private:
     std::unordered_map<std::string, PooledTexture> m_Pool;   // survives ResetPasses
     std::vector<TextureEntry>                      m_Textures;
     std::vector<RGPass>                            m_Passes;
+    std::vector<uint32_t>                          m_OutputIds;   // externally-consumed textures
     std::vector<int>                               m_SortedIndices;
 };
 
