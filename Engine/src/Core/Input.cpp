@@ -73,23 +73,33 @@ namespace
     float s_scrollY = 0.0f;
 
     // ---- GLFW callbacks ---------------------------------------------------
+    // Whoever installed callbacks before Init (e.g. ImGui's GLFW backend, when
+    // the editor initializes it first) is chained, not clobbered — GLFW only
+    // holds one callback per event, so we forward after recording our state.
 
-    void KeyCallback(GLFWwindow*, int key, int, int action, int)
+    GLFWkeyfun         s_prevKeyCallback         = nullptr;
+    GLFWmousebuttonfun s_prevMouseButtonCallback = nullptr;
+    GLFWscrollfun      s_prevScrollCallback      = nullptr;
+
+    void KeyCallback(GLFWwindow* window, int key, int scancode, int action, int mods)
     {
+        if (s_prevKeyCallback) s_prevKeyCallback(window, key, scancode, action, mods);
         if (key < 0 || key >= KeyCount) return;
         if (action == GLFW_PRESS)   { s_pressedKeys[key] = true;  s_heldKeys[key] = true;  }
         if (action == GLFW_RELEASE) { s_releasedKeys[key] = true; s_heldKeys[key] = false; }
     }
 
-    void MouseButtonCallback(GLFWwindow*, int button, int action, int)
+    void MouseButtonCallback(GLFWwindow* window, int button, int action, int mods)
     {
+        if (s_prevMouseButtonCallback) s_prevMouseButtonCallback(window, button, action, mods);
         if (button < 0 || button >= MouseCount) return;
         if (action == GLFW_PRESS)   { s_pressedMouse[button] = true;  s_heldMouse[button] = true;  }
         if (action == GLFW_RELEASE) { s_releasedMouse[button] = true; s_heldMouse[button] = false; }
     }
 
-    void ScrollCallback(GLFWwindow*, double, double yOffset)
+    void ScrollCallback(GLFWwindow* window, double xOffset, double yOffset)
     {
+        if (s_prevScrollCallback) s_prevScrollCallback(window, xOffset, yOffset);
         s_scrollY += static_cast<float>(yOffset);
     }
 }
@@ -99,9 +109,9 @@ namespace Input
     void Init(GLFWwindow* window)
     {
         s_window = window;
-        glfwSetKeyCallback(window, KeyCallback);
-        glfwSetMouseButtonCallback(window, MouseButtonCallback);
-        glfwSetScrollCallback(window, ScrollCallback);
+        s_prevKeyCallback         = glfwSetKeyCallback(window, KeyCallback);
+        s_prevMouseButtonCallback = glfwSetMouseButtonCallback(window, MouseButtonCallback);
+        s_prevScrollCallback      = glfwSetScrollCallback(window, ScrollCallback);
 
         double x, y;
         glfwGetCursorPos(window, &x, &y);

@@ -16,13 +16,7 @@ int RunVulkanMeshDemo();
 // end (no editor, no ImGui yet). Returns 0 on clean exit.
 int RunVulkanSceneDemo();
 
-// The Sandbox editor's Vulkan mode (`--vulkan` flag): a docked ImGui editor shell
-// whose viewport panel shows SceneRenderer's offscreen output as a sampled image,
-// with the in-game UI (canvas widgets) and particles rendered as graph passes.
-// Fixed test scene for now — the GL editor's asset pipeline (real Mesh/Texture
-// assets, thumbnails) under Vulkan is a later slice. Unlike the demos this is
-// declared in every build: without DIAMOND_ENABLE_VULKAN it logs an error and
-// returns nonzero, so the app can always link against it.
-int RunVulkanEditor();
+// The Sandbox editor's `--vulkan` mode lives behind the shared backend
+// interface now — see Editor/EditorBackend.h (CreateVulkanEditorBackend).
 
 } // namespace Diamond

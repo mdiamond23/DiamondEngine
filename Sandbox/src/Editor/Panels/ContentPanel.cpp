@@ -21,6 +21,7 @@
 #include <Assets/ImageLoader.h>
 #include <Assets/ModelImporter.h>
 #include <Assets/GltfImporter.h>
+#include <Renderer/RendererAPI.h>
 
 #include <miniz.h>
 #include <filesystem>
@@ -198,6 +199,14 @@ uint32_t ContentPanel::LoadThumbnail(const fs::path& p, AssetType type) {
     auto it = m_ThumbnailCache.find(key);
     if (it != m_ThumbnailCache.end()) return it->second;
     if (m_FailedPaths.count(key))     return 0;
+
+    // Thumbnail bakes are raw GL (texture uploads + the GL mesh studio); under
+    // another backend there is no GL context, so fall back to the flat icons
+    // until the cross-backend texture service (editor-wiring step 4) lands.
+    if (Diamond::RendererAPI::GetAPI() != Diamond::RendererAPI::API::OpenGL) {
+        m_FailedPaths.insert(key);
+        return 0;
+    }
 
     uint32_t texID = 0;
 

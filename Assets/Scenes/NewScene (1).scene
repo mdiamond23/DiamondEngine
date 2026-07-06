@@ -1,0 +1,730 @@
+{
+  "entities": [
+    {
+      "mesh": {
+        "albedoPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Color.png",
+        "aoPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_AmbientOcclusion.png",
+        "castsShadow": true,
+        "emissivePath": "",
+        "emissiveStrength": 0.0,
+        "materialPath": "",
+        "meshPath": "__sphere",
+        "meshSubIndex": 0,
+        "metallicPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Metalness.png",
+        "normalPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_NormalGL.png",
+        "receivesShadow": true,
+        "roughnessPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Roughness.png",
+        "transparent": false,
+        "uvScale": 1.0,
+        "visible": true
+      },
+      "name": "Sphere",
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "position": [
+          -3.0,
+          -0.30000001192092896,
+          1.0
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 1821639190453099062
+    },
+    {
+      "mesh": {
+        "albedoPath": "C:/Dev/DiamondEngine/Assets/Materials/Lava004_2K-PNG/Lava004_2K-PNG_Color.png",
+        "aoPath": "",
+        "castsShadow": true,
+        "emissivePath": "C:/Dev/DiamondEngine/Assets/Materials/Lava004_2K-PNG/Lava004_2K-PNG_Emission.png",
+        "emissiveStrength": 2.5,
+        "materialPath": "",
+        "meshPath": "__cube",
+        "meshSubIndex": 0,
+        "metallicPath": "",
+        "normalPath": "C:/Dev/DiamondEngine/Assets/Materials/Lava004_2K-PNG/Lava004_2K-PNG_NormalGL.png",
+        "receivesShadow": true,
+        "roughnessPath": "C:/Dev/DiamondEngine/Assets/Materials/Lava004_2K-PNG/Lava004_2K-PNG_Roughness.png",
+        "transparent": false,
+        "uvScale": 5.0,
+        "visible": true
+      },
+      "name": "Floor",
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "position": [
+          0.0,
+          -1.7000000476837158,
+          0.0
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          20.0,
+          0.4000000059604645,
+          20.0
+        ]
+      },
+      "uuid": 4821586891642710292
+    },
+    {
+      "mesh": {
+        "albedoPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Color.png",
+        "aoPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_AmbientOcclusion.png",
+        "castsShadow": true,
+        "emissivePath": "",
+        "emissiveStrength": 0.0,
+        "materialPath": "",
+        "meshPath": "__cube",
+        "meshSubIndex": 0,
+        "metallicPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Metalness.png",
+        "normalPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_NormalGL.png",
+        "receivesShadow": true,
+        "roughnessPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Roughness.png",
+        "transparent": false,
+        "uvScale": 1.0,
+        "visible": true
+      },
+      "name": "Cube 1",
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "position": [
+          0.5,
+          -0.30000001192092896,
+          -3.5
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 10708197310419029612
+    },
+    {
+      "mesh": {
+        "albedoPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Color.png",
+        "aoPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_AmbientOcclusion.png",
+        "castsShadow": true,
+        "emissivePath": "",
+        "emissiveStrength": 0.0,
+        "materialPath": "",
+        "meshPath": "__cube",
+        "meshSubIndex": 0,
+        "metallicPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Metalness.png",
+        "normalPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_NormalGL.png",
+        "receivesShadow": true,
+        "roughnessPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Roughness.png",
+        "transparent": false,
+        "uvScale": 1.0,
+        "visible": true
+      },
+      "name": "Cube 2",
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "position": [
+          3.5,
+          0.699999988079071,
+          1.0
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          2.0,
+          1.0
+        ]
+      },
+      "uuid": 193302469036844011
+    },
+    {
+      "mesh": {
+        "albedoPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Color.png",
+        "aoPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_AmbientOcclusion.png",
+        "castsShadow": true,
+        "emissivePath": "",
+        "emissiveStrength": 0.0,
+        "materialPath": "",
+        "meshPath": "__cube",
+        "meshSubIndex": 0,
+        "metallicPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Metalness.png",
+        "normalPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_NormalGL.png",
+        "receivesShadow": true,
+        "roughnessPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Roughness.png",
+        "transparent": false,
+        "uvScale": 1.0,
+        "visible": true
+      },
+      "name": "Cube 3",
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "position": [
+          -4.5,
+          1.7000000476837158,
+          -2.0
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          3.0,
+          1.0
+        ]
+      },
+      "uuid": 4681661720300825329
+    },
+    {
+      "mesh": {
+        "albedoPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Color.png",
+        "aoPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_AmbientOcclusion.png",
+        "castsShadow": true,
+        "emissivePath": "",
+        "emissiveStrength": 0.0,
+        "materialPath": "",
+        "meshPath": "__cube",
+        "meshSubIndex": 0,
+        "metallicPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Metalness.png",
+        "normalPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_NormalGL.png",
+        "receivesShadow": true,
+        "roughnessPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Roughness.png",
+        "transparent": false,
+        "uvScale": 1.0,
+        "visible": true
+      },
+      "name": "Cube 4",
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "position": [
+          -1.5,
+          -0.30000001192092896,
+          3.5
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.2000000476837158,
+          1.2000000476837158,
+          1.2000000476837158
+        ]
+      },
+      "uuid": 16676747030095061966
+    },
+    {
+      "mesh": {
+        "albedoPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Color.png",
+        "aoPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_AmbientOcclusion.png",
+        "castsShadow": true,
+        "emissivePath": "",
+        "emissiveStrength": 0.0,
+        "materialPath": "",
+        "meshPath": "__cube",
+        "meshSubIndex": 0,
+        "metallicPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Metalness.png",
+        "normalPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_NormalGL.png",
+        "receivesShadow": true,
+        "roughnessPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Roughness.png",
+        "transparent": false,
+        "uvScale": 1.0,
+        "visible": true
+      },
+      "name": "Cube 5",
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "position": [
+          5.5,
+          -0.30000001192092896,
+          -3.0
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 178063870468767051
+    },
+    {
+      "mesh": {
+        "albedoPath": "C:/Dev/DiamondEngine/Assets/Models/Cerberus_by_Andrew_Maximov/Textures/Cerberus_A.tga",
+        "aoPath": "",
+        "castsShadow": true,
+        "emissivePath": "",
+        "emissiveStrength": 0.0,
+        "materialPath": "",
+        "meshPath": "C:/Dev/DiamondEngine/Assets/Models/Cerberus_by_Andrew_Maximov/Revolver.FBX",
+        "meshSubIndex": 0,
+        "metallicPath": "C:/Dev/DiamondEngine/Assets/Models/Cerberus_by_Andrew_Maximov/Textures/Cerberus_M.tga",
+        "normalPath": "C:/Dev/DiamondEngine/Assets/Models/Cerberus_by_Andrew_Maximov/Textures/Cerberus_N.tga",
+        "receivesShadow": true,
+        "roughnessPath": "C:/Dev/DiamondEngine/Assets/Models/Cerberus_by_Andrew_Maximov/Textures/Cerberus_R.tga",
+        "transparent": false,
+        "uvScale": 1.0,
+        "visible": true
+      },
+      "name": "Cerberus 0",
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "position": [
+          1.5,
+          1.5,
+          1.0
+        ],
+        "rotation": [
+          0.7071067690849304,
+          -0.7071067690849304,
+          -0.0,
+          -0.0
+        ],
+        "scale": [
+          0.05000000074505806,
+          0.05000000074505806,
+          0.05000000074505806
+        ]
+      },
+      "uuid": 17790053868283917647
+    },
+    {
+      "animator": {
+        "clip": 0,
+        "loop": true,
+        "playing": true,
+        "speed": 1.0,
+        "time": 0.0
+      },
+      "name": "CesiumMan",
+      "skinnedMesh": {
+        "albedoPath": "",
+        "aoPath": "",
+        "castsShadow": true,
+        "emissivePath": "",
+        "emissiveStrength": 0.0,
+        "meshPath": "C:/Dev/DiamondEngine/Assets/Models/CesiumMan.glb",
+        "metallicPath": "",
+        "normalPath": "",
+        "roughnessPath": "",
+        "uvScale": 1.0,
+        "visible": true
+      },
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "position": [
+          -1.5,
+          0.0,
+          1.0
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 3294765267728288979
+    },
+    {
+      "mesh": {
+        "albedoPath": "",
+        "aoPath": "",
+        "castsShadow": false,
+        "emissivePath": "",
+        "emissiveStrength": 0.0,
+        "materialPath": "",
+        "meshPath": "",
+        "meshSubIndex": 0,
+        "metallicPath": "",
+        "normalPath": "",
+        "receivesShadow": true,
+        "roughnessPath": "",
+        "transparent": true,
+        "uvScale": 1.0,
+        "visible": true
+      },
+      "name": "Window 1",
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "position": [
+          0.0,
+          0.0,
+          2.5
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          0.75,
+          0.75,
+          0.75
+        ]
+      },
+      "uuid": 13271616897473352837
+    },
+    {
+      "mesh": {
+        "albedoPath": "",
+        "aoPath": "",
+        "castsShadow": false,
+        "emissivePath": "",
+        "emissiveStrength": 0.0,
+        "materialPath": "",
+        "meshPath": "",
+        "meshSubIndex": 0,
+        "metallicPath": "",
+        "normalPath": "",
+        "receivesShadow": true,
+        "roughnessPath": "",
+        "transparent": true,
+        "uvScale": 1.0,
+        "visible": true
+      },
+      "name": "Window 2",
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "position": [
+          2.0,
+          0.0,
+          0.5
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          0.75,
+          0.75,
+          0.75
+        ]
+      },
+      "uuid": 9821971602579554158
+    },
+    {
+      "mesh": {
+        "albedoPath": "",
+        "aoPath": "",
+        "castsShadow": false,
+        "emissivePath": "",
+        "emissiveStrength": 0.0,
+        "materialPath": "",
+        "meshPath": "",
+        "meshSubIndex": 0,
+        "metallicPath": "",
+        "normalPath": "",
+        "receivesShadow": true,
+        "roughnessPath": "",
+        "transparent": true,
+        "uvScale": 1.0,
+        "visible": true
+      },
+      "name": "Window 3",
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "position": [
+          -2.0,
+          0.5,
+          1.0
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          0.75,
+          0.75,
+          0.75
+        ]
+      },
+      "uuid": 12088139558793268026
+    },
+    {
+      "light": {
+        "color": [
+          1.0,
+          0.3330000042915344,
+          0.16699999570846558
+        ],
+        "innerConeAngle": 15.0,
+        "intensity": 600.0,
+        "outerConeAngle": 30.0,
+        "radius": 10.0,
+        "type": 1
+      },
+      "name": "Point Light 1",
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "position": [
+          1.0,
+          3.0,
+          2.0
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 14867252999549733982
+    },
+    {
+      "light": {
+        "color": [
+          0.13300000131130219,
+          0.3330000042915344,
+          1.0
+        ],
+        "innerConeAngle": 15.0,
+        "intensity": 600.0,
+        "outerConeAngle": 30.0,
+        "radius": 10.0,
+        "type": 1
+      },
+      "name": "Point Light 2",
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "position": [
+          -5.0,
+          2.0,
+          4.0
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 6114414922055326341
+    },
+    {
+      "light": {
+        "color": [
+          0.5,
+          1.0,
+          0.3330000042915344
+        ],
+        "innerConeAngle": 15.0,
+        "intensity": 600.0,
+        "outerConeAngle": 30.0,
+        "radius": 10.0,
+        "type": 1
+      },
+      "name": "Point Light 3",
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "position": [
+          8.0,
+          4.0,
+          -6.0
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 10105754032961949995
+    },
+    {
+      "light": {
+        "color": [
+          1.0,
+          0.800000011920929,
+          0.10000000149011612
+        ],
+        "innerConeAngle": 15.0,
+        "intensity": 500.0,
+        "outerConeAngle": 30.0,
+        "radius": 10.0,
+        "type": 1
+      },
+      "name": "Point Light 4",
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "position": [
+          -8.0,
+          4.0,
+          -6.0
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 13011816037588203450
+    },
+    {
+      "light": {
+        "color": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "innerConeAngle": 15.0,
+        "intensity": 3.0,
+        "outerConeAngle": 30.0,
+        "radius": 10.0,
+        "type": 0
+      },
+      "name": "Sun",
+      "transform": {
+        "eulerDegrees": [
+          15.048063278198242,
+          3.4431450366973877,
+          -25.640003204345703
+        ],
+        "position": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rotation": [
+          0.9653673768043518,
+          0.13422897458076477,
+          0.0,
+          -0.2237149178981781
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 14974584395457170535
+    }
+  ]
+}

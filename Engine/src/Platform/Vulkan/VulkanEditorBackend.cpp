@@ -1,0 +1,348 @@
+#include "Editor/EditorBackend.h"
+
+// The Vulkan implementation of the shared editor loop's backend interface
+// (editor-wiring step 3). Lives inside the engine — like the demos — because
+// the Vulkan backend's headers, defines, and volk include path are private to
+// MyEngine; the app only sees CreateVulkanEditorBackend().
+//
+// This TU is compiled unconditionally: without the Vulkan backend it collapses
+// to a stub factory (same pattern as SceneRenderer.cpp), so Sandbox links
+// either way.
+
+#ifdef DIAMOND_ENABLE_VULKAN
+
+#include "Renderer/SceneRenderer.h"
+#include "Renderer/RendererAPI.h"
+#include "Renderer/RHI/RHIDevice.h"
+#include "Renderer/RHI/RHIEnums.h"
+#include "Renderer/TextureData.h"
+#include "Core/Camera.h"
+#include "Core/Input.h"
+#include "Scene/Scene.h"
+#include "Scene/UISystem.h"
+#include "Scene/UIRenderSystem.h"
+#include "Scene/UIInputSystem.h"
+#include "Scene/UINavigationSystem.h"
+
+#include "Platform/Vulkan/VulkanImGuiLayer.h"
+#include "Platform/Vulkan/RHI/VulkanRHIDevice.h"
+#include "Platform/Vulkan/RHI/VulkanRHIResources.h"
+#include "Platform/Vulkan/Resources/VulkanRenderer2D.h"
+
+#include "imgui.h"
+#include "backends/imgui_impl_vulkan.h"
+
+#define GLFW_INCLUDE_NONE
+#include <GLFW/glfw3.h>
+#include <glm/glm.hpp>
+#include <spdlog/spdlog.h>
+
+#include <algorithm>
+#include <array>
+#include <cstdint>
+#include <memory>
+
+namespace Diamond {
+
+namespace {
+
+class VulkanEditorBackend final : public EditorBackend {
+public:
+    ~VulkanEditorBackend() override { Shutdown(); }
+
+    bool Init(uint32_t width, uint32_t height, const char* title) override {
+        if (!glfwVulkanSupported()) {
+            spdlog::critical("[VulkanEditor] GLFW reports no Vulkan loader present");
+            return false;
+        }
+
+        glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+        m_Window = glfwCreateWindow((int)width, (int)height, title, nullptr, nullptr);
+        if (!m_Window) {
+            spdlog::critical("[VulkanEditor] glfwCreateWindow failed");
+            return false;
+        }
+
+        m_Device = RHIDevice::Create(m_Window, RHIBackend::Vulkan);
+        if (!m_Device) {
+            spdlog::critical("[VulkanEditor] device creation failed");
+            glfwDestroyWindow(m_Window);
+            m_Window = nullptr;
+            return false;
+        }
+        m_VkDevice = static_cast<VulkanRHIDevice*>(m_Device.get());
+
+        glfwSetWindowUserPointer(m_Window, this);
+        glfwSetFramebufferSizeCallback(m_Window, [](GLFWwindow* w, int, int) {
+            auto* self = static_cast<VulkanEditorBackend*>(glfwGetWindowUserPointer(w));
+            if (self && self->m_Device) self->m_Device->NotifyResize();
+        });
+        glfwSetDropCallback(m_Window, [](GLFWwindow* w, int count, const char** paths) {
+            auto* self = static_cast<VulkanEditorBackend*>(glfwGetWindowUserPointer(w));
+            if (self && self->m_DropHandler) self->m_DropHandler(count, paths);
+        });
+
+        // Route the static factories to the Vulkan backend before the app loads
+        // any assets: Mesh::Create hands out CPU-retained meshes the
+        // SceneRenderer uploads lazily, and the Texture factory goes through
+        // this device so image/font bakes come out Vulkan-backed.
+        RendererAPI::SetAPI(RendererAPI::API::Vulkan);
+        Texture::SetResourceDevice(m_Device.get());
+
+        // The scene renders offscreen at the window-framebuffer size (same
+        // policy as the GL editor: panels stretch the image); Tonemap lands in
+        // OutputColor(), which ImGui samples inside the viewport panel — the
+        // backbuffer belongs to ImGui.
+        int fbW = 0, fbH = 0;
+        glfwGetFramebufferSize(m_Window, &fbW, &fbH);
+        m_SceneW = (uint32_t)std::max(fbW, 64);
+        m_SceneH = (uint32_t)std::max(fbH, 64);
+        m_WantW  = m_SceneW;
+        m_WantH  = m_SceneH;
+
+        m_Renderer = SceneRenderer::Create(m_Device.get(), m_SceneW, m_SceneH,
+                                           /*offscreen*/ true);
+        if (!m_Renderer) {
+            spdlog::critical("[VulkanEditor] SceneRenderer::Create returned null");
+            ReleaseDevice();
+            return false;
+        }
+
+        // In-game UI batchers, recorded by the SceneRenderer's UI2D passes into
+        // the RGBA8 scene outputs. One per render view: both overlays run in
+        // the same frame, and a Renderer2D's dynamic vertex stream is written
+        // once per frame slot.
+        m_R2D = std::make_unique<VulkanRenderer2D>(
+            m_Device.get(), DIAMOND_VULKAN_SHADER_DIR, RHIFormat::RGBA8);
+        m_R2DGame = std::make_unique<VulkanRenderer2D>(
+            m_Device.get(), DIAMOND_VULKAN_SHADER_DIR, RHIFormat::RGBA8);
+
+        // Editor-viewport UI preview — visual only (no input pass), gated by
+        // the viewport's "Show UI" toggle, mirroring the GL editor.
+        m_Renderer->SetUIOverlay([this](RHICommandList* cmd) {
+            if (!m_Frame.scene || !m_Frame.showUI) return;
+            auto& reg = m_Frame.scene->GetRegistry();
+            const glm::vec2 screen { (float)m_SceneW, (float)m_SceneH };
+            m_R2D->SetCommandList(cmd);
+            UISystem::Resolve(reg, screen);
+            UIRenderSystem::Render(reg, *m_R2D, screen);
+        });
+
+        // Game-view HUD — the interactive in-game UI during play: resolve the
+        // canvases at the game view's size, hit-test the game-panel cursor,
+        // run gamepad focus nav, then draw. Runs only when the game view
+        // renders (play mode + primary camera), so button state mutates once
+        // per frame, exactly like the GL editor's game viewport.
+        m_Renderer->SetGameUIOverlay([this](RHICommandList* cmd) {
+            if (!m_Frame.scene || !m_Frame.playing) return;
+            auto& reg = m_Frame.scene->GetRegistry();
+            const glm::vec2 screen { (float)m_GameW, (float)m_GameH };
+            m_R2DGame->SetCommandList(cmd);
+            UISystem::Resolve(reg, screen);
+
+            glm::vec2 pointer { -1.0f, -1.0f };
+            const glm::vec2 n = m_Frame.gameMouseNorm;
+            if (n.x >= 0.0f && n.y >= 0.0f && n.x < 1.0f && n.y < 1.0f)
+                pointer = n * screen;
+            UIInputSystem::Update(reg, pointer,
+                                  Input::IsMouseButtonHeld(MouseButton::Left));
+
+            UINavigationSystem::UINavInput nav = UI::PollGamepadNav();
+            nav.mouseMoved = glm::length(Input::GetMouseDelta()) > 0.0f ||
+                             Input::IsMouseButtonHeld(MouseButton::Left);
+            UINavigationSystem::Update(reg, nav);
+
+            UIRenderSystem::Render(reg, *m_R2DGame, screen);
+        });
+
+        m_ImGui.Init(m_Window, m_VkDevice);
+        if (!m_ImGui.IsInitialized()) {
+            spdlog::critical("[VulkanEditor] ImGui Vulkan binding failed");
+            m_R2DGame.reset();
+            m_R2D.reset();
+            m_Renderer.reset();
+            ReleaseDevice();
+            return false;
+        }
+
+        RegisterViewImages(m_ViewportSets, m_Renderer->OutputColor());
+        return true;
+    }
+
+    void Shutdown() override {
+        if (!m_Device) return;
+        // Teardown: everything VMA-backed dies before the device; ImGui's
+        // descriptors (viewport/game sets included) die with its own pool, and
+        // its Shutdown destroys the ImGui context.
+        m_Device->WaitIdle();
+        m_ImGui.Shutdown();
+        m_R2DGame.reset();
+        m_R2D.reset();
+        m_Renderer.reset();
+        ReleaseDevice();
+    }
+
+    GLFWwindow* Window() const override { return m_Window; }
+    const char* Name() const override { return "Vulkan"; }
+
+    void SetDropHandler(std::function<void(int, const char**)> handler) override {
+        m_DropHandler = std::move(handler);
+    }
+
+    void BeginImGuiFrame() override {
+        // Apply settled window resizes BEFORE any ImGui state references the
+        // old targets: SceneViewImage() hands this frame's descriptor to the
+        // viewport panel, and re-registering (RemoveTexture) after
+        // ImGui::Render would leave the baked draw data pointing at a freed
+        // descriptor set. Resize's internal WaitIdle makes the swap safe here.
+        ApplyPendingResize();
+        m_ImGui.BeginFrame();
+    }
+
+    void OnImGuiPanels() override {
+        if (ImGui::Begin("Renderer")) {
+            ImGui::Text("Backend: Vulkan (deferred, RHI render graph)");
+            ImGui::Text("Scene output: %ux%u", m_SceneW, m_SceneH);
+            ImGui::Separator();
+            // Global exposure (HDR scale before the ACES tonemap; 1.0 = GL parity).
+            if (ImGui::SliderFloat("Exposure", &m_Exposure, 0.1f, 2.0f, "%.2f"))
+                m_Renderer->SetExposure(m_Exposure);
+        }
+        ImGui::End();
+    }
+
+    void RenderFrame(const EditorFrameInput& input) override {
+        // Consumed by the overlay lambdas while the graph records, later this call.
+        m_Frame = input;
+
+        // The game view renders only during play with a primary camera (the GL
+        // editor's policy); it is lazily created on the first enable.
+        m_Renderer->SetGameViewEnabled(input.wantGameView);
+        if (input.wantGameView && !m_GameViewCreated) {
+            m_GameViewCreated = true;
+            m_GameW = m_SceneW;   // created at the main view's size
+            m_GameH = m_SceneH;
+            RegisterViewImages(m_GameSets, m_Renderer->GameViewColor());
+        }
+
+        m_Renderer->RenderToSwapchain(*input.scene, *input.editorCamera,
+            [this](RHICommandList* cmd) { m_ImGui.Submit(cmd); });
+    }
+
+    EditorViewImage SceneViewImage() const override {
+        // Per-frame-in-flight descriptor: each frame ImGui must sample the copy
+        // of the offscreen target the graph writes this frame.
+        return { (uint64_t)(uintptr_t)m_ViewportSets[m_VkDevice->CurrentFrame()],
+                 /*flipY*/ false };
+    }
+
+    EditorViewImage GameViewImage() const override {
+        // GameViewActive reflects the last rendered frame; while false the
+        // image holds no valid frame, so let the panel show its placeholder.
+        if (!m_GameViewCreated || !m_Renderer->GameViewActive()) return {};
+        return { (uint64_t)(uintptr_t)m_GameSets[m_VkDevice->CurrentFrame()],
+                 /*flipY*/ false };
+    }
+
+private:
+    static constexpr int kResizeSettleFrames = 15;
+
+    // Track the window framebuffer size, debounced: a Resize is a WaitIdle +
+    // pass rebuild, so only fire once the size has settled for a run of frames.
+    void ApplyPendingResize() {
+        int fbW = 0, fbH = 0;
+        glfwGetFramebufferSize(m_Window, &fbW, &fbH);
+        if (fbW <= 0 || fbH <= 0) return;   // minimized
+
+        if ((uint32_t)fbW == m_WantW && (uint32_t)fbH == m_WantH) {
+            ++m_SizeStableFrames;
+        } else {
+            m_WantW = (uint32_t)fbW;
+            m_WantH = (uint32_t)fbH;
+            m_SizeStableFrames = 0;
+        }
+        if ((m_WantW != m_SceneW || m_WantH != m_SceneH) &&
+            m_SizeStableFrames >= kResizeSettleFrames) {
+            m_SceneW = m_WantW;
+            m_SceneH = m_WantH;
+            m_Renderer->Resize(m_SceneW, m_SceneH);
+            RegisterViewImages(m_ViewportSets, m_Renderer->OutputColor());
+            if (m_GameViewCreated) {
+                m_GameW = m_SceneW;
+                m_GameH = m_SceneH;
+                m_Renderer->ResizeGameView(m_GameW, m_GameH);
+                RegisterViewImages(m_GameSets, m_Renderer->GameViewColor());
+            }
+        }
+    }
+
+    using ImageSets = std::array<VkDescriptorSet, VulkanRHIDevice::kFramesInFlight>;
+
+    // One descriptor per frame-in-flight per scene image: the offscreen targets
+    // are per-frame images internally, transitioned to SHADER_READ_ONLY before
+    // ImGui draws (by the EditorOverlay pass's read for the main viewport, by
+    // the SceneRenderer's post-execute transition for the game view).
+    void RegisterViewImages(ImageSets& sets, RHITexture* rhiTex) {
+        auto* tex = static_cast<VulkanRHITexture*>(rhiTex);
+        for (uint32_t i = 0; i < VulkanRHIDevice::kFramesInFlight; ++i) {
+            if (sets[i]) ImGui_ImplVulkan_RemoveTexture(sets[i]);
+            sets[i] = ImGui_ImplVulkan_AddTexture(
+                tex->Sampler(), tex->View(i), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        }
+    }
+
+    void ReleaseDevice() {
+        Texture::SetResourceDevice(nullptr);
+        m_Device.reset();
+        m_VkDevice = nullptr;
+        if (m_Window) {
+            glfwDestroyWindow(m_Window);
+            m_Window = nullptr;
+        }
+    }
+
+    GLFWwindow*                    m_Window   = nullptr;
+    std::unique_ptr<RHIDevice>     m_Device;
+    VulkanRHIDevice*               m_VkDevice = nullptr;
+    std::unique_ptr<SceneRenderer> m_Renderer;
+    std::unique_ptr<VulkanRenderer2D> m_R2D;      // main-view UI preview
+    std::unique_ptr<VulkanRenderer2D> m_R2DGame;  // game-view HUD
+    VulkanImGuiLayer               m_ImGui;
+
+    std::function<void(int, const char**)> m_DropHandler;
+
+    EditorFrameInput m_Frame;   // latest frame's state, read by overlay lambdas
+
+    uint32_t m_SceneW = 0, m_SceneH = 0;   // main-view render size
+    uint32_t m_GameW  = 0, m_GameH  = 0;   // game-view render size
+    uint32_t m_WantW  = 0, m_WantH  = 0;   // debounced framebuffer size
+    int      m_SizeStableFrames = 0;
+    bool     m_GameViewCreated  = false;
+
+    ImageSets m_ViewportSets {};
+    ImageSets m_GameSets {};
+
+    float m_Exposure = 1.0f;
+};
+
+} // namespace
+
+std::unique_ptr<EditorBackend> CreateVulkanEditorBackend() {
+    return std::make_unique<VulkanEditorBackend>();
+}
+
+} // namespace Diamond
+
+#else  // !DIAMOND_ENABLE_VULKAN
+
+#include <spdlog/spdlog.h>
+
+namespace Diamond {
+std::unique_ptr<EditorBackend> CreateVulkanEditorBackend() {
+    spdlog::critical("--vulkan requested but this build has no Vulkan backend "
+                     "(DIAMOND_ENABLE_VULKAN is off)");
+    return nullptr;
+}
+} // namespace Diamond
+
+#endif

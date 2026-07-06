@@ -265,7 +265,7 @@ add_library(MyEngine STATIC
     src/Renderer/RHI/RHIRenderGraph.cpp
     # Compiled in every build (like SceneRenderer.cpp): collapses to a stub
     # without DIAMOND_ENABLE_VULKAN so Sandbox's --vulkan dispatch always links.
-    src/Platform/Vulkan/VulkanEditorApp.cpp
+    src/Platform/Vulkan/VulkanEditorBackend.cpp
 )
 
 target_include_directories(MyEngine

@@ -2,6 +2,7 @@ add_executable(Sandbox
     src/main.cpp
     src/Scripts/AllScripts.h
     src/Editor/EditorLayers.cpp
+    src/Editor/GLEditorBackend.cpp
     src/Editor/Command.cpp
     src/Editor/SceneSerializer.cpp
     src/Editor/MeshThumbnailRenderer.cpp
