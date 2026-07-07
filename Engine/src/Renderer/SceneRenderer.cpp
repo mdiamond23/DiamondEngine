@@ -220,6 +220,20 @@ public:
         m_Materials.erase(mat);
     }
 
+    // See SceneRenderer.h — every map here is keyed on a pointer (or entt id)
+    // the old scene owned; a new scene's allocations can land on the same
+    // addresses, so stale entries don't just leak, they alias.
+    void InvalidateSceneCaches() override {
+        m_Device->WaitIdle();
+        m_Meshes.clear();
+        m_SkinnedMeshes.clear();
+        m_Materials.clear();
+        m_Skinned.clear();
+        m_TransparentAlbedos.clear();
+        for (auto& v : m_Views)
+            if (v) v->transparency->DropAlbedoSets();
+    }
+
     void EnsureParticlePreview(uint32_t width, uint32_t height, const glm::vec3& bgColor) override {
         if (width == 0 || height == 0) return;
         if (m_Preview && width == m_Preview->width && height == m_Preview->height) return;

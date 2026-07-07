@@ -59,6 +59,11 @@ public:
     // cached per texture for the pass's lifetime. The caller keeps 'albedo' alive.
     RHIResourceSet* GetOrCreateAlbedoSet(RHITexture* albedo);
 
+    // Scene reload: the albedo textures behind the cached sets are being freed,
+    // and a new texture at a recycled address would alias a stale set. Caller
+    // must WaitIdle() first (Reload()'s contract); sets rebuild lazily.
+    void DropAlbedoSets() { m_AlbedoSets.clear(); }
+
     // Upload this frame's camera. Call after BeginFrame, before graph.Execute.
     void SetCamera(const glm::mat4& view, const glm::mat4& projection);
 

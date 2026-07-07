@@ -134,6 +134,15 @@ public:
     // still be reading.
     virtual void InvalidateMaterial(const PBRMaterial* mat) = 0;
 
+    // Scene (re)load: every Mesh/PBRMaterial the old scene owned is destroyed,
+    // and the allocator readily recycles their addresses for the new scene's
+    // objects — a pointer-keyed cache hit on such an address would silently
+    // draw the old scene's geometry/textures. Drops every cache keyed on
+    // scene-owned pointers (meshes, materials, transparency albedo sets,
+    // per-entity skinning state); all rebuild lazily over the next frame.
+    // Same WaitIdle stall as InvalidateMaterial — scene-load rate, so fine.
+    virtual void InvalidateSceneCaches() = 0;
+
     // ── Particle preview panel (editor-only) ─────────────────────────────────
     // A standalone render target for ParticlePreviewPanel: no G-buffer, lighting,
     // or shadows — just a clear-to-bgColor pass followed by a billboard draw.

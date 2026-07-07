@@ -33,6 +33,12 @@ public:
     void SetMaterialInvalidator(std::function<void(const Diamond::PBRMaterial*)> fn) {
         m_Inspector.SetMaterialInvalidator(std::move(fn));
     }
+    // The backend's scene-reload hook (no-op under GL): called after the scene
+    // is rebuilt (open/new scene, play-stop snapshot restore) so the Vulkan
+    // renderer drops GPU caches keyed by the old scene's object addresses.
+    void SetSceneCacheInvalidator(std::function<void()> fn) {
+        m_SceneCacheInvalidator = std::move(fn);
+    }
     void UpdateCamera(const glm::mat4& view, const glm::mat4& proj, const glm::vec3& camPos);
     EditorContext& GetContext() { return m_Context; }
     bool IsViewportActive() const     { return m_Viewport.IsActive(); }
@@ -49,6 +55,7 @@ private:
 
     void DrawNewScriptDialog();
 
+    std::function<void()> m_SceneCacheInvalidator;
     bool              m_LayoutInitialized   = false;
     bool              m_OpenNewScriptDialog = false;
     std::string       m_SceneSnapshot;

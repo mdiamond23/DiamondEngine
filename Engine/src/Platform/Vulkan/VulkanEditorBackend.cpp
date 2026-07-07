@@ -393,6 +393,10 @@ public:
         m_Renderer->InvalidateMaterial(mat);
     }
 
+    void InvalidateSceneCaches() override {
+        m_Renderer->InvalidateSceneCaches();
+    }
+
 private:
     static constexpr int kResizeSettleFrames = 15;
 

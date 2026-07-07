@@ -125,18 +125,18 @@ The engine's renderer is already abstracted behind interfaces (`Mesh`, `Shader`,
 `RendererAPI`). The strategy is to implement Vulkan versions of those interfaces alongside
 the existing OpenGL ones, then switch the backend via a compile-time or runtime flag.
 
-- [ ] Abstract `RendererAPI` fully — ensure no raw `gl*` calls exist outside `Platform/OpenGL/`
-- [ ] Vulkan device + instance setup (physical device selection, logical device, queues)
-- [ ] Swapchain + render pass + framebuffers
-- [ ] Vulkan shader pipeline — compile GLSL to SPIR-V via `glslc` as a CMake step
-- [ ] Vertex/index buffer abstraction (`VulkanMesh`)
-- [ ] Uniform buffers + descriptor sets (replaces `glUniform*` calls)
-- [ ] Texture + sampler abstraction (`VulkanTexture`)
-- [ ] Deferred rendering G-buffer in Vulkan (multiple render passes / subpasses)
-- [ ] Port shadow passes (CSM + point lights)
-- [ ] Port IBL, SSAO, and PBR lighting pass
-- [ ] ImGui Vulkan backend (`imgui_impl_vulkan`)
-- [ ] Remove OpenGL backend once Vulkan is feature-complete (or keep both behind a flag)
+- [x] Abstract `RendererAPI` fully — ensure no raw `gl*` calls exist outside `Platform/OpenGL/`
+- [x] Vulkan device + instance setup (physical device selection, logical device, queues)
+- [x] Swapchain + render pass + framebuffers
+- [x] Vulkan shader pipeline — compile GLSL to SPIR-V via `glslc` as a CMake step
+- [x] Vertex/index buffer abstraction (`VulkanMesh`)
+- [x] Uniform buffers + descriptor sets (replaces `glUniform*` calls)
+- [x] Texture + sampler abstraction (`VulkanTexture`)
+- [x] Deferred rendering G-buffer in Vulkan (multiple render passes / subpasses)
+- [x] Port shadow passes (CSM + point lights)
+- [x] Port IBL, SSAO, and PBR lighting pass
+- [x] ImGui Vulkan backend (`imgui_impl_vulkan`)
+- [x] Remove OpenGL backend once Vulkan is feature-complete (or keep both behind a flag)
 
 ### Notes
 - Add [Vulkan SDK](https://vulkan.lunarg.com) + `Vulkan::Vulkan` CMake target via `find_package(Vulkan REQUIRED)`

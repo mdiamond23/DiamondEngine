@@ -147,6 +147,7 @@ EditorLayer::EditorLayer(Scene* scene, ImFont* iconFont)
         m_Context.Commands.Clear();
         if (SceneSerializer::Load(*m_Context.ActiveScene, path))
             m_Context.currentScenePath = path;
+        if (m_SceneCacheInvalidator) m_SceneCacheInvalidator();
     });
 }
 
@@ -268,6 +269,7 @@ void EditorLayer::DrawToolbar()
             m_Context.Commands.Clear();
             if (!m_SceneSnapshot.empty())
                 SceneSerializer::FromString(*scene, m_SceneSnapshot);
+            if (m_SceneCacheInvalidator) m_SceneCacheInvalidator();
         }
         ImGui::PopStyleColor(3);
 
@@ -381,6 +383,7 @@ void EditorLayer::DrawMenuBar()
             m_Context.Commands.Clear();
             m_Context.currentScenePath = "";
             m_Context.ActiveScene->Clear();
+            if (m_SceneCacheInvalidator) m_SceneCacheInvalidator();
         }
         ImGui::Separator();
         if (ImGui::MenuItem("Open Scene...", "Ctrl+O")) {
@@ -390,6 +393,7 @@ void EditorLayer::DrawMenuBar()
                 m_Context.Commands.Clear();
                 if (SceneSerializer::Load(*m_Context.ActiveScene, path))
                     m_Context.currentScenePath = path;
+                if (m_SceneCacheInvalidator) m_SceneCacheInvalidator();
             }
         }
         if (ImGui::MenuItem("Save Scene", "Ctrl+S")) {

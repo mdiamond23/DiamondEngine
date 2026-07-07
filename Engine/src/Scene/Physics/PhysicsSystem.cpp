@@ -3,7 +3,7 @@
 #include <Jolt/RegisterTypes.h>
 #include <Jolt/Core/Factory.h>
 #include <Jolt/Core/TempAllocator.h>
-#include <Jolt/Core/JobSystemSingleThreaded.h>
+#include <Jolt/Core/JobSystemThreadPool.h>
 #include <Jolt/Physics/PhysicsSystem.h>
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
 #include <Jolt/Physics/Body/BodyActivationListener.h>
@@ -59,6 +59,7 @@
 #include <cstdint>
 #include <algorithm>
 #include <cmath>
+#include <thread>
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -404,7 +405,7 @@ struct PhysicsSystem::Impl {
     double                                        simTime = 0.0;   // running physics clock (for get-up wobble noise)
 
     std::unique_ptr<JPH::TempAllocatorImpl>       tempAllocator;
-    std::unique_ptr<JPH::JobSystemSingleThreaded>  jobSystem;     // swap for JobSystemThreadPool to enable MT
+    std::unique_ptr<JPH::JobSystemThreadPool>      jobSystem;
     std::unique_ptr<JPH::PhysicsSystem>            joltSystem;
     std::unique_ptr<ContactListener>               contactListener;
     JPH::Ref<JPH::GroupFilter>                     groupFilter;   // shared by all grouped bodies
@@ -1591,7 +1592,9 @@ void PhysicsSystem::OnStart(Scene& scene) {
 
     m_impl = std::make_unique<Impl>();
     m_impl->tempAllocator = std::make_unique<JPH::TempAllocatorImpl>(32 * 1024 * 1024);
-    m_impl->jobSystem     = std::make_unique<JPH::JobSystemSingleThreaded>(2048);
+    int numThreads = std::max(1, static_cast<int>(std::thread::hardware_concurrency()) - 1);
+    m_impl->jobSystem = std::make_unique<JPH::JobSystemThreadPool>(
+        JPH::cMaxPhysicsJobs, JPH::cMaxPhysicsBarriers, numThreads);
 
     m_impl->joltSystem = std::make_unique<JPH::PhysicsSystem>();
     m_impl->joltSystem->Init(

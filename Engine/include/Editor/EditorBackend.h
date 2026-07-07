@@ -131,6 +131,14 @@ public:
     // no-op. The Vulkan backend bakes a descriptor set per material and must
     // drop the cached one so it rebuilds from the material's current state.
     virtual void InvalidateMaterial(const PBRMaterial*) {}
+
+    // Scene (re)load — new scene opened, or play-stop snapshot restore. The GL
+    // backend re-binds everything per draw, so default no-op. The Vulkan
+    // backend caches GPU meshes/material sets keyed by the scene objects'
+    // addresses; the new scene's allocations can recycle those addresses, so
+    // the caches must be dropped or the renderer draws the old scene's
+    // geometry/textures. Call after the scene has been rebuilt.
+    virtual void InvalidateSceneCaches() {}
 };
 
 // Factory for the engine-owned Vulkan implementation (the Vulkan headers and

@@ -330,6 +330,9 @@ int main(int argc, char** argv)
     editorLayer.SetMaterialInvalidator([&backend](const PBRMaterial* mat) {
         backend->InvalidateMaterial(mat);
     });
+    editorLayer.SetSceneCacheInvalidator([&backend] {
+        backend->InvalidateSceneCaches();
+    });
     if (glBackend) glBackend->AttachEditorLayer(&editorLayer);
 
     BuildDefaultScene(scene);
