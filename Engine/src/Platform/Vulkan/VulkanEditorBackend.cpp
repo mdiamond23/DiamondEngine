@@ -24,6 +24,8 @@
 #include "Scene/UIRenderSystem.h"
 #include "Scene/UIInputSystem.h"
 #include "Scene/UINavigationSystem.h"
+#include "Scene/DebugVisualization.h"
+#include "Scene/Physics/PhysicsAPI.h"
 
 #include "Platform/Vulkan/VulkanImGuiLayer.h"
 #include "Platform/Vulkan/RHI/VulkanRHIDevice.h"
@@ -346,6 +348,18 @@ public:
             m_Renderer->EnsureParticlePreview(previewW, previewH, input.previewBgColor);
             RegisterViewImages(m_PreviewSets, m_Renderer->ParticlePreviewColor());
             m_PreviewCreated = true;
+        }
+
+        // Collider/ragdoll/IK/audio debug wireframes — accumulate into
+        // DebugDraw's generic buffer before the frame records; the main view's
+        // VulkanDebugDrawPass picks them up in RenderView via SetFrameData.
+        // Mirrors the GL editor's DrawColliders/DrawRagdolls/DrawIKDebug/
+        // DrawAudioDebug + DebugDraw::Flush ordering.
+        if (input.showDebugDraw) {
+            Physics::DrawColliders(*input.scene);
+            if (input.scene->IsPlaying()) Physics::DrawRagdolls(*input.scene);
+            DrawIKDebug(*input.scene, input.selectedEntity, input.activeIKChain);
+            DrawAudioDebug(*input.scene, input.selectedEntity);
         }
 
         m_Renderer->RenderToSwapchain(*input.scene, *input.editorCamera,

@@ -417,6 +417,9 @@ int main(int argc, char** argv)
         frame.playing      = scene.IsPlaying();
         frame.showUI       = editorLayer.GetContext().showUI;
         frame.gameMouseNorm = editorLayer.GetContext().gameViewportMouseNorm;
+        frame.showDebugDraw  = editorLayer.GetContext().showDebugDraw;
+        frame.selectedEntity = editorLayer.GetContext().PrimarySelection();
+        frame.activeIKChain  = editorLayer.GetContext().activeIKChain;
 
         const entt::entity primaryCam = scene.GetPrimaryCamera();
         frame.wantGameView = frame.playing && primaryCam != entt::null;

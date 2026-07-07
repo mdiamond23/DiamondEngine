@@ -10,7 +10,7 @@ namespace {
 // ---------------------------------------------------------------------------
 // GPU state
 // ---------------------------------------------------------------------------
-struct Vert { glm::vec3 pos, color; };
+using Vert = Vertex;
 
 static GLuint            s_VAO  = 0;
 static GLuint            s_VBO  = 0;
@@ -176,6 +176,12 @@ void Flush(const glm::mat4& vp) {
     glDepthMask(depthMask);
 
     s_Verts.clear();
+}
+
+std::vector<Vertex> TakeVertices() {
+    std::vector<Vertex> out = std::move(s_Verts);
+    s_Verts.clear();
+    return out;
 }
 
 } // namespace DebugDraw

@@ -2,6 +2,8 @@
 
 #include "Renderer/ParticleRenderer.h"
 
+#include <entt/entt.hpp>
+
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -44,6 +46,14 @@ struct EditorFrameInput {
     bool  playing      = false;   // scene play mode (paused still counts)
     bool  showUI       = false;   // editor-viewport UI-canvas preview toggle
     bool  wantGameView = false;   // playing && the scene has a primary camera
+
+    // Collider/ragdoll/IK/audio debug wireframes (EditorContext::showDebugDraw).
+    // GL drives Physics::DrawColliders/DrawRagdolls + DrawIKDebug/DrawAudioDebug
+    // directly via its own EditorLayer* (m_Editor); Vulkan can't include
+    // Sandbox's EditorContext, so the loop extracts just what those calls need.
+    bool          showDebugDraw = false;
+    entt::entity  selectedEntity = entt::null;   // IK/audio debug highlight
+    int           activeIKChain  = 0;
 
     // Game-panel cursor normalized to [0,1) (top-left origin), components < 0
     // or >= 1 mean outside — maps the OS mouse into the in-game UI for

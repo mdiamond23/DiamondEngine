@@ -20,6 +20,7 @@
 #include "Platform/Vulkan/Passes/Deferred/VulkanSSAOPass.h"
 #include "Platform/Vulkan/Passes/Deferred/VulkanDeferredLightingPass.h"
 #include "Platform/Vulkan/Passes/Deferred/VulkanSkyboxPass.h"
+#include "Platform/Vulkan/Passes/Debug/VulkanDebugDrawPass.h"
 #include "Platform/Vulkan/Passes/Shadows/VulkanCSMPass.h"
 #include "Platform/Vulkan/Passes/Shadows/VulkanSpotShadowPass.h"
 #include "Platform/Vulkan/Passes/Shadows/VulkanPointShadowPass.h"
@@ -512,6 +513,7 @@ private:
         std::unique_ptr<VulkanTransparencyPass>     transparency;
         std::unique_ptr<VulkanTonemapPass>          tonemap;
         std::unique_ptr<VulkanParticleRenderer>     particles;
+        std::unique_ptr<VulkanDebugDrawPass>        debugDraw;   // main view only
 
         std::vector<DrawItem>        drawList;          // frustum-culled — geometry pass
         std::vector<SkinnedDrawItem> skinnedDraws;      // frustum-culled — skinned geometry
@@ -617,6 +619,14 @@ private:
             offscreen ? RHIFormat::RGBA8 : m_Device->SwapchainFormat());
         v->tonemap->SetExposure(m_Exposure);
         v->particles = std::make_unique<VulkanParticleRenderer>(m_Device, shaderDir, RHIFormat::RGBA16F);
+
+        // Collider/ragdoll/IK/audio debug wireframes — only the main (editor)
+        // view draws them, matching the GL editor's DrawColliders/DrawAudioDebug
+        // + DebugDraw::Flush, which only ever targets the editor viewport FBO.
+        if (viewIdx == kMainView)
+            v->debugDraw = std::make_unique<VulkanDebugDrawPass>(
+                m_Device, shaderDir,
+                offscreen ? RHIFormat::RGBA8 : m_Device->SwapchainFormat());
 
         BuildViewGraph(*v, viewIdx);
         return v;
@@ -734,6 +744,12 @@ private:
             v.outputColor = g.DeclareTexture("outputColor", { v.width, v.height, RHIFormat::RGBA8 });
         v.tonemap->AddToGraph(g, hdrLit, v.offscreen ? v.outputColor : RGTextureHandle{});
 
+        // Collider/ragdoll/IK/audio debug wireframes — on top of the tonemapped
+        // LDR scene, read-only depth test against the G-buffer depth. Matches
+        // the GL editor's frame order (scene -> debug draw -> UI canvas).
+        if (v.debugDraw)
+            v.debugDraw->AddToGraph(g, v.outputColor, /*toSwapchain*/ !v.offscreen, gDepth);
+
         // In-game UI — a 2D pass over the tonemapped LDR scene. Loads (doesn't
         // clear) so widgets composite on top. Ordering: inserted after Tonemap so
         // the write-after-write on the shared target resolves by insertion order.
@@ -792,6 +808,7 @@ private:
                                  m_PointPos, m_PointColor,
                                  m_PointShadow->FarPlane(),
                                  m_SpotLights, m_SpotShadow->GetLightMatrices());
+        if (v.debugDraw) v.debugDraw->SetFrameData(proj * view);
 
         v.graph.Execute(cmd);
 

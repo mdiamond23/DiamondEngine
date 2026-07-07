@@ -251,6 +251,7 @@ add_library(MyEngine STATIC
     src/Renderer/Shader.cpp
     src/Renderer/TextureData.cpp
     src/Scene/Scene.cpp
+    src/Scene/DebugVisualization.cpp
     src/Scene/AudioSystem.cpp
     src/Scene/ParticleSystem.cpp
     src/Scene/TransformSystem.cpp
@@ -313,6 +314,7 @@ if(DIAMOND_ENABLE_VULKAN)
         src/Platform/Vulkan/Passes/Deferred/VulkanSSAOPass.cpp
         src/Platform/Vulkan/Passes/Deferred/VulkanDeferredLightingPass.cpp
         src/Platform/Vulkan/Passes/Deferred/VulkanSkyboxPass.cpp
+        src/Platform/Vulkan/Passes/Debug/VulkanDebugDrawPass.cpp
         src/Platform/Vulkan/Passes/Forward/VulkanPBRSurfacePass.cpp
         src/Platform/Vulkan/Passes/Forward/VulkanTransparencyPass.cpp
         src/Platform/Vulkan/Passes/Shadows/VulkanCSMPass.cpp
@@ -367,6 +369,7 @@ if(DIAMOND_ENABLE_VULKAN)
                     copy.frag skybox.vert skybox.frag
                     pbr_surface.vert pbr_surface.frag
                     transparent.vert transparent.frag
+                    debugdraw.vert debugdraw.frag
                     renderer2d.vert renderer2d.frag
                     particle.vert particle.frag
                     thumbnail.vert thumbnail.frag
