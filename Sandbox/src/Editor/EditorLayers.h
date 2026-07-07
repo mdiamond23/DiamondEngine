@@ -24,6 +24,9 @@ public:
     void SetViewportTexture(ImTextureID textureID, bool flipY);
     void SetGameViewportTexture(ImTextureID textureID, bool flipY);
     void SetEditorCamera(Diamond::Camera* cam) { m_Context.EditorCamera = cam; }
+    // The backend's asset-preview baker, routed to the content browser (which
+    // the inspector's thumbnail lookups also go through).
+    void SetThumbnailService(Diamond::ThumbnailService* svc) { m_Content.SetThumbnailService(svc); }
     void UpdateCamera(const glm::mat4& view, const glm::mat4& proj, const glm::vec3& camPos);
     EditorContext& GetContext() { return m_Context; }
     bool IsViewportActive() const     { return m_Viewport.IsActive(); }

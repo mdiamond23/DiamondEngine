@@ -18,6 +18,9 @@
 #include <backends/imgui_impl_opengl3.h>
 
 #include "EditorLayers.h"
+#include "MeshThumbnailRenderer.h"
+#include "Editor/ThumbnailService.h"
+#include "Assets/ImageLoader.h"
 #include "Scene/Scene.h"
 #include "Scene/Components.h"
 #include "Scene/Physics/PhysicsAPI.h"
@@ -59,11 +62,73 @@
 #include <cstdint>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 using namespace Diamond;
 
 namespace {
+
+// GL ThumbnailService (editor-wiring step 4): the mesh/material studio is the
+// existing MeshThumbnailRenderer FBO bake; texture previews are plain GL
+// uploads (moved here from ContentPanel so the panel is backend-agnostic).
+// The service owns every returned texture id and deletes the survivors when
+// the backend shuts down (while the GL context is still current).
+class GLThumbnailService final : public Diamond::ThumbnailService {
+public:
+    ~GLThumbnailService() override {
+        for (uint32_t id : m_Live) glDeleteTextures(1, &id);
+    }
+
+    uint64_t CreateTextureThumbnail(const std::string& path) override {
+        Diamond::ImageData img = Diamond::ImageLoader::Load(path, false);
+        if (img.Pixels.empty()) return 0;
+
+        GLenum fmt;
+        switch (img.Channels) {
+            case 1:  fmt = GL_RED;  break;
+            case 3:  fmt = GL_RGB;  break;
+            case 4:  fmt = GL_RGBA; break;
+            default: return 0;
+        }
+
+        uint32_t texID = 0;
+        glGenTextures(1, &texID);
+        glBindTexture(GL_TEXTURE_2D, texID);
+        glTexImage2D(GL_TEXTURE_2D, 0, fmt, img.Width, img.Height, 0,
+                     fmt, GL_UNSIGNED_BYTE, img.Pixels.data());
+        glGenerateMipmap(GL_TEXTURE_2D);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glBindTexture(GL_TEXTURE_2D, 0);
+        return Track(texID);
+    }
+
+    uint64_t CreateMeshThumbnail(const std::vector<Diamond::MeshData>& meshes) override {
+        return Track(m_Renderer.Render(meshes));
+    }
+
+    uint64_t CreateMaterialThumbnail(const Diamond::PBRMaterial& mat) override {
+        return Track(m_Renderer.RenderMaterial(mat));
+    }
+
+    void Release(uint64_t id) override {
+        auto texID = (uint32_t)id;
+        if (!m_Live.erase(texID)) return;
+        glDeleteTextures(1, &texID);
+    }
+
+private:
+    uint64_t Track(uint32_t texID) {
+        if (texID) m_Live.insert(texID);
+        return texID;
+    }
+
+    MeshThumbnailRenderer        m_Renderer;
+    std::unordered_set<uint32_t> m_Live;
+};
 
 // Draws the IK chains of the selected entity into the debug-line buffer: each
 // chain's root->mid->tip bone segments, joint markers, the resolved world target
@@ -291,6 +356,9 @@ struct GLEditorBackend::Gfx {
     uint32_t previewFBO = 0, previewTex = 0;
     int      previewW   = 0, previewH   = 0;
 
+    // Asset previews for the content browser / inspector (editor-wiring step 4).
+    std::unique_ptr<GLThumbnailService> thumbnails;
+
     // --- Per-frame state captured by the render graph lambdas ---
     Scene* scene = nullptr;
     std::vector<DrawCall> allDraws;
@@ -372,6 +440,7 @@ bool GLEditorBackend::Init(uint32_t width, uint32_t height, const char* title)
 
     g.uiRenderer       = Renderer2D::Create();
     g.particleRenderer = ParticleRenderer::Create();
+    g.thumbnails       = std::make_unique<GLThumbnailService>();
 
     // Procedural soft-dot sprite: white core with a radial alpha falloff, so the
     // billboards read as glowing points without depending on an asset file. Used
@@ -438,6 +507,11 @@ void GLEditorBackend::Shutdown()
 void GLEditorBackend::SetDropHandler(std::function<void(int, const char**)> handler)
 {
     m_DropHandler = std::move(handler);
+}
+
+Diamond::ThumbnailService* GLEditorBackend::Thumbnails()
+{
+    return m_G ? m_G->thumbnails.get() : nullptr;
 }
 
 void GLEditorBackend::BeginImGuiFrame()

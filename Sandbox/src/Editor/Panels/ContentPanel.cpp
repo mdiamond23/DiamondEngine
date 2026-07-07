@@ -17,11 +17,9 @@
 #endif
 #include <windows.h>
 
-#include <glad/gl.h>
-#include <Assets/ImageLoader.h>
 #include <Assets/ModelImporter.h>
 #include <Assets/GltfImporter.h>
-#include <Renderer/RendererAPI.h>
+#include <Editor/ThumbnailService.h>
 
 #include <miniz.h>
 #include <filesystem>
@@ -122,10 +120,9 @@ ContentPanel::ContentPanel()
     Refresh();
 }
 
-ContentPanel::~ContentPanel() {
-    for (auto& [key, texID] : m_ThumbnailCache)
-        glDeleteTextures(1, &texID);
-}
+// Thumbnail handles are owned by the backend's ThumbnailService, which frees
+// any survivors at its own shutdown — nothing to do here.
+ContentPanel::~ContentPanel() = default;
 
 void ContentPanel::Refresh() {
     m_Items.clear();
@@ -193,55 +190,29 @@ AssetType ContentPanel::GetAssetType(const fs::path& p) {
     return AssetType::File;
 }
 
-uint32_t ContentPanel::LoadThumbnail(const fs::path& p, AssetType type) {
+uint64_t ContentPanel::LoadThumbnail(const fs::path& p, AssetType type) {
     std::string key = ToUtf8(p);
 
     auto it = m_ThumbnailCache.find(key);
     if (it != m_ThumbnailCache.end()) return it->second;
     if (m_FailedPaths.count(key))     return 0;
 
-    // Thumbnail bakes are raw GL (texture uploads + the GL mesh studio); under
-    // another backend there is no GL context, so fall back to the flat icons
-    // until the cross-backend texture service (editor-wiring step 4) lands.
-    if (Diamond::RendererAPI::GetAPI() != Diamond::RendererAPI::API::OpenGL) {
-        m_FailedPaths.insert(key);
-        return 0;
-    }
+    // Previews bake through the backend's thumbnail service (editor-wiring
+    // step 4); without one, fall back to the flat icons.
+    if (!m_Thumbs) { m_FailedPaths.insert(key); return 0; }
 
-    uint32_t texID = 0;
+    uint64_t texID = 0;
 
     if (type == AssetType::Texture) {
-        Diamond::ImageData img = Diamond::ImageLoader::Load(key, false);
-        if (img.Pixels.empty()) { m_FailedPaths.insert(key); return 0; }
-
-        GLenum fmt;
-        switch (img.Channels) {
-            case 1:  fmt = GL_RED;  break;
-            case 3:  fmt = GL_RGB;  break;
-            case 4:  fmt = GL_RGBA; break;
-            default: m_FailedPaths.insert(key); return 0;
-        }
-
-        glGenTextures(1, &texID);
-        glBindTexture(GL_TEXTURE_2D, texID);
-        glTexImage2D(GL_TEXTURE_2D, 0, fmt, img.Width, img.Height, 0,
-                     fmt, GL_UNSIGNED_BYTE, img.Pixels.data());
-        glGenerateMipmap(GL_TEXTURE_2D);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        glBindTexture(GL_TEXTURE_2D, 0);
+        texID = m_Thumbs->CreateTextureThumbnail(key);
     } else if (type == AssetType::Mesh || type == AssetType::SkinnedMesh) {
         // ModelImporter::Load routes glTF through the cgltf geometry path, so the
         // bind-pose mesh renders the same AABB-framed thumbnail as a static mesh.
         auto meshes = Diamond::ModelImporter::Load(key);
-        if (meshes.empty()) { m_FailedPaths.insert(key); return 0; }
-        texID = m_MeshRenderer.Render(meshes);
+        if (!meshes.empty()) texID = m_Thumbs->CreateMeshThumbnail(meshes);
     } else if (type == AssetType::Material) {
         auto mat = LoadMaterialAsset(key);
-        if (!mat) { m_FailedPaths.insert(key); return 0; }
-        texID = m_MeshRenderer.RenderMaterial(*mat);
+        if (mat) texID = m_Thumbs->CreateMaterialThumbnail(*mat);
     }
 
     if (!texID) { m_FailedPaths.insert(key); return 0; }
@@ -249,7 +220,7 @@ uint32_t ContentPanel::LoadThumbnail(const fs::path& p, AssetType type) {
     return texID;
 }
 
-uint32_t ContentPanel::GetThumbnail(const std::string& path, AssetType type) {
+uint64_t ContentPanel::GetThumbnail(const std::string& path, AssetType type) {
     if (path.empty()) return 0;
     return LoadThumbnail(fs::path(path), type);
 }
@@ -260,7 +231,7 @@ void ContentPanel::InvalidateThumbnail(const std::string& path) {
     std::string target = fs::path(path).make_preferred().string();
     for (auto it = m_ThumbnailCache.begin(); it != m_ThumbnailCache.end(); ) {
         if (fs::path(it->first).make_preferred().string() == target) {
-            glDeleteTextures(1, &it->second);
+            if (m_Thumbs) m_Thumbs->Release(it->second);
             it = m_ThumbnailCache.erase(it);
         } else {
             ++it;
@@ -539,7 +510,7 @@ void ContentPanel::DrawItems() {
         float iSz  = m_IconSize - pad * 2.0f;
         ImVec2 iPos = {cellOrigin.x + pad, cellOrigin.y + pad};
 
-        uint32_t thumbID = 0;
+        uint64_t thumbID = 0;
         if (item.type == AssetType::Texture || item.type == AssetType::Mesh ||
             item.type == AssetType::SkinnedMesh || item.type == AssetType::Material) {
             std::string key = ToUtf8(item.path);
@@ -553,7 +524,7 @@ void ContentPanel::DrawItems() {
 
         if (thumbID) {
             dl->AddImage(
-                (ImTextureID)(uintptr_t)thumbID,
+                (ImTextureID)thumbID,
                 iPos, {iPos.x + iSz, iPos.y + iSz});
         } else if (item.isDirectory) {
             DrawFolderIcon(iPos, iSz, isValidFolderDrop);
@@ -653,7 +624,7 @@ void ContentPanel::DrawItems() {
             if (multiDrag) {
                 ImGui::Text("Moving %zu items", m_SelectedPaths.size());
             } else {
-                if (thumbID) { ImGui::Image((ImTextureID)(uintptr_t)thumbID, {40.0f, 40.0f}); ImGui::SameLine(); }
+                if (thumbID) { ImGui::Image((ImTextureID)thumbID, {40.0f, 40.0f}); ImGui::SameLine(); }
                 ImGui::TextUnformatted(item.name.c_str());
             }
             ImGui::EndDragDropSource();

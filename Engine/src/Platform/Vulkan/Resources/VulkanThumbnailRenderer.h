@@ -7,6 +7,7 @@
 
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace Diamond {
@@ -29,9 +30,10 @@ struct PBRMaterial;
 // ImGui_ImplVulkan_AddTexture. Thumbnails are single images (not per-frame
 // RHITextures) because they're written once and only ever sampled.
 //
-// Baked images live for the renderer's lifetime — the editor caches the returned
-// handles per asset path, mirroring the GL panel's texture-ID cache. Destroy after
-// WaitIdle, before the device.
+// Baked images live until Release()d (a re-baked material preview) or the
+// renderer's destruction — the editor caches the returned handles per asset
+// path, mirroring the GL panel's texture-ID cache. Destroy after WaitIdle,
+// before the device.
 class VulkanThumbnailRenderer {
 public:
     static constexpr uint32_t kSize = 128;   // matches the GL MeshThumbnailRenderer
@@ -54,6 +56,11 @@ public:
 
     // Material ball: the shared preview sphere under two analytic lights.
     Thumb RenderMaterial(const PBRMaterial& mat);
+
+    // Frees one bake's image + UBO/set/geometry. WaitIdles first — an
+    // in-flight frame's ImGui draw data may still sample the image; releases
+    // are rare (material re-bakes). No-op for unknown views.
+    void Release(VkImageView view);
 
 private:
     // Matches the ThumbUBO/PreviewUBO blocks (thumbnail.vert declares a prefix of
@@ -80,13 +87,14 @@ private:
     static void FrameAABB(const glm::vec3& aabbMin, const glm::vec3& aabbMax,
                           bool pickAxis, ThumbUBO& ubo);
 
-    // Records the bake (transitions + dynamic rendering + draws) and returns the
-    // baked color image, stored in m_Thumbs.
-    Thumb Bake(RHIPipeline* pipeline, RHIResourceSet* set,
+    // Records the bake (transitions + dynamic rendering + draws) and files the
+    // baked color image + the bake's set and staged buffers under its view.
+    Thumb Bake(RHIPipeline* pipeline, std::unique_ptr<RHIResourceSet> set,
                const std::vector<DrawRange>& draws);
 
     // Repack MeshData into the shared 44-byte mesh vertex (pos/normal/uv/tangent)
-    // and upload; returns {vb, ib, indexCount} appended to the transient list.
+    // and upload; returns {vb, ib, indexCount} with the buffers appended to
+    // m_Staging (claimed by the next Bake).
     DrawRange UploadMesh(const MeshData& data);
 
     VulkanRHIDevice* m_Device;
@@ -107,11 +115,18 @@ private:
     DrawRange m_Sphere{};
     glm::vec3 m_SphereMin{ 0.0f }, m_SphereMax{ 0.0f };
 
-    // Per-bake resources kept alive for the renderer's lifetime: the baked images
-    // ImGui keeps sampling, plus each bake's UBO + descriptor set + geometry.
-    std::vector<VulkanImage>                     m_Thumbs;
-    std::vector<std::unique_ptr<RHIBuffer>>      m_Buffers;
-    std::vector<std::unique_ptr<RHIResourceSet>> m_Sets;
+    // One bake's GPU objects, keyed by the color image's view (the public
+    // handle): the image ImGui keeps sampling plus the UBO + descriptor set +
+    // geometry it was recorded with. Freed by Release() or at destruction.
+    struct BakeData {
+        VulkanImage                              image;
+        std::unique_ptr<RHIResourceSet>          set;
+        std::vector<std::unique_ptr<RHIBuffer>>  buffers;
+    };
+    std::unordered_map<VkImageView, BakeData> m_Bakes;
+
+    std::vector<std::unique_ptr<RHIBuffer>> m_SphereBuffers;   // preview-sphere VB/IB
+    std::vector<std::unique_ptr<RHIBuffer>> m_Staging;         // in-progress bake's buffers
 };
 
 } // namespace Diamond

@@ -45,7 +45,10 @@ void VulkanImGuiLayer::Init(GLFWwindow* window, VulkanRHIDevice* device) {
     info.Device             = ctx.Device();
     info.QueueFamily        = ctx.Queues().graphics;
     info.Queue              = ctx.GraphicsQueue();
-    info.DescriptorPoolSize = 64;   // backend owns its pool (font atlas + AddTexture)
+    // Backend owns its pool (font atlas + AddTexture). Sized for the editor's
+    // asset previews: every content-browser thumbnail costs one AddTexture
+    // descriptor set, and the pool does NOT grow — exhaustion asserts in ImGui.
+    info.DescriptorPoolSize = 1024;
     info.MinImageCount      = VulkanRHIDevice::kFramesInFlight;
     info.ImageCount         = device->SwapchainImageCount();
     info.UseDynamicRendering = true;

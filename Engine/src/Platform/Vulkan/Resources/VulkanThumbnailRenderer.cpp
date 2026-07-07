@@ -128,12 +128,15 @@ VulkanThumbnailRenderer::VulkanThumbnailRenderer(RHIDevice* device, const std::s
     m_Black = makePixel(0, 0, 0);
     m_Gray  = makePixel(128, 128, 128);
 
-    // The preview sphere, shared by every material ball.
+    // The preview sphere, shared by every material ball — claim its buffers
+    // out of the staging list so no bake record ever owns (or frees) them.
     const MeshData sphere = MeshData::UVSphere();
     const AABB     aabb   = sphere.ComputeAABB();
     m_SphereMin = aabb.min;
     m_SphereMax = aabb.max;
     m_Sphere    = UploadMesh(sphere);
+    m_SphereBuffers = std::move(m_Staging);
+    m_Staging.clear();
 }
 
 VulkanThumbnailRenderer::~VulkanThumbnailRenderer() {
@@ -141,9 +144,17 @@ VulkanThumbnailRenderer::~VulkanThumbnailRenderer() {
     // images die. Cheap: thumbnails are editor-lifetime objects.
     m_Device->WaitIdle();
     VulkanContext& ctx = m_Device->Ctx();
-    for (VulkanImage& t : m_Thumbs) DestroyImage(ctx, t);
+    for (auto& [view, bake] : m_Bakes) DestroyImage(ctx, bake.image);
     DestroyImage(ctx, m_Depth);
     vkDestroySampler(ctx.Device(), m_Sampler, nullptr);
+}
+
+void VulkanThumbnailRenderer::Release(VkImageView view) {
+    auto it = m_Bakes.find(view);
+    if (it == m_Bakes.end()) return;
+    m_Device->WaitIdle();
+    DestroyImage(m_Device->Ctx(), it->second.image);
+    m_Bakes.erase(it);
 }
 
 void VulkanThumbnailRenderer::FrameAABB(const glm::vec3& aabbMin, const glm::vec3& aabbMax,
@@ -195,8 +206,8 @@ VulkanThumbnailRenderer::DrawRange VulkanThumbnailRenderer::UploadMesh(const Mes
 
     const DrawRange range{ vertexBuffer.get(), indexBuffer.get(),
                            static_cast<uint32_t>(data.Indices.size()) };
-    m_Buffers.push_back(std::move(vertexBuffer));
-    m_Buffers.push_back(std::move(indexBuffer));
+    m_Staging.push_back(std::move(vertexBuffer));
+    m_Staging.push_back(std::move(indexBuffer));
     return range;
 }
 
@@ -229,10 +240,8 @@ VulkanThumbnailRenderer::Thumb VulkanThumbnailRenderer::RenderMesh(
     for (const MeshData& md : meshes)
         draws.push_back(UploadMesh(md));
 
-    const Thumb thumb = Bake(m_MeshPipeline.get(), set.get(), draws);
-    m_Buffers.push_back(std::move(uboBuffer));
-    m_Sets.push_back(std::move(set));
-    return thumb;
+    m_Staging.push_back(std::move(uboBuffer));
+    return Bake(m_MeshPipeline.get(), std::move(set), draws);
 }
 
 VulkanThumbnailRenderer::Thumb VulkanThumbnailRenderer::RenderMaterial(const PBRMaterial& mat) {
@@ -267,14 +276,13 @@ VulkanThumbnailRenderer::Thumb VulkanThumbnailRenderer::RenderMaterial(const PBR
           { 4, ao        ? ao        : m_White.get() },
           { 5, emissive  ? emissive  : m_Black.get() } });
 
-    const Thumb thumb = Bake(m_MatPipeline.get(), set.get(), { m_Sphere });
-    m_Buffers.push_back(std::move(uboBuffer));
-    m_Sets.push_back(std::move(set));
-    return thumb;
+    m_Staging.push_back(std::move(uboBuffer));
+    return Bake(m_MatPipeline.get(), std::move(set), { m_Sphere });
 }
 
 VulkanThumbnailRenderer::Thumb VulkanThumbnailRenderer::Bake(
-    RHIPipeline* pipeline, RHIResourceSet* set, const std::vector<DrawRange>& draws) {
+    RHIPipeline* pipeline, std::unique_ptr<RHIResourceSet> set,
+    const std::vector<DrawRange>& draws) {
     VulkanContext& ctx = m_Device->Ctx();
 
     VulkanImage color = CreateImage(
@@ -283,7 +291,7 @@ VulkanThumbnailRenderer::Thumb VulkanThumbnailRenderer::Bake(
         VK_IMAGE_ASPECT_COLOR_BIT);
 
     auto* pipe = static_cast<VulkanRHIPipeline*>(pipeline);
-    auto* rset = static_cast<VulkanRHIResourceSet*>(set);
+    auto* rset = static_cast<VulkanRHIResourceSet*>(set.get());
 
     ctx.ImmediateSubmit([&](VkCommandBuffer cmd) {
         TransitionImageLayout(cmd, color.image, VK_IMAGE_ASPECT_COLOR_BIT,
@@ -360,7 +368,9 @@ VulkanThumbnailRenderer::Thumb VulkanThumbnailRenderer::Bake(
                               VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
     });
 
-    m_Thumbs.push_back(color);
+    m_Bakes.emplace(color.view,
+                    BakeData{ color, std::move(set), std::move(m_Staging) });
+    m_Staging.clear();   // moved-from; make the empty state explicit
     return { color.view, m_Sampler };
 }
 

@@ -95,12 +95,12 @@ static MeshSlotChange DrawMeshSlot(MeshComponent& mc, ContentPanel* cp) {
     ImVec2  tMin    = {origin.x + 3.0f, origin.y + 3.0f};
     ImVec2  tMax    = {tMin.x + thumbSz, tMin.y + thumbSz};
 
-    uint32_t thumbID = (cp && !mc.meshPath.empty())
+    uint64_t thumbID = (cp && !mc.meshPath.empty())
                        ? cp->GetThumbnail(mc.meshPath, AssetType::Mesh)
                        : 0;
 
     if (thumbID)
-        dl->AddImage((ImTextureID)(uintptr_t)thumbID, tMin, tMax);
+        dl->AddImage((ImTextureID)thumbID, tMin, tMax);
     else
         dl->AddRectFilled(tMin, tMax, IM_COL32(40, 40, 40, 220), 3.0f);
 
@@ -179,11 +179,11 @@ static SkinnedSlotChange DrawSkinnedMeshSlot(SkinnedMeshComponent& smc, ContentP
     ImVec2  tMin    = {origin.x + 3.0f, origin.y + 3.0f};
     ImVec2  tMax    = {tMin.x + thumbSz, tMin.y + thumbSz};
 
-    uint32_t thumbID = (cp && !smc.meshPath.empty())
+    uint64_t thumbID = (cp && !smc.meshPath.empty())
                        ? cp->GetThumbnail(smc.meshPath, AssetType::SkinnedMesh)
                        : 0;
     if (thumbID)
-        dl->AddImage((ImTextureID)(uintptr_t)thumbID, tMin, tMax);
+        dl->AddImage((ImTextureID)thumbID, tMin, tMax);
     else
         dl->AddRectFilled(tMin, tMax, IM_COL32(40, 40, 40, 220), 3.0f);
 
@@ -258,12 +258,12 @@ static TextureRowChange DrawTextureRow(
     bool hov = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
 
     ImDrawList* dl = ImGui::GetWindowDrawList();
-    uint32_t thumbID = (cp && !texPath.empty())
+    uint64_t thumbID = (cp && !texPath.empty())
                        ? cp->GetThumbnail(texPath, AssetType::Texture)
                        : 0;
 
     if (thumbID)
-        dl->AddImage((ImTextureID)(uintptr_t)thumbID, p, {p.x + sz, p.y + sz});
+        dl->AddImage((ImTextureID)thumbID, p, {p.x + sz, p.y + sz});
     else
         dl->AddRectFilled(p, {p.x + sz, p.y + sz}, IM_COL32(42, 42, 42, 255), 2.0f);
 

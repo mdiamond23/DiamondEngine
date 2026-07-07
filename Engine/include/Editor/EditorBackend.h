@@ -12,6 +12,7 @@ class Scene;
 namespace Diamond {
 
 class Camera;
+class ThumbnailService;
 
 // Opaque panel image handle: an ImTextureID-compatible value (a GL texture id
 // or a Vulkan descriptor set) plus the UV orientation the panel must draw it
@@ -84,6 +85,10 @@ public:
     // Panel images to show this frame — query while building ImGui windows.
     virtual EditorViewImage SceneViewImage() const = 0;
     virtual EditorViewImage GameViewImage() const = 0;
+
+    // Asset-preview bakes for the content browser / inspector (editor-wiring
+    // step 4). Valid between Init() and Shutdown().
+    virtual ThumbnailService* Thumbnails() = 0;
 };
 
 // Factory for the engine-owned Vulkan implementation (the Vulkan headers and

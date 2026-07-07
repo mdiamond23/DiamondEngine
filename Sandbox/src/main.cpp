@@ -326,6 +326,7 @@ int main(int argc, char** argv)
     backend->SetDropHandler([&editorLayer](int count, const char** paths) {
         editorLayer.NotifyDroppedFiles(count, paths);
     });
+    editorLayer.SetThumbnailService(backend->Thumbnails());
     if (glBackend) glBackend->AttachEditorLayer(&editorLayer);
 
     BuildDefaultScene(scene);

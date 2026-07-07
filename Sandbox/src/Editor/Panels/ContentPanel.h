@@ -1,6 +1,5 @@
 #pragma once
 #include "Panels.h"
-#include "../MeshThumbnailRenderer.h"
 #include <imgui.h>
 #include <filesystem>
 #include <functional>
@@ -10,6 +9,8 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <cstdint>
+
+namespace Diamond { class ThumbnailService; }
 
 enum class AssetType { Folder, Texture, Mesh, SkinnedMesh, Material, Shader, Scene, PhysicsMat, AnimSM, Font, Audio, File };
 
@@ -32,9 +33,14 @@ public:
 
     std::filesystem::path GetCurrentPath() const { return m_CurrentPath; }
 
-    // Returns the cached (or freshly generated) GL texture ID for the given asset path.
-    // Returns 0 if the path is empty, the asset type has no preview, or loading fails.
-    uint32_t GetThumbnail(const std::string& path, AssetType type);
+    // The backend's preview baker (owned by the EditorBackend, wired by the
+    // loop). Null means no previews — the panel draws its flat icons.
+    void SetThumbnailService(Diamond::ThumbnailService* svc) { m_Thumbs = svc; }
+
+    // Returns the cached (or freshly generated) ImTextureID-compatible handle
+    // for the given asset path. Returns 0 if the path is empty, the asset type
+    // has no preview, or loading fails.
+    uint64_t GetThumbnail(const std::string& path, AssetType type);
 
     // Drops the cached thumbnail for an asset so it re-renders next frame — used
     // when a material is edited so its preview ball reflects the change.
@@ -46,15 +52,15 @@ private:
     void DrawFolderIcon(ImVec2 topLeft, float size, bool highlighted = false);
     void DrawFileIcon(ImVec2 topLeft, float size, const std::string& ext);
     AssetType GetAssetType(const std::filesystem::path& p);
-    uint32_t LoadThumbnail(const std::filesystem::path& p, AssetType type);
+    uint64_t LoadThumbnail(const std::filesystem::path& p, AssetType type);
 
     std::filesystem::path m_AssetsDir;
     std::filesystem::path m_CurrentPath;
     std::vector<ContentItem> m_Items;
 
-    std::unordered_map<std::string, uint32_t> m_ThumbnailCache;
+    std::unordered_map<std::string, uint64_t> m_ThumbnailCache;
     std::unordered_set<std::string>           m_FailedPaths;
-    MeshThumbnailRenderer                     m_MeshRenderer;
+    Diamond::ThumbnailService*                m_Thumbs = nullptr;
 
     // glTF skinned-vs-static results, cached so GetAssetType doesn't re-parse a
     // file on every Refresh(). Keyed by UTF-8 path.

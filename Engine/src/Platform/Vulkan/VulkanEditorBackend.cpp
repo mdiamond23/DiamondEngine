@@ -11,6 +11,7 @@
 
 #ifdef DIAMOND_ENABLE_VULKAN
 
+#include "Editor/ThumbnailService.h"
 #include "Renderer/SceneRenderer.h"
 #include "Renderer/RendererAPI.h"
 #include "Renderer/RHI/RHIDevice.h"
@@ -28,6 +29,8 @@
 #include "Platform/Vulkan/RHI/VulkanRHIDevice.h"
 #include "Platform/Vulkan/RHI/VulkanRHIResources.h"
 #include "Platform/Vulkan/Resources/VulkanRenderer2D.h"
+#include "Platform/Vulkan/Resources/VulkanTexture2D.h"
+#include "Platform/Vulkan/Resources/VulkanThumbnailRenderer.h"
 
 #include "imgui.h"
 #include "backends/imgui_impl_vulkan.h"
@@ -41,10 +44,84 @@
 #include <array>
 #include <cstdint>
 #include <memory>
+#include <unordered_map>
 
 namespace Diamond {
 
 namespace {
+
+// Vulkan ThumbnailService (editor-wiring step 4): mesh/material previews bake
+// through the VulkanThumbnailRenderer's one-shot ImmediateSubmit path; texture
+// previews ride the routed Texture::Create upload. Every returned handle is an
+// ImGui_ImplVulkan_AddTexture descriptor set, ready for ImGui::Image.
+//
+// Lifetime: created after the ImGui Vulkan binding, destroyed (in Shutdown)
+// after WaitIdle and BEFORE the binding goes down — the destructor returns the
+// live descriptor sets to ImGui's pool.
+class VulkanThumbnailService final : public ThumbnailService {
+public:
+    explicit VulkanThumbnailService(VulkanRHIDevice* device)
+        : m_Device(device), m_Renderer(device, DIAMOND_VULKAN_SHADER_DIR) {}
+
+    ~VulkanThumbnailService() override {
+        for (auto& [id, rec] : m_Records)
+            ImGui_ImplVulkan_RemoveTexture(rec.set);
+    }
+
+    uint64_t CreateTextureThumbnail(const std::string& path) override {
+        std::shared_ptr<Texture> tex = Texture::Create(path, false);
+        const auto* vk = dynamic_cast<const VulkanTexture2D*>(tex.get());
+        if (!vk || !vk->Rhi()) return 0;
+        auto* rhi = static_cast<VulkanRHITexture*>(vk->Rhi());
+        // Static upload: every frame slot aliases image 0.
+        return Track(rhi->Sampler(), rhi->View(0), VK_NULL_HANDLE, std::move(tex));
+    }
+
+    uint64_t CreateMeshThumbnail(const std::vector<MeshData>& meshes) override {
+        const auto thumb = m_Renderer.RenderMesh(meshes);
+        if (!thumb.view) return 0;
+        return Track(thumb.sampler, thumb.view, thumb.view, nullptr);
+    }
+
+    uint64_t CreateMaterialThumbnail(const PBRMaterial& mat) override {
+        const auto thumb = m_Renderer.RenderMaterial(mat);
+        if (!thumb.view) return 0;
+        return Track(thumb.sampler, thumb.view, thumb.view, nullptr);
+    }
+
+    void Release(uint64_t id) override {
+        auto it = m_Records.find(id);
+        if (it == m_Records.end()) return;
+        // The set (and for bakes, the image) may still be referenced by an
+        // in-flight frame's draw data; releases are rare (material re-bakes
+        // on inspector edit-release), so a WaitIdle keeps this simple.
+        m_Device->WaitIdle();
+        ImGui_ImplVulkan_RemoveTexture(it->second.set);
+        if (it->second.bakedView) m_Renderer.Release(it->second.bakedView);
+        m_Records.erase(it);
+    }
+
+private:
+    struct Record {
+        VkDescriptorSet          set       = VK_NULL_HANDLE;
+        VkImageView              bakedView = VK_NULL_HANDLE;   // owned by m_Renderer
+        std::shared_ptr<Texture> texture;                      // keeps uploads alive
+    };
+
+    uint64_t Track(VkSampler sampler, VkImageView view, VkImageView bakedView,
+                   std::shared_ptr<Texture> tex) {
+        VkDescriptorSet ds = ImGui_ImplVulkan_AddTexture(
+            sampler, view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        if (!ds) return 0;
+        const auto id = (uint64_t)(uintptr_t)ds;
+        m_Records[id] = { ds, bakedView, std::move(tex) };
+        return id;
+    }
+
+    VulkanRHIDevice*                     m_Device;
+    VulkanThumbnailRenderer              m_Renderer;
+    std::unordered_map<uint64_t, Record> m_Records;
+};
 
 class VulkanEditorBackend final : public EditorBackend {
 public:
@@ -166,6 +243,10 @@ public:
         }
 
         RegisterViewImages(m_ViewportSets, m_Renderer->OutputColor());
+
+        // Asset previews for the content browser / inspector — needs the ImGui
+        // binding up (its descriptor pool backs AddTexture).
+        m_Thumbs = std::make_unique<VulkanThumbnailService>(m_VkDevice);
         return true;
     }
 
@@ -173,8 +254,10 @@ public:
         if (!m_Device) return;
         // Teardown: everything VMA-backed dies before the device; ImGui's
         // descriptors (viewport/game sets included) die with its own pool, and
-        // its Shutdown destroys the ImGui context.
+        // its Shutdown destroys the ImGui context. The thumbnail service goes
+        // first — its destructor hands descriptor sets back to ImGui's pool.
         m_Device->WaitIdle();
+        m_Thumbs.reset();
         m_ImGui.Shutdown();
         m_R2DGame.reset();
         m_R2D.reset();
@@ -244,6 +327,8 @@ public:
                  /*flipY*/ false };
     }
 
+    ThumbnailService* Thumbnails() override { return m_Thumbs.get(); }
+
 private:
     static constexpr int kResizeSettleFrames = 15;
 
@@ -308,6 +393,7 @@ private:
     std::unique_ptr<VulkanRenderer2D> m_R2D;      // main-view UI preview
     std::unique_ptr<VulkanRenderer2D> m_R2DGame;  // game-view HUD
     VulkanImGuiLayer               m_ImGui;
+    std::unique_ptr<VulkanThumbnailService> m_Thumbs;
 
     std::function<void(int, const char**)> m_DropHandler;
 
