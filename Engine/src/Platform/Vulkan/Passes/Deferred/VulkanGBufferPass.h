@@ -51,18 +51,28 @@ public:
     // Register the geometry pass. Writes the five G-buffer targets (in frag
     // `location` order) plus depth. 'drawScene' records the geometry inside the
     // pass scope — bind the material set, vertex/index buffers, push the per-draw
-    // model matrix, draw — after the pass has bound the pipeline.
+    // model matrix, draw — after the pass has bound the (static) pipeline. Skinned
+    // geometry rebinds SkinnedPipeline() itself before its draws.
     void AddToGraph(RHIRenderGraph& graph,
                     RGTextureHandle viewPos, RGTextureHandle viewNormal,
                     RGTextureHandle albedo,  RGTextureHandle material,
                     RGTextureHandle emissive, RGTextureHandle depth,
                     std::function<void(RHICommandList*)> drawScene);
 
+    // The skinned-geometry pipeline: identical set-0 material layout to the static
+    // pipeline (so material sets are reused unchanged), a wider vertex layout with
+    // bone indices/weights, and set 1 = the per-entity bone palette. drawScene
+    // binds this for skinned draws, plus the material set (set 0) and a bone set
+    // (set 1) built via the device against this pipeline's set 1.
+    RHIPipeline* SkinnedPipeline() const { return m_SkinnedPipeline.get(); }
+
 private:
     RHIDevice*                   m_Device;
     std::unique_ptr<RHIShader>   m_Vert;
     std::unique_ptr<RHIShader>   m_Frag;
+    std::unique_ptr<RHIShader>   m_SkinnedVert;
     std::unique_ptr<RHIPipeline> m_Pipeline;
+    std::unique_ptr<RHIPipeline> m_SkinnedPipeline;
 };
 
 } // namespace Diamond

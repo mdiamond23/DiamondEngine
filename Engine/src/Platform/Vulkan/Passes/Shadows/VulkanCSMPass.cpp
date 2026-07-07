@@ -39,6 +39,21 @@ VulkanCSMPass::VulkanCSMPass(RHIDevice* device, const std::string& shaderDir)
     desc.depthWrite  = true;
     desc.cullMode    = RHICullMode::Front;   // front-face cull curbs peter-panning
     m_Pipeline = device->CreatePipeline(desc);
+
+    // Skinned variant: bone palette at set 1 (set 0 stays empty — the depth pass
+    // has no per-frame resources), wider vertex layout, same front-cull depth
+    // state and lightSpace * model push. Shared by the spot-shadow pass shape too,
+    // but each pass owns its own pipeline object.
+    const std::vector<uint32_t> svs = LoadSpirv(shaderDir, "csm_depth_skinned.vert.spv");
+    RHIShaderDesc svsDesc{ RHIShaderStage::Vertex, svs.data(), svs.size() };
+    m_SkinnedVert = device->CreateShader(svsDesc);
+
+    RHIPipelineDesc skinned = desc;
+    skinned.vertexShader            = m_SkinnedVert.get();
+    skinned.vertexLayout.stride     = kSkinnedVertexStride;
+    skinned.vertexLayout.attributes = SkinnedDepthVertexAttributes();
+    skinned.resourceBindings1       = BonesSetBindings();
+    m_SkinnedPipeline = device->CreatePipeline(skinned);
 }
 
 VulkanCSMPass::~VulkanCSMPass() = default;

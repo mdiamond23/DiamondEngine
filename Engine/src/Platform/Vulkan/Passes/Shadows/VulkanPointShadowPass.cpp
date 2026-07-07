@@ -80,6 +80,20 @@ VulkanPointShadowPass::VulkanPointShadowPass(RHIDevice* device, const std::strin
 
     m_Set = device->CreateResourceSet(m_Pipeline.get(), 0, { { 0, m_UBO.get() } }, {});
 
+    // Skinned variant — set 0 keeps the shared face-matrix UBO, set 1 adds the bone
+    // palette, and the vertex layout widens to carry bone indices/weights. Same
+    // no-cull depth state + model/idx push as the static pipeline.
+    const std::vector<uint32_t> svs = LoadSpirv(shaderDir, "point_shadow_skinned.vert.spv");
+    RHIShaderDesc svsDesc{ RHIShaderStage::Vertex, svs.data(), svs.size() };
+    m_SkinnedVert = device->CreateShader(svsDesc);
+
+    RHIPipelineDesc skinned = desc;
+    skinned.vertexShader            = m_SkinnedVert.get();
+    skinned.vertexLayout.stride     = kSkinnedVertexStride;
+    skinned.vertexLayout.attributes = SkinnedDepthVertexAttributes();
+    skinned.resourceBindings1       = BonesSetBindings();
+    m_SkinnedPipeline = device->CreatePipeline(skinned);
+
     VulkanContext& ctx = m_Device->Ctx();
     VkDevice dev = ctx.Device();
 
@@ -199,7 +213,7 @@ void VulkanPointShadowPass::SetLights(const std::vector<glm::vec3>& positionsWor
 }
 
 void VulkanPointShadowPass::Record(RHICommandList* cmd,
-                                   const std::function<void(RHICommandList*)>& drawScene)
+                                   const std::function<void(RHICommandList*, uint32_t)>& drawScene)
 {
     if (m_Count == 0) return;
 
@@ -248,7 +262,7 @@ void VulkanPointShadowPass::Record(RHICommandList* cmd,
             cmd->BindResourceSet(0, m_Set.get());
             const uint32_t idx = static_cast<uint32_t>(i) * 6u + f;
             cmd->PushConstants(RHIShaderStage::Vertex, kFaceOffset, sizeof(idx), &idx);
-            drawScene(cmd);
+            drawScene(cmd, idx);
 
             vkCmdEndRendering(raw);
         }

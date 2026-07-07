@@ -251,22 +251,35 @@ VulkanRHIPipeline::VulkanRHIPipeline(VulkanRHIDevice* device, const RHIPipelineD
     : m_Device(device) {
     VkDevice dev = m_Device->Ctx().Device();
 
-    // Descriptor set 0 layout from the requested bindings.
-    std::vector<VkDescriptorSetLayoutBinding> bindings;
-    bindings.reserve(desc.resourceBindings.size());
-    for (const RHIResourceBinding& b : desc.resourceBindings) {
-        VkDescriptorSetLayoutBinding vb{};
-        vb.binding         = b.binding;
-        vb.descriptorType  = ToVkDescriptorType(b.type);
-        vb.descriptorCount = 1;
-        vb.stageFlags      = ToVkShaderStages(b.stages);
-        bindings.push_back(vb);
-    }
+    // Build a descriptor-set layout from a binding list (set 0 always; set 1 only
+    // when the pipeline declares a second set — skinned pipelines' bone UBO).
+    auto makeSetLayout = [&](const std::vector<RHIResourceBinding>& src) {
+        std::vector<VkDescriptorSetLayoutBinding> bindings;
+        bindings.reserve(src.size());
+        for (const RHIResourceBinding& b : src) {
+            VkDescriptorSetLayoutBinding vb{};
+            vb.binding         = b.binding;
+            vb.descriptorType  = ToVkDescriptorType(b.type);
+            vb.descriptorCount = 1;
+            vb.stageFlags      = ToVkShaderStages(b.stages);
+            bindings.push_back(vb);
+        }
+        VkDescriptorSetLayoutCreateInfo info{ VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
+        info.bindingCount = static_cast<uint32_t>(bindings.size());
+        info.pBindings    = bindings.data();
+        VkDescriptorSetLayout layout = VK_NULL_HANDLE;
+        VK_CHECK(vkCreateDescriptorSetLayout(dev, &info, nullptr, &layout));
+        return layout;
+    };
 
-    VkDescriptorSetLayoutCreateInfo setLayoutInfo{ VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
-    setLayoutInfo.bindingCount = static_cast<uint32_t>(bindings.size());
-    setLayoutInfo.pBindings    = bindings.data();
-    VK_CHECK(vkCreateDescriptorSetLayout(dev, &setLayoutInfo, nullptr, &m_SetLayout));
+    // Set 0 (always) + an optional set 1. When set 1 is present, set 0 may legally
+    // be empty (a skinned depth pass binds only bones at set 1); an empty layout is
+    // valid and needs no set bound at draw time.
+    m_SetLayouts[0] = makeSetLayout(desc.resourceBindings);
+    const bool hasSet1 = !desc.resourceBindings1.empty();
+    const uint32_t setLayoutCount = hasSet1 ? 2u : 1u;
+    if (hasSet1)
+        m_SetLayouts[1] = makeSetLayout(desc.resourceBindings1);
 
     VkPushConstantRange pushRange{};
     const bool hasPush = desc.pushConstants.size > 0;
@@ -277,8 +290,8 @@ VulkanRHIPipeline::VulkanRHIPipeline(VulkanRHIDevice* device, const RHIPipelineD
     }
 
     VkPipelineLayoutCreateInfo layoutInfo{ VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
-    layoutInfo.setLayoutCount         = 1;
-    layoutInfo.pSetLayouts            = &m_SetLayout;
+    layoutInfo.setLayoutCount         = setLayoutCount;
+    layoutInfo.pSetLayouts            = m_SetLayouts.data();
     layoutInfo.pushConstantRangeCount = hasPush ? 1 : 0;
     layoutInfo.pPushConstantRanges    = hasPush ? &pushRange : nullptr;
     VK_CHECK(vkCreatePipelineLayout(dev, &layoutInfo, nullptr, &m_Layout));
@@ -422,21 +435,23 @@ VulkanRHIPipeline::~VulkanRHIPipeline() {
     VkDevice dev = m_Device->Ctx().Device();
     vkDestroyPipeline(dev, m_Pipeline, nullptr);
     vkDestroyPipelineLayout(dev, m_Layout, nullptr);
-    vkDestroyDescriptorSetLayout(dev, m_SetLayout, nullptr);
+    for (VkDescriptorSetLayout l : m_SetLayouts)
+        if (l) vkDestroyDescriptorSetLayout(dev, l, nullptr);
 }
 
 // ── Resource set ─────────────────────────────────────────────────────────────
 
 VulkanRHIResourceSet::VulkanRHIResourceSet(VulkanRHIDevice* device, VulkanRHIPipeline* pipeline,
-                                           uint32_t /*setIndex*/,
+                                           uint32_t setIndex,
                                            const std::vector<RHIBufferBinding>& buffers,
                                            const std::vector<RHITextureBinding>& textures)
     : m_Device(device) {
     VkDevice dev = m_Device->Ctx().Device();
 
-    // One descriptor set per frame slot, all with the pipeline's set-0 layout.
+    // One descriptor set per frame slot, all with the target set's layout (set 0 by
+    // default; set 1 for a skinned pipeline's per-entity bone set).
     std::array<VkDescriptorSetLayout, VulkanRHIDevice::kFramesInFlight> layouts;
-    layouts.fill(pipeline->SetLayout());
+    layouts.fill(pipeline->SetLayout(setIndex));
 
     VkDescriptorSetAllocateInfo alloc{ VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO };
     alloc.descriptorPool     = m_Device->DescriptorPool();

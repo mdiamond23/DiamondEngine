@@ -95,11 +95,15 @@ public:
 
     VkPipeline            Handle()    const { return m_Pipeline; }
     VkPipelineLayout      Layout()    const { return m_Layout; }
-    VkDescriptorSetLayout SetLayout() const { return m_SetLayout; }
+    // Descriptor-set layout for set 'index' (0, or 1 when the pipeline declares a
+    // second set). A resource set is allocated against the layout of the set it
+    // targets so it binds at the matching index.
+    VkDescriptorSetLayout SetLayout(uint32_t index = 0) const { return m_SetLayouts[index]; }
 
 private:
     VulkanRHIDevice*      m_Device;
-    VkDescriptorSetLayout m_SetLayout = VK_NULL_HANDLE;
+    // [0] always present; [1] valid only when resourceBindings1 was non-empty.
+    std::array<VkDescriptorSetLayout, 2> m_SetLayouts{ VK_NULL_HANDLE, VK_NULL_HANDLE };
     VkPipelineLayout      m_Layout    = VK_NULL_HANDLE;
     VkPipeline            m_Pipeline  = VK_NULL_HANDLE;
 };

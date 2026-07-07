@@ -26,6 +26,7 @@ enum class RHIVertexFormat {
     Float2,
     Float3,
     Float4,
+    Int4,     // signed 32-bit ivec4 — skinning bone indices (read as ivec4 in-shader)
 };
 
 enum class RHIIndexType { U16, U32 };

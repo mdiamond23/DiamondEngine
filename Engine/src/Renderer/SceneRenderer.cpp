@@ -14,6 +14,7 @@
 #include "Core/Camera.h"
 #include "Scene/Scene.h"
 #include "Scene/Components.h"
+#include "Animation/AnimationComponents.h"
 
 #include "Platform/Vulkan/Passes/Deferred/VulkanGBufferPass.h"
 #include "Platform/Vulkan/Passes/Deferred/VulkanSSAOPass.h"
@@ -50,6 +51,23 @@ struct MeshVertex {
     glm::vec2 uv;
     glm::vec3 tangent;
 };
+
+// The skinned mesh vertex — MeshVertex plus glTF bone indices/weights, matching
+// the skinned pipelines' vertex layout (SkinnedVertexAttributes, stride 76). Only
+// meshes referenced by a SkinnedMeshComponent upload in this wider format.
+struct SkinnedVertex {
+    glm::vec3  pos;
+    glm::vec3  normal;
+    glm::vec2  uv;
+    glm::vec3  tangent;
+    glm::ivec4 boneIDs;
+    glm::vec4  weights;
+};
+static_assert(sizeof(SkinnedVertex) == 76, "SkinnedVertex must match kSkinnedVertexStride");
+
+// Bone-palette size — matches the skinned shaders' MAX_BONES and the GL renderer's
+// uBones[100]. A humanoid skeleton stays well under this; extra slots are identity.
+constexpr int kMaxBones = 100;
 
 // Per-frame camera data for the G-buffer pass. view → view-space pos/normal;
 // viewProj → clip space. Matches GBufferUBO in the ported mesh demo.
@@ -264,14 +282,34 @@ public:
         RHICommandList* cmd = m_Device->BeginFrame();
         if (!cmd) return;   // swapchain unavailable (minimized / rebuilding)
 
+        // Now the frame slot is idle: push this frame's animated bone palettes into
+        // each skinned entity's dynamic UBO (dynamic Update must follow BeginFrame).
+        UpdateSkinnedPalettes(scene);
+
         // View-independent shadow work, once per frame: spot matrices are
         // light-space, and the point-light cube shadows record raw per-face
         // scopes the graph can't express — put them in the command buffer before
         // either view's graph so both lighting reads see this frame's maps.
         m_SpotShadow->ComputeMatrices(m_SpotLights);
         m_PointShadow->SetLights(m_PointPos);
-        m_PointShadow->Record(cmd, [this](RHICommandList* c) {
+        m_PointShadow->Record(cmd, [this](RHICommandList* c, uint32_t faceIdx) {
             for (const DrawItem& d : m_ShadowDraws) {
+                c->BindVertexBuffer(d.mesh->vertexBuffer.get());
+                c->BindIndexBuffer(d.mesh->indexBuffer.get(), RHIIndexType::U32);
+                c->PushConstants(RHIShaderStage::Vertex, 0, sizeof(glm::mat4), &d.world);
+                c->DrawIndexed(d.mesh->indexCount);
+            }
+
+            // Skinned casters: swap to the skinned distance-cube pipeline, rebind the
+            // shared face-matrix set (set 0) and re-push the face index (offset 64)
+            // it expects, then draw each with its bone palette (set 1).
+            if (m_SkinnedShadowDraws.empty()) return;
+            c->BindPipeline(m_PointShadow->SkinnedPipeline());
+            c->BindResourceSet(0, m_PointShadow->FaceSet());
+            c->PushConstants(RHIShaderStage::Vertex, sizeof(glm::mat4), sizeof(faceIdx), &faceIdx);
+            RHIResourceSet* boundBone = nullptr;
+            for (const SkinnedShadowItem& d : m_SkinnedShadowDraws) {
+                if (d.bones != boundBone) { c->BindResourceSet(1, d.bones); boundBone = d.bones; }
                 c->BindVertexBuffer(d.mesh->vertexBuffer.get());
                 c->BindIndexBuffer(d.mesh->indexBuffer.get(), RHIIndexType::U32);
                 c->PushConstants(RHIShaderStage::Vertex, 0, sizeof(glm::mat4), &d.world);
@@ -341,6 +379,29 @@ private:
         glm::mat4       world;
         float           dist;       // camera distance — back-to-front sort key
     };
+    // A skinned draw: the material set 0 (reused from the static material cache) +
+    // the entity's set-1 bone palette. Bound under the skinned G-buffer pipeline.
+    struct SkinnedDrawItem {
+        const GpuMesh*  mesh;
+        RHIResourceSet* material;   // set 0 (view-specific)
+        RHIResourceSet* bones;      // set 1 (per entity, view-independent)
+        glm::mat4       world;
+    };
+    // A skinned shadow caster — depth passes need only the bone set + world (no
+    // material). Shared across views/lights like the static m_ShadowDraws.
+    struct SkinnedShadowItem {
+        const GpuMesh*  mesh;
+        RHIResourceSet* bones;
+        glm::mat4       world;
+    };
+    // Per-skinned-entity GPU state: a dynamic bone-palette UBO (rewritten each
+    // frame from AnimatorComponent::palette) + its set-1 descriptor. Created lazily,
+    // keyed by entity, and kept for the renderer's lifetime (skinned entities are
+    // few; a destroyed entity's slot simply lingers).
+    struct SkinnedInstance {
+        std::unique_ptr<RHIBuffer>      bonesUBO;   // dynamic mat4[kMaxBones]
+        std::unique_ptr<RHIResourceSet> bonesSet;   // set 1, binding 0 = bonesUBO
+    };
     struct PBatch {
         RHITexture* tex = nullptr;
         std::shared_ptr<Texture> texAsset;
@@ -373,6 +434,7 @@ private:
         std::unique_ptr<VulkanParticleRenderer>     particles;
 
         std::vector<DrawItem>        drawList;          // frustum-culled — geometry pass
+        std::vector<SkinnedDrawItem> skinnedDraws;      // frustum-culled — skinned geometry
         std::vector<TransparentDraw> transparentDraws;  // back-to-front — forward pass
     };
 
@@ -529,7 +591,7 @@ private:
         // time, refreshed by ComputeCascades right before each view executes.
         m_CSM->AddToGraph(g, cascades,
                           [this](RHICommandList* cmd, const glm::mat4& lightSpace) {
-                              DrawShadow(cmd, lightSpace);
+                              DrawShadow(cmd, lightSpace, m_CSM->SkinnedPipeline());
                           });
 
         // Spot shadows — one perspective depth map per spot light, same push /
@@ -537,7 +599,7 @@ private:
         // view-independent, so both views record the same maps).
         m_SpotShadow->AddToGraph(g, spotMaps,
                                  [this](RHICommandList* cmd, const glm::mat4& lightSpace) {
-                                     DrawShadow(cmd, lightSpace);
+                                     DrawShadow(cmd, lightSpace, m_SpotShadow->SkinnedPipeline());
                                  });
 
         // Deferred resolve → HDR. Reads all cascade + spot maps (also keeps the
@@ -649,13 +711,30 @@ private:
     }
 
     void DrawGeometry(RHICommandList* cmd, const View& v) {
-        // The list is sorted by material, so the set rebind only fires on runs.
+        // The list is sorted by material, so the set rebind only fires on runs. The
+        // static G-buffer pipeline is already bound by the pass.
         RHIResourceSet* bound = nullptr;
         for (const DrawItem& d : v.drawList) {
             if (d.material != bound) {
                 cmd->BindResourceSet(0, d.material);
                 bound = d.material;
             }
+            cmd->BindVertexBuffer(d.mesh->vertexBuffer.get());
+            cmd->BindIndexBuffer(d.mesh->indexBuffer.get(), RHIIndexType::U32);
+            cmd->PushConstants(RHIShaderStage::Vertex, 0, sizeof(glm::mat4), &d.world);
+            cmd->DrawIndexed(d.mesh->indexCount);
+        }
+
+        // Skinned geometry: rebind to the skinned pipeline (its set-0 material
+        // layout matches the static one, so the material sets carry over) and draw,
+        // adding the per-entity bone palette at set 1.
+        if (v.skinnedDraws.empty()) return;
+        cmd->BindPipeline(m_GBuffer->SkinnedPipeline());
+        RHIResourceSet* boundMat  = nullptr;
+        RHIResourceSet* boundBone = nullptr;
+        for (const SkinnedDrawItem& d : v.skinnedDraws) {
+            if (d.material != boundMat)  { cmd->BindResourceSet(0, d.material); boundMat  = d.material; }
+            if (d.bones    != boundBone) { cmd->BindResourceSet(1, d.bones);    boundBone = d.bones;    }
             cmd->BindVertexBuffer(d.mesh->vertexBuffer.get());
             cmd->BindIndexBuffer(d.mesh->indexBuffer.get(), RHIIndexType::U32);
             cmd->PushConstants(RHIShaderStage::Vertex, 0, sizeof(glm::mat4), &d.world);
@@ -675,8 +754,24 @@ private:
         }
     }
 
-    void DrawShadow(RHICommandList* cmd, const glm::mat4& lightSpace) {
+    // Depth draw for a cascade / spot map. The static depth pipeline is bound by
+    // the pass; skinned casters rebind 'skinnedPipeline' (csm_depth_skinned — set 1
+    // bone palette) and push lightSpace * model with the skin applied in-shader.
+    void DrawShadow(RHICommandList* cmd, const glm::mat4& lightSpace,
+                    RHIPipeline* skinnedPipeline) {
         for (const DrawItem& d : m_ShadowDraws) {
+            const glm::mat4 lm = lightSpace * d.world;
+            cmd->BindVertexBuffer(d.mesh->vertexBuffer.get());
+            cmd->BindIndexBuffer(d.mesh->indexBuffer.get(), RHIIndexType::U32);
+            cmd->PushConstants(RHIShaderStage::Vertex, 0, sizeof(glm::mat4), &lm);
+            cmd->DrawIndexed(d.mesh->indexCount);
+        }
+
+        if (m_SkinnedShadowDraws.empty()) return;
+        cmd->BindPipeline(skinnedPipeline);
+        RHIResourceSet* boundBone = nullptr;
+        for (const SkinnedShadowItem& d : m_SkinnedShadowDraws) {
+            if (d.bones != boundBone) { cmd->BindResourceSet(1, d.bones); boundBone = d.bones; }
             const glm::mat4 lm = lightSpace * d.world;
             cmd->BindVertexBuffer(d.mesh->vertexBuffer.get());
             cmd->BindIndexBuffer(d.mesh->indexBuffer.get(), RHIIndexType::U32);
@@ -688,8 +783,10 @@ private:
     void RebuildDrawList(Scene& scene, const Frustum& frustum, const glm::vec3& cameraPos,
                          View& v, int viewIdx) {
         v.drawList.clear();
+        v.skinnedDraws.clear();
         v.transparentDraws.clear();
-        m_ShadowDraws.clear();   // unculled + view-independent; refilling is idempotent
+        m_ShadowDraws.clear();          // unculled + view-independent; refilling is idempotent
+        m_SkinnedShadowDraws.clear();   // (both cleared per rebuild — filled the same for either view)
         const TransformSystem& ts = scene.GetTransformSystem();
         for (auto [entity, mc] : scene.GetRegistry().view<MeshComponent>().each()) {
             if (!mc.visible || !mc.mesh) continue;
@@ -727,9 +824,34 @@ private:
                 v.drawList.push_back(item);
         }
 
+        // Skinned characters (SkinnedMeshComponent): one entry per glTF primitive,
+        // all sharing the entity's animated bone palette (set 1) and material (set
+        // 0, reused from the static cache). Casters go to the skinned shadow list;
+        // UpdateSkinnedPalettes fills each bone UBO after BeginFrame.
+        for (auto [entity, smc] : scene.GetRegistry().view<SkinnedMeshComponent>().each()) {
+            if (!smc.visible || smc.meshes.empty()) continue;
+
+            RHIResourceSet* bones    = GetOrCreateSkinned(entity).bonesSet.get();
+            RHIResourceSet* material = GetOrCreateMaterialSet(smc.material.get(), viewIdx);
+            const glm::mat4& world   = ts.GetWorldMatrix(entity);
+            const AABB bounds        = smc.localBounds.Transform(world);
+            const bool  visible      = frustum.TestAABB(bounds);
+
+            for (const auto& meshPtr : smc.meshes) {
+                const GpuMesh* gm = GetOrRegisterSkinnedMesh(meshPtr.get());
+                if (!gm) continue;
+                if (smc.castsShadow)
+                    m_SkinnedShadowDraws.push_back({ gm, bones, world });
+                if (visible)
+                    v.skinnedDraws.push_back({ gm, material, bones, world });
+            }
+        }
+
         // Group draws by material so DrawGeometry rebinds each set once per run.
         std::sort(v.drawList.begin(), v.drawList.end(),
                   [](const DrawItem& a, const DrawItem& b) { return a.material < b.material; });
+        std::sort(v.skinnedDraws.begin(), v.skinnedDraws.end(),
+                  [](const SkinnedDrawItem& a, const SkinnedDrawItem& b) { return a.material < b.material; });
 
         // Farther first, so nearer transparents blend over them.
         std::sort(v.transparentDraws.begin(), v.transparentDraws.end(),
@@ -808,6 +930,82 @@ private:
             gm.sets[viewIdx] = m_GBuffer->CreateMaterialSet(
                 m_Views[viewIdx]->cameraUBO.get(), ResolveMaps(mat), gm.params.get());
         return gm.sets[viewIdx].get();
+    }
+
+    // ── Skinning ─────────────────────────────────────────────────────────────
+    // Upload (once) a skinned mesh in the wider SkinnedVertex layout, keyed on the
+    // same Mesh* the SkinnedMeshComponent holds. Returns null if the mesh has no
+    // retained CPU geometry to upload from.
+    const GpuMesh* GetOrRegisterSkinnedMesh(Mesh* key) {
+        if (!key) return nullptr;
+        auto it = m_SkinnedMeshes.find(key);
+        if (it != m_SkinnedMeshes.end()) return &it->second;
+
+        const MeshData* cpu = key->CPUData();
+        if (!cpu) return nullptr;
+
+        std::vector<SkinnedVertex> verts;
+        verts.reserve(cpu->Vertices.size());
+        for (const Vertex& v : cpu->Vertices)
+            verts.push_back({ v.Position, v.Normal, v.TexCoords, v.Tangent,
+                              v.BoneIDs, v.BoneWeights });
+
+        GpuMesh gm;
+        RHIBufferDesc vb;
+        vb.size        = verts.size() * sizeof(SkinnedVertex);
+        vb.usage       = RHIBufferUsage::Vertex;
+        vb.initialData = verts.data();
+        gm.vertexBuffer = m_Device->CreateBuffer(vb);
+
+        RHIBufferDesc ib;
+        ib.size        = cpu->Indices.size() * sizeof(uint32_t);
+        ib.usage       = RHIBufferUsage::Index;
+        ib.initialData = cpu->Indices.data();
+        gm.indexBuffer = m_Device->CreateBuffer(ib);
+        gm.indexCount  = static_cast<uint32_t>(cpu->Indices.size());
+        gm.bounds      = cpu->ComputeAABB();
+
+        return &m_SkinnedMeshes.emplace(key, std::move(gm)).first->second;
+    }
+
+    // The per-entity bone state, created on first use. The palette UBO is dynamic
+    // (rewritten each frame by UpdateSkinnedPalettes); its set-1 descriptor is built
+    // against the skinned G-buffer pipeline's set 1 — identical to every skinned
+    // pipeline's set-1 layout, so the same set binds under the shadow pipelines too.
+    SkinnedInstance& GetOrCreateSkinned(entt::entity e) {
+        auto it = m_Skinned.find(e);
+        if (it != m_Skinned.end()) return it->second;
+
+        SkinnedInstance inst;
+        RHIBufferDesc bd;
+        bd.size    = sizeof(glm::mat4) * kMaxBones;
+        bd.usage   = RHIBufferUsage::Uniform;
+        bd.dynamic = true;
+        inst.bonesUBO = m_Device->CreateBuffer(bd);
+        inst.bonesSet = m_Device->CreateResourceSet(
+            m_GBuffer->SkinnedPipeline(), 1, { { 0, inst.bonesUBO.get() } }, {});
+        return m_Skinned.emplace(e, std::move(inst)).first->second;
+    }
+
+    // Push this frame's animated palettes into each skinned entity's bone UBO. Runs
+    // after BeginFrame (dynamic Update targets the now-idle frame slot), before any
+    // view records. A skinned entity without a live palette uploads identity (bind
+    // pose). Palettes longer than kMaxBones are clamped, matching the GL renderer.
+    void UpdateSkinnedPalettes(Scene& scene) {
+        std::array<glm::mat4, kMaxBones> palette;
+        for (auto [entity, smc] : scene.GetRegistry().view<SkinnedMeshComponent>().each()) {
+            if (!smc.visible || smc.meshes.empty()) continue;
+
+            const AnimatorComponent* anim =
+                scene.GetRegistry().try_get<AnimatorComponent>(entity);
+            const size_t count = (anim && !anim->palette.empty())
+                ? std::min(anim->palette.size(), static_cast<size_t>(kMaxBones)) : 0;
+
+            for (size_t i = 0; i < count; ++i)          palette[i] = anim->palette[i];
+            for (size_t i = count; i < kMaxBones; ++i)  palette[i] = glm::mat4(1.0f);
+
+            GetOrCreateSkinned(entity).bonesUBO->Update(palette.data(), sizeof(palette));
+        }
     }
 
     void GatherLights(Scene& scene) {
@@ -900,8 +1098,13 @@ private:
     std::unique_ptr<VulkanIBLPass>         m_IBL;
 
     std::unordered_map<Mesh*, GpuMesh>                  m_Meshes;
+    std::unordered_map<Mesh*, GpuMesh>                  m_SkinnedMeshes;  // wider vertex layout
     std::unordered_map<const PBRMaterial*, GpuMaterial> m_Materials;
     std::vector<DrawItem> m_ShadowDraws;   // unculled casters — CSM/spot/point passes
+
+    // Per-skinned-entity GPU state (SkinnedInstance defined above), keyed by entity.
+    std::unordered_map<entt::entity, SkinnedInstance> m_Skinned;
+    std::vector<SkinnedShadowItem> m_SkinnedShadowDraws;   // unculled skinned casters
     // Albedo textures behind cached transparency sets, kept alive with them.
     std::unordered_map<RHITexture*, std::shared_ptr<Texture>> m_TransparentAlbedos;
 

@@ -56,11 +56,17 @@ public:
     // Consumed by the deferred-lighting pass (folded with inverse(view) there).
     const std::array<glm::mat4, MAX_SPOTS>& GetLightMatrices() const { return m_LightMatrices; }
 
+    // Skinned depth pipeline (csm_depth_skinned — same as the CSM pass's). Bound by
+    // drawScene before recording skinned casters.
+    RHIPipeline* SkinnedPipeline() const { return m_SkinnedPipeline.get(); }
+
 private:
     RHIDevice*                   m_Device;
     std::unique_ptr<RHIShader>   m_Vert;
     std::unique_ptr<RHIShader>   m_Frag;
+    std::unique_ptr<RHIShader>   m_SkinnedVert;
     std::unique_ptr<RHIPipeline> m_Pipeline;
+    std::unique_ptr<RHIPipeline> m_SkinnedPipeline;
 
     std::array<glm::mat4, MAX_SPOTS> m_LightMatrices{};
     int                              m_Count = 0;

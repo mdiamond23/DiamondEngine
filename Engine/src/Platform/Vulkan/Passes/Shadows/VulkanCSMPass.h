@@ -51,11 +51,18 @@ public:
     const std::array<glm::mat4, NUM_CASCADES>& GetLightMatrices() const { return m_LightMatrices; }
     const std::array<float,     NUM_CASCADES>& GetSplitDepths()   const { return m_SplitDepths; }
 
+    // The skinned depth pipeline (csm_depth_skinned: empty set 0, set 1 = bone
+    // palette, wider vertex layout). drawScene binds this before recording skinned
+    // casters, pushing lightSpace * model and binding a set-1 bone set.
+    RHIPipeline* SkinnedPipeline() const { return m_SkinnedPipeline.get(); }
+
 private:
     RHIDevice*                   m_Device;
     std::unique_ptr<RHIShader>   m_Vert;
     std::unique_ptr<RHIShader>   m_Frag;
+    std::unique_ptr<RHIShader>   m_SkinnedVert;
     std::unique_ptr<RHIPipeline> m_Pipeline;
+    std::unique_ptr<RHIPipeline> m_SkinnedPipeline;
 
     std::array<glm::mat4, NUM_CASCADES> m_LightMatrices{};
     std::array<float,     NUM_CASCADES> m_SplitDepths{};

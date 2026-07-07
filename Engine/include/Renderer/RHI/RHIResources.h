@@ -127,6 +127,11 @@ struct RHIPipelineDesc {
 
     RHIVertexLayout                 vertexLayout;
     std::vector<RHIResourceBinding> resourceBindings;   // descriptor set 0
+    // Optional descriptor set 1. Empty (the default) means the pipeline layout
+    // declares a single set. Skinned pipelines put the per-entity bone-matrix UBO
+    // here (set 0 stays the shared material/camera set), so a skinned draw reuses
+    // the same set-0 resources as its static counterpart and only swaps set 1.
+    std::vector<RHIResourceBinding> resourceBindings1;
     RHIPushConstantRange            pushConstants;
 
     RHIPrimitiveTopology topology    = RHIPrimitiveTopology::TriangleList;

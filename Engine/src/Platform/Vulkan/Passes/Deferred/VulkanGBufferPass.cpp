@@ -67,6 +67,22 @@ VulkanGBufferPass::VulkanGBufferPass(RHIDevice* device, const std::string& shade
     desc.depthTest   = true;
     desc.depthWrite  = true;
     m_Pipeline = device->CreatePipeline(desc);
+
+    // Skinned variant: same material set-0 layout, push constant, and MRT — so a
+    // skinned draw reuses its material's static set-0 descriptor — but with the
+    // wider bone vertex layout and a set-1 bone-palette UBO. gbuffer_skinned.vert
+    // blends the palette into a skin matrix before the model transform; the frag
+    // stage is shared.
+    const std::vector<uint32_t> svs = LoadSpirv(shaderDir, "gbuffer_skinned.vert.spv");
+    RHIShaderDesc svsDesc{ RHIShaderStage::Vertex, svs.data(), svs.size() };
+    m_SkinnedVert = device->CreateShader(svsDesc);
+
+    RHIPipelineDesc skinned = desc;
+    skinned.vertexShader             = m_SkinnedVert.get();
+    skinned.vertexLayout.stride      = kSkinnedVertexStride;
+    skinned.vertexLayout.attributes  = SkinnedVertexAttributes();
+    skinned.resourceBindings1        = BonesSetBindings();
+    m_SkinnedPipeline = device->CreatePipeline(skinned);
 }
 
 VulkanGBufferPass::~VulkanGBufferPass() = default;

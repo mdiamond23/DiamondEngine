@@ -56,9 +56,17 @@ public:
     // Record the shadow renders for every set light: per light, 6 per-face depth
     // scopes + barriers, ending with the cube sampleable by the fragment stage.
     // drawScene records the casters; it must push each draw's model matrix at
-    // push-constant offset 0 (the pass pushes the face index at offset 64).
+    // push-constant offset 0 (the pass pushes the face index at offset 64). The
+    // face index is also handed to drawScene so a skinned pass that rebinds the
+    // skinned pipeline can re-push it (offset 64) after the pipeline switch.
     void Record(RHICommandList* cmd,
-                const std::function<void(RHICommandList*)>& drawScene);
+                const std::function<void(RHICommandList*, uint32_t faceIdx)>& drawScene);
+
+    // The skinned distance-cube pipeline (point_shadow_skinned: set 0 = the shared
+    // face-matrix UBO, set 1 = bone palette, wider vertex layout) and the shared
+    // face-matrix set, so a skinned draw can rebind both under the new pipeline.
+    RHIPipeline*    SkinnedPipeline() const { return m_SkinnedPipeline.get(); }
+    RHIResourceSet* FaceSet()         const { return m_Set.get(); }
 
     // Raw handles for the deferred-lighting descriptor set (per frame slot, since
     // the cubes are per-frame-in-flight). Valid from construction.
@@ -88,7 +96,9 @@ private:
 
     std::unique_ptr<RHIShader>      m_Vert;
     std::unique_ptr<RHIShader>      m_Frag;
+    std::unique_ptr<RHIShader>      m_SkinnedVert;
     std::unique_ptr<RHIPipeline>    m_Pipeline;
+    std::unique_ptr<RHIPipeline>    m_SkinnedPipeline;
     std::unique_ptr<RHIBuffer>      m_UBO;
     std::unique_ptr<RHIResourceSet> m_Set;
 

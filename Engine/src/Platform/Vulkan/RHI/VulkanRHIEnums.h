@@ -38,6 +38,7 @@ inline VkFormat ToVkFormat(RHIVertexFormat f) {
         case RHIVertexFormat::Float2: return VK_FORMAT_R32G32_SFLOAT;
         case RHIVertexFormat::Float3: return VK_FORMAT_R32G32B32_SFLOAT;
         case RHIVertexFormat::Float4: return VK_FORMAT_R32G32B32A32_SFLOAT;
+        case RHIVertexFormat::Int4:   return VK_FORMAT_R32G32B32A32_SINT;
     }
     return VK_FORMAT_UNDEFINED;
 }

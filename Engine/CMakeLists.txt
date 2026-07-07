@@ -357,9 +357,10 @@ if(DIAMOND_ENABLE_VULKAN)
     foreach(_shader mesh.vert mesh.frag fullscreen.vert tonemap.frag fxaa.frag
                     bloom_extract.frag bloom_blur.frag bloom_composite.frag
                     gbuffer.vert gbuffer.frag gbuffer_debug.frag
+                    gbuffer_skinned.vert
                     ssao.frag ssao_blur.frag
-                    csm_depth.vert csm_depth.frag
-                    point_shadow.vert point_shadow.frag
+                    csm_depth.vert csm_depth.frag csm_depth_skinned.vert
+                    point_shadow.vert point_shadow.frag point_shadow_skinned.vert
                     deferred_lighting.frag
                     cubemap.vert equirect_to_cubemap.frag
                     irradiance_convolution.frag prefilter.frag brdf_lut.frag
