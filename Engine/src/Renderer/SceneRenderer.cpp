@@ -26,6 +26,7 @@
 #include "Platform/Vulkan/Passes/Forward/VulkanTransparencyPass.h"
 #include "Platform/Vulkan/Passes/PostProcess/VulkanTonemapPass.h"
 #include "Platform/Vulkan/Passes/IBL/VulkanIBLPass.h"
+#include "Platform/Vulkan/Passes/VulkanPassCommon.h"   // RecompileSpirv (shader hot-reload)
 #include "Platform/Vulkan/Resources/VulkanParticleRenderer.h"
 #include "Platform/Vulkan/Resources/VulkanTexture2D.h"
 
@@ -35,6 +36,7 @@
 
 #include <algorithm>
 #include <array>
+#include <filesystem>
 #include <unordered_map>
 #include <vector>
 
@@ -205,6 +207,80 @@ public:
             if (v) v->tonemap->SetExposure(exposure);
     }
 
+    // Drop the baked G-buffer descriptor set(s) for a material edited in the
+    // Inspector, so the next frame's GetOrCreateMaterialSet rebuilds it from
+    // the material's current textures/params. WaitIdle first: the cached sets
+    // may still be read by an in-flight command buffer from a prior frame
+    // (same rationale as VulkanThumbnailService::Release — rare, edit-release
+    // only, so a stall is an acceptable price for correctness).
+    void InvalidateMaterial(const PBRMaterial* mat) override {
+        if (!mat || m_Materials.find(mat) == m_Materials.end()) return;
+        m_Device->WaitIdle();
+        m_Materials.erase(mat);
+    }
+
+    void EnsureParticlePreview(uint32_t width, uint32_t height, const glm::vec3& bgColor) override {
+        if (width == 0 || height == 0) return;
+        if (m_Preview && width == m_Preview->width && height == m_Preview->height) return;
+
+        // Same rationale as Resize/InvalidateMaterial: the pooled texture the old
+        // pass wrote may still be read by ImGui's in-flight draw data.
+        if (m_Preview) m_Device->WaitIdle();
+
+        if (!m_Preview) {
+            m_Preview = std::make_unique<ParticlePreview>(m_Device);
+            const std::string shaderDir = DIAMOND_VULKAN_SHADER_DIR;
+            m_Preview->particles =
+                std::make_unique<VulkanParticleRenderer>(m_Device, shaderDir, RHIFormat::RGBA8);
+        }
+        m_Preview->width  = width;
+        m_Preview->height = height;
+
+        RHIRenderGraph& g = m_Preview->graph;
+        g.ResetPasses();
+        m_Preview->color = g.DeclareTexture("previewColor", { width, height, RHIFormat::RGBA8 });
+        const RGTextureHandle depth =
+            g.DeclareTexture("previewDepth", { width, height, RHIFormat::Depth32F });
+
+        g.AddPass("ParticlePreview")
+            .Write(m_Preview->color)
+            .Write(depth)
+            .SetClearColor({ bgColor.r, bgColor.g, bgColor.b, 1.0f })
+            .SetExecute([this](RHICommandList* cmd) {
+                m_Preview->particles->SetCommandList(cmd);
+                if (m_PreviewFn) m_PreviewFn(*m_Preview->particles);
+            });
+        // Nothing inside this graph reads the color output — ImGui samples it
+        // externally, so mark it to survive dead-pass culling.
+        g.MarkOutput(m_Preview->color);
+        g.Compile();
+    }
+
+    RHITexture* ParticlePreviewColor() const override {
+        return m_Preview ? m_Preview->graph.GetTexture(m_Preview->color) : nullptr;
+    }
+
+    void SetParticlePreviewOverlay(const ParticleOverlayFn& fn) override { m_PreviewFn = fn; }
+
+    std::shared_ptr<Texture> DefaultParticleTexture() const override {
+        return m_DefaultParticleTexture;
+    }
+
+    void ReloadChangedShaders() override {
+        bool gbuffer = false, lighting = false, skybox = false, transparency = false, particles = false;
+        CheckWatch(m_GBufferWatch, gbuffer);
+        CheckWatch(m_LightingWatch, lighting);
+        CheckWatch(m_SkyboxWatch, skybox);
+        CheckWatch(m_TransparencyWatch, transparency);
+        CheckWatch(m_ParticlesWatch, particles);
+        if (gbuffer || lighting || skybox || transparency || particles)
+            DoReload(gbuffer, lighting, skybox, transparency, particles);
+    }
+
+    void ReloadAllShaders() override {
+        DoReload(true, true, true, true, true);
+    }
+
     void Resize(uint32_t width, uint32_t height) override {
         if (!m_Offscreen) return;
         ResizeView(*m_Views[kMainView], kMainView, width, height);
@@ -328,6 +404,10 @@ public:
             RenderView(*game, gameView, gameProj, cmd);
         RenderView(main, view, proj, cmd);
 
+        // Particle preview panel: independent of the scene views above, same
+        // command buffer/frame — no extra submission needed.
+        if (m_Preview) m_Preview->graph.Execute(cmd);
+
         // Swapchain mode: composite an optional overlay (ImGui) over the
         // tonemapped backbuffer, loading its contents so the scene shows through.
         // The backbuffer is still in COLOR_ATTACHMENT layout here; EndFrame
@@ -436,6 +516,18 @@ private:
         std::vector<DrawItem>        drawList;          // frustum-culled — geometry pass
         std::vector<SkinnedDrawItem> skinnedDraws;      // frustum-culled — skinned geometry
         std::vector<TransparentDraw> transparentDraws;  // back-to-front — forward pass
+    };
+
+    // The particle-preview panel's standalone target: one graph, one pass
+    // (clear + particles), no G-buffer/lighting/shadows. Lives outside
+    // m_Views — it isn't a scene camera, just a billboard canvas.
+    struct ParticlePreview {
+        explicit ParticlePreview(RHIDevice* device) : graph(device) {}
+        uint32_t width  = 0;
+        uint32_t height = 0;
+        RHIRenderGraph  graph;
+        RGTextureHandle color;
+        std::unique_ptr<VulkanParticleRenderer> particles;
     };
 
     // Shared, view-independent resources: default textures, the stateless
@@ -1070,6 +1162,67 @@ private:
         }
     }
 
+    // ── Shader hot-reload (editor only) ─────────────────────────────────────
+    // One GLSL source filename + the mtime CheckWatch last saw it at. The
+    // first poll after construction only records a baseline (no reload) — the
+    // file was just compiled by the build, so treating that as "changed" would
+    // reload every pass on the very first frame.
+    struct ShaderWatch { std::string name; std::filesystem::file_time_type mtime{}; };
+
+    void CheckWatch(std::vector<ShaderWatch>& files, bool& changed) {
+        namespace fs = std::filesystem;
+        for (ShaderWatch& f : files) {
+            std::error_code ec;
+            const fs::file_time_type t = fs::last_write_time(m_ShaderSrcDir + "/" + f.name, ec);
+            if (ec) continue;   // source missing — leave the pass on its last-good module
+            if (f.mtime == fs::file_time_type{}) { f.mtime = t; continue; }   // baseline
+            if (t != f.mtime) { f.mtime = t; changed = true; }
+        }
+    }
+
+    // Recompiles every watched file in the requested groups (harmless to
+    // recompile an unchanged file alongside a changed sibling) and rebuilds
+    // the corresponding pass(es) in place. One WaitIdle for the whole batch —
+    // reloads across groups in the same poll share the stall.
+    void DoReload(bool gbuffer, bool lighting, bool skybox, bool transparency, bool particles) {
+        const std::string spvDir = DIAMOND_VULKAN_SHADER_DIR;
+        auto recompile = [&](std::vector<ShaderWatch>& files) {
+            for (ShaderWatch& f : files) RecompileSpirv(m_ShaderSrcDir, spvDir, f.name);
+        };
+        if (gbuffer)      recompile(m_GBufferWatch);
+        if (lighting)     recompile(m_LightingWatch);
+        if (skybox)       recompile(m_SkyboxWatch);
+        if (transparency) recompile(m_TransparencyWatch);
+        if (particles)    recompile(m_ParticlesWatch);
+
+        m_Device->WaitIdle();
+
+        if (gbuffer) {
+            m_GBuffer->Reload();
+            // Baked against the G-buffer pipeline's set-0 layout — rebuild lazily.
+            m_Materials.clear();
+        }
+        for (auto& v : m_Views) {
+            if (!v) continue;
+            if (lighting) {
+                v->lighting->Reload();
+                v->lighting->BindIBL(*m_IBL);
+                v->lighting->BindPointShadows(*m_PointShadow);
+            }
+            if (skybox) {
+                v->skybox->Reload();
+                v->skybox->BindIBL(*m_IBL);
+            }
+            if (transparency) v->transparency->Reload();
+            if (particles)    v->particles->Reload();
+        }
+        if (particles && m_Preview) m_Preview->particles->Reload();
+
+        spdlog::info("[Vulkan] hot-reloaded shaders (gbuffer={} lighting={} skybox={} "
+                     "transparency={} particles={})",
+                     gbuffer, lighting, skybox, transparency, particles);
+    }
+
     RHIDevice* m_Device;
     bool       m_Offscreen;
 
@@ -1123,6 +1276,19 @@ private:
     std::unique_ptr<RHITexture> m_DefaultParticleRHI;
     std::shared_ptr<Texture>    m_DefaultParticleTexture;
     std::vector<PBatch>         m_ParticleBatches;
+
+    std::unique_ptr<ParticlePreview> m_Preview;      // null until first EnsureParticlePreview
+    ParticleOverlayFn                m_PreviewFn;     // preview panel's per-frame Begin/Draw/End
+
+    // Shader hot-reload watch lists (editor only) — GLSL source dir + one
+    // ShaderWatch per file, grouped by the pass it feeds.
+    const std::string m_ShaderSrcDir = std::string(DIAMOND_ASSETS_DIR) + "/Shaders/Vulkan";
+    std::vector<ShaderWatch> m_GBufferWatch {
+        { "gbuffer.vert" }, { "gbuffer.frag" }, { "gbuffer_skinned.vert" } };
+    std::vector<ShaderWatch> m_LightingWatch { { "fullscreen.vert" }, { "deferred_lighting.frag" } };
+    std::vector<ShaderWatch> m_SkyboxWatch { { "skybox.vert" }, { "skybox.frag" } };
+    std::vector<ShaderWatch> m_TransparencyWatch { { "transparent.vert" }, { "transparent.frag" } };
+    std::vector<ShaderWatch> m_ParticlesWatch { { "particle.vert" }, { "particle.frag" } };
 };
 
 std::unique_ptr<SceneRenderer> SceneRenderer::Create(RHIDevice* device,

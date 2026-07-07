@@ -12,7 +12,7 @@
 namespace Diamond {
 
 VulkanSkyboxPass::VulkanSkyboxPass(RHIDevice* device, const std::string& shaderDir)
-    : m_Device(device)
+    : m_Device(device), m_ShaderDir(shaderDir)
 {
     const std::vector<uint32_t> vs = LoadSpirv(shaderDir, "skybox.vert.spv");
     const std::vector<uint32_t> fs = LoadSpirv(shaderDir, "skybox.frag.spv");
@@ -117,6 +117,43 @@ void VulkanSkyboxPass::SetFrameData(const glm::mat4& view, const glm::mat4& proj
     cam.view       = view;
     cam.projection = projection;
     m_UBO->Update(&cam, sizeof(cam));
+}
+
+void VulkanSkyboxPass::Reload()
+{
+    const std::vector<uint32_t> vs = TryLoadSpirv(m_ShaderDir, "skybox.vert.spv");
+    const std::vector<uint32_t> fs = TryLoadSpirv(m_ShaderDir, "skybox.frag.spv");
+    if (vs.empty() || fs.empty()) {
+        spdlog::warn("[VulkanSkyboxPass] reload skipped — missing/corrupt SPIR-V");
+        return;
+    }
+
+    RHIShaderDesc vsDesc{ RHIShaderStage::Vertex,   vs.data(), vs.size() };
+    RHIShaderDesc fsDesc{ RHIShaderStage::Fragment, fs.data(), fs.size() };
+    m_Vert = m_Device->CreateShader(vsDesc);
+    m_Frag = m_Device->CreateShader(fsDesc);
+
+    RHIPipelineDesc desc;
+    desc.vertexShader        = m_Vert.get();
+    desc.fragmentShader      = m_Frag.get();
+    desc.vertexLayout.stride = sizeof(glm::vec3);
+    desc.vertexLayout.attributes = { { 0, RHIVertexFormat::Float3, 0 } };
+    desc.resourceBindings = {
+        { 0, RHIResourceType::UniformBuffer,        RHIShaderStage::Vertex },
+        { 1, RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment },
+    };
+    desc.colorFormat  = RHIFormat::RGBA16F;
+    desc.cullMode     = RHICullMode::None;
+    desc.depthFormat  = RHIFormat::Depth32F;
+    desc.depthTest    = true;
+    desc.depthWrite   = false;
+    desc.depthCompare = RHICompareOp::LessEqual;
+    m_Pipeline = m_Device->CreatePipeline(desc);
+
+    // AddToGraph only runs once at graph-build time (unlike the material/
+    // transparency lazy caches), so rebuild the set eagerly — the caller
+    // re-calls BindIBL right after to fill binding 1 again.
+    m_Set = m_Device->CreateResourceSet(m_Pipeline.get(), 0, { { 0, m_UBO.get() } });
 }
 
 } // namespace Diamond

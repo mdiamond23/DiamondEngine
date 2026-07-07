@@ -1,5 +1,6 @@
 #pragma once
 #include <imgui.h>
+#include <functional>
 #include <string>
 #include "EditorContext.h"
 #include "Scene/Scene.h"
@@ -27,6 +28,11 @@ public:
     // The backend's asset-preview baker, routed to the content browser (which
     // the inspector's thumbnail lookups also go through).
     void SetThumbnailService(Diamond::ThumbnailService* svc) { m_Content.SetThumbnailService(svc); }
+    // The backend's live-material-edit hook (no-op under GL); routed to the
+    // Inspector, which calls it on edit-release.
+    void SetMaterialInvalidator(std::function<void(const Diamond::PBRMaterial*)> fn) {
+        m_Inspector.SetMaterialInvalidator(std::move(fn));
+    }
     void UpdateCamera(const glm::mat4& view, const glm::mat4& proj, const glm::vec3& camPos);
     EditorContext& GetContext() { return m_Context; }
     bool IsViewportActive() const     { return m_Viewport.IsActive(); }

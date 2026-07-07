@@ -66,8 +66,20 @@ public:
     // (set 1) built via the device against this pipeline's set 1.
     RHIPipeline* SkinnedPipeline() const { return m_SkinnedPipeline.get(); }
 
+    // Hot-reload (editor only): recompiles gbuffer.vert/frag/gbuffer_skinned.vert
+    // from shaderDir's current .spv and rebuilds both pipelines IN PLACE — same
+    // 'this', so the already-registered graph pass (which reads m_Pipeline at
+    // Execute time) picks up the change with no graph rebuild. The caller must
+    // WaitIdle() first and drop any descriptor set baked against the old
+    // pipeline layout (SceneRenderer's material cache) — this only touches the
+    // pass's own shaders/pipelines.
+    void Reload() { Build(/*isReload*/ true); }
+
 private:
+    void Build(bool isReload);
+
     RHIDevice*                   m_Device;
+    std::string                  m_ShaderDir;
     std::unique_ptr<RHIShader>   m_Vert;
     std::unique_ptr<RHIShader>   m_Frag;
     std::unique_ptr<RHIShader>   m_SkinnedVert;

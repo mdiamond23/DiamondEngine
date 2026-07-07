@@ -20,14 +20,31 @@ constexpr uint32_t kVertexStride = sizeof(glm::vec3) * 3 + sizeof(glm::vec2);  /
 } // namespace
 
 VulkanGBufferPass::VulkanGBufferPass(RHIDevice* device, const std::string& shaderDir)
-    : m_Device(device)
+    : m_Device(device), m_ShaderDir(shaderDir)
 {
-    const std::vector<uint32_t> vs = LoadSpirv(shaderDir, "gbuffer.vert.spv");
-    const std::vector<uint32_t> fs = LoadSpirv(shaderDir, "gbuffer.frag.spv");
+    Build(/*isReload*/ false);
+}
+
+VulkanGBufferPass::~VulkanGBufferPass() = default;
+
+void VulkanGBufferPass::Build(bool isReload)
+{
+    const std::vector<uint32_t> vs  = TryLoadSpirv(m_ShaderDir, "gbuffer.vert.spv");
+    const std::vector<uint32_t> fs  = TryLoadSpirv(m_ShaderDir, "gbuffer.frag.spv");
+    const std::vector<uint32_t> svs = TryLoadSpirv(m_ShaderDir, "gbuffer_skinned.vert.spv");
+    if (vs.empty() || fs.empty() || svs.empty()) {
+        if (isReload) {
+            spdlog::warn("[VulkanGBufferPass] reload skipped — missing/corrupt SPIR-V");
+            return;
+        }
+        spdlog::critical("[Vulkan] failed to open SPIR-V for VulkanGBufferPass");
+        std::abort();
+    }
+
     RHIShaderDesc vsDesc{ RHIShaderStage::Vertex,   vs.data(), vs.size() };
     RHIShaderDesc fsDesc{ RHIShaderStage::Fragment, fs.data(), fs.size() };
-    m_Vert = device->CreateShader(vsDesc);
-    m_Frag = device->CreateShader(fsDesc);
+    m_Vert = m_Device->CreateShader(vsDesc);
+    m_Frag = m_Device->CreateShader(fsDesc);
 
     RHIPipelineDesc desc;
     desc.vertexShader   = m_Vert.get();
@@ -66,26 +83,23 @@ VulkanGBufferPass::VulkanGBufferPass(RHIDevice* device, const std::string& shade
     desc.depthFormat = RHIFormat::Depth32F;
     desc.depthTest   = true;
     desc.depthWrite  = true;
-    m_Pipeline = device->CreatePipeline(desc);
+    m_Pipeline = m_Device->CreatePipeline(desc);
 
     // Skinned variant: same material set-0 layout, push constant, and MRT — so a
     // skinned draw reuses its material's static set-0 descriptor — but with the
     // wider bone vertex layout and a set-1 bone-palette UBO. gbuffer_skinned.vert
     // blends the palette into a skin matrix before the model transform; the frag
     // stage is shared.
-    const std::vector<uint32_t> svs = LoadSpirv(shaderDir, "gbuffer_skinned.vert.spv");
     RHIShaderDesc svsDesc{ RHIShaderStage::Vertex, svs.data(), svs.size() };
-    m_SkinnedVert = device->CreateShader(svsDesc);
+    m_SkinnedVert = m_Device->CreateShader(svsDesc);
 
     RHIPipelineDesc skinned = desc;
     skinned.vertexShader             = m_SkinnedVert.get();
     skinned.vertexLayout.stride      = kSkinnedVertexStride;
     skinned.vertexLayout.attributes  = SkinnedVertexAttributes();
     skinned.resourceBindings1        = BonesSetBindings();
-    m_SkinnedPipeline = device->CreatePipeline(skinned);
+    m_SkinnedPipeline = m_Device->CreatePipeline(skinned);
 }
-
-VulkanGBufferPass::~VulkanGBufferPass() = default;
 
 std::unique_ptr<RHIResourceSet> VulkanGBufferPass::CreateMaterialSet(
     RHIBuffer* frameUBO,

@@ -687,10 +687,13 @@ void InspectorPanel::OnImGuiRender() {
             // (updating every mesh using it) and we re-save the .mat once on release.
             // Inline materials keep the undo-tracked, saved-with-scene behavior.
             bool matDirty = false;
+            // Fires once per edit-release (any field), regardless of asset-backed vs
+            // inline — tells the Vulkan backend to drop its baked descriptor set.
+            bool anyMaterialEdit = false;
 
             ImGui::DragFloat("UV Scale", &mc.material->UVScale, 0.01f, 0.01f, 64.0f);
             if (assetBacked) {
-                if (ImGui::IsItemDeactivatedAfterEdit()) matDirty = true;
+                if (ImGui::IsItemDeactivatedAfterEdit()) { matDirty = true; anyMaterialEdit = true; }
             } else {
                 if (ImGui::IsItemActivated())   m_OldUVScale = mc.material->UVScale;
                 if (ImGui::IsItemDeactivatedAfterEdit()) {
@@ -699,12 +702,13 @@ void InspectorPanel::OnImGuiRender() {
                         [scene, entity, newVal]() { scene->GetRegistry().get<MeshComponent>(entity).material->UVScale = newVal; },
                         [scene, entity, oldVal]() { scene->GetRegistry().get<MeshComponent>(entity).material->UVScale = oldVal; },
                         "Change UV Scale"));
+                    anyMaterialEdit = true;
                 }
             }
 
             ImGui::DragFloat("Emissive Strength", &mc.material->EmissiveStrength, 0.01f, 0.0f, 100.0f);
             if (assetBacked) {
-                if (ImGui::IsItemDeactivatedAfterEdit()) matDirty = true;
+                if (ImGui::IsItemDeactivatedAfterEdit()) { matDirty = true; anyMaterialEdit = true; }
             } else {
                 if (ImGui::IsItemActivated())   m_OldEmissiveStrength = mc.material->EmissiveStrength;
                 if (ImGui::IsItemDeactivatedAfterEdit()) {
@@ -713,6 +717,7 @@ void InspectorPanel::OnImGuiRender() {
                         [scene, entity, newVal]() { scene->GetRegistry().get<MeshComponent>(entity).material->EmissiveStrength = newVal; },
                         [scene, entity, oldVal]() { scene->GetRegistry().get<MeshComponent>(entity).material->EmissiveStrength = oldVal; },
                         "Change Emissive Strength"));
+                    anyMaterialEdit = true;
                 }
             }
 
@@ -730,6 +735,7 @@ void InspectorPanel::OnImGuiRender() {
                                TexMem tm, PathMem pm, const char* desc) {
                 auto r = DrawTextureRow(label, texPtr, texPath, m_ContentPanel);
                 if (!r.changed) return;
+                anyMaterialEdit = true;
                 if (assetBacked) { matDirty = true; return; }
                 auto ot = r.oldTex, nt = texPtr;
                 auto op = r.oldPath, np = texPath;
@@ -758,6 +764,8 @@ void InspectorPanel::OnImGuiRender() {
                 SaveMaterialAsset(mc.materialPath, *mc.material);
                 if (m_ContentPanel) m_ContentPanel->InvalidateThumbnail(mc.materialPath);
             }
+            if (anyMaterialEdit && m_MaterialInvalidator)
+                m_MaterialInvalidator(mc.material.get());
         }
     }
 

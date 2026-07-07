@@ -988,7 +988,7 @@ void GLEditorBackend::RenderFrame(const Diamond::EditorFrameInput& in)
                 g.particleRenderer->End();
             }
         }
-        preview.SetTexture(g.previewTex);
+        preview.SetTexture((ImTextureID)(uintptr_t)g.previewTex, /*flipY*/ true);
     }
 
     // Clear backbuffer for ImGui — the scene lives in the viewport textures.

@@ -1,9 +1,13 @@
 #pragma once
 
+#include "Renderer/ParticleRenderer.h"
+
 #include <cstdint>
 #include <functional>
 #include <memory>
 #include <string>
+
+#include <glm/glm.hpp>
 
 // Scene is engine-global (no namespace), like the rest of the ECS layer.
 class Scene;
@@ -16,6 +20,7 @@ struct MeshData;
 class RHIDevice;
 class RHICommandList;
 class RHITexture;
+struct PBRMaterial;
 
 // Backend-neutral bridge from the engine's Scene/ECS to the RHI render graph.
 //
@@ -120,6 +125,54 @@ public:
     // 1.0 (the default) matches the GL renderer's tonemap exactly; lower values
     // darken the whole frame. Takes effect next frame; survives Resize.
     virtual void SetExposure(float exposure) = 0;
+
+    // Live material edits (Inspector): drop the baked G-buffer descriptor set
+    // for 'mat' so the next frame rebuilds it from the material's current
+    // textures/params. A no-op if the material was never drawn (nothing baked
+    // yet to invalidate). Call on edit-release, not per-keystroke — this stalls
+    // the GPU (WaitIdle) to safely retire descriptor sets a prior frame may
+    // still be reading.
+    virtual void InvalidateMaterial(const PBRMaterial* mat) = 0;
+
+    // ── Particle preview panel (editor-only) ─────────────────────────────────
+    // A standalone render target for ParticlePreviewPanel: no G-buffer, lighting,
+    // or shadows — just a clear-to-bgColor pass followed by a billboard draw.
+    // Call before RenderToSwapchain, never mid-frame: lazily creates the target
+    // on first call, or WaitIdle()s + rebuilds it on a size change (Resize's
+    // policy). A no-op if width/height are unchanged from the last call.
+    virtual void EnsureParticlePreview(uint32_t width, uint32_t height,
+                                       const glm::vec3& bgColor) = 0;
+
+    // The preview's per-frame-in-flight color output; nullptr until the first
+    // EnsureParticlePreview call. Re-query (and re-register with ImGui) after
+    // any call that changes the size.
+    virtual RHITexture* ParticlePreviewColor() const = 0;
+
+    using ParticleOverlayFn = std::function<void(ParticleRenderer&)>;
+
+    // The preview's per-frame draw hook, run inside RenderToSwapchain against
+    // the preview's own ParticleRenderer (after the clear) — 'fn' must itself
+    // call Begin(view,proj) / Draw(...) / End(). Set once; capture whatever
+    // panel state it reads by reference, like SetGameUIOverlay. A no-op frame
+    // if EnsureParticlePreview was never called.
+    virtual void SetParticlePreviewOverlay(const ParticleOverlayFn& fn) = 0;
+
+    // The engine's soft-dot fallback texture (same one the main scene's
+    // particle pass uses for emitters with no assigned texture) — for the
+    // preview overlay to fall back on identically.
+    virtual std::shared_ptr<Texture> DefaultParticleTexture() const = 0;
+
+    // ── Shader hot-reload (editor only) ──────────────────────────────────────
+    // Vulkan-only, and scoped to the shading passes an artist actually iterates
+    // on live: G-buffer, deferred lighting, skybox, transparency, particles.
+    // Shadow-depth/SSAO/tonemap/IBL-bake/thumbnail shaders stay build-time-only.
+    // Recompiles via the same glslangValidator the offline build uses (shelled
+    // out to, not linked in) and rebuilds the affected pipeline(s) in place —
+    // WaitIdle first, so this is a hitch, not a per-frame cost, exactly like
+    // Resize()/InvalidateMaterial(). A no-op if glslangValidator wasn't found
+    // at build time (DIAMOND_GLSLANG_VALIDATOR undefined).
+    virtual void ReloadChangedShaders() = 0;   // throttled per-file mtime poll
+    virtual void ReloadAllShaders() = 0;       // force recompile — F5
 };
 
 } // namespace Diamond

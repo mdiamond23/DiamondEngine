@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Renderer/RHI/RHIRenderGraph.h"
+#include "Renderer/RHI/RHIResources.h"   // RHITextureBinding
 #include "Platform/Vulkan/Passes/Shadows/VulkanCSMPass.h"        // NUM_CASCADES
 #include "Platform/Vulkan/Passes/Shadows/VulkanSpotShadowPass.h" // MAX_SPOTS + SpotLightInfo
 
@@ -84,6 +85,17 @@ public:
                       const std::vector<SpotLightInfo>& spots = {},
                       const std::array<glm::mat4, NUM_SPOTS>& spotMatrices = {});
 
+    // Hot-reload (editor only): recompiles fullscreen.vert + deferred_lighting.frag
+    // from shaderDir's current .spv and rebuilds the pipeline IN PLACE (same
+    // 'this' — the graph pass reads m_Pipeline at Execute time, no graph
+    // rebuild). Also rebuilds the descriptor set eagerly from the texture
+    // bindings AddToGraph captured (its graph pass only runs once at
+    // graph-build time, so nothing else would ever repopulate it) — the caller
+    // must re-call BindIBL and BindPointShadows right after, since those write
+    // the IBL/point-shadow slots separately. Caller must WaitIdle() first. A
+    // no-op (logs) if the new SPIR-V is missing/corrupt.
+    void Reload();
+
 private:
     // std140 layout matching deferred_lighting.frag's LightingUBO.
     struct LightingUBO {
@@ -104,6 +116,7 @@ private:
     };
 
     RHIDevice*                      m_Device;
+    std::string                     m_ShaderDir;
     LightingUBO                     m_UBOData{};
     float                           m_PrefilterMaxLod = 0.0f;
 
@@ -112,6 +125,10 @@ private:
     std::unique_ptr<RHIPipeline>    m_Pipeline;
     std::unique_ptr<RHIBuffer>      m_UBO;
     std::unique_ptr<RHIResourceSet> m_Set;
+    // The texture bindings AddToGraph built the set from — kept so Reload can
+    // rebuild the set without the graph/handles (the underlying pooled
+    // RHITexture* addresses are stable for the pass's lifetime).
+    std::vector<RHITextureBinding>  m_TexBindings;
 };
 
 } // namespace Diamond

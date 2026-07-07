@@ -2,6 +2,7 @@
 #include "Panels.h"
 #include "../EditorContext.h"
 #include <glm/glm.hpp>
+#include <functional>
 #include <optional>
 #include <vector>
 #include "Scene/Physics/Collision.h"
@@ -10,18 +11,26 @@
 #include "Animation/AnimationComponents.h"
 
 class ContentPanel;
+namespace Diamond { struct PBRMaterial; }
 
 class InspectorPanel : public Panel {
 public:
     void OnImGuiRender() override;
     void SetContext(EditorContext* context) { m_Context = context; }
     void SetContentPanel(ContentPanel* cp)  { m_ContentPanel = cp; }
+    // Vulkan backend hook (no-op under GL): called on material edit-release so
+    // the renderer can drop its baked descriptor set for the material. See
+    // Diamond::EditorBackend::InvalidateMaterial.
+    void SetMaterialInvalidator(std::function<void(const Diamond::PBRMaterial*)> fn) {
+        m_MaterialInvalidator = std::move(fn);
+    }
 private:
     // Unity-style multi-object editing — common components, mixed-value fields.
     void DrawMultiInspector(const std::vector<entt::entity>& entities);
 
     EditorContext* m_Context      = nullptr;
     ContentPanel*  m_ContentPanel = nullptr;
+    std::function<void(const Diamond::PBRMaterial*)> m_MaterialInvalidator;
 
     bool m_Renaming           = false;
     char m_RenameBuffer[256]  = {};

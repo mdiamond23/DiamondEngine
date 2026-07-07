@@ -388,6 +388,10 @@ if(DIAMOND_ENABLE_VULKAN)
         IMGUI_IMPL_VULKAN_USE_VOLK   # imgui_impl_vulkan calls volk's loaded pointers
         DIAMOND_VULKAN_SHADER_DIR="${_vk_spv_dir}"
         DIAMOND_ASSETS_DIR="${CMAKE_SOURCE_DIR}/Assets"
+        # Same glslangValidator this file's offline compile uses — the editor's
+        # runtime hot-reload shells out to it again on a source-file change
+        # instead of linking a second (shaderc) copy of the same compiler.
+        DIAMOND_GLSLANG_VALIDATOR="${GLSLANG_VALIDATOR}"
     )
 endif()
 

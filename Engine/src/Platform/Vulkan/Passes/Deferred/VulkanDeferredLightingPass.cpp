@@ -20,7 +20,7 @@ constexpr RHIFormat kHDRFormat = RHIFormat::RGBA16F;   // HDR scene color
 
 VulkanDeferredLightingPass::VulkanDeferredLightingPass(RHIDevice* device,
                                                        const std::string& shaderDir)
-    : m_Device(device)
+    : m_Device(device), m_ShaderDir(shaderDir)
 {
     const std::vector<uint32_t> vs = LoadSpirv(shaderDir, "fullscreen.vert.spv");
     const std::vector<uint32_t> fs = LoadSpirv(shaderDir, "deferred_lighting.frag.spv");
@@ -77,16 +77,19 @@ void VulkanDeferredLightingPass::AddToGraph(
         const std::array<RGTextureHandle, NUM_SPOTS>& spotShadows,
         RGTextureHandle output)
 {
-    if (!m_Set)
+    if (!m_Set) {
+        m_TexBindings = {
+            { 0,  graph.GetTexture(viewPos) },        { 1,  graph.GetTexture(viewNormal) },
+            { 2,  graph.GetTexture(albedo) },         { 3,  graph.GetTexture(material) },
+            { 4,  graph.GetTexture(ssao) },           { 5,  graph.GetTexture(emissive) },
+            { 6,  graph.GetTexture(cascades[0]) },    { 7,  graph.GetTexture(cascades[1]) },
+            { 8,  graph.GetTexture(cascades[2]) },    { 9,  graph.GetTexture(cascades[3]) },
+            { 14, graph.GetTexture(spotShadows[0]) }, { 15, graph.GetTexture(spotShadows[1]) },
+            { 16, graph.GetTexture(spotShadows[2]) }, { 17, graph.GetTexture(spotShadows[3]) },
+        };
         m_Set = m_Device->CreateResourceSet(
-            m_Pipeline.get(), 0, { { 10, m_UBO.get() } },
-            { { 0,  graph.GetTexture(viewPos) },        { 1,  graph.GetTexture(viewNormal) },
-              { 2,  graph.GetTexture(albedo) },         { 3,  graph.GetTexture(material) },
-              { 4,  graph.GetTexture(ssao) },           { 5,  graph.GetTexture(emissive) },
-              { 6,  graph.GetTexture(cascades[0]) },    { 7,  graph.GetTexture(cascades[1]) },
-              { 8,  graph.GetTexture(cascades[2]) },    { 9,  graph.GetTexture(cascades[3]) },
-              { 14, graph.GetTexture(spotShadows[0]) }, { 15, graph.GetTexture(spotShadows[1]) },
-              { 16, graph.GetTexture(spotShadows[2]) }, { 17, graph.GetTexture(spotShadows[3]) } });
+            m_Pipeline.get(), 0, { { 10, m_UBO.get() } }, m_TexBindings);
+    }
 
     // Read every input so the graph barriers each to SampledRead and orders this
     // pass after the G-buffer/SSAO/CSM/spot-shadow producers. Reading all cascade
@@ -222,6 +225,57 @@ void VulkanDeferredLightingPass::SetFrameData(
                                  static_cast<float>(ns), pointShadowFar);
 
     m_UBO->Update(&m_UBOData, sizeof(LightingUBO));
+}
+
+void VulkanDeferredLightingPass::Reload()
+{
+    const std::vector<uint32_t> vs = TryLoadSpirv(m_ShaderDir, "fullscreen.vert.spv");
+    const std::vector<uint32_t> fs = TryLoadSpirv(m_ShaderDir, "deferred_lighting.frag.spv");
+    if (vs.empty() || fs.empty()) {
+        spdlog::warn("[VulkanDeferredLightingPass] reload skipped — missing/corrupt SPIR-V");
+        return;
+    }
+
+    RHIShaderDesc vsDesc{ RHIShaderStage::Vertex,   vs.data(), vs.size() };
+    RHIShaderDesc fsDesc{ RHIShaderStage::Fragment, fs.data(), fs.size() };
+    m_Vert = m_Device->CreateShader(vsDesc);
+    m_Frag = m_Device->CreateShader(fsDesc);
+
+    RHIPipelineDesc desc;
+    desc.vertexShader   = m_Vert.get();
+    desc.fragmentShader = m_Frag.get();
+    desc.resourceBindings = {
+        { 0,  RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment },
+        { 1,  RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment },
+        { 2,  RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment },
+        { 3,  RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment },
+        { 4,  RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment },
+        { 5,  RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment },
+        { 6,  RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment },
+        { 7,  RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment },
+        { 8,  RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment },
+        { 9,  RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment },
+        { 10, RHIResourceType::UniformBuffer,        RHIShaderStage::Fragment },
+        { 11, RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment },
+        { 12, RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment },
+        { 13, RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment },
+        { 14, RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment },
+        { 15, RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment },
+        { 16, RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment },
+        { 17, RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment },
+        { 18, RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment },
+        { 19, RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment },
+        { 20, RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment },
+        { 21, RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment },
+    };
+    desc.colorFormat = kHDRFormat;
+    m_Pipeline = m_Device->CreatePipeline(desc);
+
+    // AddToGraph only runs once at graph-build time, so rebuild the set eagerly
+    // from the bindings it captured — the caller re-calls BindIBL/
+    // BindPointShadows right after to refill bindings 11-13/18-21.
+    m_Set = m_Device->CreateResourceSet(
+        m_Pipeline.get(), 0, { { 10, m_UBO.get() } }, m_TexBindings);
 }
 
 } // namespace Diamond

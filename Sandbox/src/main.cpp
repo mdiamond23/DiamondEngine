@@ -327,6 +327,9 @@ int main(int argc, char** argv)
         editorLayer.NotifyDroppedFiles(count, paths);
     });
     editorLayer.SetThumbnailService(backend->Thumbnails());
+    editorLayer.SetMaterialInvalidator([&backend](const PBRMaterial* mat) {
+        backend->InvalidateMaterial(mat);
+    });
     if (glBackend) glBackend->AttachEditorLayer(&editorLayer);
 
     BuildDefaultScene(scene);
@@ -450,9 +453,43 @@ int main(int argc, char** argv)
             const EditorViewImage img = backend->GameViewImage();
             editorLayer.SetGameViewportTexture((ImTextureID)img.textureId, img.flipY);
         }
+        // Vulkan only: GL drives ParticlePreviewPanel directly (AttachEditorLayer)
+        // and would have its real texture from last frame's RenderFrame clobbered
+        // by this default no-op fetch.
+        if (!glBackend) {
+            const EditorViewImage img = backend->ParticlePreviewImage();
+            editorLayer.GetParticlePreviewPanel().SetTexture((ImTextureID)img.textureId, img.flipY);
+        }
         editorLayer.UpdateCamera(frame.view, frame.proj, g_camera.Position);
         editorLayer.OnImGuiRender();
         backend->OnImGuiPanels();
+
+        // Vulkan only: gather the particle-preview panel's per-frame state into
+        // engine-visible types (RenderParticle array) so the Vulkan backend can
+        // render it without depending on this Sandbox-side panel type. DesiredSize
+        // is only valid after OnImGuiRender ran the panel this frame. GL instead
+        // ticks and renders the panel itself inside GLEditorBackend::RenderFrame.
+        if (!glBackend) {
+            auto& preview = editorLayer.GetParticlePreviewPanel();
+            preview.Tick(deltaTime);
+            frame.previewActive  = preview.HasParticles();
+            frame.previewSize    = preview.DesiredSize();
+            frame.previewBgColor = preview.BackgroundColor();
+            frame.previewView    = preview.ViewMatrix();
+            frame.previewProj    = preview.ProjMatrix();
+            frame.previewParticles.clear();
+            frame.previewTexture = nullptr;
+            if (frame.previewActive) {
+                const auto& em = preview.Emitter();
+                frame.previewParticles.reserve(em.liveCount);
+                for (std::size_t i = 0; i < em.liveCount; ++i) {
+                    const auto& p = em.pool[i];
+                    frame.previewParticles.push_back({ p.pos, p.size, p.color, p.rotation });
+                }
+                frame.previewTexture = em.texture.get();
+                frame.previewBlend   = em.blend;
+            }
+        }
 
         // Read viewport active state and drive camera from ImGui mouse delta.
         // io.MouseDelta is valid here (after NewFrame, before Render).

@@ -4,6 +4,7 @@
 #include "Scene/Components.h"
 #include "Core/Camera.h"
 #include <entt/entt.hpp>
+#include <imgui.h>
 #include <glm/glm.hpp>
 #include <cstdint>
 
@@ -28,7 +29,9 @@ public:
 
     // --- Driven by main.cpp, before OnImGuiRender ---
     void Tick(float dt);                       // resolve source, mirror config, step sim
-    void SetTexture(uint32_t id) { m_TextureID = id; }
+    // textureID: a GL texture id or Vulkan descriptor set, pre-cast to
+    // ImTextureID. flipY: true for GL FBO textures (bottom-up).
+    void SetTexture(ImTextureID textureID, bool flipY) { m_TextureID = textureID; m_FlipY = flipY; }
 
     // --- Read by main.cpp to render the preview into its FBO ---
     bool                            HasParticles() const { return m_HasSource; }
@@ -50,7 +53,8 @@ private:
     Diamond::Camera          m_Camera;
     entt::entity             m_Source = entt::null;   // entity currently mirrored
 
-    uint32_t   m_TextureID   = 0;
+    ImTextureID m_TextureID  = 0;
+    bool        m_FlipY      = false;
     glm::ivec2 m_DesiredSize { 1, 1 };
     float      m_Aspect      = 1.0f;
     glm::vec3  m_BgColor     { 0.10f, 0.10f, 0.12f };

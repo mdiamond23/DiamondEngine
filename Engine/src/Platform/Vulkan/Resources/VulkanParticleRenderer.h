@@ -44,6 +44,15 @@ public:
               const Texture& texture, ParticleBlend blend) override;
     void End() override;
 
+    // Hot-reload (editor only): recompiles particle.vert/frag from shaderDir's
+    // current .spv and rebuilds both pipelines IN PLACE (same 'this' — the
+    // graph pass captured in AddToGraph reads m_AlphaPipeline/m_AdditivePipeline
+    // at Execute time, no graph rebuild). Drops the per-texture set cache (built
+    // against the old pipeline layout); GetSet rebuilds lazily on the next Draw.
+    // Caller must WaitIdle() first. A no-op (logs) if the new SPIR-V is
+    // missing/corrupt.
+    void Reload();
+
 private:
     struct Vertex {
         glm::vec3 pos;
@@ -65,6 +74,8 @@ private:
 
     RHIDevice*      m_Device = nullptr;
     RHICommandList* m_Cmd    = nullptr;
+    std::string     m_ShaderDir;
+    RHIFormat       m_ColorFormat;
 
     glm::mat4 m_ViewProj {1.0f};
     glm::vec3 m_CamRight {1.0f, 0.0f, 0.0f};

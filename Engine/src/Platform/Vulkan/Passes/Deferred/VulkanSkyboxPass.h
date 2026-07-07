@@ -44,13 +44,24 @@ public:
     // The shader strips the view translation itself, so pass the full view.
     void SetFrameData(const glm::mat4& view, const glm::mat4& projection);
 
+    // Hot-reload (editor only): recompiles skybox.vert/frag from shaderDir's
+    // current .spv, rebuilds the pipeline IN PLACE (same 'this' — the graph
+    // pass reads m_Pipeline at Execute time, no graph rebuild), and rebuilds
+    // the descriptor set eagerly (unlike the material/transparency caches,
+    // AddToGraph only runs once at graph-build time, so nothing else would
+    // ever repopulate it). The caller must re-call BindIBL right after — the
+    // fresh set's binding 1 (env cubemap) starts unwritten. Caller must
+    // WaitIdle() first. A no-op (logs) if the new SPIR-V is missing/corrupt.
+    void Reload();
+
 private:
     struct CameraUBO {   // skybox.vert
         glm::mat4 view;
         glm::mat4 projection;
     };
 
-    RHIDevice* m_Device;
+    RHIDevice*  m_Device;
+    std::string m_ShaderDir;
 
     std::unique_ptr<RHIShader>      m_Vert;
     std::unique_ptr<RHIShader>      m_Frag;

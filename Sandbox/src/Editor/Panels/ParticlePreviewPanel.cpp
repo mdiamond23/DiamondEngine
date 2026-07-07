@@ -170,8 +170,10 @@ void ParticlePreviewPanel::OnImGuiRender()
     m_Aspect      = avail.y > 0.0f ? avail.x / avail.y : 1.0f;
 
     ImVec2 imgPos = ImGui::GetCursorScreenPos();
-    if (m_TextureID != 0)
-        ImGui::Image((ImTextureID)(uintptr_t)m_TextureID, avail, {0, 1}, {1, 0});
+    if (m_TextureID != 0) {
+        if (m_FlipY) ImGui::Image(m_TextureID, avail, {0, 1}, {1, 0});
+        else         ImGui::Image(m_TextureID, avail, {0, 0}, {1, 1});
+    }
 
     bool imgHovered = ImGui::IsItemHovered();
 

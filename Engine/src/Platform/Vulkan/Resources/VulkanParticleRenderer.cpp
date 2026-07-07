@@ -23,7 +23,7 @@ RHIBlendMode ToRHIBlendMode(ParticleBlend blend)
 
 VulkanParticleRenderer::VulkanParticleRenderer(RHIDevice* device, const std::string& shaderDir,
                                                RHIFormat colorFormat)
-    : m_Device(device)
+    : m_Device(device), m_ShaderDir(shaderDir), m_ColorFormat(colorFormat)
 {
     const std::vector<uint32_t> vs = LoadSpirv(shaderDir, "particle.vert.spv");
     const std::vector<uint32_t> fs = LoadSpirv(shaderDir, "particle.frag.spv");
@@ -202,6 +202,51 @@ void VulkanParticleRenderer::End()
     m_Batches.clear();
     m_CurrentTex = nullptr;
     m_BatchStart = 0;
+}
+
+void VulkanParticleRenderer::Reload()
+{
+    const std::vector<uint32_t> vs = TryLoadSpirv(m_ShaderDir, "particle.vert.spv");
+    const std::vector<uint32_t> fs = TryLoadSpirv(m_ShaderDir, "particle.frag.spv");
+    if (vs.empty() || fs.empty()) {
+        spdlog::warn("[VulkanParticleRenderer] reload skipped — missing/corrupt SPIR-V");
+        return;
+    }
+
+    RHIShaderDesc vsDesc{ RHIShaderStage::Vertex,   vs.data(), vs.size() };
+    RHIShaderDesc fsDesc{ RHIShaderStage::Fragment, fs.data(), fs.size() };
+    m_Vert = m_Device->CreateShader(vsDesc);
+    m_Frag = m_Device->CreateShader(fsDesc);
+
+    RHIPipelineDesc desc;
+    desc.vertexShader   = m_Vert.get();
+    desc.fragmentShader = m_Frag.get();
+    desc.vertexLayout.stride     = sizeof(Vertex);
+    desc.vertexLayout.attributes = {
+        { 0, RHIVertexFormat::Float3, static_cast<uint32_t>(offsetof(Vertex, pos))   },
+        { 1, RHIVertexFormat::Float2, static_cast<uint32_t>(offsetof(Vertex, uv))    },
+        { 2, RHIVertexFormat::Float4, static_cast<uint32_t>(offsetof(Vertex, color)) },
+    };
+    desc.resourceBindings = {
+        { 0, RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment },
+    };
+    desc.pushConstants = { RHIShaderStage::Vertex, sizeof(glm::mat4) };
+    desc.colorFormat   = m_ColorFormat;
+    desc.depthFormat   = RHIFormat::Depth32F;
+    desc.depthTest     = true;
+    desc.depthWrite    = false;
+    desc.depthCompare  = RHICompareOp::Less;
+    desc.cullMode      = RHICullMode::None;
+
+    desc.blendMode = RHIBlendMode::Alpha;
+    m_AlphaPipeline = m_Device->CreatePipeline(desc);
+
+    desc.blendMode = RHIBlendMode::Additive;
+    m_AdditivePipeline = m_Device->CreatePipeline(desc);
+
+    // Built against the old pipeline's descriptor-set layout — drop and let
+    // the next Draw's GetSet rebuild them lazily.
+    m_Sets.clear();
 }
 
 } // namespace Diamond

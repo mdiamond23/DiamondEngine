@@ -23,7 +23,7 @@ std::unique_ptr<RHIShader> MakeShader(RHIDevice* device, const std::string& dir,
 } // namespace
 
 VulkanTransparencyPass::VulkanTransparencyPass(RHIDevice* device, const std::string& shaderDir)
-    : m_Device(device)
+    : m_Device(device), m_ShaderDir(shaderDir)
 {
     // ── Copy pipeline (fullscreen passthrough of the previous HDR result) ──────────
     m_CopyVert = MakeShader(device, shaderDir, "fullscreen.vert.spv", RHIShaderStage::Vertex);
@@ -132,6 +132,47 @@ void VulkanTransparencyPass::SetCamera(const glm::mat4& view, const glm::mat4& p
     m_CamData.view       = view;
     m_CamData.projection = projection;
     m_UBO->Update(&m_CamData, sizeof(CameraUBO));
+}
+
+void VulkanTransparencyPass::Reload()
+{
+    const std::vector<uint32_t> vs = TryLoadSpirv(m_ShaderDir, "transparent.vert.spv");
+    const std::vector<uint32_t> fs = TryLoadSpirv(m_ShaderDir, "transparent.frag.spv");
+    if (vs.empty() || fs.empty()) {
+        spdlog::warn("[VulkanTransparencyPass] reload skipped — missing/corrupt SPIR-V");
+        return;
+    }
+
+    RHIShaderDesc vsDesc{ RHIShaderStage::Vertex,   vs.data(), vs.size() };
+    RHIShaderDesc fsDesc{ RHIShaderStage::Fragment, fs.data(), fs.size() };
+    m_Vert = m_Device->CreateShader(vsDesc);
+    m_Frag = m_Device->CreateShader(fsDesc);
+
+    RHIPipelineDesc desc;
+    desc.vertexShader        = m_Vert.get();
+    desc.fragmentShader      = m_Frag.get();
+    desc.vertexLayout.stride = kVertexStride;
+    desc.vertexLayout.attributes = {
+        { 0, RHIVertexFormat::Float3, 0 },                     // position
+        { 2, RHIVertexFormat::Float2, sizeof(glm::vec3) * 2 }, // uv (normal skipped)
+    };
+    desc.resourceBindings = {
+        { 0, RHIResourceType::UniformBuffer,        RHIShaderStage::Vertex },
+        { 1, RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment },
+    };
+    desc.pushConstants = { RHIShaderStage::Vertex, sizeof(TransparentPush) };
+    desc.colorFormat   = kHDRFormat;
+    desc.cullMode      = RHICullMode::None;
+    desc.depthFormat   = kDepthFormat;
+    desc.depthTest     = true;
+    desc.depthWrite    = false;
+    desc.blendMode     = RHIBlendMode::Alpha;
+    m_Pipeline = m_Device->CreatePipeline(desc);
+
+    // Both built against the old pipeline's descriptor-set layout — drop and
+    // let the next draw rebuild them lazily.
+    m_Set.reset();
+    m_AlbedoSets.clear();
 }
 
 } // namespace Diamond

@@ -232,6 +232,19 @@ public:
             UIRenderSystem::Render(reg, *m_R2DGame, screen);
         });
 
+        // Particle preview panel (editor-wiring step 4 tail): the loop hands us
+        // the panel's already-extracted per-frame state (see EditorFrameInput);
+        // this just runs Begin/Draw/End against whatever ParticlePreview target
+        // EnsureParticlePreview built this frame.
+        m_Renderer->SetParticlePreviewOverlay([this](ParticleRenderer& particles) {
+            if (!m_Frame.previewActive || m_Frame.previewParticles.empty()) return;
+            const std::shared_ptr<Texture> fallback = m_Renderer->DefaultParticleTexture();
+            const Texture& tex = m_Frame.previewTexture ? *m_Frame.previewTexture : *fallback;
+            particles.Begin(m_Frame.previewView, m_Frame.previewProj);
+            particles.Draw(m_Frame.previewParticles, tex, m_Frame.previewBlend);
+            particles.End();
+        });
+
         m_ImGui.Init(m_Window, m_VkDevice);
         if (!m_ImGui.IsInitialized()) {
             spdlog::critical("[VulkanEditor] ImGui Vulkan binding failed");
@@ -298,6 +311,19 @@ public:
         // Consumed by the overlay lambdas while the graph records, later this call.
         m_Frame = input;
 
+        // Shader hot-reload: F5 force-recompiles everything; otherwise poll
+        // source file mtimes a couple times a second and reload whatever
+        // changed on disk. Same policy as the GL editor's ShaderLibrary.
+        if (Input::IsKeyPressed(Key::F5)) {
+            m_Renderer->ReloadAllShaders();
+        } else {
+            m_ShaderReloadTimer += input.dt;
+            if (m_ShaderReloadTimer >= 0.5f) {
+                m_Renderer->ReloadChangedShaders();
+                m_ShaderReloadTimer = 0.0f;
+            }
+        }
+
         // The game view renders only during play with a primary camera (the GL
         // editor's policy); it is lazily created on the first enable.
         m_Renderer->SetGameViewEnabled(input.wantGameView);
@@ -306,6 +332,20 @@ public:
             m_GameW = m_SceneW;   // created at the main view's size
             m_GameH = m_SceneH;
             RegisterViewImages(m_GameSets, m_Renderer->GameViewColor());
+        }
+
+        // Particle preview panel: resize (WaitIdle + rebuild) must happen here,
+        // before BeginFrame — never mid-record. Re-register ImGui's descriptors
+        // only on an actual size change; the underlying texture is otherwise the
+        // same pooled object every frame.
+        const uint32_t previewW = (uint32_t)std::max(input.previewSize.x, 1);
+        const uint32_t previewH = (uint32_t)std::max(input.previewSize.y, 1);
+        if (previewW != m_PreviewW || previewH != m_PreviewH) {
+            m_PreviewW = previewW;
+            m_PreviewH = previewH;
+            m_Renderer->EnsureParticlePreview(previewW, previewH, input.previewBgColor);
+            RegisterViewImages(m_PreviewSets, m_Renderer->ParticlePreviewColor());
+            m_PreviewCreated = true;
         }
 
         m_Renderer->RenderToSwapchain(*input.scene, *input.editorCamera,
@@ -327,7 +367,17 @@ public:
                  /*flipY*/ false };
     }
 
+    EditorViewImage ParticlePreviewImage() const override {
+        if (!m_PreviewCreated) return {};
+        return { (uint64_t)(uintptr_t)m_PreviewSets[m_VkDevice->CurrentFrame()],
+                 /*flipY*/ false };
+    }
+
     ThumbnailService* Thumbnails() override { return m_Thumbs.get(); }
+
+    void InvalidateMaterial(const PBRMaterial* mat) override {
+        m_Renderer->InvalidateMaterial(mat);
+    }
 
 private:
     static constexpr int kResizeSettleFrames = 15;
@@ -405,8 +455,14 @@ private:
     int      m_SizeStableFrames = 0;
     bool     m_GameViewCreated  = false;
 
+    uint32_t m_PreviewW = 0, m_PreviewH = 0;   // particle-preview render size
+    bool     m_PreviewCreated = false;
+
+    float m_ShaderReloadTimer = 0.0f;   // throttles the hot-reload mtime poll
+
     ImageSets m_ViewportSets {};
     ImageSets m_GameSets {};
+    ImageSets m_PreviewSets {};
 
     float m_Exposure = 1.0f;
 };

@@ -62,14 +62,25 @@ public:
     // Upload this frame's camera. Call after BeginFrame, before graph.Execute.
     void SetCamera(const glm::mat4& view, const glm::mat4& projection);
 
+    // Hot-reload (editor only): recompiles transparent.vert/frag from
+    // shaderDir's current .spv and rebuilds the transparent pipeline IN PLACE
+    // (same 'this' — the graph passes read m_Pipeline at Execute time, so no
+    // graph rebuild). Drops the per-albedo set cache (built against the old
+    // pipeline layout); callers rebuild lazily on the next draw. The copy
+    // pipeline (fullscreen passthrough) is unaffected — out of hot-reload scope.
+    // Caller must WaitIdle() first. A no-op (logs) if the new SPIR-V is
+    // missing/corrupt.
+    void Reload();
+
 private:
     struct CameraUBO {        // transparent.vert
         glm::mat4 view;
         glm::mat4 projection;
     };
 
-    RHIDevice* m_Device;
-    CameraUBO  m_CamData{};
+    RHIDevice*  m_Device;
+    std::string m_ShaderDir;
+    CameraUBO   m_CamData{};
 
     // Copy: fullscreen.vert + copy.frag.
     std::unique_ptr<RHIShader>      m_CopyVert;
