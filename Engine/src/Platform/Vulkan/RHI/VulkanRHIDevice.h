@@ -120,6 +120,12 @@ private:
     void CreateDescriptorPool();
     void RecreateSwapchain();
     void RecreateRenderFinishedSemaphores();
+    // GPU frame timing (Docs/profiler-panel-design.md, Phase 2). Query pool
+    // sized per frame-in-flight slot; results for slot N are read back the next
+    // time slot N is reused, at which point the fence wait already guarantees
+    // that submission has finished on the GPU.
+    void CreateTimestampPool();
+    void DestroyTimestampPool();
 
     GLFWwindow*     m_Window = nullptr;
     VulkanContext   m_Ctx;
@@ -156,6 +162,14 @@ private:
     RendererStats m_SnapshotStats;
     std::unordered_set<const void*> m_MaterialsSeen;
     std::unordered_set<const void*> m_TexturesSeen;
+
+    // GPU frame timing (Phase 2): timestamp pool with 2 queries (top/bottom of
+    // frame) per frame-in-flight slot. m_TimestampValid[slot] is false until
+    // that slot has completed one full submission, so the first couple frames
+    // read no result (RendererStats::gpuFrameMs stays 0 -> panel shows "n/a").
+    VkQueryPool m_TimestampPool       = VK_NULL_HANDLE;
+    bool        m_TimestampsSupported = false;
+    std::array<bool, kFramesInFlight> m_TimestampValid{};
 
     uint32_t m_CurrentFrame       = 0;
     uint32_t m_AcquiredImageIndex = 0;   // valid between BeginFrame and EndFrame

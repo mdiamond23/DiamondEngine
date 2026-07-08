@@ -215,15 +215,48 @@ VulkanRHIDevice::VulkanRHIDevice(GLFWwindow* window) : m_Window(window) {
     CreateFrameResources();
     CreateDepthResources();
     CreateDescriptorPool();
+    CreateTimestampPool();
 }
 
 VulkanRHIDevice::~VulkanRHIDevice() {
     vkDeviceWaitIdle(m_Ctx.Device());
+    DestroyTimestampPool();
     if (m_DescriptorPool) vkDestroyDescriptorPool(m_Ctx.Device(), m_DescriptorPool, nullptr);
     DestroyDepthResources();
     DestroyFrameResources();
     m_Swapchain.Destroy();
     m_Ctx.Shutdown();
+}
+
+// GPU frame timing (Docs/profiler-panel-design.md, Phase 2). Requires a
+// graphics queue family with timestampValidBits set and a nonzero
+// timestampPeriod; both hold on essentially all desktop GPUs, but if either
+// is missing (unusual driver/hardware) the pool is left null and
+// RendererStats::gpuFrameMs simply stays 0 (the panel already shows "n/a").
+void VulkanRHIDevice::CreateTimestampPool() {
+    VkQueueFamilyProperties familyProps{};
+    uint32_t count = 0;
+    vkGetPhysicalDeviceQueueFamilyProperties(m_Ctx.PhysicalDevice(), &count, nullptr);
+    std::vector<VkQueueFamilyProperties> families(count);
+    vkGetPhysicalDeviceQueueFamilyProperties(m_Ctx.PhysicalDevice(), &count, families.data());
+    if (m_Ctx.Queues().graphics < families.size())
+        familyProps = families[m_Ctx.Queues().graphics];
+
+    if (familyProps.timestampValidBits == 0 ||
+        m_Ctx.DeviceProperties().limits.timestampPeriod <= 0.0f) {
+        return;
+    }
+
+    VkQueryPoolCreateInfo poolInfo{ VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO };
+    poolInfo.queryType  = VK_QUERY_TYPE_TIMESTAMP;
+    poolInfo.queryCount = kFramesInFlight * 2;
+    VK_CHECK(vkCreateQueryPool(m_Ctx.Device(), &poolInfo, nullptr, &m_TimestampPool));
+    m_TimestampsSupported = true;
+}
+
+void VulkanRHIDevice::DestroyTimestampPool() {
+    if (m_TimestampPool) vkDestroyQueryPool(m_Ctx.Device(), m_TimestampPool, nullptr);
+    m_TimestampPool = VK_NULL_HANDLE;
 }
 
 void VulkanRHIDevice::CreateFrameResources() {
@@ -360,6 +393,20 @@ RHICommandList* VulkanRHIDevice::BeginFrame() {
 
     VK_CHECK(vkWaitForFences(device, 1, &frame.inFlight, VK_TRUE, UINT64_MAX));
 
+    // GPU frame timing: the fence wait above just proved slot m_CurrentFrame's
+    // previous submission (kFramesInFlight frames ago) finished on the GPU, so
+    // its timestamp results are ready with no polling needed.
+    if (m_TimestampsSupported && m_TimestampValid[m_CurrentFrame]) {
+        uint64_t ts[2] = {};
+        VkResult qr = vkGetQueryPoolResults(device, m_TimestampPool, m_CurrentFrame * 2, 2,
+                                            sizeof(ts), ts, sizeof(uint64_t),
+                                            VK_QUERY_RESULT_64_BIT);
+        if (qr == VK_SUCCESS) {
+            double ns = double(ts[1] - ts[0]) * m_Ctx.DeviceProperties().limits.timestampPeriod;
+            m_WorkingStats.gpuFrameMs = float(ns / 1.0e6);
+        }
+    }
+
     VkResult acquire = vkAcquireNextImageKHR(device, m_Swapchain.Handle(), UINT64_MAX,
                                              frame.imageAvailable, VK_NULL_HANDLE,
                                              &m_AcquiredImageIndex);
@@ -376,6 +423,12 @@ RHICommandList* VulkanRHIDevice::BeginFrame() {
     VkCommandBufferBeginInfo begin{ VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
     begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     VK_CHECK(vkBeginCommandBuffer(cmd, &begin));
+
+    if (m_TimestampsSupported) {
+        vkCmdResetQueryPool(cmd, m_TimestampPool, m_CurrentFrame * 2, 2);
+        vkCmdWriteTimestamp2(cmd, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT,
+                             m_TimestampPool, m_CurrentFrame * 2 + 0);
+    }
 
     // Move the backbuffer + the device depth buffer into their attachment layouts
     // up front (both discard via UNDEFINED; the swapchain pass clears or loads).
@@ -414,6 +467,12 @@ void VulkanRHIDevice::EndFrame() {
                           VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
                           VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
                           VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, 0);
+
+    if (m_TimestampsSupported) {
+        vkCmdWriteTimestamp2(cmd, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT,
+                             m_TimestampPool, m_CurrentFrame * 2 + 1);
+        m_TimestampValid[m_CurrentFrame] = true;
+    }
 
     VK_CHECK(vkEndCommandBuffer(cmd));
 
@@ -483,6 +542,20 @@ void VulkanRHIDevice::RecordTextureUsed(const void* texture)    { m_TexturesSeen
 void VulkanRHIDevice::FinalizeFrameStats() {
     m_WorkingStats.materialsBound = (uint32_t)m_MaterialsSeen.size();
     m_WorkingStats.texturesUsed   = (uint32_t)m_TexturesSeen.size();
+
+    // VRAM estimate (Docs/profiler-panel-design.md): VMA already tracks every allocation,
+    // so this is just a heap-budget query, no bookkeeping needed. Device-local heaps are
+    // the ones backing actual GPU memory (as opposed to host-visible upload heaps).
+    VkPhysicalDeviceMemoryProperties memProps;
+    vkGetPhysicalDeviceMemoryProperties(m_Ctx.PhysicalDevice(), &memProps);
+    VmaBudget budgets[VK_MAX_MEMORY_HEAPS];
+    vmaGetHeapBudgets(m_Ctx.Allocator(), budgets);
+    uint64_t vramBytes = 0;
+    for (uint32_t i = 0; i < memProps.memoryHeapCount; ++i)
+        if (memProps.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT)
+            vramBytes += budgets[i].usage;
+    m_WorkingStats.vramBytes = vramBytes;
+
     m_SnapshotStats = m_WorkingStats;
 }
 

@@ -12,6 +12,7 @@ OpenGLMesh::OpenGLMesh(const MeshData& data)
 
 OpenGLMesh::~OpenGLMesh()
 {
+    GLStats::RecordBufferFree(m_VertexBytes + m_IndexBytes);
     glDeleteVertexArrays(1, &m_VAO);
     glDeleteBuffers(1, &m_VBO);
     glDeleteBuffers(1, &m_EBO);
@@ -27,17 +28,22 @@ void OpenGLMesh::Upload(const MeshData& data)
 
     glBindVertexArray(m_VAO);
 
+    m_VertexBytes = data.Vertices.size() * sizeof(Vertex);
+    m_IndexBytes  = data.Indices.size() * sizeof(uint32_t);
+
     glBindBuffer(GL_ARRAY_BUFFER, m_VBO);
     glBufferData(GL_ARRAY_BUFFER,
-                 data.Vertices.size() * sizeof(Vertex),
+                 m_VertexBytes,
                  data.Vertices.data(),
                  GL_STATIC_DRAW);
 
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m_EBO);
     glBufferData(GL_ELEMENT_ARRAY_BUFFER,
-                 data.Indices.size() * sizeof(uint32_t),
+                 m_IndexBytes,
                  data.Indices.data(),
                  GL_STATIC_DRAW);
+
+    GLStats::RecordBufferAlloc(m_VertexBytes + m_IndexBytes);
 
     // layout (location = 0) Position
     glEnableVertexAttribArray(0);

@@ -1,4 +1,5 @@
 #include "Renderer/RenderGraph.h"
+#include "Profiling/GLRendererStats.h"
 #include <glad/gl.h>
 #include <spdlog/spdlog.h>
 #include <queue>
@@ -217,6 +218,9 @@ void RenderGraph::Execute()
 
                 entry.glFBO          = primary.glFBO; // borrowed — do not delete
                 entry.isMRTSecondary = true;
+
+                GLStats::RecordTextureAlloc((uint64_t)entry.desc.width * entry.desc.height *
+                                             GLStats::BytesPerTexel(entry.desc.internalFormat));
                 continue;
             }
 
@@ -259,6 +263,14 @@ void RenderGraph::Execute()
                 }
             }
             glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+            {
+                uint64_t bytes = (uint64_t)entry.desc.width * entry.desc.height *
+                                  GLStats::BytesPerTexel(entry.desc.internalFormat);
+                if (entry.desc.needsDepth)
+                    bytes += (uint64_t)entry.desc.width * entry.desc.height * 4; // depth24 RBO
+                GLStats::RecordTextureAlloc(bytes);
+            }
         }
 
         // Run the pass
@@ -273,6 +285,14 @@ void RenderGraph::Execute()
                 continue;
 
             TextureEntry& entry = m_Textures[t];
+            if (entry.glTexture)
+            {
+                uint64_t bytes = (uint64_t)entry.desc.width * entry.desc.height *
+                                  GLStats::BytesPerTexel(entry.desc.internalFormat);
+                if (entry.glDepthRBO)
+                    bytes += (uint64_t)entry.desc.width * entry.desc.height * 4;
+                GLStats::RecordTextureFree(bytes);
+            }
             if (entry.glDepthRBO) { glDeleteRenderbuffers(1, &entry.glDepthRBO); entry.glDepthRBO = 0; }
             if (entry.glTexture)  { glDeleteTextures(1,      &entry.glTexture);  entry.glTexture  = 0; }
             if (entry.glFBO && !entry.isMRTSecondary) { glDeleteFramebuffers(1, &entry.glFBO); entry.glFBO = 0; }
@@ -286,6 +306,14 @@ void RenderGraph::Clear()
 {
     for (TextureEntry& entry : m_Textures)
     {
+        if (entry.glTexture)
+        {
+            uint64_t bytes = (uint64_t)entry.desc.width * entry.desc.height *
+                              GLStats::BytesPerTexel(entry.desc.internalFormat);
+            if (entry.glDepthRBO)
+                bytes += (uint64_t)entry.desc.width * entry.desc.height * 4;
+            GLStats::RecordTextureFree(bytes);
+        }
         if (entry.glDepthRBO) { glDeleteRenderbuffers(1, &entry.glDepthRBO); entry.glDepthRBO = 0; }
         if (entry.glTexture)  { glDeleteTextures(1,      &entry.glTexture);  entry.glTexture  = 0; }
         if (entry.glFBO && !entry.isMRTSecondary) { glDeleteFramebuffers(1, &entry.glFBO); entry.glFBO = 0; }

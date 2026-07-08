@@ -24,6 +24,7 @@ private:
     uint32_t m_RendererID = 0;
     uint32_t m_Width      = 0;
     uint32_t m_Height     = 0;
+    uint64_t m_ByteSize   = 0;   // VRAM estimate — see Docs/profiler-panel-design.md
 };
 
 } // namespace Diamond

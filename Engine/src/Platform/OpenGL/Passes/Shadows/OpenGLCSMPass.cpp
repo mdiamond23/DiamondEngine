@@ -24,6 +24,8 @@ namespace Diamond {
 
 OpenGLCSMPass::~OpenGLCSMPass()
 {
+    if (m_ShadowArray)
+        GLStats::RecordTextureFree((uint64_t)m_Resolution * m_Resolution * NUM_CASCADES * 4);
     if (m_ShadowArray) glDeleteTextures(1, &m_ShadowArray);
     for (int i = 0; i < NUM_CASCADES; ++i)
         if (m_FBOs[i]) glDeleteFramebuffers(1, &m_FBOs[i]);
@@ -55,6 +57,8 @@ void OpenGLCSMPass::Setup(int resolution)
     }
 
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+    GLStats::RecordTextureAlloc((uint64_t)resolution * resolution * NUM_CASCADES * 4);
 }
 
 void OpenGLCSMPass::ComputeCascades(

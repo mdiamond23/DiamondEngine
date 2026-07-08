@@ -231,6 +231,13 @@ struct GLEditorBackend::Gfx {
     glm::mat4 view { 1.0f }, proj { 1.0f };
     glm::vec3 camPos { 0.0f };
     int fbW = 0, fbH = 0;
+
+    // GPU frame timing (Docs/profiler-panel-design.md, Phase 2): double-buffered
+    // GL_TIME_ELAPSED query objects — query slot N this frame, read back slot
+    // N's result from last frame (avoids stalling on the GPU).
+    uint32_t timeQueries[2]     = { 0, 0 };
+    bool     timeQueryIssued[2] = { false, false };
+    int      timeQuerySlot      = 0;
 };
 
 GLEditorBackend::GLEditorBackend()  = default;
@@ -275,6 +282,8 @@ bool GLEditorBackend::Init(uint32_t width, uint32_t height, const char* title)
 
     m_G = std::make_unique<Gfx>();
     Gfx& g = *m_G;
+
+    glGenQueries(2, g.timeQueries);
 
     auto& s = g.shaders;
     g.gbufferShader           = &s.Load("gbuffer",           ENGINE_SHADERS_DIR "/Deferred/gbuffer.vert",            ENGINE_SHADERS_DIR "/Deferred/gbuffer.frag");
@@ -351,6 +360,7 @@ void GLEditorBackend::Shutdown()
         if (g.previewTex)      glDeleteTextures(1,     &g.previewTex);
         if (g.previewFBO)      glDeleteFramebuffers(1, &g.previewFBO);
         if (g.windowTex)       glDeleteTextures(1,     &g.windowTex);
+        glDeleteQueries(2, g.timeQueries);
         m_G.reset();   // pass/shader/texture dtors need the context current
     }
 
@@ -667,6 +677,23 @@ void GLEditorBackend::RenderFrame(const Diamond::EditorFrameInput& in)
 
     GLStats::Reset();
 
+    // GPU frame timing (Phase 2): read back the slot written last frame (if its
+    // result has landed yet — GL_QUERY_RESULT_AVAILABLE avoids a stall), then
+    // begin this frame's query on the other slot.
+    {
+        const int slot = g.timeQuerySlot, prevSlot = 1 - slot;
+        if (g.timeQueryIssued[prevSlot]) {
+            GLuint available = 0;
+            glGetQueryObjectuiv(g.timeQueries[prevSlot], GL_QUERY_RESULT_AVAILABLE, &available);
+            if (available) {
+                GLuint64 ns = 0;
+                glGetQueryObjectui64v(g.timeQueries[prevSlot], GL_QUERY_RESULT, &ns);
+                GLStats::SetGpuFrameMs((float)(ns / 1000000.0));
+            }
+        }
+        glBeginQuery(GL_TIME_ELAPSED, g.timeQueries[slot]);
+    }
+
     if (g.fbW != m_LastFbW || g.fbH != m_LastFbH) {
         BuildGraph(g.fbW, g.fbH);
         m_LastFbW = g.fbW;
@@ -874,6 +901,10 @@ void GLEditorBackend::RenderFrame(const Diamond::EditorFrameInput& in)
     glClear(GL_COLOR_BUFFER_BIT);
 
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+
+    glEndQuery(GL_TIME_ELAPSED);
+    g.timeQueryIssued[g.timeQuerySlot] = true;
+    g.timeQuerySlot = 1 - g.timeQuerySlot;
 
     glfwSwapBuffers(m_Window);
     GLStats::Finalize();

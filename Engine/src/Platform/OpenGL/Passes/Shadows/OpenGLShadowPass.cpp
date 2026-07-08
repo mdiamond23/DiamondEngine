@@ -23,6 +23,9 @@ namespace Diamond {
 
 OpenGLShadowPass::~OpenGLShadowPass()
 {
+    if (m_PointShadowCount > 0)
+        GLStats::RecordTextureFree((uint64_t)m_PointShadowCount * 6 *
+                                    m_PointShadowRes * m_PointShadowRes * 4);
     for (int i = 0; i < m_PointShadowCount; ++i) {
         if (m_PointShadowFBOs[i]) glDeleteFramebuffers(1, &m_PointShadowFBOs[i]);
         if (m_PointShadowMaps[i]) glDeleteTextures(1, &m_PointShadowMaps[i]);
@@ -55,6 +58,8 @@ void OpenGLShadowPass::SetupPointShadowMaps(int count, int resolution, float far
         CheckFBO("point shadow cubemap");
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
     }
+
+    GLStats::RecordTextureAlloc((uint64_t)count * 6 * resolution * resolution * 4);
 }
 
 void OpenGLShadowPass::RenderPointShadowPass(

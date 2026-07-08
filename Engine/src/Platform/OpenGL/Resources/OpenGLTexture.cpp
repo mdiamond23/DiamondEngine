@@ -2,6 +2,7 @@
 
 #include <glad/gl.h>
 #include "Assets/ImageLoader.h"
+#include "Profiling/GLRendererStats.h"
 #include <spdlog/spdlog.h>
 
 namespace Diamond {
@@ -37,6 +38,10 @@ OpenGLTexture::OpenGLTexture(const std::string& path, bool flipVertically)
 
     glBindTexture(GL_TEXTURE_2D, 0);
     spdlog::info("OpenGLTexture: loaded '{}' ({}x{}, {} ch)", path, img.Width, img.Height, img.Channels);
+
+    // Mipmapped, so ~4/3x the base level (geometric series of quarter-sized mips).
+    m_ByteSize = (uint64_t)m_Width * m_Height * GLStats::BytesPerTexel(internalFormat) * 4 / 3;
+    GLStats::RecordTextureAlloc(m_ByteSize);
 }
 
 OpenGLTexture::OpenGLTexture(const uint8_t* pixels, int width, int height, int channels)
@@ -66,6 +71,9 @@ OpenGLTexture::OpenGLTexture(const uint8_t* pixels, int width, int height, int c
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 
     glBindTexture(GL_TEXTURE_2D, 0);
+
+    m_ByteSize = (uint64_t)m_Width * m_Height * GLStats::BytesPerTexel(internalFormat) * 4 / 3;
+    GLStats::RecordTextureAlloc(m_ByteSize);
 }
 
 OpenGLTexture::OpenGLTexture(const std::string& path, bool flipVertically, bool /*isHDR*/)
@@ -92,10 +100,15 @@ OpenGLTexture::OpenGLTexture(const std::string& path, bool flipVertically, bool 
 
     glBindTexture(GL_TEXTURE_2D, 0);
     spdlog::info("OpenGLTexture: loaded HDR '{}' ({}x{}, {} ch)", path, img.Width, img.Height, img.Channels);
+
+    // No mipmaps for this ctor.
+    m_ByteSize = (uint64_t)m_Width * m_Height * GLStats::BytesPerTexel(GL_RGB16F);
+    GLStats::RecordTextureAlloc(m_ByteSize);
 }
 
 OpenGLTexture::~OpenGLTexture()
 {
+    GLStats::RecordTextureFree(m_ByteSize);
     glDeleteTextures(1, &m_RendererID);
 }
 

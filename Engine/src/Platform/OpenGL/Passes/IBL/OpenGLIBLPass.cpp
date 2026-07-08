@@ -1,4 +1,5 @@
 #include "Platform/OpenGL/Passes/IBL/OpenGLIBLPass.h"
+#include "Profiling/GLRendererStats.h"
 #include <glad/gl.h>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
@@ -23,6 +24,16 @@ static void CheckFBO(const char* label)
         spdlog::info("FBO complete at [{}]", label);
 }
 
+// VRAM estimate (Docs/profiler-panel-design.md): all four textures are fixed-size
+// constants set in BakeEnvironment, so precompute the total once rather than
+// re-deriving it from stored state in the dtor (none of the sizes are kept as
+// members — they're baked into the glTexImage2D calls below).
+constexpr uint64_t kEnvBytes  = (uint64_t)512 * 512 * 6 * 6 * 4 / 3; // RGB16F, 6 faces, mipmapped
+constexpr uint64_t kIrrBytes  = (uint64_t)32  * 32  * 6 * 6;         // RGB16F, 6 faces, no mips
+constexpr uint64_t kPrefBytes = (uint64_t)128 * 128 * 6 * 6 * 4 / 3; // RGB16F, 6 faces, mipmapped
+constexpr uint64_t kBrdfBytes = (uint64_t)512 * 512 * 4;             // RG16F
+constexpr uint64_t kIBLBytes  = kEnvBytes + kIrrBytes + kPrefBytes + kBrdfBytes;
+
 } // namespace
 
 namespace Diamond {
@@ -34,6 +45,12 @@ OpenGLIBLPass::OpenGLIBLPass()
 
 OpenGLIBLPass::~OpenGLIBLPass()
 {
+    // Guarded: BakeEnvironment may never have run before shutdown (no skybox
+    // loaded), and m_EnvCubemap defaults to 0 in that case — an unconditional
+    // free would underflow the unsigned running VRAM tally.
+    if (m_EnvCubemap)
+        GLStats::RecordTextureFree(kIBLBytes);
+
     glDeleteTextures(1, &m_EnvCubemap);
     glDeleteTextures(1, &m_IrradianceMap);
     glDeleteTextures(1, &m_PrefilterMap);
@@ -187,6 +204,8 @@ void OpenGLIBLPass::BakeEnvironment(
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     glDeleteFramebuffers(1, &captureFBO);
     glDeleteRenderbuffers(1, &captureRBO);
+
+    GLStats::RecordTextureAlloc(kIBLBytes);
 
     spdlog::info("OpenGLIBLPass: BakeEnvironment complete — envCubemap={} irradiance={} prefilter={} brdfLUT={}",
         m_EnvCubemap, m_IrradianceMap, m_PrefilterMap, m_BrdfLUT);
