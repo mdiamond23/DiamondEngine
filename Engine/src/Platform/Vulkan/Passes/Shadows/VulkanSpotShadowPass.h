@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Renderer/RHI/RHIRenderGraph.h"
+#include "Renderer/RHI/RHIResources.h"
 
 #include <glm/glm.hpp>
 
@@ -13,6 +13,7 @@
 namespace Diamond {
 
 class RHIDevice;
+class RHICommandList;
 class RHIShader;
 class RHIPipeline;
 
@@ -29,14 +30,21 @@ struct SpotLightInfo {
 };
 
 // Spot-light shadow maps — one perspective depth target per spot light, following
-// the CSM pass shape exactly: a depth-only pipeline (csm_depth shaders reused —
-// they are a generic "push lightSpace * model, write depth" pass), the per-light
-// matrix folded with each draw's model into a single push constant, the graph
-// owning the depth targets. Inactive slots still clear their map (cheap, keeps
-// the lighting set's reads valid) but record no draws.
+// the CSM pass shape: a depth-only pipeline (csm_depth shaders reused — they are
+// a generic "push lightSpace * model, write depth" pass), the per-light matrix
+// folded with each draw's model into a single push constant.
+//
+// Unlike the CSM cascades (whose fit is per-camera, so each view's graph renders
+// its own), spot maps are view-independent — so the pass OWNS its depth targets
+// (per-frame-in-flight internally, like any RHI render target) and Record()s all
+// of them once per frame, before either view's graph executes. Both views'
+// lighting sets then bind the same maps (the point-shadow pattern, but expressible
+// in plain RHI since the targets are 2D). Inactive slots still clear their map
+// (cheap, keeps the lighting set valid to sample) but record no draws.
 class VulkanSpotShadowPass {
 public:
-    static constexpr int MAX_SPOTS = 4;
+    static constexpr int      MAX_SPOTS   = 4;
+    static constexpr uint32_t kResolution = 1024;   // GL parity (was kSpotShadowRes)
 
     VulkanSpotShadowPass(RHIDevice* device, const std::string& shaderDir);
     ~VulkanSpotShadowPass();
@@ -45,13 +53,21 @@ public:
     // lights (at most MAX_SPOTS are used). Pure CPU work — callable any time.
     void ComputeMatrices(const std::vector<SpotLightInfo>& spots);
 
-    // Register one depth pass per spot slot. 'maps' are caller-declared Depth32F
-    // targets; drawScene records the scene and receives the slot's light-space
-    // matrix so it can push lightSpace * model per draw (same callback the CSM
-    // pass uses).
-    void AddToGraph(RHIRenderGraph& graph,
-                    const std::array<RGTextureHandle, MAX_SPOTS>& maps,
-                    std::function<void(RHICommandList*, const glm::mat4& lightSpace)> drawScene);
+    // Render every slot's map for this frame: clear, draw the casters of the
+    // active slots, and leave each map in SampledRead for the lighting passes.
+    // Call between RHIDevice::BeginFrame and the first graph Execute, after
+    // ComputeMatrices. drawScene receives the slot's light-space matrix so it can
+    // push lightSpace * model per draw (same callback shape the CSM pass uses).
+    void Record(RHICommandList* cmd,
+                const std::function<void(RHICommandList*, const glm::mat4& lightSpace)>& drawScene);
+
+    // The pass-owned depth maps, for the lighting set (slots 14-17). Stable for
+    // the pass's lifetime — only their contents are re-rendered.
+    std::array<RHITexture*, MAX_SPOTS> Maps() const {
+        std::array<RHITexture*, MAX_SPOTS> out{};
+        for (int i = 0; i < MAX_SPOTS; ++i) out[i] = m_Maps[i].get();
+        return out;
+    }
 
     // Consumed by the deferred-lighting pass (folded with inverse(view) there).
     const std::array<glm::mat4, MAX_SPOTS>& GetLightMatrices() const { return m_LightMatrices; }
@@ -67,6 +83,8 @@ private:
     std::unique_ptr<RHIShader>   m_SkinnedVert;
     std::unique_ptr<RHIPipeline> m_Pipeline;
     std::unique_ptr<RHIPipeline> m_SkinnedPipeline;
+
+    std::array<std::unique_ptr<RHITexture>, MAX_SPOTS> m_Maps;
 
     std::array<glm::mat4, MAX_SPOTS> m_LightMatrices{};
     int                              m_Count = 0;

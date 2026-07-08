@@ -52,6 +52,17 @@ VulkanSpotShadowPass::VulkanSpotShadowPass(RHIDevice* device, const std::string&
     skinned.vertexLayout.attributes = SkinnedDepthVertexAttributes();
     skinned.resourceBindings1       = BonesSetBindings();
     m_SkinnedPipeline = device->CreatePipeline(skinned);
+
+    // Pass-owned depth maps (same desc the graph derived for its Depth32F
+    // transients). Every slot is cleared + transitioned each Record, so the maps
+    // are always valid to sample — no creation-time clear needed.
+    RHITextureDesc td;
+    td.width  = kResolution;
+    td.height = kResolution;
+    td.format = RHIFormat::Depth32F;
+    td.usage  = RHITextureUsage::DepthAttachment | RHITextureUsage::Sampled;
+    for (auto& map : m_Maps)
+        map = device->CreateTexture(td);
 }
 
 VulkanSpotShadowPass::~VulkanSpotShadowPass() = default;
@@ -74,21 +85,25 @@ void VulkanSpotShadowPass::ComputeMatrices(const std::vector<SpotLightInfo>& spo
     }
 }
 
-void VulkanSpotShadowPass::AddToGraph(
-        RHIRenderGraph& graph,
-        const std::array<RGTextureHandle, MAX_SPOTS>& maps,
-        std::function<void(RHICommandList*, const glm::mat4&)> drawScene)
+void VulkanSpotShadowPass::Record(
+        RHICommandList* cmd,
+        const std::function<void(RHICommandList*, const glm::mat4&)>& drawScene)
 {
-    // One depth pass per spot slot. A slot beyond this frame's light count still
-    // clears its target (the graph clears on write) but skips the scene draws.
+    // One depth scope per slot, mirroring what the graph passes did: a slot beyond
+    // this frame's light count still clears its target but skips the scene draws.
+    // Each map ends in SampledRead — the graphs no longer know about these
+    // textures, so the transition the graph used to drive happens here.
     for (int i = 0; i < MAX_SPOTS; ++i) {
-        graph.AddPass("SpotShadow" + std::to_string(i))
-            .Write(maps[i])
-            .SetExecute([this, i, drawScene](RHICommandList* cmd) {
-                if (i >= m_Count) return;
-                cmd->BindPipeline(m_Pipeline.get());
-                drawScene(cmd, m_LightMatrices[i]);
-            });
+        RHIRenderPass rp;
+        rp.depthTexture = m_Maps[i].get();
+        rp.clearDepth   = true;
+        cmd->BeginRendering(rp);
+        if (i < m_Count) {
+            cmd->BindPipeline(m_Pipeline.get());
+            drawScene(cmd, m_LightMatrices[i]);
+        }
+        cmd->EndRendering();
+        cmd->TransitionTexture(m_Maps[i].get(), RHITextureState::SampledRead);
     }
 }
 

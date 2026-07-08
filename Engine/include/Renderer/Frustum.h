@@ -23,6 +23,15 @@ struct AABB {
         };
         return { tc - th, tc + th };
     }
+
+    // True if the box touches the sphere: clamp the center to the box and
+    // compare the squared distance against r². Used to skip shadow casters
+    // beyond a point light's range.
+    bool IntersectsSphere(const glm::vec3& center, float radius) const {
+        glm::vec3 closest = glm::clamp(center, min, max);
+        glm::vec3 d       = center - closest;
+        return glm::dot(d, d) <= radius * radius;
+    }
 };
 
 // 6-plane view frustum. Extract once per frame from (proj * view), then test draw calls.

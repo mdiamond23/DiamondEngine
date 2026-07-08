@@ -86,7 +86,6 @@ constexpr float kNear      = 0.1f;
 constexpr float kFar       = 100.0f;
 constexpr float kShadowFar = 25.0f;
 constexpr uint32_t kShadowRes     = 2048;
-constexpr uint32_t kSpotShadowRes = 1024;
 
 // Per-material params, std140 layout matching gbuffer.frag's MaterialUBO
 // (scalars at offsets 0/4, padded to 16).
@@ -370,7 +369,8 @@ public:
 
         // Per-view draw lists (frustum-culled per camera). Built before
         // BeginFrame so lazy mesh/material uploads keep their pre-frame timing.
-        // The unculled shadow list is view-independent and shared.
+        // The shadow list is view-independent and shared — each shadow pass
+        // culls it against its own light frustum / range at draw time.
         RebuildDrawList(scene, Frustum::Extract(proj * view, /*zeroToOneDepth*/ true),
                         camera.Position, main, kMainView);
         if (m_GameViewActive)
@@ -384,14 +384,24 @@ public:
         // each skinned entity's dynamic UBO (dynamic Update must follow BeginFrame).
         UpdateSkinnedPalettes(scene);
 
-        // View-independent shadow work, once per frame: spot matrices are
-        // light-space, and the point-light cube shadows record raw per-face
-        // scopes the graph can't express — put them in the command buffer before
-        // either view's graph so both lighting reads see this frame's maps.
+        // View-independent shadow work, once per frame: spot and point maps are
+        // light-space (unlike the CSM cascades, whose fit is per-camera), so they
+        // render once into pass-owned targets before either view's graph — both
+        // views' lighting sets bind the same maps, halving the shadow draws the
+        // old per-view-graph spot passes recorded when the game view was live.
         m_SpotShadow->ComputeMatrices(m_SpotLights);
+        m_SpotShadow->Record(cmd, [this](RHICommandList* c, const glm::mat4& lightSpace) {
+            DrawShadow(c, lightSpace, m_SpotShadow->SkinnedPipeline());
+        });
         m_PointShadow->SetLights(m_PointPos);
         m_PointShadow->Record(cmd, [this](RHICommandList* c, uint32_t faceIdx) {
-            for (const DrawItem& d : m_ShadowDraws) {
+            // Range cull: a caster outside the light's far-plane sphere can't
+            // reach any face of the cube (depth stores distance / farPlane), so
+            // skip it before paying 6 draws. faceIdx = light * 6 + face.
+            const glm::vec3 lightPos = m_PointPos[faceIdx / 6];
+            const float     range    = m_PointShadow->FarPlane();
+            for (const ShadowItem& d : m_ShadowDraws) {
+                if (!d.worldBounds.IntersectsSphere(lightPos, range)) continue;
                 c->BindVertexBuffer(d.mesh->vertexBuffer.get());
                 c->BindIndexBuffer(d.mesh->indexBuffer.get(), RHIIndexType::U32);
                 c->PushConstants(RHIShaderStage::Vertex, 0, sizeof(glm::mat4), &d.world);
@@ -401,13 +411,18 @@ public:
 
             // Skinned casters: swap to the skinned distance-cube pipeline, rebind the
             // shared face-matrix set (set 0) and re-push the face index (offset 64)
-            // it expects, then draw each with its bone palette (set 1).
-            if (m_SkinnedShadowDraws.empty()) return;
-            c->BindPipeline(m_PointShadow->SkinnedPipeline());
-            c->BindResourceSet(0, m_PointShadow->FaceSet());
-            c->PushConstants(RHIShaderStage::Vertex, sizeof(glm::mat4), sizeof(faceIdx), &faceIdx);
+            // it expects, then draw each with its bone palette (set 1). The switch
+            // waits for the first in-range caster so a fully culled list costs nothing.
+            bool skinnedBound = false;
             RHIResourceSet* boundBone = nullptr;
             for (const SkinnedShadowItem& d : m_SkinnedShadowDraws) {
+                if (!d.worldBounds.IntersectsSphere(lightPos, range)) continue;
+                if (!skinnedBound) {
+                    c->BindPipeline(m_PointShadow->SkinnedPipeline());
+                    c->BindResourceSet(0, m_PointShadow->FaceSet());
+                    c->PushConstants(RHIShaderStage::Vertex, sizeof(glm::mat4), sizeof(faceIdx), &faceIdx);
+                    skinnedBound = true;
+                }
                 if (d.bones != boundBone) { c->BindResourceSet(1, d.bones); boundBone = d.bones; }
                 c->BindVertexBuffer(d.mesh->vertexBuffer.get());
                 c->BindIndexBuffer(d.mesh->indexBuffer.get(), RHIIndexType::U32);
@@ -478,6 +493,13 @@ private:
         RHIResourceSet* material;   // G-buffer set 0 for this draw (view-specific)
         glm::mat4       world;
     };
+    // A shadow caster — depth passes need no material, but each light view culls
+    // against the caster's world-space bounds (cached here once per rebuild).
+    struct ShadowItem {
+        const GpuMesh* mesh;
+        glm::mat4      world;
+        AABB           worldBounds;
+    };
     struct TransparentDraw {
         const GpuMesh*  mesh;
         RHIResourceSet* set;        // transparency set 0 (camera UBO + albedo)
@@ -498,6 +520,7 @@ private:
         const GpuMesh*  mesh;
         RHIResourceSet* bones;
         glm::mat4       world;
+        AABB            worldBounds;   // entity bounds — shared by all its primitives
     };
     // Per-skinned-entity GPU state: a dynamic bone-palette UBO (rewritten each
     // frame from AnimatorComponent::palette) + its set-1 descriptor. Created lazily,
@@ -698,11 +721,6 @@ private:
             cascades[i] = g.DeclareTexture("csmCascade" + std::to_string(i),
                                            { kShadowRes, kShadowRes, RHIFormat::Depth32F });
 
-        std::array<RGTextureHandle, VulkanSpotShadowPass::MAX_SPOTS> spotMaps;
-        for (int i = 0; i < VulkanSpotShadowPass::MAX_SPOTS; ++i)
-            spotMaps[i] = g.DeclareTexture("spotShadow" + std::to_string(i),
-                                           { kSpotShadowRes, kSpotShadowRes, RHIFormat::Depth32F });
-
         // G-buffer — fill from the view's draw list; each draw binds its
         // material's descriptor set (built lazily by GetOrCreateMaterialSet).
         m_GBuffer->AddToGraph(g, gViewPos, gViewNormal, gAlbedo, gMaterial, gEmissive,
@@ -720,19 +738,13 @@ private:
                               DrawShadow(cmd, lightSpace, m_CSM->SkinnedPipeline());
                           });
 
-        // Spot shadows — one perspective depth map per spot light, same push /
-        // draw callback shape as the cascades (also shared; light-space is
-        // view-independent, so both views record the same maps).
-        m_SpotShadow->AddToGraph(g, spotMaps,
-                                 [this](RHICommandList* cmd, const glm::mat4& lightSpace) {
-                                     DrawShadow(cmd, lightSpace, m_SpotShadow->SkinnedPipeline());
-                                 });
-
-        // Deferred resolve → HDR. Reads all cascade + spot maps (also keeps the
-        // unlit ones alive). The point-shadow cubes aren't graph textures — they
-        // render pre-graph in RenderToSwapchain and bind raw below.
+        // Deferred resolve → HDR. Reads all cascade maps (also keeps the unlit
+        // ones alive). The spot maps and point-shadow cubes aren't graph
+        // textures — both render once pre-graph in RenderToSwapchain; the spot
+        // maps bind as pass-owned RHITextures, the cubes bind raw below.
         v.lighting->AddToGraph(g, gViewPos, gViewNormal, gAlbedo, gMaterial,
-                               ssaoBlurred, gEmissive, cascades, spotMaps, hdrLit);
+                               ssaoBlurred, gEmissive, cascades,
+                               m_SpotShadow->Maps(), hdrLit);
         v.lighting->BindIBL(*m_IBL);
         v.lighting->BindPointShadows(*m_PointShadow);
 
@@ -905,9 +917,16 @@ private:
     // Depth draw for a cascade / spot map. The static depth pipeline is bound by
     // the pass; skinned casters rebind 'skinnedPipeline' (csm_depth_skinned — set 1
     // bone palette) and push lightSpace * model with the skin applied in-shader.
+    //
+    // Casters are culled against the light's own frustum. The matrices already
+    // include their padding (the CSM near-plane zPad, the spot far = range), so
+    // this only skips draws the hardware would have clipped anyway — never a
+    // caster that could reach the map.
     void DrawShadow(RHICommandList* cmd, const glm::mat4& lightSpace,
                     RHIPipeline* skinnedPipeline) {
-        for (const DrawItem& d : m_ShadowDraws) {
+        const Frustum lightFrustum = Frustum::Extract(lightSpace, /*zeroToOneDepth*/ true);
+        for (const ShadowItem& d : m_ShadowDraws) {
+            if (!lightFrustum.TestAABB(d.worldBounds)) continue;
             const glm::mat4 lm = lightSpace * d.world;
             cmd->BindVertexBuffer(d.mesh->vertexBuffer.get());
             cmd->BindIndexBuffer(d.mesh->indexBuffer.get(), RHIIndexType::U32);
@@ -916,10 +935,13 @@ private:
             m_Device->RecordShadowCaster();
         }
 
-        if (m_SkinnedShadowDraws.empty()) return;
-        cmd->BindPipeline(skinnedPipeline);
+        // Skinned casters — the pipeline switch waits for the first survivor so a
+        // fully culled list costs nothing.
+        bool skinnedBound = false;
         RHIResourceSet* boundBone = nullptr;
         for (const SkinnedShadowItem& d : m_SkinnedShadowDraws) {
+            if (!lightFrustum.TestAABB(d.worldBounds)) continue;
+            if (!skinnedBound) { cmd->BindPipeline(skinnedPipeline); skinnedBound = true; }
             if (d.bones != boundBone) { cmd->BindResourceSet(1, d.bones); boundBone = d.bones; }
             const glm::mat4 lm = lightSpace * d.world;
             cmd->BindVertexBuffer(d.mesh->vertexBuffer.get());
@@ -935,7 +957,8 @@ private:
         v.drawList.clear();
         v.skinnedDraws.clear();
         v.transparentDraws.clear();
-        m_ShadowDraws.clear();          // unculled + view-independent; refilling is idempotent
+        m_ShadowDraws.clear();          // view-independent (culled per light view at draw time);
+                                        // refilling is idempotent
         m_SkinnedShadowDraws.clear();   // (both cleared per rebuild — filled the same for either view)
         const TransformSystem& ts = scene.GetTransformSystem();
         for (auto [entity, mc] : scene.GetRegistry().view<MeshComponent>().each()) {
@@ -971,14 +994,14 @@ private:
                 continue;
             }
 
-            const DrawItem item{ &it->second,
-                                 GetOrCreateMaterialSet(mc.material.get(), viewIdx), world };
+            const AABB worldBounds = it->second.bounds.Transform(world);
             if (mc.castsShadow)
-                m_ShadowDraws.push_back(item);
-            if (frustum.TestAABB(it->second.bounds.Transform(world))) {
+                m_ShadowDraws.push_back({ &it->second, world, worldBounds });
+            if (frustum.TestAABB(worldBounds)) {
                 m_Device->RecordVisible(1);
                 RecordMaterialUsage(mc.material.get());
-                v.drawList.push_back(item);
+                v.drawList.push_back({ &it->second,
+                                       GetOrCreateMaterialSet(mc.material.get(), viewIdx), world });
             } else {
                 m_Device->RecordCulled(1);
             }
@@ -1001,7 +1024,7 @@ private:
                 const GpuMesh* gm = GetOrRegisterSkinnedMesh(meshPtr.get());
                 if (!gm) continue;
                 if (smc.castsShadow)
-                    m_SkinnedShadowDraws.push_back({ gm, bones, world });
+                    m_SkinnedShadowDraws.push_back({ gm, bones, world, bounds });
                 if (visible) {
                     m_Device->RecordVisible(1);
                     RecordMaterialUsage(smc.material.get());
@@ -1326,11 +1349,11 @@ private:
     std::unordered_map<Mesh*, GpuMesh>                  m_Meshes;
     std::unordered_map<Mesh*, GpuMesh>                  m_SkinnedMeshes;  // wider vertex layout
     std::unordered_map<const PBRMaterial*, GpuMaterial> m_Materials;
-    std::vector<DrawItem> m_ShadowDraws;   // unculled casters — CSM/spot/point passes
+    std::vector<ShadowItem> m_ShadowDraws;   // all casters — culled per light view at draw time
 
     // Per-skinned-entity GPU state (SkinnedInstance defined above), keyed by entity.
     std::unordered_map<entt::entity, SkinnedInstance> m_Skinned;
-    std::vector<SkinnedShadowItem> m_SkinnedShadowDraws;   // unculled skinned casters
+    std::vector<SkinnedShadowItem> m_SkinnedShadowDraws;   // skinned casters — culled per light view
     // Albedo textures behind cached transparency sets, kept alive with them.
     std::unordered_map<RHITexture*, std::shared_ptr<Texture>> m_TransparentAlbedos;
 

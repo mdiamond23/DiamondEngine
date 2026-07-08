@@ -68,6 +68,45 @@ VulkanDeferredLightingPass::VulkanDeferredLightingPass(RHIDevice* device,
 
 VulkanDeferredLightingPass::~VulkanDeferredLightingPass() = default;
 
+RGPass& VulkanDeferredLightingPass::AddToGraph(
+        RHIRenderGraph& graph,
+        RGTextureHandle viewPos, RGTextureHandle viewNormal,
+        RGTextureHandle albedo,  RGTextureHandle material,
+        RGTextureHandle ssao,    RGTextureHandle emissive,
+        const std::array<RGTextureHandle, NUM_CASCADES>& cascades,
+        const std::array<RHITexture*, NUM_SPOTS>& spotShadows,
+        RGTextureHandle output)
+{
+    if (!m_Set) {
+        m_TexBindings = {
+            { 0,  graph.GetTexture(viewPos) },     { 1,  graph.GetTexture(viewNormal) },
+            { 2,  graph.GetTexture(albedo) },      { 3,  graph.GetTexture(material) },
+            { 4,  graph.GetTexture(ssao) },        { 5,  graph.GetTexture(emissive) },
+            { 6,  graph.GetTexture(cascades[0]) }, { 7,  graph.GetTexture(cascades[1]) },
+            { 8,  graph.GetTexture(cascades[2]) }, { 9,  graph.GetTexture(cascades[3]) },
+            { 14, spotShadows[0] },                { 15, spotShadows[1] },
+            { 16, spotShadows[2] },                { 17, spotShadows[3] },
+        };
+        m_Set = m_Device->CreateResourceSet(
+            m_Pipeline.get(), 0, { { 10, m_UBO.get() } }, m_TexBindings);
+    }
+
+    // Read every graph input so the graph barriers each to SampledRead and orders
+    // this pass after the G-buffer/SSAO/CSM producers. Reading all cascades also
+    // keeps them alive through dead-pass culling. The spot maps are NOT graph
+    // textures — their owner records + transitions them before the graph runs.
+    return graph.AddPass("DeferredLighting")
+        .Read(viewPos).Read(viewNormal).Read(albedo).Read(material)
+        .Read(ssao).Read(emissive)
+        .Read(cascades[0]).Read(cascades[1]).Read(cascades[2]).Read(cascades[3])
+        .Write(output)
+        .SetExecute([this](RHICommandList* cmd) {
+            cmd->BindPipeline(m_Pipeline.get());
+            cmd->BindResourceSet(0, m_Set.get());
+            cmd->Draw(3);
+        });
+}
+
 void VulkanDeferredLightingPass::AddToGraph(
         RHIRenderGraph& graph,
         RGTextureHandle viewPos, RGTextureHandle viewNormal,
@@ -77,34 +116,16 @@ void VulkanDeferredLightingPass::AddToGraph(
         const std::array<RGTextureHandle, NUM_SPOTS>& spotShadows,
         RGTextureHandle output)
 {
-    if (!m_Set) {
-        m_TexBindings = {
-            { 0,  graph.GetTexture(viewPos) },        { 1,  graph.GetTexture(viewNormal) },
-            { 2,  graph.GetTexture(albedo) },         { 3,  graph.GetTexture(material) },
-            { 4,  graph.GetTexture(ssao) },           { 5,  graph.GetTexture(emissive) },
-            { 6,  graph.GetTexture(cascades[0]) },    { 7,  graph.GetTexture(cascades[1]) },
-            { 8,  graph.GetTexture(cascades[2]) },    { 9,  graph.GetTexture(cascades[3]) },
-            { 14, graph.GetTexture(spotShadows[0]) }, { 15, graph.GetTexture(spotShadows[1]) },
-            { 16, graph.GetTexture(spotShadows[2]) }, { 17, graph.GetTexture(spotShadows[3]) },
-        };
-        m_Set = m_Device->CreateResourceSet(
-            m_Pipeline.get(), 0, { { 10, m_UBO.get() } }, m_TexBindings);
-    }
+    std::array<RHITexture*, NUM_SPOTS> resolved{};
+    for (int i = 0; i < NUM_SPOTS; ++i)
+        resolved[i] = graph.GetTexture(spotShadows[i]);
 
-    // Read every input so the graph barriers each to SampledRead and orders this
-    // pass after the G-buffer/SSAO/CSM/spot-shadow producers. Reading all cascade
-    // and spot maps also keeps them alive through dead-pass culling.
-    graph.AddPass("DeferredLighting")
-        .Read(viewPos).Read(viewNormal).Read(albedo).Read(material)
-        .Read(ssao).Read(emissive)
-        .Read(cascades[0]).Read(cascades[1]).Read(cascades[2]).Read(cascades[3])
-        .Read(spotShadows[0]).Read(spotShadows[1]).Read(spotShadows[2]).Read(spotShadows[3])
-        .Write(output)
-        .SetExecute([this](RHICommandList* cmd) {
-            cmd->BindPipeline(m_Pipeline.get());
-            cmd->BindResourceSet(0, m_Set.get());
-            cmd->Draw(3);
-        });
+    RGPass& pass = AddToGraph(graph, viewPos, viewNormal, albedo, material,
+                              ssao, emissive, cascades, resolved, output);
+    // Graph-owned spot maps rely on this pass's reads for their SampledRead
+    // transition (and, when written, producer ordering).
+    for (const RGTextureHandle& h : spotShadows)
+        pass.Read(h);
 }
 
 void VulkanDeferredLightingPass::BindIBL(const VulkanIBLPass& ibl)

@@ -47,9 +47,22 @@ public:
     ~VulkanDeferredLightingPass();
 
     // Register the lighting pass: reads the G-buffer (view pos/normal, albedo,
-    // material, emissive) + blurred SSAO + the cascade and spot-shadow depth maps,
-    // and writes the HDR 'output' target (RGBA16F). Sets are built once from the
-    // graph's pooled textures.
+    // material, emissive) + blurred SSAO + the cascade depth maps, and writes the
+    // HDR 'output' target (RGBA16F). Sets are built once from the graph's pooled
+    // textures. 'spotShadows' are the spot pass's OWN depth maps (rendered +
+    // transitioned by its Record before this graph executes, so they take no
+    // graph reads); returns the pass so a caller can append reads.
+    RGPass& AddToGraph(RHIRenderGraph& graph,
+                       RGTextureHandle viewPos, RGTextureHandle viewNormal,
+                       RGTextureHandle albedo,  RGTextureHandle material,
+                       RGTextureHandle ssao,    RGTextureHandle emissive,
+                       const std::array<RGTextureHandle, NUM_CASCADES>& cascades,
+                       const std::array<RHITexture*, NUM_SPOTS>& spotShadows,
+                       RGTextureHandle output);
+
+    // Graph-handle spot maps (demo scaffolds): resolves the handles and forwards,
+    // then reads them so the graph orders after their writers and transitions
+    // never-written dummies to a sampleable layout.
     void AddToGraph(RHIRenderGraph& graph,
                     RGTextureHandle viewPos, RGTextureHandle viewNormal,
                     RGTextureHandle albedo,  RGTextureHandle material,
