@@ -109,43 +109,58 @@ VulkanPointShadowPass::VulkanPointShadowPass(RHIDevice* device, const std::strin
         VK_CHECK(vkCreateSampler(dev, &si, nullptr, &m_Sampler));
     }
 
-    // ── One D32 cube per light per frame slot + a cube view and 6 face views each.
-    for (auto& frameCubes : m_Cubes) {
-        for (Cube& c : frameCubes) {
-            VkImageCreateInfo ii{ VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
-            ii.flags         = VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
-            ii.imageType     = VK_IMAGE_TYPE_2D;
-            ii.format        = VulkanRHIDevice::kDepthFormat;
-            ii.extent        = { kResolution, kResolution, 1 };
-            ii.mipLevels     = 1;
-            ii.arrayLayers   = 6;
-            ii.samples       = VK_SAMPLE_COUNT_1_BIT;
-            ii.tiling        = VK_IMAGE_TILING_OPTIMAL;
-            ii.usage         = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT
-                             | VK_IMAGE_USAGE_SAMPLED_BIT
-                             | VK_IMAGE_USAGE_TRANSFER_DST_BIT;   // creation-time clear
-            ii.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
-            ii.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    // ── One D32 cube per light per frame slot (working maps — sampled by the
+    // lighting pass, seeded from the static cache by transfer) + one static-cache
+    // cube per light (baked static casters; transfer source only, so no cube view
+    // and no SAMPLED usage).
+    auto createCube = [&](Cube& c, VkImageUsageFlags usage, bool sampled) {
+        VkImageCreateInfo ii{ VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
+        ii.flags         = VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
+        ii.imageType     = VK_IMAGE_TYPE_2D;
+        ii.format        = VulkanRHIDevice::kDepthFormat;
+        ii.extent        = { kResolution, kResolution, 1 };
+        ii.mipLevels     = 1;
+        ii.arrayLayers   = 6;
+        ii.samples       = VK_SAMPLE_COUNT_1_BIT;
+        ii.tiling        = VK_IMAGE_TILING_OPTIMAL;
+        ii.usage         = usage;
+        ii.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
+        ii.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
-            VmaAllocationCreateInfo ai{};
-            ai.usage = VMA_MEMORY_USAGE_AUTO;
-            ai.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
-            VK_CHECK(vmaCreateImage(ctx.Allocator(), &ii, &ai, &c.image, &c.alloc, nullptr));
+        VmaAllocationCreateInfo ai{};
+        ai.usage = VMA_MEMORY_USAGE_AUTO;
+        ai.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
+        VK_CHECK(vmaCreateImage(ctx.Allocator(), &ii, &ai, &c.image, &c.alloc, nullptr));
 
-            VkImageViewCreateInfo vi{ VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
-            vi.image    = c.image;
+        VkImageViewCreateInfo vi{ VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
+        vi.image    = c.image;
+        vi.format   = VulkanRHIDevice::kDepthFormat;
+        if (sampled) {
             vi.viewType = VK_IMAGE_VIEW_TYPE_CUBE;
-            vi.format   = VulkanRHIDevice::kDepthFormat;
             vi.subresourceRange = { VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 6 };
             VK_CHECK(vkCreateImageView(dev, &vi, nullptr, &c.cubeView));
-
-            for (uint32_t f = 0; f < 6; ++f) {
-                vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
-                vi.subresourceRange = { VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, f, 1 };
-                VK_CHECK(vkCreateImageView(dev, &vi, nullptr, &c.faceViews[f]));
-            }
         }
-    }
+        for (uint32_t f = 0; f < 6; ++f) {
+            vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+            vi.subresourceRange = { VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, f, 1 };
+            VK_CHECK(vkCreateImageView(dev, &vi, nullptr, &c.faceViews[f]));
+        }
+    };
+    for (auto& frameCubes : m_Cubes)
+        for (Cube& c : frameCubes)
+            createCube(c, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT
+                        | VK_IMAGE_USAGE_SAMPLED_BIT
+                        | VK_IMAGE_USAGE_TRANSFER_DST_BIT,   // creation clear + cache copy
+                       /*sampled*/ true);
+    for (Cube& c : m_StaticCubes)
+        createCube(c, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT
+                    | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,       // copy source for working cubes
+                   /*sampled*/ false);
+
+    // No creation-time clear for the static cubes: an active slot is always dirty
+    // on its first frame (init here, or newly active in SetLights), so its cache
+    // bakes before the first copy samples it. Inactive slots never copy.
+    m_StaticDirty.fill(true);
 
     // ── Clear every cube to depth 1 (no occluder) and settle SHADER_READ_ONLY, so
     // slots that never render (fewer live lights) are still valid to sample.
@@ -174,15 +189,18 @@ VulkanPointShadowPass::~VulkanPointShadowPass()
 {
     VulkanContext& ctx = m_Device->Ctx();
     VkDevice dev = ctx.Device();
-    for (auto& frameCubes : m_Cubes) {
-        for (Cube& c : frameCubes) {
-            for (VkImageView v : c.faceViews)
-                if (v) vkDestroyImageView(dev, v, nullptr);
-            if (c.cubeView) vkDestroyImageView(dev, c.cubeView, nullptr);
-            if (c.image)    vmaDestroyImage(ctx.Allocator(), c.image, c.alloc);
-            c = {};
-        }
-    }
+    auto destroyCube = [&](Cube& c) {
+        for (VkImageView v : c.faceViews)
+            if (v) vkDestroyImageView(dev, v, nullptr);
+        if (c.cubeView) vkDestroyImageView(dev, c.cubeView, nullptr);
+        if (c.image)    vmaDestroyImage(ctx.Allocator(), c.image, c.alloc);
+        c = {};
+    };
+    for (auto& frameCubes : m_Cubes)
+        for (Cube& c : frameCubes)
+            destroyCube(c);
+    for (Cube& c : m_StaticCubes)
+        destroyCube(c);
     if (m_Sampler) vkDestroySampler(dev, m_Sampler, nullptr);
 }
 
@@ -208,12 +226,67 @@ void VulkanPointShadowPass::SetLights(const std::vector<glm::vec3>& positionsWor
         for (int f = 0; f < 6; ++f)
             ubo.faceVP[i * 6 + f] = proj * views[f];
         ubo.lightPosFar[i] = glm::vec4(lp, kFarPlane);
+
+        // A slot whose light moved (position fully determines the face matrices —
+        // the projection is fixed) or that a different light now occupies must
+        // re-bake its static cache. Exact compare is safe: identical input →
+        // identical position, so a stationary light never re-bakes.
+        if (i >= m_PrevCount || lp != m_PrevPos[i])
+            m_StaticDirty[i] = true;
+        m_PrevPos[i] = lp;
     }
+    m_PrevCount = m_Count;
     m_UBO->Update(&ubo, sizeof(ubo));
 }
 
+void VulkanPointShadowPass::MarkStaticDirty()
+{
+    for (int i = 0; i < m_Count; ++i)
+        m_StaticDirty[i] = true;
+}
+
+void VulkanPointShadowPass::RenderFaces(RHICommandList* cmd, VkCommandBuffer raw,
+                                        const Cube& cube, int light, bool clear,
+                                        const std::function<void(RHICommandList*, uint32_t)>& draw)
+{
+    for (uint32_t f = 0; f < 6; ++f) {
+        VkRenderingAttachmentInfo depth{ VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
+        depth.imageView   = cube.faceViews[f];
+        depth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+        depth.loadOp      = clear ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
+        depth.storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
+        depth.clearValue.depthStencil = { 1.0f, 0 };
+
+        VkRenderingInfo ri{ VK_STRUCTURE_TYPE_RENDERING_INFO };
+        ri.renderArea.extent = { kResolution, kResolution };
+        ri.layerCount        = 1;
+        ri.pDepthAttachment  = &depth;
+        vkCmdBeginRendering(raw, &ri);
+
+        // Negative-height viewport — the same Y-flip every device render scope
+        // uses, keeping the face orientation aligned with the IBL bake.
+        VkViewport vp{};
+        vp.x = 0.0f; vp.y = static_cast<float>(kResolution);
+        vp.width    = static_cast<float>(kResolution);
+        vp.height   = -static_cast<float>(kResolution);
+        vp.minDepth = 0.0f; vp.maxDepth = 1.0f;
+        vkCmdSetViewport(raw, 0, 1, &vp);
+        VkRect2D sc{}; sc.extent = { kResolution, kResolution };
+        vkCmdSetScissor(raw, 0, 1, &sc);
+
+        cmd->BindPipeline(m_Pipeline.get());
+        cmd->BindResourceSet(0, m_Set.get());
+        const uint32_t idx = static_cast<uint32_t>(light) * 6u + f;
+        cmd->PushConstants(RHIShaderStage::Vertex, kFaceOffset, sizeof(idx), &idx);
+        draw(cmd, idx);
+
+        vkCmdEndRendering(raw);
+    }
+}
+
 void VulkanPointShadowPass::Record(RHICommandList* cmd,
-                                   const std::function<void(RHICommandList*, uint32_t)>& drawScene)
+                                   const std::function<void(RHICommandList*, uint32_t)>& drawStatic,
+                                   const std::function<void(RHICommandList*, uint32_t)>& drawDynamic)
 {
     if (m_Count == 0) return;
 
@@ -221,51 +294,63 @@ void VulkanPointShadowPass::Record(RHICommandList* cmd,
     const uint32_t  frame = m_Device->CurrentFrame();
 
     for (int i = 0; i < m_Count; ++i) {
-        Cube& c = m_Cubes[frame][i];
+        Cube& sc = m_StaticCubes[i];
 
-        // Whole cube → depth attachment. oldLayout UNDEFINED discards the previous
-        // contents (every face is cleared below); the frame fence already retired
-        // this slot's last use, so no execution dependency is needed.
+        // (1) Static cache — only when dirty. Bake static casters into all 6
+        // faces, then settle TRANSFER_SRC for this and future frames' copies. The
+        // cache is single-buffered, so the barrier's TRANSFER srcStage orders the
+        // overwrite after any in-flight prior frame's copy from it (WAR — an
+        // execution dependency suffices, hence srcAccess 0); oldLayout UNDEFINED
+        // discards the stale contents (every face is cleared).
+        if (m_StaticDirty[i]) {
+            CubeDepthBarrier(raw, sc.image,
+                             VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+                             VK_PIPELINE_STAGE_2_TRANSFER_BIT, 0,
+                             VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT
+                                 | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
+                             VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT
+                                 | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
+
+            RenderFaces(cmd, raw, sc, i, /*clear*/ true, drawStatic);
+
+            CubeDepthBarrier(raw, sc.image,
+                             VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+                             VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                             VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
+                             VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+                             VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
+            m_StaticDirty[i] = false;
+        }
+
+        // (2) Working cube: seed every face from the cached static depth with one
+        // whole-cube copy, then draw this frame's dynamic casters over it (loadOp
+        // LOAD — they depth-test against, and win where closer than, the copied
+        // static occluders). oldLayout UNDEFINED discards the previous contents
+        // (the copy overwrites every texel); the frame fence already retired this
+        // slot's last use, so no execution dependency is needed.
+        Cube& c = m_Cubes[frame][i];
         CubeDepthBarrier(raw, c.image,
-                         VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+                         VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                          VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                         VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+
+        VkImageCopy region{};
+        region.srcSubresource = { VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 6 };
+        region.dstSubresource = { VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 6 };
+        region.extent         = { kResolution, kResolution, 1 };
+        vkCmdCopyImage(raw, sc.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                       c.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+
+        CubeDepthBarrier(raw, c.image,
+                         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                         VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+                         VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
                          VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT
                              | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
-                         VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
+                         VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT
+                             | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
 
-        for (uint32_t f = 0; f < 6; ++f) {
-            VkRenderingAttachmentInfo depth{ VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
-            depth.imageView   = c.faceViews[f];
-            depth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
-            depth.loadOp      = VK_ATTACHMENT_LOAD_OP_CLEAR;
-            depth.storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
-            depth.clearValue.depthStencil = { 1.0f, 0 };
-
-            VkRenderingInfo ri{ VK_STRUCTURE_TYPE_RENDERING_INFO };
-            ri.renderArea.extent = { kResolution, kResolution };
-            ri.layerCount        = 1;
-            ri.pDepthAttachment  = &depth;
-            vkCmdBeginRendering(raw, &ri);
-
-            // Negative-height viewport — the same Y-flip every device render scope
-            // uses, keeping the face orientation aligned with the IBL bake.
-            VkViewport vp{};
-            vp.x = 0.0f; vp.y = static_cast<float>(kResolution);
-            vp.width    = static_cast<float>(kResolution);
-            vp.height   = -static_cast<float>(kResolution);
-            vp.minDepth = 0.0f; vp.maxDepth = 1.0f;
-            vkCmdSetViewport(raw, 0, 1, &vp);
-            VkRect2D sc{}; sc.extent = { kResolution, kResolution };
-            vkCmdSetScissor(raw, 0, 1, &sc);
-
-            cmd->BindPipeline(m_Pipeline.get());
-            cmd->BindResourceSet(0, m_Set.get());
-            const uint32_t idx = static_cast<uint32_t>(i) * 6u + f;
-            cmd->PushConstants(RHIShaderStage::Vertex, kFaceOffset, sizeof(idx), &idx);
-            drawScene(cmd, idx);
-
-            vkCmdEndRendering(raw);
-        }
+        RenderFaces(cmd, raw, c, i, /*clear*/ false, drawDynamic);
 
         CubeDepthBarrier(raw, c.image,
                          VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,

@@ -51,16 +51,34 @@ public:
 
     // Upload this frame's light positions (world space, at most MAX_LIGHTS) into
     // the face-matrix UBO. Call after RHIDevice::BeginFrame, before Record.
+    // A slot whose position changed (light moved / a new light took the slot) has
+    // its static cache marked dirty here, so a moved light re-bakes its cube.
     void SetLights(const std::vector<glm::vec3>& positionsWorld);
+
+    // Invalidate every active slot's static cache — call when the set of static
+    // shadow casters (or any static caster's transform) changed this frame, since
+    // the cache can't detect that itself. Re-baked on the next Record.
+    void MarkStaticDirty();
 
     // Record the shadow renders for every set light: per light, 6 per-face depth
     // scopes + barriers, ending with the cube sampleable by the fragment stage.
-    // drawScene records the casters; it must push each draw's model matrix at
+    // The callbacks record the casters; each must push its draw's model matrix at
     // push-constant offset 0 (the pass pushes the face index at offset 64). The
-    // face index is also handed to drawScene so a skinned pass that rebinds the
+    // face index is also handed to the callback so a skinned pass that rebinds the
     // skinned pipeline can re-push it (offset 64) after the pipeline switch.
+    //
+    // Static shadow caching: each slot keeps a cached static-caster cube, re-baked
+    // only when dirty (drawStatic). Every frame the working cube is seeded from
+    // that cache — vkCmdCopyImage, all 6 faces at once (this pass is raw Vulkan,
+    // so the transfer copy the RHI lacks is available; the spot pass needs a
+    // fullscreen depth-copy pipeline instead) — and only this frame's DYNAMIC
+    // casters are drawn over it (drawDynamic). Unlike the spot pass's RHI render
+    // targets, the static cubes are single images (not per-frame-in-flight): they
+    // are written only when dirty and read by transfer, with barriers ordering
+    // both against prior frames, so one bake fills the cache.
     void Record(RHICommandList* cmd,
-                const std::function<void(RHICommandList*, uint32_t faceIdx)>& drawScene);
+                const std::function<void(RHICommandList*, uint32_t faceIdx)>& drawStatic,
+                const std::function<void(RHICommandList*, uint32_t faceIdx)>& drawDynamic);
 
     // The skinned distance-cube pipeline (point_shadow_skinned: set 0 = the shared
     // face-matrix UBO, set 1 = bone palette, wider vertex layout) and the shared
@@ -84,12 +102,20 @@ private:
     };
 
     // A D32 cubemap: the cube view samples it, the six face views render into it.
+    // Static-cache cubes skip the cube view (they are only a transfer source).
     struct Cube {
         VkImage       image    = VK_NULL_HANDLE;
         VmaAllocation alloc    = VK_NULL_HANDLE;
         VkImageView   cubeView = VK_NULL_HANDLE;
         std::array<VkImageView, 6> faceViews{};
     };
+
+    // Render 6 per-face depth scopes into 'cube' (the shared raw-record shape:
+    // negative-height viewport, pipeline + face-matrix set bound per face, face
+    // index pushed at offset 64). clear=false loads the copied-in static depth.
+    void RenderFaces(RHICommandList* cmd, VkCommandBuffer raw, const Cube& cube,
+                     int light, bool clear,
+                     const std::function<void(RHICommandList*, uint32_t)>& draw);
 
     VulkanRHIDevice* m_Device;
     int              m_Count = 0;
@@ -104,6 +130,14 @@ private:
 
     VkSampler m_Sampler = VK_NULL_HANDLE;
     std::array<std::array<Cube, MAX_LIGHTS>, VulkanRHIDevice::kFramesInFlight> m_Cubes{};
+
+    // Static shadow caching: per-slot cached static-caster cube (copy source for
+    // the working cubes) + dirty flag (bake next Record) + previous positions for
+    // moved-light detection in SetLights. Single-buffered by design — see Record.
+    std::array<Cube, MAX_LIGHTS>      m_StaticCubes{};
+    std::array<bool, MAX_LIGHTS>      m_StaticDirty{};
+    std::array<glm::vec3, MAX_LIGHTS> m_PrevPos{};
+    int                               m_PrevCount = 0;
 };
 
 } // namespace Diamond

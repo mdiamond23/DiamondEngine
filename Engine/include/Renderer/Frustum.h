@@ -75,6 +75,17 @@ struct Frustum {
         }
         return true;
     }
+
+    // Returns true if the sphere is fully or partially inside the frustum.
+    // Same plane-distance test as TestAABB's p-vertex check, collapsed to a
+    // single point since a sphere has no orientation.
+    bool TestSphere(const glm::vec3& center, float radius) const {
+        for (const auto& plane : planes) {
+            if (glm::dot(glm::vec3(plane), center) + plane.w < -radius)
+                return false;
+        }
+        return true;
+    }
 };
 
 } // namespace Diamond

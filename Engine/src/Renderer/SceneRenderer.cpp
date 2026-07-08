@@ -15,6 +15,7 @@
 #include "Core/Camera.h"
 #include "Scene/Scene.h"
 #include "Scene/Components.h"
+#include "Scene/Physics/Rigidbody.h"   // RigidBodyComponent / BodyType (static-cache classification)
 #include "Animation/AnimationComponents.h"
 
 #include "Platform/Vulkan/Passes/Deferred/VulkanGBufferPass.h"
@@ -342,18 +343,18 @@ public:
         // depth range from a per-TU define, and its inline instantiations
         // COMDAT-fold across TUs — a GL TU's [-1,1] version can silently win.
         const glm::mat4 proj = glm::perspectiveRH_ZO(glm::radians(camera.Zoom), aspect, kNear, kFar);
+        const Frustum mainFrustum = Frustum::Extract(proj * view, /*zeroToOneDepth*/ true);
 
-        // Refresh world transforms, then gather this frame's shared (view-
-        // independent) scene data: lights and particle batches.
         scene.GetTransformSystem().Update(scene.GetRegistry());
-        GatherLights(scene);
-        GatherParticles(scene);
 
         // Game view: rendered only when enabled AND the scene has a primary
         // camera to render from (mirrors the GL editor's game viewport).
+        // Computed before GatherLights so its frustum is available for
+        // light-range culling below.
         m_GameViewActive = false;
         View* game = (m_GameViewEnabled && m_Views[kGameView]) ? m_Views[kGameView].get() : nullptr;
         glm::mat4 gameView(1.0f), gameProj(1.0f);
+        Frustum gameFrustum{};
         if (game) {
             const entt::entity camEntity = scene.GetPrimaryCamera();
             if (camEntity != entt::null) {
@@ -363,18 +364,26 @@ public:
                     glm::radians(cc.fov),
                     static_cast<float>(game->width) / static_cast<float>(game->height),
                     cc.nearClip, cc.farClip);
+                gameFrustum = Frustum::Extract(gameProj * gameView, /*zeroToOneDepth*/ true);
                 m_GameViewActive = true;
             }
         }
+
+        // Gather this frame's shared (view-independent) scene data: lights
+        // (culled against the active camera frustum(s) — a light whose range
+        // sphere misses every view skips its shadow pass and the lighting
+        // pass, since both consume the vectors GatherLights fills) and
+        // particle batches.
+        GatherLights(scene, mainFrustum, m_GameViewActive ? &gameFrustum : nullptr);
+        GatherParticles(scene);
 
         // Per-view draw lists (frustum-culled per camera). Built before
         // BeginFrame so lazy mesh/material uploads keep their pre-frame timing.
         // The shadow list is view-independent and shared — each shadow pass
         // culls it against its own light frustum / range at draw time.
-        RebuildDrawList(scene, Frustum::Extract(proj * view, /*zeroToOneDepth*/ true),
-                        camera.Position, main, kMainView);
+        RebuildDrawList(scene, mainFrustum, camera.Position, main, kMainView);
         if (m_GameViewActive)
-            RebuildDrawList(scene, Frustum::Extract(gameProj * gameView, /*zeroToOneDepth*/ true),
+            RebuildDrawList(scene, gameFrustum,
                             glm::vec3(glm::inverse(gameView)[3]), *game, kGameView);
 
         RHICommandList* cmd = m_Device->BeginFrame();
@@ -389,48 +398,32 @@ public:
         // render once into pass-owned targets before either view's graph — both
         // views' lighting sets bind the same maps, halving the shadow draws the
         // old per-view-graph spot passes recorded when the game view was live.
-        m_SpotShadow->ComputeMatrices(m_SpotLights);
-        m_SpotShadow->Record(cmd, [this](RHICommandList* c, const glm::mat4& lightSpace) {
-            DrawShadow(c, lightSpace, m_SpotShadow->SkinnedPipeline());
-        });
-        m_PointShadow->SetLights(m_PointPos);
-        m_PointShadow->Record(cmd, [this](RHICommandList* c, uint32_t faceIdx) {
-            // Range cull: a caster outside the light's far-plane sphere can't
-            // reach any face of the cube (depth stores distance / farPlane), so
-            // skip it before paying 6 draws. faceIdx = light * 6 + face.
-            const glm::vec3 lightPos = m_PointPos[faceIdx / 6];
-            const float     range    = m_PointShadow->FarPlane();
-            for (const ShadowItem& d : m_ShadowDraws) {
-                if (!d.worldBounds.IntersectsSphere(lightPos, range)) continue;
-                c->BindVertexBuffer(d.mesh->vertexBuffer.get());
-                c->BindIndexBuffer(d.mesh->indexBuffer.get(), RHIIndexType::U32);
-                c->PushConstants(RHIShaderStage::Vertex, 0, sizeof(glm::mat4), &d.world);
-                c->DrawIndexed(d.mesh->indexCount);
-                m_Device->RecordShadowCaster();
-            }
+        // Static shadow caching: if the set/pose of static casters changed since
+        // last frame, invalidate the cached static maps (the caches detect a moved
+        // light themselves, but not moved/added/removed static geometry). Dynamic
+        // casters are excluded from the hash, so they never force a re-bake.
+        const size_t staticHash = ComputeStaticShadowHash();
+        const bool   staticChanged = staticHash != m_LastStaticShadowHash;
+        m_LastStaticShadowHash = staticHash;
 
-            // Skinned casters: swap to the skinned distance-cube pipeline, rebind the
-            // shared face-matrix set (set 0) and re-push the face index (offset 64)
-            // it expects, then draw each with its bone palette (set 1). The switch
-            // waits for the first in-range caster so a fully culled list costs nothing.
-            bool skinnedBound = false;
-            RHIResourceSet* boundBone = nullptr;
-            for (const SkinnedShadowItem& d : m_SkinnedShadowDraws) {
-                if (!d.worldBounds.IntersectsSphere(lightPos, range)) continue;
-                if (!skinnedBound) {
-                    c->BindPipeline(m_PointShadow->SkinnedPipeline());
-                    c->BindResourceSet(0, m_PointShadow->FaceSet());
-                    c->PushConstants(RHIShaderStage::Vertex, sizeof(glm::mat4), sizeof(faceIdx), &faceIdx);
-                    skinnedBound = true;
-                }
-                if (d.bones != boundBone) { c->BindResourceSet(1, d.bones); boundBone = d.bones; }
-                c->BindVertexBuffer(d.mesh->vertexBuffer.get());
-                c->BindIndexBuffer(d.mesh->indexBuffer.get(), RHIIndexType::U32);
-                c->PushConstants(RHIShaderStage::Vertex, 0, sizeof(glm::mat4), &d.world);
-                c->DrawIndexed(d.mesh->indexCount);
-                m_Device->RecordShadowCaster();
-            }
-        });
+        m_SpotShadow->ComputeMatrices(m_SpotLights);
+        if (staticChanged) m_SpotShadow->MarkStaticDirty();
+        m_SpotShadow->Record(cmd,
+            [this](RHICommandList* c, const glm::mat4& lightSpace) {   // static cache bake
+                DrawShadow(c, lightSpace, m_SpotShadow->SkinnedPipeline(), ShadowFilter::StaticOnly);
+            },
+            [this](RHICommandList* c, const glm::mat4& lightSpace) {   // dynamic, over the cache
+                DrawShadow(c, lightSpace, m_SpotShadow->SkinnedPipeline(), ShadowFilter::DynamicOnly);
+            });
+        m_PointShadow->SetLights(m_PointPos);   // also marks moved-light slots dirty
+        if (staticChanged) m_PointShadow->MarkStaticDirty();
+        m_PointShadow->Record(cmd,
+            [this](RHICommandList* c, uint32_t faceIdx) {   // static cache bake
+                DrawPointShadow(c, faceIdx, ShadowFilter::StaticOnly);
+            },
+            [this](RHICommandList* c, uint32_t faceIdx) {   // dynamic, over the cache
+                DrawPointShadow(c, faceIdx, ShadowFilter::DynamicOnly);
+            });
 
         // Offscreen mode routes the overlay through the graph's EditorOverlay
         // pass (which owns the backbuffer and has already transitioned the scene
@@ -499,6 +492,9 @@ private:
         const GpuMesh* mesh;
         glm::mat4      world;
         AABB           worldBounds;
+        bool           isStatic;   // eligible for a light's cached static map (see
+                                   // MeshComponent::staticShadowCaster). Skinned
+                                   // casters are always dynamic (separate list).
     };
     struct TransparentDraw {
         const GpuMesh*  mesh;
@@ -914,6 +910,28 @@ private:
         }
     }
 
+    // Which casters a depth draw records. Static shadow caching bakes StaticOnly
+    // into a light's cached map, then draws DynamicOnly over the cached copy each
+    // frame; passes that don't cache (CSM cascades) use All.
+    enum class ShadowFilter { All, StaticOnly, DynamicOnly };
+
+    // Fingerprint of this frame's static shadow casters (mesh identity + world
+    // transform). A change means static geometry moved / was added / removed, so
+    // the cached static shadow maps must re-bake. Dynamic casters are excluded, so
+    // ordinary movement never invalidates the caches. m_ShadowDraws must be built
+    // (RebuildDrawList) before this is called.
+    size_t ComputeStaticShadowHash() const {
+        size_t h = 0;
+        auto mix = [&h](size_t v) { h ^= v + 0x9e3779b97f4a7c15ull + (h << 6) + (h >> 2); };
+        for (const ShadowItem& d : m_ShadowDraws) {
+            if (!d.isStatic) continue;
+            mix(std::hash<const void*>{}(d.mesh));
+            const float* m = &d.world[0][0];
+            for (int i = 0; i < 16; ++i) mix(std::hash<float>{}(m[i]));
+        }
+        return h;
+    }
+
     // Depth draw for a cascade / spot map. The static depth pipeline is bound by
     // the pass; skinned casters rebind 'skinnedPipeline' (csm_depth_skinned — set 1
     // bone palette) and push lightSpace * model with the skin applied in-shader.
@@ -921,11 +939,14 @@ private:
     // Casters are culled against the light's own frustum. The matrices already
     // include their padding (the CSM near-plane zPad, the spot far = range), so
     // this only skips draws the hardware would have clipped anyway — never a
-    // caster that could reach the map.
+    // caster that could reach the map. 'filter' selects static/dynamic casters for
+    // the shadow-cache split; skinned casters are always dynamic (never baked).
     void DrawShadow(RHICommandList* cmd, const glm::mat4& lightSpace,
-                    RHIPipeline* skinnedPipeline) {
+                    RHIPipeline* skinnedPipeline, ShadowFilter filter = ShadowFilter::All) {
         const Frustum lightFrustum = Frustum::Extract(lightSpace, /*zeroToOneDepth*/ true);
         for (const ShadowItem& d : m_ShadowDraws) {
+            if (filter == ShadowFilter::StaticOnly  && !d.isStatic) continue;
+            if (filter == ShadowFilter::DynamicOnly &&  d.isStatic) continue;
             if (!lightFrustum.TestAABB(d.worldBounds)) continue;
             const glm::mat4 lm = lightSpace * d.world;
             cmd->BindVertexBuffer(d.mesh->vertexBuffer.get());
@@ -935,8 +956,10 @@ private:
             m_Device->RecordShadowCaster();
         }
 
-        // Skinned casters — the pipeline switch waits for the first survivor so a
-        // fully culled list costs nothing.
+        // Skinned casters are always dynamic — skip them entirely when baking the
+        // static cache. The pipeline switch waits for the first survivor so a fully
+        // culled (or filtered-out) list costs nothing.
+        if (filter == ShadowFilter::StaticOnly) return;
         bool skinnedBound = false;
         RHIResourceSet* boundBone = nullptr;
         for (const SkinnedShadowItem& d : m_SkinnedShadowDraws) {
@@ -947,6 +970,54 @@ private:
             cmd->BindVertexBuffer(d.mesh->vertexBuffer.get());
             cmd->BindIndexBuffer(d.mesh->indexBuffer.get(), RHIIndexType::U32);
             cmd->PushConstants(RHIShaderStage::Vertex, 0, sizeof(glm::mat4), &lm);
+            cmd->DrawIndexed(d.mesh->indexCount);
+            m_Device->RecordShadowCaster();
+        }
+    }
+
+    // Depth draw for one point-shadow cube face. The distance-cube pipeline and
+    // face-matrix set are bound by the pass; only the model matrix is pushed here
+    // (offset 0 — the pass pushed the face index at 64). 'filter' selects
+    // static/dynamic casters for the shadow-cache split, as in DrawShadow.
+    //
+    // Range cull: a caster outside the light's far-plane sphere can't reach any
+    // face of the cube (depth stores distance / farPlane), so skip it before
+    // paying 6 draws. faceIdx = light * 6 + face.
+    void DrawPointShadow(RHICommandList* cmd, uint32_t faceIdx, ShadowFilter filter) {
+        const glm::vec3 lightPos = m_PointPos[faceIdx / 6];
+        const float     range    = m_PointShadow->FarPlane();
+        for (const ShadowItem& d : m_ShadowDraws) {
+            if (filter == ShadowFilter::StaticOnly  && !d.isStatic) continue;
+            if (filter == ShadowFilter::DynamicOnly &&  d.isStatic) continue;
+            if (!d.worldBounds.IntersectsSphere(lightPos, range)) continue;
+            cmd->BindVertexBuffer(d.mesh->vertexBuffer.get());
+            cmd->BindIndexBuffer(d.mesh->indexBuffer.get(), RHIIndexType::U32);
+            cmd->PushConstants(RHIShaderStage::Vertex, 0, sizeof(glm::mat4), &d.world);
+            cmd->DrawIndexed(d.mesh->indexCount);
+            m_Device->RecordShadowCaster();
+        }
+
+        // Skinned casters are always dynamic — skip them entirely when baking the
+        // static cache. Otherwise swap to the skinned distance-cube pipeline,
+        // rebind the shared face-matrix set (set 0) and re-push the face index
+        // (offset 64) it expects, then draw each with its bone palette (set 1).
+        // The switch waits for the first in-range caster so a fully culled list
+        // costs nothing.
+        if (filter == ShadowFilter::StaticOnly) return;
+        bool skinnedBound = false;
+        RHIResourceSet* boundBone = nullptr;
+        for (const SkinnedShadowItem& d : m_SkinnedShadowDraws) {
+            if (!d.worldBounds.IntersectsSphere(lightPos, range)) continue;
+            if (!skinnedBound) {
+                cmd->BindPipeline(m_PointShadow->SkinnedPipeline());
+                cmd->BindResourceSet(0, m_PointShadow->FaceSet());
+                cmd->PushConstants(RHIShaderStage::Vertex, sizeof(glm::mat4), sizeof(faceIdx), &faceIdx);
+                skinnedBound = true;
+            }
+            if (d.bones != boundBone) { cmd->BindResourceSet(1, d.bones); boundBone = d.bones; }
+            cmd->BindVertexBuffer(d.mesh->vertexBuffer.get());
+            cmd->BindIndexBuffer(d.mesh->indexBuffer.get(), RHIIndexType::U32);
+            cmd->PushConstants(RHIShaderStage::Vertex, 0, sizeof(glm::mat4), &d.world);
             cmd->DrawIndexed(d.mesh->indexCount);
             m_Device->RecordShadowCaster();
         }
@@ -995,8 +1066,19 @@ private:
             }
 
             const AABB worldBounds = it->second.bounds.Transform(world);
-            if (mc.castsShadow)
-                m_ShadowDraws.push_back({ &it->second, world, worldBounds });
+            if (mc.castsShadow) {
+                // Static-cache eligibility: honor the mesh's flag, but a moving
+                // rigidbody (Dynamic/Kinematic) forces dynamic even if the flag is
+                // set — its shadow can't be cached. Static-type bodies (level
+                // colliders) stay eligible. Evaluated live each rebuild so editor
+                // component add/remove is picked up without a stale cached flag.
+                bool isStatic = mc.staticShadowCaster;
+                if (isStatic) {
+                    if (const auto* rb = scene.GetRegistry().try_get<RigidBodyComponent>(entity))
+                        isStatic = (rb->bodyType == BodyType::Static);
+                }
+                m_ShadowDraws.push_back({ &it->second, world, worldBounds, isStatic });
+            }
             if (frustum.TestAABB(worldBounds)) {
                 m_Device->RecordVisible(1);
                 RecordMaterialUsage(mc.material.get());
@@ -1196,13 +1278,23 @@ private:
         }
     }
 
-    void GatherLights(Scene& scene) {
+    // gameFrustum is null when the game view isn't active this frame. A point
+    // or spot light survives if its range sphere is visible to *either* active
+    // view — shadow maps are recorded once, view-independent, and shared by
+    // both views' lighting passes (see RenderToSwapchain), so culling against
+    // only one view could drop a light the other still needs.
+    void GatherLights(Scene& scene, const Frustum& mainFrustum, const Frustum* gameFrustum) {
         m_PointPos.clear();
         m_PointColor.clear();
         m_SpotLights.clear();
         m_SunDir   = glm::vec3(0.0f, -1.0f, 0.0f);
         m_SunColor = glm::vec3(0.0f);
         bool foundSun = false;
+
+        auto visible = [&](const glm::vec3& pos, float radius) {
+            if (mainFrustum.TestSphere(pos, radius)) return true;
+            return gameFrustum && gameFrustum->TestSphere(pos, radius);
+        };
 
         const TransformSystem& ts = scene.GetTransformSystem();
         for (auto [entity, lc] : scene.GetRegistry().view<LightComponent>().each()) {
@@ -1211,10 +1303,12 @@ private:
             const glm::vec3 dir = glm::normalize(glm::mat3(world) * glm::vec3(0.0f, -1.0f, 0.0f));
 
             if (lc.type == LightType::Point && m_PointPos.size() < 4) {
+                if (!visible(pos, lc.radius)) continue;
                 m_PointPos.push_back(pos);
                 m_PointColor.push_back(lc.color * lc.intensity);
             } else if (lc.type == LightType::Spot
                        && m_SpotLights.size() < VulkanSpotShadowPass::MAX_SPOTS) {
+                if (!visible(pos, lc.radius)) continue;
                 m_SpotLights.push_back({ pos, dir, lc.color * lc.intensity,
                                          lc.innerConeAngle, lc.outerConeAngle, lc.radius });
             } else if (lc.type == LightType::Sun && !foundSun) {
@@ -1350,6 +1444,7 @@ private:
     std::unordered_map<Mesh*, GpuMesh>                  m_SkinnedMeshes;  // wider vertex layout
     std::unordered_map<const PBRMaterial*, GpuMaterial> m_Materials;
     std::vector<ShadowItem> m_ShadowDraws;   // all casters — culled per light view at draw time
+    size_t m_LastStaticShadowHash = 0;       // detects static-caster changes → re-bake cached maps
 
     // Per-skinned-entity GPU state (SkinnedInstance defined above), keyed by entity.
     std::unordered_map<entt::entity, SkinnedInstance> m_Skinned;

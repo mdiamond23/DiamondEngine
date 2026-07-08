@@ -47,6 +47,15 @@ struct MeshComponent
     bool visible        = true;
     bool castsShadow    = true;
     bool receivesShadow = true;
+    // Eligible for the static shadow cache: when true, this mesh's shadow depth
+    // is rendered into a light's cached map once and reused across frames instead
+    // of re-drawn every frame (the win from unchanged geometry). Leave true for
+    // level geometry; clear it for anything moved outside physics — e.g. a mesh
+    // spun by a script — since the cache only re-renders when the light moves,
+    // this caster's transform changes, or it's added/removed. A moving rigidbody
+    // (Dynamic/Kinematic) is treated as dynamic automatically, regardless of this
+    // flag; static rigidbodies (level colliders) stay cached.
+    bool staticShadowCaster = true;
     // Forward alpha-blended instead of deferred-opaque: the mesh skips the
     // G-buffer and renders in the transparency pass (albedo map's alpha, sorted
     // back-to-front, depth-tested but not written).

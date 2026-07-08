@@ -575,6 +575,16 @@ void InspectorPanel::OnImGuiRender() {
                     !v, v, "Toggle Receive Shadows"));
             }
             ImGui::SameLine();
+            if (ImGui::Checkbox("Static Shadow", &mc.staticShadowCaster)) {
+                bool v = mc.staticShadowCaster;
+                m_Context->Commands.ExecuteCommand(std::make_unique<ValueChangeCommand<bool>>(
+                    [scene, entity](const bool& x) { scene->GetRegistry().get<MeshComponent>(entity).staticShadowCaster = x; },
+                    !v, v, "Toggle Static Shadow"));
+            }
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Cache this mesh's shadow across frames (level geometry).\n"
+                                  "Clear for meshes moved outside physics (e.g. by script).");
+            ImGui::SameLine();
             if (ImGui::Checkbox("Transparent", &mc.transparent)) {
                 bool v = mc.transparent;
                 m_Context->Commands.ExecuteCommand(std::make_unique<ValueChangeCommand<bool>>(
@@ -2789,6 +2799,11 @@ void InspectorPanel::DrawMultiInspector(const std::vector<entt::entity>& ents)
             FieldGet(&MeshComponent::receivesShadow), FieldSet(&MeshComponent::receivesShadow),
             [](bool& v, bool mixed) { return MixedCheckbox("Recv Shadows", v, mixed); },
             "Toggle Receive Shadows", true);
+        ImGui::SameLine();
+        MultiEdit<bool>(ed, scene, ents,
+            FieldGet(&MeshComponent::staticShadowCaster), FieldSet(&MeshComponent::staticShadowCaster),
+            [](bool& v, bool mixed) { return MixedCheckbox("Static Shadow", v, mixed); },
+            "Toggle Static Shadow", true);
         ImGui::SameLine();
         MultiEdit<bool>(ed, scene, ents,
             FieldGet(&MeshComponent::transparent), FieldSet(&MeshComponent::transparent),

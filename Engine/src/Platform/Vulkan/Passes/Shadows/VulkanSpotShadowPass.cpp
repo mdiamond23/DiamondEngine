@@ -1,5 +1,6 @@
 #include "Platform/Vulkan/Passes/Shadows/VulkanSpotShadowPass.h"
 #include "Platform/Vulkan/Passes/VulkanPassCommon.h"
+#include "Platform/Vulkan/RHI/VulkanRHIDevice.h"   // kFramesInFlight
 #include "Renderer/RHI/RHIDevice.h"
 #include "Renderer/RHI/RHICommandList.h"
 
@@ -54,15 +55,48 @@ VulkanSpotShadowPass::VulkanSpotShadowPass(RHIDevice* device, const std::string&
     m_SkinnedPipeline = device->CreatePipeline(skinned);
 
     // Pass-owned depth maps (same desc the graph derived for its Depth32F
-    // transients). Every slot is cleared + transitioned each Record, so the maps
-    // are always valid to sample — no creation-time clear needed.
+    // transients). Working maps are seeded + drawn each Record; static maps hold
+    // the cached static-caster depth, re-baked only when a slot is dirty. Both are
+    // sampleable depth targets. No creation-time clear: an active slot always bakes
+    // its static map (dirty on first active frame) before the copy samples it.
     RHITextureDesc td;
     td.width  = kResolution;
     td.height = kResolution;
     td.format = RHIFormat::Depth32F;
     td.usage  = RHITextureUsage::DepthAttachment | RHITextureUsage::Sampled;
-    for (auto& map : m_Maps)
-        map = device->CreateTexture(td);
+    for (int i = 0; i < MAX_SPOTS; ++i) {
+        m_Maps[i]   = device->CreateTexture(td);
+        m_Static[i] = device->CreateTexture(td);
+    }
+
+    // Depth-copy pipeline: fullscreen triangle that writes gl_FragDepth from a
+    // cached static map. LessEqual + depthWrite against a 1.0-cleared target writes
+    // every fragment (the skybox-at-far trick), reproducing the static occluders so
+    // dynamic casters can be drawn over them with the normal Less caster pipeline.
+    const std::vector<uint32_t> cvs = LoadSpirv(shaderDir, "fullscreen.vert.spv");
+    const std::vector<uint32_t> cfs = LoadSpirv(shaderDir, "spot_depth_copy.frag.spv");
+    RHIShaderDesc cvsDesc{ RHIShaderStage::Vertex,   cvs.data(), cvs.size() };
+    RHIShaderDesc cfsDesc{ RHIShaderStage::Fragment, cfs.data(), cfs.size() };
+    m_CopyVert = device->CreateShader(cvsDesc);
+    m_CopyFrag = device->CreateShader(cfsDesc);
+
+    RHIPipelineDesc copy;
+    copy.vertexShader     = m_CopyVert.get();
+    copy.fragmentShader   = m_CopyFrag.get();
+    copy.resourceBindings = { { 0, RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment } };
+    copy.depthFormat      = RHIFormat::Depth32F;
+    copy.depthTest        = true;
+    copy.depthWrite       = true;
+    copy.depthCompare     = RHICompareOp::LessEqual;
+    copy.cullMode         = RHICullMode::None;   // fullscreen triangle — never cull
+    m_CopyPipeline = device->CreatePipeline(copy);
+
+    for (int i = 0; i < MAX_SPOTS; ++i)
+        m_CopySets[i] = device->CreateResourceSet(m_CopyPipeline.get(), 0, {},
+                                                  { { 0, m_Static[i].get() } });
+
+    // Bake every active slot's static map on its first frame.
+    m_StaticDirty.fill(VulkanRHIDevice::kFramesInFlight);
 }
 
 VulkanSpotShadowPass::~VulkanSpotShadowPass() = default;
@@ -82,25 +116,64 @@ void VulkanSpotShadowPass::ComputeMatrices(const std::vector<SpotLightInfo>& spo
         const glm::mat4 view = glm::lookAt(s.position, s.position + dir, up);
         const glm::mat4 proj = glm::perspectiveRH_ZO(fov, 1.0f, 0.1f, std::max(s.range, 0.5f));
         m_LightMatrices[i] = proj * view;
+
+        // A slot whose light moved (matrix changed) or that a different light now
+        // occupies must re-bake its static cache — its cached depth is stale under
+        // the new projection. Exact compare is safe: identical input → identical
+        // matrix, so a stationary light never re-bakes.
+        if (i >= m_PrevCount || m_LightMatrices[i] != m_PrevMatrices[i])
+            m_StaticDirty[i] = VulkanRHIDevice::kFramesInFlight;
     }
+    m_PrevMatrices = m_LightMatrices;
+    m_PrevCount    = m_Count;
+}
+
+void VulkanSpotShadowPass::MarkStaticDirty()
+{
+    for (int i = 0; i < m_Count; ++i)
+        m_StaticDirty[i] = VulkanRHIDevice::kFramesInFlight;
 }
 
 void VulkanSpotShadowPass::Record(
         RHICommandList* cmd,
-        const std::function<void(RHICommandList*, const glm::mat4&)>& drawScene)
+        const std::function<void(RHICommandList*, const glm::mat4&)>& drawStatic,
+        const std::function<void(RHICommandList*, const glm::mat4&)>& drawDynamic)
 {
-    // One depth scope per slot, mirroring what the graph passes did: a slot beyond
-    // this frame's light count still clears its target but skips the scene draws.
-    // Each map ends in SampledRead — the graphs no longer know about these
-    // textures, so the transition the graph used to drive happens here.
+    // Two depth scopes per active slot: (1) re-bake the static cache when dirty,
+    // (2) seed the working map from that cache and draw this frame's dynamic
+    // casters over it. Inactive slots still clear + transition their working map so
+    // the lighting set stays valid to sample. Each map ends in SampledRead — the
+    // graphs no longer know about these textures, so the transition happens here.
     for (int i = 0; i < MAX_SPOTS; ++i) {
+        const bool active = i < m_Count;
+
+        // (1) Static cache — only when dirty. Bake static casters, then leave the
+        // map in SampledRead so step (2)'s copy (and future frames) can sample it.
+        if (active && m_StaticDirty[i] > 0) {
+            RHIRenderPass sp;
+            sp.depthTexture = m_Static[i].get();
+            sp.clearDepth   = true;
+            cmd->BeginRendering(sp);
+            cmd->BindPipeline(m_Pipeline.get());
+            drawStatic(cmd, m_LightMatrices[i]);
+            cmd->EndRendering();
+            cmd->TransitionTexture(m_Static[i].get(), RHITextureState::SampledRead);
+            --m_StaticDirty[i];
+        }
+
+        // (2) Working map: clear to 1.0, copy the cached static depth in, then draw
+        // dynamic casters. The copy pipeline (LessEqual + depthWrite) writes every
+        // texel of the cleared target; dynamic casters (Less) win where closer.
         RHIRenderPass rp;
         rp.depthTexture = m_Maps[i].get();
         rp.clearDepth   = true;
         cmd->BeginRendering(rp);
-        if (i < m_Count) {
+        if (active) {
+            cmd->BindPipeline(m_CopyPipeline.get());
+            cmd->BindResourceSet(0, m_CopySets[i].get());
+            cmd->Draw(3);
             cmd->BindPipeline(m_Pipeline.get());
-            drawScene(cmd, m_LightMatrices[i]);
+            drawDynamic(cmd, m_LightMatrices[i]);
         }
         cmd->EndRendering();
         cmd->TransitionTexture(m_Maps[i].get(), RHITextureState::SampledRead);
