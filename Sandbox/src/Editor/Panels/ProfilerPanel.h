@@ -20,6 +20,7 @@ public:
 
     void SetContext(EditorContext* ctx) { m_Context = ctx; }
     void OnImGuiRender() override;
+    const char* GetName() const override { return "Profiler"; }
 
     // Latest completed-frame snapshot, handed in by the renderer/backend glue.
     void SetStats(const Diamond::RendererStats& stats) { m_LatestStats = stats; }

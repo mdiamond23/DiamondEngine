@@ -10,6 +10,7 @@ public:
     // false for Vulkan offscreen targets. Pass 0 to show the placeholder text.
     void SetTexture(ImTextureID id, bool flipY) { m_TextureID = id; m_FlipY = flipY; }
     void OnImGuiRender() override;
+    const char* GetName() const override { return "Game"; }
     bool IsActive() const { return m_IsActive; }
 
 private:

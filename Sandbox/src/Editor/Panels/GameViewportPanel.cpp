@@ -3,8 +3,9 @@
 
 void GameViewportPanel::OnImGuiRender()
 {
+    if (!m_Open) return;
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0, 0});
-    ImGui::Begin("Game");
+    ImGui::Begin("Game", &m_Open);
     ImGui::PopStyleVar();
 
     m_IsActive = ImGui::IsWindowFocused();

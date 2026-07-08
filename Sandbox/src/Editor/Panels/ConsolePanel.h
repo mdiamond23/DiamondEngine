@@ -5,6 +5,7 @@
 class ConsolePanel : public Panel {
 public:
     void OnImGuiRender() override;
+    const char* GetName() const override { return "Console"; }
     void Log(LogLevel level, const std::string& message);
     void Clear();
 

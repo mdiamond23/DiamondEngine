@@ -18,7 +18,8 @@ void ConsolePanel::Clear()
 
 void ConsolePanel::OnImGuiRender()
 {
-    ImGui::Begin("Console");
+    if (!m_Open) return;
+    ImGui::Begin("Console", &m_Open);
 
     if (ImGui::Button("Clear"))
         Clear();

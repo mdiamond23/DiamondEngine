@@ -26,7 +26,8 @@ namespace {
 
 void MixerPanel::OnImGuiRender()
 {
-    if (!ImGui::Begin("Mixer")) { ImGui::End(); return; }
+    if (!m_Open) return;
+    if (!ImGui::Begin("Mixer", &m_Open)) { ImGui::End(); return; }
 
     // First frame: adopt whatever mute state the engine already holds.
     if (!m_Initialized) {

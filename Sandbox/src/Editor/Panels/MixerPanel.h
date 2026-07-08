@@ -15,6 +15,7 @@
 class MixerPanel : public Panel {
 public:
     void OnImGuiRender() override;
+    const char* GetName() const override { return "Mixer"; }
 
 private:
     void DrawStrip(Audio::Bus bus, const char* name, bool soloable);

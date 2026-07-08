@@ -57,7 +57,8 @@ ProfilerPanel::ProfilerPanel() = default;
 
 void ProfilerPanel::OnImGuiRender()
 {
-    if (!ImGui::Begin("Profiler")) { ImGui::End(); return; }
+    if (!m_Open) return;
+    if (!ImGui::Begin("Profiler", &m_Open)) { ImGui::End(); return; }
 
     ImGui::Checkbox("Pause", &m_Paused);
     ImGui::SameLine();

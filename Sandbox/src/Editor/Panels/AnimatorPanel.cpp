@@ -29,7 +29,8 @@ static std::vector<float> UniqueKeyTimes(const AnimationClip& clip) {
 // ---- panel ------------------------------------------------------------------
 
 void AnimatorPanel::OnImGuiRender() {
-    ImGui::Begin("Animator");
+    if (!m_Open) return;
+    ImGui::Begin("Animator", &m_Open);
 
     if (!m_Context || !m_Context->HasSelection()) {
         ImGui::TextDisabled("Select an entity with a Skinned Mesh / Animator.");

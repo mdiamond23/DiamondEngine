@@ -1,9 +1,11 @@
 #pragma once
 #include <imgui.h>
+#include <array>
 #include <functional>
 #include <string>
 #include "EditorContext.h"
 #include "Scene/Scene.h"
+#include "Panels/Panels.h"
 #include "Panels/HierarchyPanel.h"
 #include "Panels/ViewportPanel.h"
 #include "Panels/GameViewportPanel.h"
@@ -76,5 +78,13 @@ private:
     ParticlePreviewPanel m_ParticlePreview;
     MixerPanel        m_Mixer;
     ProfilerPanel     m_Profiler;
+
+    // Every panel above, for the generic render loop and the "View" menu's
+    // checkbox list. Add new panels to both the members above and this list.
+    std::array<Panel*, 10> m_Panels {
+        &m_Hierarchy, &m_Viewport, &m_GameViewport, &m_Inspector, &m_Content,
+        &m_Console, &m_Animator, &m_ParticlePreview, &m_Mixer, &m_Profiler
+    };
+
     EditorContext     m_Context;
 };

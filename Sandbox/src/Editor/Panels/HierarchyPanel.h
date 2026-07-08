@@ -6,6 +6,7 @@
 class HierarchyPanel : public Panel {
 public:
     void OnImGuiRender() override;
+    const char* GetName() const override { return "Hierarchy"; }
     void SetContext(EditorContext* context) { m_Context = context; }
 private:
     EditorContext* m_Context           = nullptr;

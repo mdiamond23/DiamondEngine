@@ -26,6 +26,7 @@ public:
 
     void SetContext(EditorContext* ctx) { m_Context = ctx; }
     void OnImGuiRender() override;
+    const char* GetName() const override { return "Particle Preview"; }
 
     // --- Driven by main.cpp, before OnImGuiRender ---
     void Tick(float dt);                       // resolve source, mirror config, step sim

@@ -392,7 +392,8 @@ static bool MixedCheckbox(const char* label, bool& v, bool mixed)
 // ---- panel ------------------------------------------------------------------
 
 void InspectorPanel::OnImGuiRender() {
-    ImGui::Begin("Inspector");
+    if (!m_Open) return;
+    ImGui::Begin("Inspector", &m_Open);
 
     if (!m_Context || !m_Context->HasSelection()) {
         ImGui::Text("(nothing selected)");

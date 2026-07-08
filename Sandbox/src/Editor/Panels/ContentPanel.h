@@ -26,6 +26,7 @@ public:
     ContentPanel();
     ~ContentPanel();
     void OnImGuiRender() override;
+    const char* GetName() const override { return "Content Browser"; }
 
     void SetOnSceneOpen(std::function<void(const std::string&)> cb) { m_OnSceneOpen = std::move(cb); }
     void QueueDroppedFiles(int count, const char** paths);

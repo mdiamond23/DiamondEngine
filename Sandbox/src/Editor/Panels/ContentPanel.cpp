@@ -710,7 +710,8 @@ void ContentPanel::DrawItems() {
 }
 
 void ContentPanel::OnImGuiRender() {
-    ImGui::Begin("Content Browser");
+    if (!m_Open) return;
+    ImGui::Begin("Content Browser", &m_Open);
 
     DrawToolbar();
     DrawItems();

@@ -121,7 +121,8 @@ void ParticlePreviewPanel::Tick(float dt)
 
 void ParticlePreviewPanel::OnImGuiRender()
 {
-    ImGui::Begin("Particle Preview");
+    if (!m_Open) return;
+    ImGui::Begin("Particle Preview", &m_Open);
 
     // --- Toolbar: playback on the left, Restart pinned to the right ---
     if (ImGui::Button(m_Paused ? "Play" : "Pause")) m_Paused = !m_Paused;

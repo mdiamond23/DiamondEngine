@@ -12,6 +12,7 @@
 class ViewportPanel : public Panel {
 public:
     void OnImGuiRender() override;
+    const char* GetName() const override { return "Viewport"; }
     // Opaque backend image handle (GL texture id or Vulkan descriptor set, both
     // cast to ImTextureID by the caller). flipY: GL FBO textures are bottom-up
     // and need flipped UVs; Vulkan offscreen targets are top-down and must not.

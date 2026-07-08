@@ -14,8 +14,9 @@
 #include "Animation/AnimationComponents.h"
 
 void ViewportPanel::OnImGuiRender() {
+    if (!m_Open) return;
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0, 0});
-    ImGui::Begin("Viewport");
+    ImGui::Begin("Viewport", &m_Open);
 
     ImVec2 vpSize = ImGui::GetContentRegionAvail();
     ImVec2 vpPos  = ImGui::GetCursorScreenPos();

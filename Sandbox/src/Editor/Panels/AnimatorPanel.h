@@ -14,6 +14,7 @@ class AnimatorPanel : public Panel {
 public:
     void SetContext(EditorContext* ctx) { m_Context = ctx; }
     void OnImGuiRender() override;
+    const char* GetName() const override { return "Animator"; }
 
 private:
     void DrawTimeline(entt::entity e);

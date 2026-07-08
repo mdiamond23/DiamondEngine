@@ -412,6 +412,12 @@ void EditorLayer::DrawMenuBar()
         ImGui::EndMenu();
     }
 
+    if (ImGui::BeginMenu("View")) {
+        for (Panel* panel : m_Panels)
+            ImGui::MenuItem(panel->GetName(), nullptr, &panel->Open());
+        ImGui::EndMenu();
+    }
+
     DrawToolbar();
 
     ImGui::EndMainMenuBar();
@@ -463,14 +469,6 @@ void EditorLayer::OnImGuiRender()
     DrawNewScriptDialog();
 
     // Render each panel
-    m_Hierarchy.OnImGuiRender();
-    m_Viewport.OnImGuiRender();
-    m_GameViewport.OnImGuiRender();
-    m_Inspector.OnImGuiRender();
-    m_Content.OnImGuiRender();
-    m_Animator.OnImGuiRender();
-    m_Console.OnImGuiRender();
-    m_ParticlePreview.OnImGuiRender();
-    m_Mixer.OnImGuiRender();
-    m_Profiler.OnImGuiRender();
+    for (Panel* panel : m_Panels)
+        panel->OnImGuiRender();
 }

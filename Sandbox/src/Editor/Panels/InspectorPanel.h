@@ -16,6 +16,7 @@ namespace Diamond { struct PBRMaterial; }
 class InspectorPanel : public Panel {
 public:
     void OnImGuiRender() override;
+    const char* GetName() const override { return "Inspector"; }
     void SetContext(EditorContext* context) { m_Context = context; }
     void SetContentPanel(ContentPanel* cp)  { m_ContentPanel = cp; }
     // Vulkan backend hook (no-op under GL): called on material edit-release so

@@ -310,7 +310,8 @@ static void DrawEntityNode(entt::entity entity, const HierarchyDrawCtx& ctx)
 // ---- panel ------------------------------------------------------------------
 
 void HierarchyPanel::OnImGuiRender() {
-    ImGui::Begin("Hierarchy");
+    if (!m_Open) return;
+    ImGui::Begin("Hierarchy", &m_Open);
 
     if (!m_Context || !m_Context->ActiveScene) {
         ImGui::End();
