@@ -1,4 +1,5 @@
 #include "Platform/OpenGL/Passes/Shadows/OpenGLShadowPass.h"
+#include "Profiling/GLRendererStats.h"
 #include <glad/gl.h>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
@@ -103,6 +104,7 @@ void OpenGLShadowPass::RenderPointShadowPass(
             if (skinned)
                 shader.SetMat4Array("uBones", draw.bonePalette, draw.boneCount);
             draw.mesh->Draw(shader);
+            GLStats::RecordShadowCaster();
         }
     }
     glBindFramebuffer(GL_FRAMEBUFFER, 0);

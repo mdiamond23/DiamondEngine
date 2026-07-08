@@ -389,6 +389,10 @@ public:
 
     ThumbnailService* Thumbnails() override { return m_Thumbs.get(); }
 
+    RendererStats GetStats() const override {
+        return m_Renderer ? m_Renderer->GetStats() : RendererStats{};
+    }
+
     void InvalidateMaterial(const PBRMaterial* mat) override {
         m_Renderer->InvalidateMaterial(mat);
     }

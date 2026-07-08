@@ -13,6 +13,7 @@
 #include "Panels/AnimatorPanel.h"
 #include "Panels/ParticlePreviewPanel.h"
 #include "Panels/MixerPanel.h"
+#include "Panels/ProfilerPanel.h"
 
 class EditorLayer {
 public:
@@ -39,6 +40,10 @@ public:
     void SetSceneCacheInvalidator(std::function<void()> fn) {
         m_SceneCacheInvalidator = std::move(fn);
     }
+    // Last-completed-frame renderer stats, pushed once per frame by the app
+    // loop (see Sandbox/src/main.cpp) and read by ProfilerPanel.
+    void SetStats(const Diamond::RendererStats& stats) { m_Profiler.SetStats(stats); }
+    void SetBackendIsVulkan(bool isVulkan) { m_Profiler.SetBackendIsVulkan(isVulkan); }
     void UpdateCamera(const glm::mat4& view, const glm::mat4& proj, const glm::vec3& camPos);
     EditorContext& GetContext() { return m_Context; }
     bool IsViewportActive() const     { return m_Viewport.IsActive(); }
@@ -70,5 +75,6 @@ private:
     AnimatorPanel     m_Animator;
     ParticlePreviewPanel m_ParticlePreview;
     MixerPanel        m_Mixer;
+    ProfilerPanel     m_Profiler;
     EditorContext     m_Context;
 };

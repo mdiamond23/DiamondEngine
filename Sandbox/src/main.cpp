@@ -37,6 +37,7 @@
 #include "Animation/AnimationSystem.h"
 #include "Animation/IKSystem.h"
 
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <memory>
@@ -327,6 +328,7 @@ int main(int argc, char** argv)
         editorLayer.NotifyDroppedFiles(count, paths);
     });
     editorLayer.SetThumbnailService(backend->Thumbnails());
+    editorLayer.SetBackendIsVulkan(wantVulkan);
     editorLayer.SetMaterialInvalidator([&backend](const PBRMaterial* mat) {
         backend->InvalidateMaterial(mat);
     });
@@ -348,12 +350,22 @@ int main(int argc, char** argv)
     // --- Editor loop (backend-agnostic) ---
     float deltaTime = 0.0f, lastFrame = 0.0f, fpsTimer = 0.0f;
     int   frameCount = 0;
+    float smoothedFps = 0.0f;   // EMA, ~0.5s time constant (RendererStats::fps)
 
     while (!glfwWindowShouldClose(window))
     {
         const float now = (float)glfwGetTime();
         deltaTime = now - lastFrame;
         lastFrame = now;
+
+        // EMA-smoothed FPS for the profiler panel (~0.5s time constant — stable
+        // even through per-frame jitter, unlike the instantaneous 1/deltaTime).
+        if (deltaTime > 0.0f) {
+            const float instFps = 1.0f / deltaTime;
+            const float alpha   = 1.0f - std::exp(-deltaTime / 0.5f);
+            smoothedFps = (smoothedFps <= 0.0f) ? instFps
+                                                 : smoothedFps + alpha * (instFps - smoothedFps);
+        }
 
         // fps counter
         fpsTimer += deltaTime;
@@ -511,6 +523,15 @@ int main(int argc, char** argv)
 
         ImGui::Render();
         backend->RenderFrame(frame);
+
+        // Renderer counters are this backend's last-completed frame; FPS/CPU ms
+        // are the app loop's own measurements, merged in here (Docs/profiler-
+        // panel-design.md — neither backend owns timing). Feeds next frame's
+        // ProfilerPanel draw, one frame latent like GetStats() itself already is.
+        RendererStats stats = backend->GetStats();
+        stats.fps        = smoothedFps;
+        stats.cpuFrameMs = deltaTime * 1000.0f;
+        editorLayer.SetStats(stats);
 
         Input::Update();
         glfwPollEvents();

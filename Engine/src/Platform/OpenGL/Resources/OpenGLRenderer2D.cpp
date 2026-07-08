@@ -1,6 +1,7 @@
 #include "Platform/OpenGL/Resources/OpenGLRenderer2D.h"
 #include "Platform/OpenGL/Resources/OpenGLTexture.h"
 #include "Renderer/Font.h"
+#include "Profiling/GLRendererStats.h"
 
 #include <glad/gl.h>
 #include <glm/gtc/type_ptr.hpp>
@@ -252,7 +253,9 @@ void OpenGLRenderer2D::Flush()
     glBufferData(GL_ARRAY_BUFFER,
                  static_cast<GLsizeiptr>(m_Verts.size() * sizeof(Vertex)),
                  m_Verts.data(), GL_DYNAMIC_DRAW);
+    GLStats::RecordBufferUpload();
     glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(m_Verts.size()));
+    GLStats::RecordDraw(m_Verts.size() / 3);
 
     glBindVertexArray(0);
     glUseProgram(0);

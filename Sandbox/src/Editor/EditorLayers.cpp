@@ -141,6 +141,7 @@ EditorLayer::EditorLayer(Scene* scene, ImFont* iconFont)
     m_GameViewport.SetContext(&m_Context);
     m_Animator.SetContext(&m_Context);
     m_ParticlePreview.SetContext(&m_Context);
+    m_Profiler.SetContext(&m_Context);
 
     m_Content.SetOnSceneOpen([this](const std::string& path) {
         m_Context.ClearSelection();
@@ -471,4 +472,5 @@ void EditorLayer::OnImGuiRender()
     m_Console.OnImGuiRender();
     m_ParticlePreview.OnImGuiRender();
     m_Mixer.OnImGuiRender();
+    m_Profiler.OnImGuiRender();
 }

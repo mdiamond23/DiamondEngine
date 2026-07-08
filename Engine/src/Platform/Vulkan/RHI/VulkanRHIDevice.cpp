@@ -42,11 +42,13 @@ void VulkanRHICommandList::BindIndexBuffer(RHIBuffer* buffer, RHIIndexType type)
 void VulkanRHICommandList::DrawIndexed(uint32_t indexCount, uint32_t instanceCount,
                                        uint32_t firstIndex) {
     vkCmdDrawIndexed(m_Cmd, indexCount, instanceCount, firstIndex, 0, 0);
+    m_Device->RecordDraw((uint64_t)(indexCount / 3) * instanceCount);
 }
 
 void VulkanRHICommandList::Draw(uint32_t vertexCount, uint32_t instanceCount,
                                 uint32_t firstVertex) {
     vkCmdDraw(m_Cmd, vertexCount, instanceCount, firstVertex, 0);
+    m_Device->RecordDraw((uint64_t)(vertexCount / 3) * instanceCount);
 }
 
 // ── Render-pass scoping + barriers ───────────────────────────────────────────
@@ -456,6 +458,32 @@ void VulkanRHIDevice::EndFrame() {
     }
 
     m_CurrentFrame = (m_CurrentFrame + 1) % kFramesInFlight;
+}
+
+// ── Frame stats ──────────────────────────────────────────────────────────────
+
+void VulkanRHIDevice::ResetFrameStats() {
+    m_WorkingStats = RendererStats{};
+    m_MaterialsSeen.clear();
+    m_TexturesSeen.clear();
+}
+
+void VulkanRHIDevice::RecordDraw(uint64_t triangleCount) {
+    m_WorkingStats.drawCalls++;
+    m_WorkingStats.trianglesSubmitted += triangleCount;
+}
+
+void VulkanRHIDevice::RecordBufferUpload() { m_WorkingStats.bufferUploads++; }
+void VulkanRHIDevice::RecordVisible(uint32_t count) { m_WorkingStats.visibleObjects += count; }
+void VulkanRHIDevice::RecordCulled(uint32_t count)  { m_WorkingStats.culledObjects  += count; }
+void VulkanRHIDevice::RecordShadowCaster() { m_WorkingStats.shadowCasters++; }
+void VulkanRHIDevice::RecordMaterialBound(const void* material) { m_MaterialsSeen.insert(material); }
+void VulkanRHIDevice::RecordTextureUsed(const void* texture)    { m_TexturesSeen.insert(texture); }
+
+void VulkanRHIDevice::FinalizeFrameStats() {
+    m_WorkingStats.materialsBound = (uint32_t)m_MaterialsSeen.size();
+    m_WorkingStats.texturesUsed   = (uint32_t)m_TexturesSeen.size();
+    m_SnapshotStats = m_WorkingStats;
 }
 
 std::unique_ptr<RHIDevice> CreateVulkanRHIDevice(GLFWwindow* window) {

@@ -10,6 +10,7 @@
 #include "Renderer/RHI/RHICommandList.h"
 #include "Renderer/RHI/RHIRenderGraph.h"
 #include "Renderer/MeshData.h"
+#include "Renderer/Material.h"
 #include "Renderer/Frustum.h"
 #include "Core/Camera.h"
 #include "Scene/Scene.h"
@@ -296,6 +297,8 @@ public:
         DoReload(true, true, true, true, true);
     }
 
+    RendererStats GetStats() const override { return m_Device->GetStats(); }
+
     void Resize(uint32_t width, uint32_t height) override {
         if (!m_Offscreen) return;
         ResizeView(*m_Views[kMainView], kMainView, width, height);
@@ -329,6 +332,10 @@ public:
 
     void RenderToSwapchain(Scene& scene, const Camera& camera,
                            const OverlayFn& overlay) override {
+        // Culling (RebuildDrawList, below) runs before BeginFrame, so the frame
+        // stats window brackets this whole call, not just BeginFrame/EndFrame.
+        m_Device->ResetFrameStats();
+
         View& main = *m_Views[kMainView];
         const float aspect = static_cast<float>(main.width) / static_cast<float>(main.height);
         const glm::mat4 view = camera.GetViewMatrix();
@@ -389,6 +396,7 @@ public:
                 c->BindIndexBuffer(d.mesh->indexBuffer.get(), RHIIndexType::U32);
                 c->PushConstants(RHIShaderStage::Vertex, 0, sizeof(glm::mat4), &d.world);
                 c->DrawIndexed(d.mesh->indexCount);
+                m_Device->RecordShadowCaster();
             }
 
             // Skinned casters: swap to the skinned distance-cube pipeline, rebind the
@@ -405,6 +413,7 @@ public:
                 c->BindIndexBuffer(d.mesh->indexBuffer.get(), RHIIndexType::U32);
                 c->PushConstants(RHIShaderStage::Vertex, 0, sizeof(glm::mat4), &d.world);
                 c->DrawIndexed(d.mesh->indexCount);
+                m_Device->RecordShadowCaster();
             }
         });
 
@@ -439,6 +448,7 @@ public:
         }
 
         m_Device->EndFrame();
+        m_Device->FinalizeFrameStats();
     }
 
 private:
@@ -833,6 +843,21 @@ private:
                                    RHITextureState::SampledRead);
     }
 
+    // Records a visible draw's material as "bound" this frame, plus its 6
+    // per-material texture slots ("used") — deduped internally by RHIDevice.
+    // The 3 IBL maps (Irradiance/Prefilter/BrdfLUT) are scene-global constants
+    // shared by nearly every material, so they're excluded: counting them would
+    // just add a fixed +3 that never reflects anything about this frame.
+    void RecordMaterialUsage(const PBRMaterial* mat) {
+        if (!mat) return;
+        m_Device->RecordMaterialBound(mat);
+        auto tex = [this](const std::shared_ptr<Texture>& t) {
+            if (t) m_Device->RecordTextureUsed(t.get());
+        };
+        tex(mat->Albedo); tex(mat->Normal); tex(mat->Metallic);
+        tex(mat->Roughness); tex(mat->AO); tex(mat->Emissive);
+    }
+
     void DrawGeometry(RHICommandList* cmd, const View& v) {
         // The list is sorted by material, so the set rebind only fires on runs. The
         // static G-buffer pipeline is already bound by the pass.
@@ -888,6 +913,7 @@ private:
             cmd->BindIndexBuffer(d.mesh->indexBuffer.get(), RHIIndexType::U32);
             cmd->PushConstants(RHIShaderStage::Vertex, 0, sizeof(glm::mat4), &lm);
             cmd->DrawIndexed(d.mesh->indexCount);
+            m_Device->RecordShadowCaster();
         }
 
         if (m_SkinnedShadowDraws.empty()) return;
@@ -900,6 +926,7 @@ private:
             cmd->BindIndexBuffer(d.mesh->indexBuffer.get(), RHIIndexType::U32);
             cmd->PushConstants(RHIShaderStage::Vertex, 0, sizeof(glm::mat4), &lm);
             cmd->DrawIndexed(d.mesh->indexCount);
+            m_Device->RecordShadowCaster();
         }
     }
 
@@ -932,7 +959,12 @@ private:
             // no shadow casting (an alpha surface throwing a solid shadow reads
             // wrong — matches the GL editor, whose windows never cast).
             if (mc.transparent) {
-                if (!frustum.TestAABB(it->second.bounds.Transform(world))) continue;
+                if (!frustum.TestAABB(it->second.bounds.Transform(world))) {
+                    m_Device->RecordCulled(1);
+                    continue;
+                }
+                m_Device->RecordVisible(1);
+                RecordMaterialUsage(mc.material.get());
                 v.transparentDraws.push_back({
                     &it->second, GetOrCreateTransparentSet(mc.material.get(), v), world,
                     glm::length(glm::vec3(world[3]) - cameraPos) });
@@ -943,8 +975,13 @@ private:
                                  GetOrCreateMaterialSet(mc.material.get(), viewIdx), world };
             if (mc.castsShadow)
                 m_ShadowDraws.push_back(item);
-            if (frustum.TestAABB(it->second.bounds.Transform(world)))
+            if (frustum.TestAABB(it->second.bounds.Transform(world))) {
+                m_Device->RecordVisible(1);
+                RecordMaterialUsage(mc.material.get());
                 v.drawList.push_back(item);
+            } else {
+                m_Device->RecordCulled(1);
+            }
         }
 
         // Skinned characters (SkinnedMeshComponent): one entry per glTF primitive,
@@ -965,8 +1002,13 @@ private:
                 if (!gm) continue;
                 if (smc.castsShadow)
                     m_SkinnedShadowDraws.push_back({ gm, bones, world });
-                if (visible)
+                if (visible) {
+                    m_Device->RecordVisible(1);
+                    RecordMaterialUsage(smc.material.get());
                     v.skinnedDraws.push_back({ gm, material, bones, world });
+                } else {
+                    m_Device->RecordCulled(1);
+                }
             }
         }
 

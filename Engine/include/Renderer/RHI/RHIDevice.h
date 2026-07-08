@@ -2,6 +2,7 @@
 
 #include "Renderer/RHI/RHIEnums.h"
 #include "Renderer/RHI/RHIResources.h"
+#include "Profiling/ProfilerStats.h"
 
 #include <array>
 #include <memory>
@@ -55,6 +56,25 @@ public:
     virtual void NotifyResize() = 0;
     // Block until the GPU is idle (before tearing resources down).
     virtual void WaitIdle() = 0;
+
+    // ── Frame stats (Docs/profiler-panel-design.md, Phase 1: CPU-side counters
+    // only) ───────────────────────────────────────────────────────────────────
+    // A working accumulator every draw/upload/culling choke point in this
+    // device (and the SceneRenderer built on top of it) writes into, snapshotted
+    // into a stable last-completed-frame copy GetStats() returns. Culling runs
+    // before BeginFrame, so ResetFrameStats/FinalizeFrameStats bracket the whole
+    // SceneRenderer::RenderToSwapchain call, not just BeginFrame/EndFrame.
+    virtual void ResetFrameStats() = 0;
+    virtual void RecordDraw(uint64_t triangleCount) = 0;
+    virtual void RecordBufferUpload() = 0;
+    virtual void RecordVisible(uint32_t count) = 0;
+    virtual void RecordCulled(uint32_t count) = 0;
+    virtual void RecordShadowCaster() = 0;
+    // Deduped internally (unique per frame) — pass any stable pointer identity.
+    virtual void RecordMaterialBound(const void* material) = 0;
+    virtual void RecordTextureUsed(const void* texture) = 0;
+    virtual void FinalizeFrameStats() = 0;
+    virtual const RendererStats& GetStats() const = 0;
 };
 
 } // namespace Diamond

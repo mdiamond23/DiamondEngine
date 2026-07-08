@@ -39,6 +39,7 @@
 #include "Renderer/Renderer2D.h"
 #include "Renderer/ParticleRenderer.h"
 #include "Renderer/Frustum.h"
+#include "Profiling/GLRendererStats.h"
 #include "Platform/OpenGL/Resources/OpenGLRenderTypes.h"
 #include "Platform/OpenGL/Resources/OpenGLShader.h"
 #include "Platform/OpenGL/Resources/ShaderLibrary.h"
@@ -371,6 +372,11 @@ Diamond::ThumbnailService* GLEditorBackend::Thumbnails()
     return m_G ? m_G->thumbnails.get() : nullptr;
 }
 
+Diamond::RendererStats GLEditorBackend::GetStats() const
+{
+    return GLStats::GetStats();
+}
+
 void GLEditorBackend::BeginImGuiFrame()
 {
     ImGui_ImplOpenGL3_NewFrame();
@@ -621,6 +627,17 @@ void GLEditorBackend::CullAndExecute(uint32_t targetFBO)
         for (const auto& dc : batch)
             if (frustum.TestAABB(dc.localBounds.Transform(dc.modelMatrix)))
                 out.push_back(dc);
+
+        GLStats::RecordVisible((uint32_t)out.size());
+        GLStats::RecordCulled((uint32_t)(batch.size() - out.size()));
+        if (!out.empty()) {
+            GLStats::RecordMaterialBound(mat);
+            auto tex = [](const std::shared_ptr<Texture>& t) {
+                if (t) GLStats::RecordTextureUsed(t.get());
+            };
+            tex(mat->Albedo); tex(mat->Normal); tex(mat->Metallic);
+            tex(mat->Roughness); tex(mat->AO); tex(mat->Emissive);
+        }
     }
     g.outputFBO = targetFBO;
     g.graph.Execute();
@@ -647,6 +664,8 @@ void GLEditorBackend::RenderFrame(const Diamond::EditorFrameInput& in)
 
     glfwGetFramebufferSize(m_Window, &g.fbW, &g.fbH);
     if (g.fbW <= 0 || g.fbH <= 0) return;   // minimized
+
+    GLStats::Reset();
 
     if (g.fbW != m_LastFbW || g.fbH != m_LastFbH) {
         BuildGraph(g.fbW, g.fbH);
@@ -857,4 +876,5 @@ void GLEditorBackend::RenderFrame(const Diamond::EditorFrameInput& in)
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
     glfwSwapBuffers(m_Window);
+    GLStats::Finalize();
 }

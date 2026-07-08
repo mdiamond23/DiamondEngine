@@ -33,6 +33,7 @@ public:
     Diamond::EditorViewImage GameViewImage() const override;
 
     Diamond::ThumbnailService* Thumbnails() override;
+    Diamond::RendererStats GetStats() const override;
 
     // GL-only editor extras (debug draw, the particle preview panel) read the
     // editor layer directly; the Vulkan backend gets these through the step-4

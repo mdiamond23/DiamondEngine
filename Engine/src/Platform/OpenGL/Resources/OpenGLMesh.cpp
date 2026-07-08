@@ -1,4 +1,5 @@
 #include "Platform/OpenGL/Resources/OpenGLMesh.h"
+#include "Profiling/GLRendererStats.h"
 
 #include <glad/gl.h>
 
@@ -76,6 +77,7 @@ void OpenGLMesh::Draw(const Shader& /*shader*/) const
     glBindVertexArray(m_VAO);
     glDrawElements(GL_TRIANGLES, m_IndexCount, GL_UNSIGNED_INT, nullptr);
     glBindVertexArray(0);
+    GLStats::RecordDraw(m_IndexCount / 3);
 }
 
 } // namespace Diamond

@@ -1,4 +1,5 @@
 #include "Platform/OpenGL/Passes/Shadows/OpenGLCSMPass.h"
+#include "Profiling/GLRendererStats.h"
 #include <glad/gl.h>
 #include <glm/gtc/matrix_transform.hpp>  // glm::ortho, glm::lookAt
 #include <glm/gtc/type_ptr.hpp>          // glm::value_ptr
@@ -171,6 +172,7 @@ void OpenGLCSMPass::Render(
             if (skinned)
                 shader.SetMat4Array("uBones", draw.bonePalette, draw.boneCount);
             draw.mesh->Draw(shader);
+            GLStats::RecordShadowCaster();
         }
     }
 

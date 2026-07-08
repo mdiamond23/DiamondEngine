@@ -50,6 +50,7 @@ void VulkanRHIBuffer::Update(const void* data, uint64_t size) {
     // Writes the current frame's copy; the device guaranteed that slot idle in
     // BeginFrame, so this never races the GPU.
     std::memcpy(m_Mapped[m_Device->CurrentFrame()], data, static_cast<size_t>(size));
+    m_Device->RecordBufferUpload();
 }
 
 VkBuffer VulkanRHIBuffer::Handle(uint32_t frame) const {

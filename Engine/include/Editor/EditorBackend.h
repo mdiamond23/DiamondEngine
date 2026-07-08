@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Renderer/ParticleRenderer.h"
+#include "Profiling/ProfilerStats.h"
 
 #include <entt/entt.hpp>
 
@@ -125,6 +126,11 @@ public:
     // Asset-preview bakes for the content browser / inspector (editor-wiring
     // step 4). Valid between Init() and Shutdown().
     virtual ThumbnailService* Thumbnails() = 0;
+
+    // Last-completed-frame renderer stats (Docs/profiler-panel-design.md) — for
+    // ProfilerPanel. FPS/CPU-ms are 0 here; the app loop measures those and
+    // merges them in before handing the struct to the panel.
+    virtual RendererStats GetStats() const = 0;
 
     // Live material edits (Inspector, on edit-release): the GL backend re-binds
     // every texture/uniform per draw, so it needs no notification — default

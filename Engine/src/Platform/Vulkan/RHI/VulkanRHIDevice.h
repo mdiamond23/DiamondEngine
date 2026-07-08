@@ -8,6 +8,7 @@
 
 #include <array>
 #include <cstdint>
+#include <unordered_set>
 #include <vector>
 
 struct GLFWwindow;
@@ -79,6 +80,18 @@ public:
     void NotifyResize() override { m_FramebufferResized = true; }
     void WaitIdle() override { vkDeviceWaitIdle(m_Ctx.Device()); }
 
+    // RHIDevice frame-stats interface (see RHIDevice.h).
+    void ResetFrameStats() override;
+    void RecordDraw(uint64_t triangleCount) override;
+    void RecordBufferUpload() override;
+    void RecordVisible(uint32_t count) override;
+    void RecordCulled(uint32_t count) override;
+    void RecordShadowCaster() override;
+    void RecordMaterialBound(const void* material) override;
+    void RecordTextureUsed(const void* texture) override;
+    void FinalizeFrameStats() override;
+    const RendererStats& GetStats() const override { return m_SnapshotStats; }
+
     // Per-frame depth attachment format (D32_SFLOAT); also surfaced through the
     // RHI DepthFormat() so pipelines match.
     static constexpr VkFormat kDepthFormat = VK_FORMAT_D32_SFLOAT;
@@ -134,6 +147,15 @@ private:
     VkDescriptorPool m_DescriptorPool = VK_NULL_HANDLE;
 
     VulkanRHICommandList m_CommandList{ this };
+
+    // Frame-stats accumulator: m_WorkingStats collects the frame currently being
+    // built (RebuildDrawList..EndFrame), m_SnapshotStats is the last completed
+    // frame GetStats() returns. The sets exist only to dedup materialsBound/
+    // texturesUsed; their sizes are folded into m_WorkingStats at finalize time.
+    RendererStats m_WorkingStats;
+    RendererStats m_SnapshotStats;
+    std::unordered_set<const void*> m_MaterialsSeen;
+    std::unordered_set<const void*> m_TexturesSeen;
 
     uint32_t m_CurrentFrame       = 0;
     uint32_t m_AcquiredImageIndex = 0;   // valid between BeginFrame and EndFrame

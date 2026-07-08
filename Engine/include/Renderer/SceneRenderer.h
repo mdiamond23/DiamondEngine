@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Renderer/ParticleRenderer.h"
+#include "Profiling/ProfilerStats.h"
 
 #include <cstdint>
 #include <functional>
@@ -182,6 +183,11 @@ public:
     // at build time (DIAMOND_GLSLANG_VALIDATOR undefined).
     virtual void ReloadChangedShaders() = 0;   // throttled per-file mtime poll
     virtual void ReloadAllShaders() = 0;       // force recompile — F5
+
+    // Last-completed-frame renderer stats (Docs/profiler-panel-design.md).
+    // A thin passthrough to the RHIDevice this renderer draws through — see
+    // RHIDevice::GetStats().
+    virtual RendererStats GetStats() const = 0;
 };
 
 } // namespace Diamond
