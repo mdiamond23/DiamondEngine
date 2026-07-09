@@ -3,6 +3,7 @@
 #include "../EditorContext.h"
 #include <glm/glm.hpp>
 #include "Profiling/ProfilerStats.h"
+#include "Profiling/CPUProfiler.h"
 #include <cstdint>
 #include <vector>
 
@@ -39,6 +40,10 @@ private:
 
     Diamond::RendererStats m_LatestStats;  // written by SetStats(), every frame
     Diamond::RendererStats m_DisplayStats; // throttled copy actually drawn
+
+    // CPU scope timers (DIAMOND_PROFILE_SCOPE) — read straight from the
+    // CPUProfiler singleton on the same throttle/pause cadence as the stats.
+    std::vector<Diamond::CPUScopeStats> m_DisplayCpuScopes;
 
     float m_RefreshTimer = 0.0f;
     bool  m_Paused        = false;

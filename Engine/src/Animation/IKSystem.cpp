@@ -6,6 +6,7 @@
 #include "Scene/Scene.h"
 #include "Scene/Physics/RagdollComponent.h"
 #include "Scene/Physics/PhysicsAPI.h"
+#include "Profiling/CPUProfiler.h"
 
 #include <glm/gtc/quaternion.hpp>
 #include <vector>
@@ -33,6 +34,7 @@ static glm::quat BlendTo(glm::quat from, glm::quat to, float w)
 
 void UpdateIK(Scene& scene, float dt)
 {
+    DIAMOND_PROFILE_SCOPE("IK");
     auto& reg  = scene.GetRegistry();
     auto  view = reg.view<SkinnedMeshComponent, AnimatorComponent, IKComponent>();
     std::vector<glm::mat4> world;

@@ -36,6 +36,7 @@
 #include "Animation/AnimationComponents.h"
 #include "Animation/AnimationSystem.h"
 #include "Animation/IKSystem.h"
+#include "Profiling/CPUProfiler.h"
 
 #include <cmath>
 #include <cstdio>
@@ -478,9 +479,12 @@ int main(int argc, char** argv)
             const EditorViewImage img = backend->ParticlePreviewImage();
             editorLayer.GetParticlePreviewPanel().SetTexture((ImTextureID)img.textureId, img.flipY);
         }
-        editorLayer.UpdateCamera(frame.view, frame.proj, g_camera.Position);
-        editorLayer.OnImGuiRender();
-        backend->OnImGuiPanels();
+        {
+            DIAMOND_PROFILE_SCOPE("Editor ImGui");
+            editorLayer.UpdateCamera(frame.view, frame.proj, g_camera.Position);
+            editorLayer.OnImGuiRender();
+            backend->OnImGuiPanels();
+        }
 
         // Vulkan only: gather the particle-preview panel's per-frame state into
         // engine-visible types (RenderParticle array) so the Vulkan backend can
@@ -521,8 +525,17 @@ int main(int argc, char** argv)
             g_camera.SyncOrbitTargets();
         }
 
-        ImGui::Render();
-        backend->RenderFrame(frame);
+        {
+            // Wall time of record + submit + present — at vsync this includes
+            // the swap wait, so it reads large on an idle frame by design.
+            DIAMOND_PROFILE_SCOPE("Render Submit");
+            ImGui::Render();
+            backend->RenderFrame(frame);
+        }
+
+        // Flip the CPU profiler's frame: merge every thread's scope tree into
+        // the snapshot ProfilerPanel reads next frame via GetSnapshot().
+        CPUProfiler::EndFrame();
 
         // Renderer counters are this backend's last-completed frame; FPS/CPU ms
         // are the app loop's own measurements, merged in here (Docs/profiler-

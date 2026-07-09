@@ -177,8 +177,37 @@ stays backend-agnostic.
      validation-only). `RHICommandList::Begin/EndDebugLabel` wraps every graph
      pass + the shadow records; render-graph pooled textures carry
      `RHITextureDesc::debugName` → named images in the resource inspector.
-5. *(Optional later)* per-view culling split, bind-call counts, CPU scope
-   timers (`DIAMOND_PROFILE_SCOPE` macro).
+5. **CPU scope timers — DONE, backend-agnostic.** What shipped:
+   - `Engine/include/Profiling/CPUProfiler.h`: `DIAMOND_PROFILE_SCOPE("name")` /
+     `DIAMOND_PROFILE_FUNCTION()` RAII macros (compile to nothing under
+     `DIAMOND_PROFILE_ENABLED=0`). Zero-allocation hot path: scopes are keyed
+     by the name literal's *pointer* within their parent (strcmp fallback for
+     unmerged literals), so names must be string literals / permanent.
+   - Thread-safe by design: thread-local scope trees, merged at
+     `CPUProfiler::EndFrame()` (called by the shared editor loop in main.cpp,
+     right after `RenderFrame`). Rows from non-main threads appear under a
+     thread header row. Not for per-entity inner loops — EndScope takes an
+     uncontended mutex.
+   - Every `GameSystem` is timed automatically: `Scene::UpdateSystems` wraps
+     each `OnUpdate` in a scope named by `GameSystem::GetName()`, which
+     `DECLARE_SYSTEM` overrides with the class name — user scripts get a
+     profiler row with zero effort. Engine phases instrumented directly:
+     Scene Systems (+ per-system children), Transforms, Anim State Machines,
+     Animators, IK, Ragdoll Sync, Audio Update, Editor ImGui, Render Submit
+     (includes the vsync/present wait by design).
+   - Per scope: EMA avg (α=0.15), raw last-frame, max over the last ~1–2 s
+     window (so hitches survive the smoothing), calls/frame. Rows unseen for
+     120 frames are evicted (play-mode-only scopes disappear ~2 s after stop).
+   - Panel: "CPU Timers" table (Scope/Avg/Last/Max/Calls) indented by depth,
+     plus an "Other" row = `cpuFrameMs − Σ depth-0 lastMs`, clamped ≥ 0.
+     Panel reads `CPUProfiler::GetSnapshot()` directly on the same 4 Hz
+     refresh/pause cadence as the renderer stats.
+   - Panel UX: every section (Frame, Renderer Stats, Passes, CPU Timers) is a
+     `CollapsingHeader`; the Passes + CPU tables are sortable (click a column;
+     numeric columns default descending; tri-state — third click restores the
+     grouped/tree view, since a sorted hierarchy is meaningless the active
+     sort flattens it) and hideable (right-click the header row).
+6. *(Optional later)* per-view culling split, bind-call counts.
 
 ## Open questions
 

@@ -44,6 +44,7 @@
 #include "Animation/AnimationComponents.h"   // SkinnedMeshComponent + AnimatorComponent (ragdoll readback)
 #include "DebugDraw.h"
 #include "Assets/ModelImporter.h"
+#include "Profiling/CPUProfiler.h"
 
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -2444,6 +2445,7 @@ void RagdollGetUp(RagdollComponent& rag) {
 // loop, after UpdateAnimators.
 void SyncRagdollPoses(Scene& scene) {
     if (!s_Impl || s_Impl->ragdolls.empty()) return;
+    DIAMOND_PROFILE_SCOPE("Ragdoll Sync");
     auto& reg = scene.GetRegistry();
     JPH::BodyInterface& bi = s_Impl->joltSystem->GetBodyInterface();
 

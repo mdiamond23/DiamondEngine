@@ -1,6 +1,7 @@
 #include "Animation/AnimationSystem.h"
 #include "Animation/AnimationComponents.h"
 #include "Animation/AnimationSampler.h"
+#include "Profiling/CPUProfiler.h"
 
 #include <algorithm>
 #include <cmath>
@@ -24,6 +25,7 @@ static float AdvanceTime(float t, float delta, float duration, bool loop)
 
 void UpdateAnimators(entt::registry& reg, float dt, bool advance)
 {
+    DIAMOND_PROFILE_SCOPE("Animators");
     auto view = reg.view<SkinnedMeshComponent, AnimatorComponent>();
     for (auto entity : view) {
         auto& smc  = view.get<SkinnedMeshComponent>(entity);
@@ -93,6 +95,7 @@ static bool EvalCondition(const AnimStateMachineComponent& sm, const AnimConditi
 
 void UpdateStateMachines(entt::registry& reg, float dt, bool advance)
 {
+    DIAMOND_PROFILE_SCOPE("Anim State Machines");
     (void)dt;
     auto view = reg.view<AnimStateMachineComponent, AnimatorComponent, SkinnedMeshComponent>();
     for (auto entity : view) {

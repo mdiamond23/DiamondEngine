@@ -1,5 +1,6 @@
 #include "Audio/AudioEngine.h"
 #include "Audio/AudioAPI.h"
+#include "Profiling/CPUProfiler.h"
 
 #include "miniaudio.h"   // declarations only — implementation lives in miniaudio_impl.c
 
@@ -292,6 +293,7 @@ void AudioEngine::Shutdown()
 void AudioEngine::Update()
 {
     if (!m_Impl) return;
+    DIAMOND_PROFILE_SCOPE("Audio Update");
 
     // Reclaim any voice that has reached its end. Swap-erase keeps it O(1) per removal;
     // order among the survivors only matters for cap-eviction, which tolerates the swap.

@@ -1,10 +1,12 @@
 #include "Scene/TransformSystem.h"
 #include "Scene/Components.h"
+#include "Profiling/CPUProfiler.h"
 
 // ---- public -----------------------------------------------------------------
 
 void TransformSystem::Update(entt::registry& reg)
 {
+    DIAMOND_PROFILE_SCOPE("Transforms");
     if (m_Dirty) {
         Rebuild(reg);
         m_Dirty = false;

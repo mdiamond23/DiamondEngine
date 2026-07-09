@@ -224,6 +224,7 @@ add_library(MyEngine STATIC
     src/Animation/IKSolver.cpp
     src/Animation/IKSystem.cpp
     src/Platform/OpenGL/GLRendererStats.cpp
+    src/Profiling/CPUProfiler.cpp
     src/Platform/OpenGL/Resources/OpenGLMesh.cpp
     src/Platform/OpenGL/Resources/OpenGLParticleRenderer.cpp
     src/Platform/OpenGL/Resources/OpenGLRenderer2D.cpp

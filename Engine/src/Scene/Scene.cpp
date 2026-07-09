@@ -1,4 +1,5 @@
 #include "Scene/Scene.h"
+#include "Profiling/CPUProfiler.h"
 #include "UUIDGenerator.h"
 #include <algorithm>
 #define GLM_ENABLE_EXPERIMENTAL
@@ -170,8 +171,12 @@ void Scene::Resume()
 void Scene::UpdateSystems(float dt)
 {
     if (!m_Playing || m_Paused) return;
-    for (auto& system : m_Systems)
+    DIAMOND_PROFILE_SCOPE("Scene Systems");
+    for (auto& system : m_Systems) {
+        // Each system gets its own profiler row, named by DECLARE_SYSTEM.
+        DIAMOND_PROFILE_SCOPE(system->GetName());
         system->OnUpdate(*this, dt);
+    }
 
     // Drain any events posted via enqueue() this frame. trigger() dispatches
     // immediately and is unaffected.
