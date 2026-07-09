@@ -1,8 +1,26 @@
 #pragma once
 #include <cstdint>
+#include <string>
+#include <vector>
 
-namespace Diamond 
+namespace Diamond
 {
+    // One profiled render pass (Docs/profiler-panel-design.md, per-pass phase).
+    // Vulkan-only: the GL backend leaves RendererStats::passes empty. GPU times
+    // are read back frames-in-flight late (like gpuFrameMs), so a pass row is a
+    // couple of frames older than the top-level counters — fine for a profiler.
+    struct PassStats
+    {
+        std::string scope;          // group: "Main View", "Game View", "Shadows"
+        std::string name;           // pass name: "GBuffer", "SSAO", ...
+        float    gpuMs     = 0.0f;  // EMA-smoothed timestamp span
+        float    cpuMs     = 0.0f;  // EMA-smoothed command-recording time
+        uint32_t drawCalls = 0;
+        uint64_t triangles = 0;
+        uint32_t width     = 0;     // render-target size; 0 = backbuffer/unknown
+        uint32_t height    = 0;
+    };
+
     struct RendererStats
     {
     float fps            = 0.0f;   // smoothed (EMA over ~0.5 s)
@@ -27,5 +45,8 @@ namespace Diamond
 
     // Memory
     uint64_t vramBytes        = 0; // estimate — see VRAM below
+
+    // Per-pass breakdown (Vulkan only; empty on GL). In execution order.
+    std::vector<PassStats> passes;
     };
 }

@@ -54,6 +54,10 @@ struct RHITextureDesc {
     // (blit downsample), sampled trilinearly. Material textures want this — the GL
     // texture path always generates mipmaps; render targets ignore it.
     bool generateMips = false;
+
+    // Diagnostic name shown by capture tools (RenderDoc resource inspector).
+    // Empty = unnamed. Must outlive the CreateTexture call only.
+    const char* debugName = nullptr;
 };
 
 // A texture usable as a sampled image and/or a render-pass attachment, depending

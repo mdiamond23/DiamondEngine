@@ -7,7 +7,10 @@
 #include "Platform/Vulkan/VulkanImage.h"
 
 #include <array>
+#include <chrono>
 #include <cstdint>
+#include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -45,6 +48,9 @@ public:
                      uint32_t firstIndex) override;
     void Draw(uint32_t vertexCount, uint32_t instanceCount,
               uint32_t firstVertex) override;
+
+    void BeginDebugLabel(const char* name) override;
+    void EndDebugLabel() override;
 
 private:
     VulkanRHIDevice* m_Device;
@@ -91,6 +97,9 @@ public:
     void RecordTextureUsed(const void* texture) override;
     void FinalizeFrameStats() override;
     const RendererStats& GetStats() const override { return m_SnapshotStats; }
+    void BeginPassProfile(const char* scope, const char* name,
+                          uint32_t width, uint32_t height) override;
+    void EndPassProfile() override;
 
     // Per-frame depth attachment format (D32_SFLOAT); also surfaced through the
     // RHI DepthFormat() so pipelines match.
@@ -126,6 +135,10 @@ private:
     // that submission has finished on the GPU.
     void CreateTimestampPool();
     void DestroyTimestampPool();
+    // Publishes slot's per-pass records (GPU spans + captured CPU counters)
+    // into m_WorkingStats.passes, then clears them. Called from BeginFrame
+    // right after the fence wait proves the slot's submission finished.
+    void ResolvePassRecords(uint32_t slot);
 
     GLFWwindow*     m_Window = nullptr;
     VulkanContext   m_Ctx;
@@ -170,6 +183,31 @@ private:
     VkQueryPool m_TimestampPool       = VK_NULL_HANDLE;
     bool        m_TimestampsSupported = false;
     std::array<bool, kFramesInFlight> m_TimestampValid{};
+
+    // Per-pass profiling (per-pass phase): a second timestamp pool with one
+    // begin/end query pair per profiled pass, kMaxProfiledPasses pairs per
+    // frame-in-flight slot. Each slot's PassRecord list is written while its
+    // frame records (names + CPU-side counters captured then, since the graph
+    // may be rebuilt before readback) and resolved against the query results
+    // when the slot's fence wait proves the submission finished — so published
+    // rows are kFramesInFlight frames old, like gpuFrameMs.
+    static constexpr uint32_t kMaxProfiledPasses = 64;
+    struct PassRecord {
+        std::string scope;
+        std::string name;
+        uint32_t    width = 0, height = 0;
+        uint32_t    drawCalls = 0;
+        uint64_t    triangles = 0;
+        float       cpuMs = 0.0f;
+    };
+    std::array<std::vector<PassRecord>, kFramesInFlight> m_PassRecords;
+    VkQueryPool m_PassQueryPool = VK_NULL_HANDLE;
+    int         m_ActivePass    = -1;   // index into the current slot's records
+    uint32_t    m_PassSkipDepth = 0;    // Begins ignored while a pass was open
+    std::chrono::steady_clock::time_point m_PassCpuStart;
+    // EMA-smoothed (gpuMs, cpuMs) keyed "scope/name" — raw per-pass times are
+    // too jittery to read. Entries for passes that stop running just linger.
+    std::unordered_map<std::string, std::pair<float, float>> m_PassSmoothed;
 
     uint32_t m_CurrentFrame       = 0;
     uint32_t m_AcquiredImageIndex = 0;   // valid between BeginFrame and EndFrame

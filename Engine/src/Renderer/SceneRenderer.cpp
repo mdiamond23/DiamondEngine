@@ -408,6 +408,10 @@ public:
 
         m_SpotShadow->ComputeMatrices(m_SpotLights);
         if (staticChanged) m_SpotShadow->MarkStaticDirty();
+        cmd->BeginDebugLabel("SpotShadows");
+        m_Device->BeginPassProfile("Shadows", "Spot Maps",
+                                   VulkanSpotShadowPass::kResolution,
+                                   VulkanSpotShadowPass::kResolution);
         m_SpotShadow->Record(cmd,
             [this](RHICommandList* c, const glm::mat4& lightSpace) {   // static cache bake
                 DrawShadow(c, lightSpace, m_SpotShadow->SkinnedPipeline(), ShadowFilter::StaticOnly);
@@ -415,8 +419,14 @@ public:
             [this](RHICommandList* c, const glm::mat4& lightSpace) {   // dynamic, over the cache
                 DrawShadow(c, lightSpace, m_SpotShadow->SkinnedPipeline(), ShadowFilter::DynamicOnly);
             });
+        m_Device->EndPassProfile();
+        cmd->EndDebugLabel();
         m_PointShadow->SetLights(m_PointPos);   // also marks moved-light slots dirty
         if (staticChanged) m_PointShadow->MarkStaticDirty();
+        cmd->BeginDebugLabel("PointShadows");
+        m_Device->BeginPassProfile("Shadows", "Point Cubes",
+                                   VulkanPointShadowPass::kResolution,
+                                   VulkanPointShadowPass::kResolution);
         m_PointShadow->Record(cmd,
             [this](RHICommandList* c, uint32_t faceIdx) {   // static cache bake
                 DrawPointShadow(c, faceIdx, ShadowFilter::StaticOnly);
@@ -424,6 +434,8 @@ public:
             [this](RHICommandList* c, uint32_t faceIdx) {   // dynamic, over the cache
                 DrawPointShadow(c, faceIdx, ShadowFilter::DynamicOnly);
             });
+        m_Device->EndPassProfile();
+        cmd->EndDebugLabel();
 
         // Offscreen mode routes the overlay through the graph's EditorOverlay
         // pass (which owns the backbuffer and has already transitioned the scene
@@ -702,6 +714,9 @@ private:
 
     void BuildViewGraph(View& v, int viewIdx) {
         RHIRenderGraph& g = v.graph;
+        // Scene views are profiled per pass (the preview/thumbnail graphs are
+        // not — they'd inject sporadic rows into the breakdown).
+        g.SetProfileScope(viewIdx == kGameView ? "Game View" : "Main View");
         const RGTextureHandle gViewPos    = g.DeclareTexture("gViewPos",    { v.width, v.height, RHIFormat::RGBA16F });
         const RGTextureHandle gViewNormal = g.DeclareTexture("gViewNormal", { v.width, v.height, RHIFormat::RGBA16F });
         const RGTextureHandle gAlbedo     = g.DeclareTexture("gAlbedo",     { v.width, v.height, RHIFormat::RGBA8   });

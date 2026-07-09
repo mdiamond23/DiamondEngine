@@ -2,6 +2,7 @@
 #include "Platform/Vulkan/RHI/VulkanRHIEnums.h"
 
 #include <cstring>
+#include <string>
 
 namespace Diamond {
 
@@ -127,6 +128,13 @@ VulkanRHITexture::VulkanRHITexture(VulkanRHIDevice* device, const RHITextureDesc
     for (uint32_t i = 0; i < count; ++i) {
         m_Images[i]  = CreateImage(ctx, desc.width, desc.height, m_Format, usage, m_Aspect, mipLevels);
         m_Layouts[i] = VK_IMAGE_LAYOUT_UNDEFINED;
+        if (desc.debugName) {
+            // Per-slot suffix so RenderDoc distinguishes the frame-in-flight copies.
+            const std::string name = count > 1
+                ? std::string(desc.debugName) + "[" + std::to_string(i) + "]"
+                : std::string(desc.debugName);
+            ctx.SetObjectName(VK_OBJECT_TYPE_IMAGE, (uint64_t)m_Images[i].image, name.c_str());
+        }
     }
 
     // Static textures upload their pixels once and settle in SHADER_READ_ONLY.

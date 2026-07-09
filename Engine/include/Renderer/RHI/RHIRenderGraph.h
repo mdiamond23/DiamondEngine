@@ -90,6 +90,13 @@ public:
     // graph can be rebuilt for a new frame. Not needed when Compiling once.
     void ResetPasses();
 
+    // Opt this graph into per-pass profiling (RHIDevice::BeginPassProfile around
+    // every pass in Execute), grouped in the profiler under 'scope' ("Main View",
+    // "Game View"). Default off, so sporadic graphs (thumbnails, particle
+    // preview) don't spike the breakdown. Survives ResetPasses. Debug labels for
+    // capture tools are emitted regardless of this setting.
+    void SetProfileScope(std::string_view scope) { m_ProfileScope = scope; }
+
     // Resolve a declared handle to its (pool-owned) texture — e.g. to build a
     // resource set that samples a graph output.
     RHITexture* GetTexture(RGTextureHandle h) const;
@@ -107,6 +114,7 @@ private:
     };
 
     RHIDevice*                                     m_Device;
+    std::string                                    m_ProfileScope;   // empty = don't profile
     std::unordered_map<std::string, PooledTexture> m_Pool;   // survives ResetPasses
     std::vector<TextureEntry>                      m_Textures;
     std::vector<RGPass>                            m_Passes;

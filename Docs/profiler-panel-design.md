@@ -154,8 +154,31 @@ stays backend-agnostic.
 2. **GPU timing** — Vulkan timestamp pool + GL timer queries, whole-frame first.
 3. **Memory + Vulkan-specifics** — VMA heap budgets, GL creation-tally estimate,
    descriptor-write counter.
-4. *(Optional later)* per-pass GPU breakdown, per-view (editor vs game view) split,
-   bind-call counts, CPU scope timers (`DIAMOND_PROFILE_SCOPE` macro).
+4. **Per-pass breakdown — DONE, Vulkan-only by decision** (GL keeps whole-frame
+   stats only; per-pass `GL_TIME_ELAPSED` queries can't coexist with the
+   whole-frame one, and GL retires at parity anyway). What shipped:
+   - `PassStats` (scope, name, gpuMs, cpuMs, draws, tris, target size) in
+     `RendererStats::passes`, in execution order.
+   - `RHIDevice::Begin/EndPassProfile` (default no-op; Vulkan implements): a
+     second timestamp pool (64 pass pairs × frames-in-flight), pass names +
+     CPU counters captured at record time, resolved at the slot's next fence
+     wait — rows are frames-in-flight old, like `gpuFrameMs`. GPU/CPU times
+     EMA-smoothed (α=0.15) keyed `scope/name`.
+   - `RHIRenderGraph::SetProfileScope("Main View"/"Game View")` brackets every
+     pass in Execute; default-off so preview/thumbnail graphs stay out of the
+     breakdown. Spot/point shadow `Record()` bracketed directly in
+     `RenderToSwapchain` under scope "Shadows".
+   - Draw/triangle attribution: `RecordDraw` also increments the open pass.
+   - Panel: 6-column pass table grouped by scope headers, plus an "Other" row
+     (`gpuFrameMs − Σ pass gpuMs`, clamped ≥ 0 — adjacent passes can overlap
+     on the GPU, and uploads/seed-copies/transitions live outside passes).
+   - **RenderDoc integration**: `VK_EXT_debug_utils` now enabled whenever
+     available (decoupled from validation; the messenger stays
+     validation-only). `RHICommandList::Begin/EndDebugLabel` wraps every graph
+     pass + the shadow records; render-graph pooled textures carry
+     `RHITextureDesc::debugName` → named images in the resource inspector.
+5. *(Optional later)* per-view culling split, bind-call counts, CPU scope
+   timers (`DIAMOND_PROFILE_SCOPE` macro).
 
 ## Open questions
 

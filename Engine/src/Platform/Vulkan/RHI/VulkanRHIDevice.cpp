@@ -51,6 +51,19 @@ void VulkanRHICommandList::Draw(uint32_t vertexCount, uint32_t instanceCount,
     m_Device->RecordDraw((uint64_t)(vertexCount / 3) * instanceCount);
 }
 
+void VulkanRHICommandList::BeginDebugLabel(const char* name) {
+    // Entry points are null when VK_EXT_debug_utils wasn't enabled.
+    if (!m_Device->Ctx().DebugUtilsEnabled() || !vkCmdBeginDebugUtilsLabelEXT) return;
+    VkDebugUtilsLabelEXT label{ VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT };
+    label.pLabelName = name;
+    vkCmdBeginDebugUtilsLabelEXT(m_Cmd, &label);
+}
+
+void VulkanRHICommandList::EndDebugLabel() {
+    if (!m_Device->Ctx().DebugUtilsEnabled() || !vkCmdEndDebugUtilsLabelEXT) return;
+    vkCmdEndDebugUtilsLabelEXT(m_Cmd);
+}
+
 // ── Render-pass scoping + barriers ───────────────────────────────────────────
 
 namespace {
@@ -252,11 +265,17 @@ void VulkanRHIDevice::CreateTimestampPool() {
     poolInfo.queryCount = kFramesInFlight * 2;
     VK_CHECK(vkCreateQueryPool(m_Ctx.Device(), &poolInfo, nullptr, &m_TimestampPool));
     m_TimestampsSupported = true;
+
+    // Per-pass pool: a begin/end pair per profiled pass per slot.
+    poolInfo.queryCount = kFramesInFlight * kMaxProfiledPasses * 2;
+    VK_CHECK(vkCreateQueryPool(m_Ctx.Device(), &poolInfo, nullptr, &m_PassQueryPool));
 }
 
 void VulkanRHIDevice::DestroyTimestampPool() {
-    if (m_TimestampPool) vkDestroyQueryPool(m_Ctx.Device(), m_TimestampPool, nullptr);
+    if (m_TimestampPool)  vkDestroyQueryPool(m_Ctx.Device(), m_TimestampPool, nullptr);
+    if (m_PassQueryPool)  vkDestroyQueryPool(m_Ctx.Device(), m_PassQueryPool, nullptr);
     m_TimestampPool = VK_NULL_HANDLE;
+    m_PassQueryPool = VK_NULL_HANDLE;
 }
 
 void VulkanRHIDevice::CreateFrameResources() {
@@ -407,6 +426,13 @@ RHICommandList* VulkanRHIDevice::BeginFrame() {
         }
     }
 
+    // Per-pass results for the same finished submission: resolve each recorded
+    // pass's query pair, EMA-smooth (raw per-pass spans jitter frame to frame),
+    // and publish into this frame's working stats. CPU-side fields (name, draw
+    // counts, record time) were captured with the record, so a graph rebuilt
+    // since then can't misattribute them.
+    ResolvePassRecords(m_CurrentFrame);
+
     VkResult acquire = vkAcquireNextImageKHR(device, m_Swapchain.Handle(), UINT64_MAX,
                                              frame.imageAvailable, VK_NULL_HANDLE,
                                              &m_AcquiredImageIndex);
@@ -428,6 +454,10 @@ RHICommandList* VulkanRHIDevice::BeginFrame() {
         vkCmdResetQueryPool(cmd, m_TimestampPool, m_CurrentFrame * 2, 2);
         vkCmdWriteTimestamp2(cmd, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT,
                              m_TimestampPool, m_CurrentFrame * 2 + 0);
+        // The slot's whole pass-query range: which pairs get written this frame
+        // isn't known yet, and resetting unused queries is harmless.
+        vkCmdResetQueryPool(cmd, m_PassQueryPool,
+                            m_CurrentFrame * kMaxProfiledPasses * 2, kMaxProfiledPasses * 2);
     }
 
     // Move the backbuffer + the device depth buffer into their attachment layouts
@@ -530,6 +560,11 @@ void VulkanRHIDevice::ResetFrameStats() {
 void VulkanRHIDevice::RecordDraw(uint64_t triangleCount) {
     m_WorkingStats.drawCalls++;
     m_WorkingStats.trianglesSubmitted += triangleCount;
+    if (m_ActivePass >= 0) {
+        PassRecord& r = m_PassRecords[m_CurrentFrame][m_ActivePass];
+        r.drawCalls++;
+        r.triangles += triangleCount;
+    }
 }
 
 void VulkanRHIDevice::RecordBufferUpload() { m_WorkingStats.bufferUploads++; }
@@ -557,6 +592,105 @@ void VulkanRHIDevice::FinalizeFrameStats() {
     m_WorkingStats.vramBytes = vramBytes;
 
     m_SnapshotStats = m_WorkingStats;
+}
+
+// ── Per-pass profiling ───────────────────────────────────────────────────────
+
+void VulkanRHIDevice::BeginPassProfile(const char* scope, const char* name,
+                                       uint32_t width, uint32_t height) {
+    if (!m_FrameActive) return;
+    // No nesting: a Begin while a pass is open (or after a skipped Begin) is
+    // ignored, and the depth counter makes its matching End a no-op too.
+    if (m_ActivePass >= 0 || m_PassSkipDepth > 0) { m_PassSkipDepth++; return; }
+
+    std::vector<PassRecord>& records = m_PassRecords[m_CurrentFrame];
+    if (records.size() >= kMaxProfiledPasses) { m_PassSkipDepth++; return; }
+
+    if (width == 0) {   // backbuffer-targeting pass
+        width  = m_Swapchain.Extent().width;
+        height = m_Swapchain.Extent().height;
+    }
+
+    PassRecord r;
+    r.scope  = scope;
+    r.name   = name;
+    r.width  = width;
+    r.height = height;
+    records.push_back(std::move(r));
+    m_ActivePass   = static_cast<int>(records.size()) - 1;
+    m_PassCpuStart = std::chrono::steady_clock::now();
+
+    if (m_TimestampsSupported) {
+        const uint32_t q = m_CurrentFrame * kMaxProfiledPasses * 2
+                         + static_cast<uint32_t>(m_ActivePass) * 2;
+        vkCmdWriteTimestamp2(m_Frames[m_CurrentFrame].commandBuffer,
+                             VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, m_PassQueryPool, q);
+    }
+}
+
+void VulkanRHIDevice::EndPassProfile() {
+    if (m_PassSkipDepth > 0) { m_PassSkipDepth--; return; }
+    if (m_ActivePass < 0) return;
+
+    PassRecord& r = m_PassRecords[m_CurrentFrame][m_ActivePass];
+    r.cpuMs = std::chrono::duration<float, std::milli>(
+                  std::chrono::steady_clock::now() - m_PassCpuStart).count();
+
+    if (m_TimestampsSupported) {
+        const uint32_t q = m_CurrentFrame * kMaxProfiledPasses * 2
+                         + static_cast<uint32_t>(m_ActivePass) * 2 + 1;
+        vkCmdWriteTimestamp2(m_Frames[m_CurrentFrame].commandBuffer,
+                             VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, m_PassQueryPool, q);
+    }
+    m_ActivePass = -1;
+}
+
+void VulkanRHIDevice::ResolvePassRecords(uint32_t slot) {
+    std::vector<PassRecord>& records = m_PassRecords[slot];
+    if (records.empty()) return;
+
+    // GPU spans for the finished submission — one begin/end pair per record, in
+    // record order. Read only the pairs actually written (the rest of the slot's
+    // range was reset but never used).
+    std::vector<uint64_t> ts(records.size() * 2, 0);
+    bool haveGpuTimes = false;
+    if (m_TimestampsSupported && m_TimestampValid[slot]) {
+        VkResult qr = vkGetQueryPoolResults(
+            m_Ctx.Device(), m_PassQueryPool, slot * kMaxProfiledPasses * 2,
+            static_cast<uint32_t>(ts.size()), ts.size() * sizeof(uint64_t), ts.data(),
+            sizeof(uint64_t), VK_QUERY_RESULT_64_BIT);
+        haveGpuTimes = (qr == VK_SUCCESS);
+    }
+    const double period = m_Ctx.DeviceProperties().limits.timestampPeriod;
+
+    for (size_t i = 0; i < records.size(); ++i) {
+        PassRecord& r = records[i];
+        const float gpuMs = haveGpuTimes
+            ? float(double(ts[i * 2 + 1] - ts[i * 2]) * period / 1.0e6)
+            : 0.0f;
+
+        // EMA smoothing, keyed by scope/name so the same pass in two views keeps
+        // separate histories. First sighting seeds with the raw sample.
+        constexpr float kEma = 0.15f;
+        auto [it, inserted] = m_PassSmoothed.try_emplace(r.scope + "/" + r.name,
+                                                         gpuMs, r.cpuMs);
+        if (!inserted) {
+            it->second.first  += (gpuMs   - it->second.first)  * kEma;
+            it->second.second += (r.cpuMs - it->second.second) * kEma;
+        }
+
+        PassStats ps;
+        ps.scope     = std::move(r.scope);
+        ps.name      = std::move(r.name);
+        ps.gpuMs     = it->second.first;
+        ps.cpuMs     = it->second.second;
+        ps.drawCalls = r.drawCalls;
+        ps.triangles = r.triangles;
+        ps.width     = r.width;
+        ps.height    = r.height;
+        m_WorkingStats.passes.push_back(std::move(ps));
+    }
+    records.clear();
 }
 
 std::unique_ptr<RHIDevice> CreateVulkanRHIDevice(GLFWwindow* window) {

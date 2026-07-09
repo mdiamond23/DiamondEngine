@@ -64,6 +64,16 @@ bool ValidationLayerAvailable() {
     return false;
 }
 
+bool DebugUtilsExtensionAvailable() {
+    uint32_t count = 0;
+    vkEnumerateInstanceExtensionProperties(nullptr, &count, nullptr);
+    std::vector<VkExtensionProperties> extensions(count);
+    vkEnumerateInstanceExtensionProperties(nullptr, &count, extensions.data());
+    for (const auto& e : extensions)
+        if (std::strcmp(e.extensionName, VK_EXT_DEBUG_UTILS_EXTENSION_NAME) == 0) return true;
+    return false;
+}
+
 QueueFamilyIndices FindQueueFamilies(VkPhysicalDevice device, VkSurfaceKHR surface) {
     QueueFamilyIndices indices;
 
@@ -168,7 +178,15 @@ void VulkanContext::CreateInstance() {
     uint32_t glfwExtCount = 0;
     const char** glfwExt = glfwGetRequiredInstanceExtensions(&glfwExtCount);
     std::vector<const char*> extensions(glfwExt, glfwExt + glfwExtCount);
-    if (m_ValidationEnabled) extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+
+    // Debug utils is enabled whenever the loader offers it, independent of
+    // validation: it also carries the pass labels + object names RenderDoc and
+    // other capture tools display, and is free when no tool is attached. The
+    // debug *messenger* stays validation-only.
+    // (The validation layer also provides debug_utils even when the loader's
+    // own enumeration misses it.)
+    m_DebugUtilsEnabled = DebugUtilsExtensionAvailable() || m_ValidationEnabled;
+    if (m_DebugUtilsEnabled) extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
 
     VkInstanceCreateInfo ci{ VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO };
     ci.pApplicationInfo        = &app;
@@ -186,6 +204,17 @@ void VulkanContext::CreateInstance() {
     }
 
     VK_CHECK(vkCreateInstance(&ci, nullptr, &m_Instance));
+}
+
+void VulkanContext::SetObjectName(VkObjectType type, uint64_t handle, const char* name) const {
+    // vkSetDebugUtilsObjectNameEXT is null when the extension wasn't enabled
+    // (volk leaves unloaded entry points null).
+    if (!m_DebugUtilsEnabled || !vkSetDebugUtilsObjectNameEXT || handle == 0) return;
+    VkDebugUtilsObjectNameInfoEXT info{ VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT };
+    info.objectType   = type;
+    info.objectHandle = handle;
+    info.pObjectName  = name;
+    vkSetDebugUtilsObjectNameEXT(m_Device, &info);
 }
 
 void VulkanContext::CreateDebugMessenger() {

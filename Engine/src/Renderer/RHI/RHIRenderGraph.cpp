@@ -26,9 +26,10 @@ RGTextureHandle RHIRenderGraph::DeclareTexture(std::string_view name, const RGTe
         it->second.desc.format != desc.format)
     {
         RHITextureDesc td;
-        td.width  = desc.width;
-        td.height = desc.height;
-        td.format = desc.format;
+        td.width     = desc.width;
+        td.height    = desc.height;
+        td.format    = desc.format;
+        td.debugName = key.c_str();   // names the images in capture tools
         // Depth targets are also Sampled: shadow maps (CSM cascades) and depth
         // pre-passes are written as a depth attachment, then read in a later pass.
         td.usage  = isDepth ? (RHITextureUsage::DepthAttachment | RHITextureUsage::Sampled)
@@ -182,9 +183,28 @@ void RHIRenderGraph::Compile()
 // here: textures are pooled (created at declare, owned for the graph's lifetime).
 void RHIRenderGraph::Execute(RHICommandList* cmd)
 {
+    const bool profile = !m_ProfileScope.empty();
+
     for (int passIdx : m_SortedIndices)
     {
         RGPass& pass = m_Passes[passIdx];
+
+        // Capture-tool group for the whole pass. The profile bracket sits just
+        // inside it and also opens before the read barriers, so barrier cost is
+        // attributed to the pass that required it. Target size: first write's
+        // declared size, or 0x0 = backbuffer (the device substitutes its extent).
+        cmd->BeginDebugLabel(pass.name.c_str());
+        if (profile)
+        {
+            uint32_t w = 0, h = 0;
+            if (!pass.toSwapchain && !pass.writes.empty())
+            {
+                const RGTextureDesc& d = m_Textures[pass.writes[0].id - 1].desc;
+                w = d.width;
+                h = d.height;
+            }
+            m_Device->BeginPassProfile(m_ProfileScope.c_str(), pass.name.c_str(), w, h);
+        }
 
         // Auto-barrier: each read must be shader-readable before the pass runs.
         // Writes are transitioned to their attachment layout by BeginRendering.
@@ -220,6 +240,10 @@ void RHIRenderGraph::Execute(RHICommandList* cmd)
         if (pass.execute)
             pass.execute(cmd);
         cmd->EndRendering();
+
+        if (profile)
+            m_Device->EndPassProfile();
+        cmd->EndDebugLabel();
     }
 }
 

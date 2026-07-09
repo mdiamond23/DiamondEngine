@@ -48,6 +48,12 @@ public:
     // generated from gl_VertexIndex) that bind no vertex/index buffer.
     virtual void Draw(uint32_t vertexCount, uint32_t instanceCount = 1,
                       uint32_t firstVertex = 0) = 0;
+
+    // Opens/closes a named region visible in capture tools (RenderDoc groups
+    // draws under it). Purely diagnostic — default no-op so backends without a
+    // labeling mechanism ignore it. May nest.
+    virtual void BeginDebugLabel(const char* /*name*/) {}
+    virtual void EndDebugLabel() {}
 };
 
 } // namespace Diamond

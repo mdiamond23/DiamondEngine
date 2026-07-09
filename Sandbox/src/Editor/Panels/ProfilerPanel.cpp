@@ -51,6 +51,52 @@ namespace {
         std::snprintf(buf, sizeof(buf), "%llu", static_cast<unsigned long long>(value));
         StatRow(label, buf);
     }
+
+    // One row of the per-pass table. cpuMs < 0 renders as "—" (the synthetic
+    // "Other" row has no CPU recording time); width 0 likewise.
+    void PassRow(const char* name, float gpuMs, float cpuMs,
+                 uint32_t draws, uint64_t tris, uint32_t w, uint32_t h, bool indent) {
+        char buf[48];
+        ImGui::TableNextRow();
+
+        ImGui::TableSetColumnIndex(0);
+        if (indent) ImGui::Indent(12.0f);
+        ImGui::TextUnformatted(name);
+        if (indent) ImGui::Unindent(12.0f);
+
+        ImGui::TableSetColumnIndex(1);
+        std::snprintf(buf, sizeof(buf), "%.2f", gpuMs);
+        RightAlignedText(buf);
+
+        ImGui::TableSetColumnIndex(2);
+        if (cpuMs >= 0.0f) {
+            std::snprintf(buf, sizeof(buf), "%.2f", cpuMs);
+            RightAlignedText(buf);
+        } else {
+            ImGui::TextDisabled("-");
+        }
+
+        ImGui::TableSetColumnIndex(3);
+        std::snprintf(buf, sizeof(buf), "%u", draws);
+        RightAlignedText(buf);
+
+        ImGui::TableSetColumnIndex(4);
+        if (tris >= 1000000)
+            std::snprintf(buf, sizeof(buf), "%.1fM", static_cast<double>(tris) / 1.0e6);
+        else if (tris >= 1000)
+            std::snprintf(buf, sizeof(buf), "%.1fk", static_cast<double>(tris) / 1.0e3);
+        else
+            std::snprintf(buf, sizeof(buf), "%llu", static_cast<unsigned long long>(tris));
+        RightAlignedText(buf);
+
+        ImGui::TableSetColumnIndex(5);
+        if (w > 0) {
+            std::snprintf(buf, sizeof(buf), "%ux%u", w, h);
+            RightAlignedText(buf);
+        } else {
+            ImGui::TextDisabled("-");
+        }
+    }
 }
 
 ProfilerPanel::ProfilerPanel() = default;
@@ -126,6 +172,50 @@ void ProfilerPanel::OnImGuiRender()
         StatRow("VRAM (est.)", vramBuf);
 
         ImGui::EndTable();
+    }
+
+    // Per-pass breakdown (Vulkan only — empty on GL, section hidden). Passes
+    // arrive in execution order, already grouped by scope (Shadows, Game View,
+    // Main View), so a header row on each scope change is enough.
+    if (!s.passes.empty()) {
+        ImGui::Separator();
+        ImGui::TextUnformatted("Passes");
+
+        if (ImGui::BeginTable("##profiler_passes", 6,
+                               ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH |
+                               ImGuiTableFlags_SizingStretchProp)) {
+            ImGui::TableSetupColumn("Pass",   ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableSetupColumn("GPU ms", ImGuiTableColumnFlags_WidthFixed, 60.0f);
+            ImGui::TableSetupColumn("CPU ms", ImGuiTableColumnFlags_WidthFixed, 60.0f);
+            ImGui::TableSetupColumn("Draws",  ImGuiTableColumnFlags_WidthFixed, 50.0f);
+            ImGui::TableSetupColumn("Tris",   ImGuiTableColumnFlags_WidthFixed, 70.0f);
+            ImGui::TableSetupColumn("Size",   ImGuiTableColumnFlags_WidthFixed, 80.0f);
+            ImGui::TableHeadersRow();
+
+            float gpuSum = 0.0f;
+            const std::string* lastScope = nullptr;
+            for (const Diamond::PassStats& p : s.passes) {
+                if (!lastScope || *lastScope != p.scope) {
+                    lastScope = &p.scope;
+                    ImGui::TableNextRow();
+                    ImGui::TableSetColumnIndex(0);
+                    ImGui::TextColored(ImVec4(0.55f, 0.75f, 1.0f, 1.0f), "%s", p.scope.c_str());
+                }
+                gpuSum += p.gpuMs;
+                PassRow(p.name.c_str(), p.gpuMs, p.cpuMs, p.drawCalls, p.triangles,
+                        p.width, p.height, /*indent*/ true);
+            }
+
+            // Work outside profiled passes: uploads, layout transitions, the
+            // point-shadow cube seed copies, present transitions. Adjacent
+            // passes can overlap on the GPU, so the sum may slightly exceed
+            // the frame span — clamp instead of showing a negative.
+            if (s.gpuFrameMs > 0.0f)
+                PassRow("Other", std::max(0.0f, s.gpuFrameMs - gpuSum), -1.0f,
+                        0, 0, 0, 0, /*indent*/ false);
+
+            ImGui::EndTable();
+        }
     }
 
     ImGui::End();

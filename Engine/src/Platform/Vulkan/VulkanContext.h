@@ -45,6 +45,14 @@ public:
 
     const VkPhysicalDeviceProperties& DeviceProperties() const { return m_DeviceProps; }
 
+    // Whether VK_EXT_debug_utils is enabled — gates command-buffer labels and
+    // object naming (RenderDoc groups/names). Independent of validation.
+    bool DebugUtilsEnabled() const { return m_DebugUtilsEnabled; }
+
+    // Names a Vulkan object for capture/debug tools. No-op when debug utils is
+    // unavailable. 'handle' is the raw object handle cast to uint64_t.
+    void SetObjectName(VkObjectType type, uint64_t handle, const char* name) const;
+
     // Records 'record' into a transient command buffer, submits it to the
     // graphics queue, and blocks until it retires. For one-off GPU work outside
     // the frame loop — staging copies, layout transitions during resource
@@ -78,6 +86,7 @@ private:
 
     VkPhysicalDeviceProperties m_DeviceProps{};
     bool                       m_ValidationEnabled = false;
+    bool                       m_DebugUtilsEnabled = false;
 };
 
 } // namespace Diamond

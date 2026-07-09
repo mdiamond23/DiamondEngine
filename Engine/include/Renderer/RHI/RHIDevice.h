@@ -75,6 +75,17 @@ public:
     virtual void RecordTextureUsed(const void* texture) = 0;
     virtual void FinalizeFrameStats() = 0;
     virtual const RendererStats& GetStats() const = 0;
+
+    // ── Per-pass profiling (Docs/profiler-panel-design.md, per-pass phase) ────
+    // Brackets the recording of one render pass, between BeginFrame/EndFrame:
+    // writes GPU timestamps around it, times the CPU recording, and attributes
+    // RecordDraw calls to it. 'scope' groups passes for display ("Main View",
+    // "Shadows"); width/height 0 means the backbuffer. Does not nest — a Begin
+    // while a pass is open is ignored (with its matching End). Default no-ops:
+    // the Vulkan device implements them; profiling is Vulkan-only by design.
+    virtual void BeginPassProfile(const char* /*scope*/, const char* /*name*/,
+                                  uint32_t /*width*/, uint32_t /*height*/) {}
+    virtual void EndPassProfile() {}
 };
 
 } // namespace Diamond
