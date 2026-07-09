@@ -6,6 +6,14 @@
 #include "Platform/Vulkan/VulkanSwapchain.h"
 #include "Platform/Vulkan/VulkanImage.h"
 
+// Tracy GPU zones (phase 2): TracyVulkan.hpp needs Vulkan types in scope —
+// VulkanContext.h above pulls in volk, whose global function pointers also
+// satisfy Tracy's direct vk* calls under VK_NO_PROTOTYPES.
+#ifdef DIAMOND_TRACY
+#include <tracy/TracyVulkan.hpp>
+#include <optional>
+#endif
+
 #include <array>
 #include <chrono>
 #include <cstdint>
@@ -213,6 +221,16 @@ private:
     uint32_t m_AcquiredImageIndex = 0;   // valid between BeginFrame and EndFrame
     bool     m_FramebufferResized = false;
     bool     m_FrameActive        = false;
+
+#ifdef DIAMOND_TRACY
+    // Tracy GPU track: one zone per profiled pass, riding the same
+    // Begin/EndPassProfile hooks as the panel's timestamps. The RAII zone must
+    // outlive the Begin call, so it's stored — a single slot suffices because
+    // pass profiles never nest (m_PassSkipDepth enforces it).
+    void CreateTracyVkContext();
+    tracy::VkCtx*                    m_TracyVkCtx = nullptr;
+    std::optional<tracy::VkCtxScope> m_TracyPassZone;
+#endif
 };
 
 // Defined in VulkanRHIDevice.cpp; called by the always-compiled RHIDevice::Create.

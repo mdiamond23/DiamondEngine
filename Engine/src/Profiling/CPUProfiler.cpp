@@ -1,5 +1,11 @@
 #include "Profiling/CPUProfiler.h"
 
+// Direct include (not via the header) so FrameMark below still compiles if
+// someone builds with DIAMOND_PROFILE_ENABLED=0 but Tracy on.
+#ifdef DIAMOND_TRACY
+#include <tracy/Tracy.hpp>
+#endif
+
 #include <algorithm>
 #include <chrono>
 #include <cstring>
@@ -216,6 +222,10 @@ void CPUProfiler::EndFrame()
             reg.snapshot.push_back(r);
         }
     }
+
+#ifdef DIAMOND_TRACY
+    FrameMark;  // Tracy frame boundary — this is the once-per-loop point
+#endif
 }
 
 const std::vector<CPUScopeStats>& CPUProfiler::GetSnapshot()

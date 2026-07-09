@@ -6,6 +6,15 @@
 // (CreateVulkanEditorBackend). `--vulkan` selects the Vulkan backend; the
 // scene, editor layer, systems, audio, and ImGui build are shared.
 
+// --tracy auto-launch (Windows-only; define carries the fetched GUI's path).
+// windows.h must precede glfw3.h so GLFW skips its own APIENTRY definition.
+#ifdef DIAMOND_TRACY_GUI
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#include <shellapi.h>
+#endif
+
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
@@ -266,6 +275,7 @@ int main(int argc, char** argv)
     // Renderer backend flag. `--vulkan` runs the editor through the Vulkan
     // backend; macOS is GL-only (no MoltenVK) — ignore the flag there.
     bool wantVulkan = false;
+    bool wantTracy  = false;
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--vulkan") == 0) {
 #ifdef __APPLE__
@@ -274,7 +284,23 @@ int main(int argc, char** argv)
 #else
             wantVulkan = true;
 #endif
+        } else if (std::strcmp(argv[i], "--tracy") == 0) {
+            wantTracy = true;
         }
+    }
+
+    // `--tracy` spawns the version-matched Tracy GUI auto-connected to this
+    // process; TRACY_ON_DEMAND starts collection the moment it attaches. A
+    // second launch just opens another GUI instance — the client only accepts
+    // one connection, so close the old one first.
+    if (wantTracy) {
+#ifdef DIAMOND_TRACY_GUI
+        ShellExecuteA(nullptr, "open", DIAMOND_TRACY_GUI, "-a 127.0.0.1",
+                      nullptr, SW_SHOWNORMAL);
+#else
+        std::fprintf(stderr, "--tracy ignored: built without -DDIAMOND_TRACY=ON "
+                             "(or no prebuilt Tracy GUI for this platform).\n");
+#endif
     }
 
     if (!glfwInit()) return -1;

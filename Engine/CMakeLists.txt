@@ -167,6 +167,22 @@ if(NOT miniaudio_POPULATED)
     FetchContent_Populate(miniaudio)
 endif()
 
+# Tracy client — compiled in only with -DDIAMOND_TRACY=ON (root CMakeLists).
+# TRACY_ON_DEMAND defers all collection until the Tracy GUI connects, so an
+# enabled build costs ~nothing while unattached. The GUI must be the same
+# version as this tag — the wire protocol is version-locked.
+if(DIAMOND_TRACY)
+    set(TRACY_ENABLE    ON CACHE BOOL "" FORCE)
+    set(TRACY_ON_DEMAND ON CACHE BOOL "" FORCE)
+    FetchContent_Declare(
+        tracy
+        GIT_REPOSITORY https://github.com/wolfpld/tracy.git
+        GIT_TAG        v0.13.1
+        GIT_SHALLOW    TRUE
+    )
+    FetchContent_MakeAvailable(tracy)
+endif()
+
 find_package(OpenGL REQUIRED)
 
 # ── Vulkan backend dependencies ──────────────────────────────────────────────
@@ -295,6 +311,14 @@ target_link_libraries(MyEngine
     PRIVATE
         Jolt
 )
+
+# PUBLIC on both: the DIAMOND_PROFILE_* macros live in the public CPUProfiler.h
+# and expand to Tracy zones in every TU that uses them (Sandbox included), so
+# downstream targets need the include path, the define, and the client symbols.
+if(DIAMOND_TRACY)
+    target_link_libraries(MyEngine PUBLIC Tracy::TracyClient)
+    target_compile_definitions(MyEngine PUBLIC DIAMOND_TRACY)
+endif()
 
 # ── Vulkan backend wiring ────────────────────────────────────────────────────
 # volk + VMA are PRIVATE: Vulkan types never appear in MyEngine's public headers

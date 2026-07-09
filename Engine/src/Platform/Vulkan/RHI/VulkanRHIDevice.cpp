@@ -5,6 +5,11 @@
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
 
+#ifdef DIAMOND_TRACY
+#include <cstdio>
+#include <cstring>
+#endif
+
 namespace Diamond {
 
 // ── Command list ─────────────────────────────────────────────────────────────
@@ -229,10 +234,16 @@ VulkanRHIDevice::VulkanRHIDevice(GLFWwindow* window) : m_Window(window) {
     CreateDepthResources();
     CreateDescriptorPool();
     CreateTimestampPool();
+#ifdef DIAMOND_TRACY
+    CreateTracyVkContext();
+#endif
 }
 
 VulkanRHIDevice::~VulkanRHIDevice() {
     vkDeviceWaitIdle(m_Ctx.Device());
+#ifdef DIAMOND_TRACY
+    if (m_TracyVkCtx) { TracyVkDestroy(m_TracyVkCtx); m_TracyVkCtx = nullptr; }
+#endif
     DestroyTimestampPool();
     if (m_DescriptorPool) vkDestroyDescriptorPool(m_Ctx.Device(), m_DescriptorPool, nullptr);
     DestroyDepthResources();
@@ -270,6 +281,17 @@ void VulkanRHIDevice::CreateTimestampPool() {
     poolInfo.queryCount = kFramesInFlight * kMaxProfiledPasses * 2;
     VK_CHECK(vkCreateQueryPool(m_Ctx.Device(), &poolInfo, nullptr, &m_PassQueryPool));
 }
+
+#ifdef DIAMOND_TRACY
+// Tracy GPU context — calibrates GPU↔CPU clocks by recording, submitting, and
+// waiting a one-shot command buffer internally; frame 0's is safe to lend
+// before its first real use. Same support gate as our own timestamp pools.
+void VulkanRHIDevice::CreateTracyVkContext() {
+    if (!m_TimestampsSupported) return;
+    m_TracyVkCtx = TracyVkContext(m_Ctx.PhysicalDevice(), m_Ctx.Device(),
+                                  m_Ctx.GraphicsQueue(), m_Frames[0].commandBuffer);
+}
+#endif
 
 void VulkanRHIDevice::DestroyTimestampPool() {
     if (m_TimestampPool)  vkDestroyQueryPool(m_Ctx.Device(), m_TimestampPool, nullptr);
@@ -504,6 +526,11 @@ void VulkanRHIDevice::EndFrame() {
         m_TimestampValid[m_CurrentFrame] = true;
     }
 
+#ifdef DIAMOND_TRACY
+    // Harvest this frame's Tracy GPU timestamps (Tracy owns its own query pool).
+    if (m_TracyVkCtx) TracyVkCollect(m_TracyVkCtx, cmd);
+#endif
+
     VK_CHECK(vkEndCommandBuffer(cmd));
 
     VkSemaphore signalSem = m_RenderFinished[m_AcquiredImageIndex];
@@ -626,6 +653,21 @@ void VulkanRHIDevice::BeginPassProfile(const char* scope, const char* name,
         vkCmdWriteTimestamp2(m_Frames[m_CurrentFrame].commandBuffer,
                              VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, m_PassQueryPool, q);
     }
+
+#ifdef DIAMOND_TRACY
+    // Mirror the pass onto Tracy's GPU track. Emplaced (not the stack macro)
+    // because the zone spans Begin→EndPassProfile; the transient-name ctor
+    // copies zoneName, so the stack buffer is fine.
+    if (m_TracyVkCtx) {
+        char zoneName[128];
+        std::snprintf(zoneName, sizeof(zoneName), "%s/%s", scope, name);
+        m_TracyPassZone.emplace(m_TracyVkCtx, (uint32_t)__LINE__,
+                                __FILE__, strlen(__FILE__),
+                                __FUNCTION__, strlen(__FUNCTION__),
+                                zoneName, strlen(zoneName),
+                                m_Frames[m_CurrentFrame].commandBuffer, true);
+    }
+#endif
 }
 
 void VulkanRHIDevice::EndPassProfile() {
@@ -642,6 +684,9 @@ void VulkanRHIDevice::EndPassProfile() {
         vkCmdWriteTimestamp2(m_Frames[m_CurrentFrame].commandBuffer,
                              VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, m_PassQueryPool, q);
     }
+#ifdef DIAMOND_TRACY
+    m_TracyPassZone.reset();   // dtor writes the zone's end timestamp
+#endif
     m_ActivePass = -1;
 }
 

@@ -59,9 +59,22 @@ namespace Diamond
 #if DIAMOND_PROFILE_ENABLED
 #define DIAMOND_PROFILE_CONCAT_INNER(a, b) a##b
 #define DIAMOND_PROFILE_CONCAT(a, b) DIAMOND_PROFILE_CONCAT_INNER(a, b)
+
+// Tracy mirror (-DDIAMOND_TRACY=ON): every scope also emits a Tracy zone.
+// ZoneTransientN is the runtime-name variant — names reach this macro through
+// GetName() etc., so they aren't compile-time literals as ZoneScopedN requires.
+#ifdef DIAMOND_TRACY
+#include <tracy/Tracy.hpp>
+#define DIAMOND_PROFILE_TRACY_ZONE(name) \
+    ZoneTransientN(DIAMOND_PROFILE_CONCAT(_diamondTracyZone, __LINE__), name, true)
+#else
+#define DIAMOND_PROFILE_TRACY_ZONE(name) ((void)0)
+#endif
+
 // `name` must be a string literal (or otherwise permanent — e.g. GameSystem::GetName()).
 #define DIAMOND_PROFILE_SCOPE(name) \
-    ::Diamond::CPUProfileScope DIAMOND_PROFILE_CONCAT(_diamondProfScope, __LINE__)(name)
+    ::Diamond::CPUProfileScope DIAMOND_PROFILE_CONCAT(_diamondProfScope, __LINE__)(name); \
+    DIAMOND_PROFILE_TRACY_ZONE(name)
 #define DIAMOND_PROFILE_FUNCTION() DIAMOND_PROFILE_SCOPE(__FUNCTION__)
 #else
 #define DIAMOND_PROFILE_SCOPE(name) ((void)0)
