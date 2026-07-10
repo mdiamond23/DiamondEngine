@@ -73,6 +73,22 @@ inline bool SaveMaterialAsset(const std::string& path, const Diamond::PBRMateria
     return true;
 }
 
+// Re-parse a .mat into an ALREADY-SHARED PBRMaterial instance (hot reload) in
+// place of a fresh LoadMaterialAsset -- every mesh referencing this exact
+// instance picks up the change live. Leaves the material untouched if the file
+// is missing or mid-write, so a save-in-progress never leaves it half-applied;
+// the caller retries on the next mtime change (same policy as shader/texture
+// hot reload).
+inline bool ReloadMaterialInPlace(Diamond::PBRMaterial& m, const std::string& path)
+{
+    std::ifstream f{std::filesystem::path(path)};
+    if (!f.is_open()) return false;
+    auto j = nlohmann::json::parse(f, nullptr, /*allow_exceptions=*/false);
+    if (j.is_discarded()) return false;
+    ApplyMaterialJson(m, j);
+    return true;
+}
+
 // Registry load path for .mat materials. Lives here rather than in
 // AssetRegistry.h because it needs LoadMaterialAsset above; any TU that calls
 // Assets::Load<PBRMaterial> must include this header (the base template is
@@ -85,6 +101,41 @@ namespace Assets {
         return Detail::LoadCached<Diamond::PBRMaterial>(path, [](const std::string& p) {
             return LoadMaterialAsset(p);
         });
+    }
+
+    // Hot reload: poll every live .mat's mtime and re-apply it onto the SAME
+    // PBRMaterial instance (not a fresh Load) -- every mesh sharing the
+    // material updates live. Texture slots resolve through Assets::Load
+    // inside ApplyMaterialJson, so an unchanged slot is a cache hit; a slot
+    // whose image changed on disk (same path) is picked up separately by
+    // ReloadChangedTextures/ReloadAllTextures below.
+    inline void ReloadChangedMaterials()
+    {
+        Detail::SweepReload<Diamond::PBRMaterial>(/*forceAll=*/false, [](Diamond::PBRMaterial& mat, const std::string& path) {
+            if (ReloadMaterialInPlace(mat, path)) spdlog::info("AssetRegistry: reloaded material '{}'", path);
+        });
+    }
+
+    inline void ReloadAllMaterials()
+    {
+        Detail::SweepReload<Diamond::PBRMaterial>(/*forceAll=*/true, [](Diamond::PBRMaterial& mat, const std::string& path) {
+            if (ReloadMaterialInPlace(mat, path)) spdlog::info("AssetRegistry: reloaded material '{}'", path);
+        });
+    }
+
+    // Umbrella entry points for the editor's hot-reload driver (GLEditorBackend
+    // ::RenderFrame): every asset type with a Reload path today. Meshes/models
+    // are deliberately out of scope -- see Docs/asset-pipeline-design.md, §2.
+    inline void ReloadChanged()
+    {
+        ReloadChangedTextures();
+        ReloadChangedMaterials();
+    }
+
+    inline void ReloadAll()
+    {
+        ReloadAllTextures();
+        ReloadAllMaterials();
     }
 
 } // namespace Assets

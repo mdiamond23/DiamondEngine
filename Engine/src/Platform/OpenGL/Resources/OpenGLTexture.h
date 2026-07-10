@@ -14,6 +14,7 @@ public:
     void     Bind(uint32_t slot = 0) const override;
     uint32_t GetWidth()  const override { return m_Width; }
     uint32_t GetHeight() const override { return m_Height; }
+    bool     Reload()    override;
 
     // Native GL texture name. Backend-only — not part of the abstract Texture
     // interface; used by other OpenGL code (e.g. the 2D batcher) that needs to
@@ -25,6 +26,12 @@ private:
     uint32_t m_Width      = 0;
     uint32_t m_Height     = 0;
     uint64_t m_ByteSize   = 0;   // VRAM estimate — see Docs/profiler-panel-design.md
+
+    // Source info for Reload() — empty m_Path means CreateFromPixels (no file
+    // to watch/reload from).
+    std::string m_Path;
+    bool        m_FlipVertically = false;
+    bool        m_IsHDR          = false;
 };
 
 } // namespace Diamond

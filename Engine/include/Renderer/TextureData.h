@@ -16,6 +16,14 @@ public:
     virtual uint32_t GetWidth()  const = 0;
     virtual uint32_t GetHeight() const = 0;
 
+    // Re-decode from the source file and upload in place (new GPU image
+    // internally, old one freed) so every shared_ptr<Texture> handed out stays
+    // valid across a reload. Returns false and leaves the texture unchanged if
+    // there's no source file to reload from (CreateFromPixels) or the decode
+    // fails (e.g. file mid-write) — callers should keep the old texture and
+    // retry later. Default: not reloadable.
+    virtual bool Reload() { return false; }
+
     // Load from file (flips vertically by default to match OpenGL UV convention).
     static std::shared_ptr<Texture> Create(const std::string& path, bool flipVertically = true);
 

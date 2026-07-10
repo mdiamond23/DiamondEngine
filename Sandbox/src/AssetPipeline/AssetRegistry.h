@@ -54,10 +54,26 @@ inline std::string NormalizePath(const std::string& path)
     return ec ? path : canonical.string();
 }
 
-template<typename T>
-std::unordered_map<std::string, std::weak_ptr<T>>& Cache()
+inline std::filesystem::file_time_type FileTime(const std::string& path)
 {
-    static std::unordered_map<std::string, std::weak_ptr<T>> cache;
+    std::error_code ec;
+    auto t = std::filesystem::last_write_time(path, ec);
+    return ec ? std::filesystem::file_time_type{} : t;
+}
+
+// mtime is recorded alongside the weak_ptr so hot-reload sweeps (see
+// ReloadChangedTextures/ReloadAllTextures below) can detect on-disk changes
+// without a second map keyed the same way.
+template<typename T>
+struct Entry {
+    std::weak_ptr<T> asset;
+    std::filesystem::file_time_type mtime{};
+};
+
+template<typename T>
+std::unordered_map<std::string, Entry<T>>& Cache()
+{
+    static std::unordered_map<std::string, Entry<T>> cache;
     return cache;
 }
 
@@ -72,7 +88,7 @@ std::shared_ptr<T> LoadCached(const std::string& path, LoadFn&& loadFn)
     auto it = cache.find(key);
     if (it != cache.end())
     {
-        if (auto sp = it->second.lock())
+        if (auto sp = it->second.asset.lock())
             return sp;
     }
 
@@ -81,12 +97,35 @@ std::shared_ptr<T> LoadCached(const std::string& path, LoadFn&& loadFn)
     spdlog::info("AssetRegistry: disk load '{}'", key);
 
     auto asset = loadFn(key);
-    if (asset) cache[key] = asset;
+    if (asset) cache[key] = Entry<T>{ asset, FileTime(key) };
     else {
         spdlog::warn("AssetRegistry: failed to load '{}'", key);
         cache.erase(key);
     }
     return asset;
+}
+
+// Sweeps a live cache, calling reloadFn(asset, key) on every entry whose file
+// mtime changed since last recorded (forceAll = true reloads every live entry
+// regardless of mtime -- the F5 path). Expired entries (nothing references the
+// asset anymore) are pruned along the way instead of waiting for a Load() miss.
+template<typename T, typename ReloadFn>
+void SweepReload(bool forceAll, ReloadFn&& reloadFn)
+{
+    auto& cache = Cache<T>();
+    for (auto it = cache.begin(); it != cache.end(); )
+    {
+        auto sp = it->second.asset.lock();
+        if (!sp) { it = cache.erase(it); continue; }
+
+        auto t = FileTime(it->first);
+        if (forceAll || t != it->second.mtime)
+        {
+            reloadFn(*sp, it->first);
+            it->second.mtime = t;   // update regardless of success -- same policy as ShaderLibrary
+        }
+        ++it;
+    }
 }
 
 } // namespace Detail
@@ -107,6 +146,25 @@ inline std::shared_ptr<Diamond::Texture> Load<Diamond::Texture>(const std::strin
 {
     return Detail::LoadCached<Diamond::Texture>(path, [](const std::string& p) {
         return Diamond::Texture::Create(p, /*flipVertically=*/false);
+    });
+}
+
+// Hot reload (GL only -- see Docs/asset-pipeline-design.md, section 2): poll
+// every live texture's source mtime and re-upload in place via
+// OpenGLTexture::Reload(), so materials/components holding the shared_ptr pick
+// up the change with zero invalidation logic. Textures with no source file
+// (CreateFromPixels: font atlases, GLB-embedded) are no-ops here.
+inline void ReloadChangedTextures()
+{
+    Detail::SweepReload<Diamond::Texture>(/*forceAll=*/false, [](Diamond::Texture& tex, const std::string& path) {
+        if (tex.Reload()) spdlog::info("AssetRegistry: reloaded texture '{}'", path);
+    });
+}
+
+inline void ReloadAllTextures()
+{
+    Detail::SweepReload<Diamond::Texture>(/*forceAll=*/true, [](Diamond::Texture& tex, const std::string& path) {
+        if (tex.Reload()) spdlog::info("AssetRegistry: reloaded texture '{}'", path);
     });
 }
 
