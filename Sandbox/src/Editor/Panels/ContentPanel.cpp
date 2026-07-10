@@ -20,6 +20,7 @@
 #include <Assets/ModelImporter.h>
 #include <Assets/GltfImporter.h>
 #include <Editor/ThumbnailService.h>
+#include "AssetPipeline/AssetRegistry.h"
 
 #include <miniz.h>
 #include <filesystem>
@@ -208,9 +209,12 @@ uint64_t ContentPanel::LoadThumbnail(const fs::path& p, AssetType type) {
     } else if (type == AssetType::Mesh || type == AssetType::SkinnedMesh) {
         // ModelImporter::Load routes glTF through the cgltf geometry path, so the
         // bind-pose mesh renders the same AABB-framed thumbnail as a static mesh.
-        auto meshes = Diamond::ModelImporter::Load(key);
-        if (!meshes.empty()) texID = m_Thumbs->CreateMeshThumbnail(meshes);
+        // Via the registry: free when the scene has the same model pinned.
+        auto meshAsset = Assets::Load<Assets::MeshAsset>(key);
+        if (meshAsset) texID = m_Thumbs->CreateMeshThumbnail(meshAsset->subMeshes);
     } else if (type == AssetType::Material) {
+        // Deliberately NOT the shared MaterialLibrary instance: the preview needs
+        // the .mat as saved on disk, independent of unsaved in-editor edits.
         auto mat = LoadMaterialAsset(key);
         if (mat) texID = m_Thumbs->CreateMaterialThumbnail(*mat);
     }

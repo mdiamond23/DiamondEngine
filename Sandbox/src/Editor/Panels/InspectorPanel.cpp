@@ -5,6 +5,7 @@
 #include "../AnimStateMachineAsset.h"
 #include "../MaterialAsset.h"
 #include "../RagdollAsset.h"      // ragdoll auto-gen + .ragdoll I/O (BuildDefaultRagdoll, SaveRagdoll)
+#include "AssetPipeline/AssetRegistry.h"
 #include <spdlog/spdlog.h>
 #include <imgui.h>
 #include <imgui_internal.h>   // ImGuiItemFlags_MixedValue for tri-state checkboxes
@@ -124,16 +125,16 @@ static MeshSlotChange DrawMeshSlot(MeshComponent& mc, ContentPanel* cp) {
         if (auto* payload = ImGui::AcceptDragDropPayload("CONTENT_ITEM_PATH")) {
             std::string path((const char*)payload->Data);
             if (IsMeshPath(path)) {
-                auto meshes = ModelImporter::Load(path);
-                if (!meshes.empty()) {
+                auto meshAsset = Assets::Load<Assets::MeshAsset>(path);
+                if (meshAsset) {
                     result.oldMesh     = mc.mesh;
                     result.oldBounds   = mc.localBounds;
                     result.oldMeshPath = mc.meshPath;
                     result.oldSubIndex = mc.meshSubIndex;
                     result.oldMaterial = mc.material;
 
-                    mc.mesh         = Mesh::Create(meshes[0]);
-                    mc.localBounds  = meshes[0].ComputeAABB();
+                    mc.mesh         = Mesh::Create(meshAsset->subMeshes[0]);
+                    mc.localBounds  = meshAsset->subMeshes[0].ComputeAABB();
                     mc.meshPath     = path;
                     mc.meshSubIndex = 0;
                     if (!mc.material)
@@ -203,23 +204,27 @@ static SkinnedSlotChange DrawSkinnedMeshSlot(SkinnedMeshComponent& smc, ContentP
         if (auto* payload = ImGui::AcceptDragDropPayload("CONTENT_ITEM_PATH")) {
             std::string path((const char*)payload->Data);
             if (IsSkinnedMeshPath(path)) {
-                ImportedModel model = GltfImporter::LoadModel(path);
-                if (!model.skeleton.bones.empty() && !model.meshes.empty()) {
+                auto model = Assets::Load<ImportedModel>(path);
+                if (model && !model->skeleton.bones.empty() && !model->meshes.empty()) {
                     result.oldComp = smc;   // snapshot for undo
 
                     smc.meshes.clear();
                     AABB bounds;
-                    for (auto& md : model.meshes) {
+                    for (auto& md : model->meshes) {
                         smc.meshes.push_back(Mesh::Create(md));
                         AABB b     = md.ComputeAABB();
                         bounds.min = glm::min(bounds.min, b.min);
                         bounds.max = glm::max(bounds.max, b.max);
                     }
-                    smc.skeleton    = std::move(model.skeleton);
-                    smc.clips       = std::move(model.animations);
+                    // Copies, not moves — the imported model is a shared registry
+                    // asset now; gutting it would corrupt the next load of this file.
+                    // The .glb material is copied for the same reason scene load
+                    // copies it: per-entity edits must not bleed across instances.
+                    smc.skeleton    = model->skeleton;
+                    smc.clips       = model->animations;
                     smc.localBounds = bounds;
                     smc.meshPath    = path;
-                    smc.material    = model.material ? model.material
+                    smc.material    = model->material ? std::make_shared<PBRMaterial>(*model->material)
                                     : (smc.material ? smc.material : std::make_shared<PBRMaterial>());
 
                     result.changed = true;
@@ -276,7 +281,7 @@ static TextureRowChange DrawTextureRow(
             if (IsTexturePath(path)) {
                 result.oldTex  = texPtr;
                 result.oldPath = texPath;
-                texPtr  = Texture::Create(path, false);
+                texPtr  = Assets::Load<Texture>(path);
                 texPath = path;
                 result.changed = true;
             }

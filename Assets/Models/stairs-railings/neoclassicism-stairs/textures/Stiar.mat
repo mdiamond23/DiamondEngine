@@ -1,10 +1,10 @@
 {
-    "albedoPath": "C:/Dev/DiamondEngine\\Assets\\Models\\stairs-railings\\spiral-stairs-free\\textures\\StairsWood_albedo.png",
-    "aoPath": "C:/Dev/DiamondEngine\\Assets\\Models\\stairs-railings\\spiral-stairs-free\\textures\\StairsWood_ao.png",
+    "albedoPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine\\Assets\\Models\\stairs-railings\\spiral-stairs-free\\textures\\StairsWood_albedo.png",
+    "aoPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine\\Assets\\Models\\stairs-railings\\spiral-stairs-free\\textures\\StairsWood_ao.png",
     "emissivePath": "",
     "emissiveStrength": 0.0,
-    "metallicPath": "C:/Dev/DiamondEngine\\Assets\\Models\\stairs-railings\\spiral-stairs-free\\textures\\StairsWood_metallic.png",
-    "normalPath": "C:/Dev/DiamondEngine\\Assets\\Models\\stairs-railings\\spiral-stairs-free\\textures\\StairsWood_normal.png",
-    "roughnessPath": "C:/Dev/DiamondEngine\\Assets\\Models\\stairs-railings\\spiral-stairs-free\\textures\\StairsWood_roughness.png",
+    "metallicPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine\\Assets\\Models\\stairs-railings\\spiral-stairs-free\\textures\\StairsWood_metallic.png",
+    "normalPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine\\Assets\\Models\\stairs-railings\\spiral-stairs-free\\textures\\StairsWood_normal.png",
+    "roughnessPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine\\Assets\\Models\\stairs-railings\\spiral-stairs-free\\textures\\StairsWood_roughness.png",
     "uvScale": 1.0
 }

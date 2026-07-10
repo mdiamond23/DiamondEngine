@@ -3,7 +3,7 @@
     {
       "mesh": {
         "castsShadow": true,
-        "materialPath": "C:\\Dev\\DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\Diamond.mat",
+        "materialPath": "C:\\Users\\Matt\\source\\repos\\mdiamond23\\DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\Diamond.mat",
         "meshPath": "__sphere",
         "meshSubIndex": 0,
         "receivesShadow": true,
@@ -38,7 +38,7 @@
     {
       "mesh": {
         "castsShadow": true,
-        "materialPath": "C:\\Dev\\DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\Lava.mat",
+        "materialPath": "C:\\Users\\Matt\\source\\repos\\mdiamond23\\DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\Lava.mat",
         "meshPath": "__cube",
         "meshSubIndex": 0,
         "receivesShadow": true,
@@ -73,7 +73,7 @@
     {
       "mesh": {
         "castsShadow": true,
-        "materialPath": "C:\\Dev\\DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\Diamond.mat",
+        "materialPath": "C:\\Users\\Matt\\source\\repos\\mdiamond23\\DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\Diamond.mat",
         "meshPath": "__cube",
         "meshSubIndex": 0,
         "receivesShadow": true,
@@ -108,7 +108,7 @@
     {
       "mesh": {
         "castsShadow": true,
-        "materialPath": "C:\\Dev\\DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\Diamond.mat",
+        "materialPath": "C:\\Users\\Matt\\source\\repos\\mdiamond23\\DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\Diamond.mat",
         "meshPath": "__cube",
         "meshSubIndex": 0,
         "receivesShadow": true,
@@ -143,7 +143,7 @@
     {
       "mesh": {
         "castsShadow": true,
-        "materialPath": "C:\\Dev\\DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\Diamond.mat",
+        "materialPath": "C:\\Users\\Matt\\source\\repos\\mdiamond23\\DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\Diamond.mat",
         "meshPath": "__cube",
         "meshSubIndex": 0,
         "receivesShadow": true,
@@ -178,7 +178,7 @@
     {
       "mesh": {
         "castsShadow": true,
-        "materialPath": "C:\\Dev\\DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\Diamond.mat",
+        "materialPath": "C:\\Users\\Matt\\source\\repos\\mdiamond23\\DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\Diamond.mat",
         "meshPath": "__cube",
         "meshSubIndex": 0,
         "receivesShadow": true,
@@ -213,7 +213,7 @@
     {
       "mesh": {
         "castsShadow": true,
-        "materialPath": "C:\\Dev\\DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\Diamond.mat",
+        "materialPath": "C:\\Users\\Matt\\source\\repos\\mdiamond23\\DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\Diamond.mat",
         "meshPath": "__cube",
         "meshSubIndex": 0,
         "receivesShadow": true,
@@ -248,8 +248,8 @@
     {
       "mesh": {
         "castsShadow": true,
-        "materialPath": "C:\\Dev\\DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\Diamond.mat",
-        "meshPath": "C:/Dev/DiamondEngine/Assets/Models/Cerberus_by_Andrew_Maximov/Revolver.FBX",
+        "materialPath": "C:\\Users\\Matt\\source\\repos\\mdiamond23\\DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\Diamond.mat",
+        "meshPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine/Assets/Models/Cerberus_by_Andrew_Maximov/Revolver.FBX",
         "meshSubIndex": 0,
         "receivesShadow": true,
         "visible": true
@@ -295,7 +295,7 @@
         "castsShadow": true,
         "emissivePath": "",
         "emissiveStrength": 0.0,
-        "meshPath": "C:/Dev/DiamondEngine/Assets\\Models\\Fox.glb",
+        "meshPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine/Assets\\Models\\Fox.glb",
         "metallicPath": "",
         "normalPath": "",
         "roughnessPath": "",
@@ -525,7 +525,7 @@
     {
       "mesh": {
         "castsShadow": true,
-        "materialPath": "C:\\Dev\\DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\Diamond.mat",
+        "materialPath": "C:\\Users\\Matt\\source\\repos\\mdiamond23\\DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\Diamond.mat",
         "meshPath": "__cube",
         "meshSubIndex": 0,
         "receivesShadow": true,

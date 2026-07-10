@@ -1,12 +1,12 @@
 #pragma once
 #include <Renderer/Material.h>
 #include <Renderer/TextureData.h>
+#include <AssetPipeline/AssetRegistry.h>
 #include <nlohmann/json.hpp>
 #include <fstream>
 #include <filesystem>
 #include <memory>
 #include <string>
-#include <unordered_map>
 
 // Load/save for the .mat asset — a reusable PBR material (texture paths + scalars)
 // stored on disk, like PhysicsMaterialAsset / AnimStateMachineAsset. Editor-side
@@ -18,6 +18,8 @@ inline std::string NormalizeMaterialPath(const std::string& path)
 }
 
 // Populate a material's paths + scalars from JSON and (re)load its textures.
+// Textures come through the asset registry, so two materials sharing an albedo
+// share one GPU texture (empty path -> nullptr, handled by the registry).
 inline void ApplyMaterialJson(Diamond::PBRMaterial& m, const nlohmann::json& j)
 {
     m.AlbedoPath       = j.value("albedoPath",       std::string{});
@@ -29,15 +31,12 @@ inline void ApplyMaterialJson(Diamond::PBRMaterial& m, const nlohmann::json& j)
     m.EmissiveStrength = j.value("emissiveStrength", 0.0f);
     m.UVScale          = j.value("uvScale",          1.0f);
 
-    auto load = [](const std::string& p) -> std::shared_ptr<Diamond::Texture> {
-        return p.empty() ? nullptr : Diamond::Texture::Create(p, false);
-    };
-    m.Albedo    = load(m.AlbedoPath);
-    m.Normal    = load(m.NormalPath);
-    m.Metallic  = load(m.MetallicPath);
-    m.Roughness = load(m.RoughnessPath);
-    m.AO        = load(m.AOPath);
-    m.Emissive  = load(m.EmissivePath);
+    m.Albedo    = Assets::Load<Diamond::Texture>(m.AlbedoPath);
+    m.Normal    = Assets::Load<Diamond::Texture>(m.NormalPath);
+    m.Metallic  = Assets::Load<Diamond::Texture>(m.MetallicPath);
+    m.Roughness = Assets::Load<Diamond::Texture>(m.RoughnessPath);
+    m.AO        = Assets::Load<Diamond::Texture>(m.AOPath);
+    m.Emissive  = Assets::Load<Diamond::Texture>(m.EmissivePath);
 }
 
 inline nlohmann::json MaterialToJson(const Diamond::PBRMaterial& m)
@@ -74,22 +73,32 @@ inline bool SaveMaterialAsset(const std::string& path, const Diamond::PBRMateria
     return true;
 }
 
-// Shared-instance cache: every mesh referencing the same .mat gets the SAME
-// PBRMaterial, so editing it (and saving) updates all of them live. Held weakly,
-// so a material is reloaded from disk once nothing references it (e.g. after a
-// scene reload), picking up any external edits.
+// Registry load path for .mat materials. Lives here rather than in
+// AssetRegistry.h because it needs LoadMaterialAsset above; any TU that calls
+// Assets::Load<PBRMaterial> must include this header (the base template is
+// deleted, so forgetting is a compile error, not a silent miss).
+namespace Assets {
+
+    template<>
+    inline std::shared_ptr<Diamond::PBRMaterial> Load<Diamond::PBRMaterial>(const std::string& path)
+    {
+        return Detail::LoadCached<Diamond::PBRMaterial>(path, [](const std::string& p) {
+            return LoadMaterialAsset(p);
+        });
+    }
+
+} // namespace Assets
+
+// Shared-instance access: every mesh referencing the same .mat gets the SAME
+// PBRMaterial, so editing it (and saving) updates all of them live. Held weakly
+// by the registry, so a material is reloaded from disk once nothing references
+// it (e.g. after a scene reload), picking up any external edits. Kept as the
+// editor-facing name; the cache itself moved into the AssetRegistry.
 namespace MaterialLibrary {
 
     inline std::shared_ptr<Diamond::PBRMaterial> Get(const std::string& path)
     {
-        static std::unordered_map<std::string, std::weak_ptr<Diamond::PBRMaterial>> cache;
-        std::string key = NormalizeMaterialPath(path);
-        auto it = cache.find(key);
-        if (it != cache.end())
-            if (auto sp = it->second.lock()) return sp;
-        auto m = LoadMaterialAsset(key);
-        if (m) cache[key] = m;
-        return m;
+        return Assets::Load<Diamond::PBRMaterial>(path);
     }
 
 } // namespace MaterialLibrary

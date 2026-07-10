@@ -1,0 +1,21 @@
+* text=auto eol=lf
+
+*.ttf binary
+*.otf binary
+*.fbx binary
+*.glb binary
+*.gltf binary
+*.obj binary
+*.ragdoll binary
+*.animsm binary
+*.wav binary
+*.mp3 binary
+*.ogg binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.tga binary
+*.dds binary
+*.exr binary
+*.hdr binary
+*.ico binary

@@ -7,6 +7,7 @@
 #include "Scene/ComponentRegistry.h"
 #include "Scene/ParticlePresets.h"
 #include "Renderer/TextureData.h"
+#include "AssetPipeline/AssetRegistry.h"
 #include <imgui.h>
 #include <nlohmann/json.hpp>
 #include <glm/gtc/type_ptr.hpp>
@@ -92,7 +93,7 @@ inline void DrawComponentInspector<ParticleEmitterComponent>(ParticleEmitterComp
     if (ImGui::BeginDragDropTarget()) {
         if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload("CONTENT_ITEM_PATH")) {
             std::string path(static_cast<const char*>(p->Data));
-            if (auto tex = Diamond::Texture::Create(path, false)) {
+            if (auto tex = Assets::Load<Diamond::Texture>(path)) {
                 c.texture     = tex;
                 c.texturePath = path;
             }
@@ -176,8 +177,7 @@ inline void DeserializeComponent<ParticleEmitterComponent>(ParticleEmitterCompon
     c.endSize     = j.value("endSize", 0.0f);
     c.blend       = (Diamond::ParticleBlend)j.value("blend", (int)Diamond::ParticleBlend::Additive);
     c.texturePath = j.value("texturePath", std::string{});
-    c.texture     = c.texturePath.empty() ? nullptr
-                                          : Diamond::Texture::Create(c.texturePath, false);
+    c.texture     = Assets::Load<Diamond::Texture>(c.texturePath);
 }
 
 // ---- Registration (after the specializations above) -------------------------

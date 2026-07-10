@@ -17,6 +17,7 @@
 #include "PhysicsMaterialAsset.h"
 #include "AnimStateMachineAsset.h"
 #include "MaterialAsset.h"
+#include "AssetPipeline/AssetRegistry.h"
 #include "RagdollAsset.h"
 #include "Assets/ImageLoader.h"
 #include "Renderer/MeshData.h"
@@ -37,16 +38,6 @@ static glm::vec3 ToVec3(const json& j) { return { j[0], j[1], j[2] }; }
 static glm::vec4 ToVec4(const json& j) { return { j[0], j[1], j[2], j[3] }; }
 static glm::quat ToQuat(const json& j) { return glm::quat(float(j[0]), float(j[1]), float(j[2]), float(j[3])); }
 
-static std::shared_ptr<Texture> LoadCached(
-    const std::string& path,
-    std::unordered_map<std::string, std::shared_ptr<Texture>>& cache)
-{
-    if (path.empty()) return nullptr;
-    auto [it, inserted] = cache.emplace(path, nullptr);
-    if (inserted) it->second = Texture::Create(path, false);
-    return it->second;
-}
-
 static std::shared_ptr<Font> LoadFontCached(
     const std::string& path,
     std::unordered_map<std::string, std::shared_ptr<Font>>& cache)
@@ -54,27 +45,6 @@ static std::shared_ptr<Font> LoadFontCached(
     if (path.empty()) return nullptr;
     auto [it, inserted] = cache.emplace(path, nullptr);
     if (inserted) it->second = Font::Create(path, kUIFontBakeHeight);
-    return it->second;
-}
-
-static const std::vector<MeshData>& LoadMeshCached(
-    const std::string& path,
-    std::unordered_map<std::string, std::vector<MeshData>>& cache)
-{
-    auto [it, inserted] = cache.emplace(path, std::vector<MeshData>{});
-    if (inserted) it->second = ModelImporter::Load(path);
-    return it->second;
-}
-
-// Skinned models are reloaded through cgltf (geometry + skeleton + clips), unlike
-// the static path which only needs MeshData. Cached so multiple skinned entities
-// sharing one .glb don't re-parse it on load.
-static const ImportedModel& LoadSkinnedCached(
-    const std::string& path,
-    std::unordered_map<std::string, ImportedModel>& cache)
-{
-    auto [it, inserted] = cache.emplace(path, ImportedModel{});
-    if (inserted) it->second = GltfImporter::LoadModel(path);
     return it->second;
 }
 
@@ -405,10 +375,14 @@ static bool FromJson(Scene& scene, const json& root)
 {
     scene.Clear();
 
-    std::unordered_map<std::string, std::shared_ptr<Texture>>  texCache;
-    std::unordered_map<std::string, std::shared_ptr<Font>>     fontCache;
-    std::unordered_map<std::string, std::vector<MeshData>>     meshCache;
-    std::unordered_map<std::string, ImportedModel>             skinnedCache;
+    std::unordered_map<std::string, std::shared_ptr<Font>> fontCache;
+
+    // Textures/materials/models load through the asset registry (dedup across
+    // the whole editor, not just this load). The registry holds only weak_ptrs
+    // and mesh CPU data is dropped right after GPU upload, so pin every model
+    // asset until the load finishes — entities sharing a file then parse it
+    // once. Textures need no pin: the components/materials hold them strongly.
+    std::vector<std::shared_ptr<void>> modelPins;
 
     std::unordered_map<uint64_t, entt::entity> uuidToEntity;
     for (const auto& ej : root.at("entities")) {
@@ -460,10 +434,12 @@ static bool FromJson(Scene& scene, const json& root)
                 bounds  = md.ComputeAABB();
                 mesh    = Mesh::Create(md);
             } else if (!mpath.empty()) {
-                const auto& subMeshes = LoadMeshCached(mpath, meshCache);
-                if (subIdx < (int)subMeshes.size()) {
-                    bounds = subMeshes[subIdx].ComputeAABB();
-                    mesh   = Mesh::Create(subMeshes[subIdx]);
+                if (auto meshAsset = Assets::Load<Assets::MeshAsset>(mpath)) {
+                    modelPins.push_back(meshAsset);
+                    if (subIdx < (int)meshAsset->subMeshes.size()) {
+                        bounds = meshAsset->subMeshes[subIdx].ComputeAABB();
+                        mesh   = Mesh::Create(meshAsset->subMeshes[subIdx]);
+                    }
                 }
             }
 
@@ -488,12 +464,12 @@ static bool FromJson(Scene& scene, const json& root)
                 mat->EmissiveStrength = mj.value("emissiveStrength", 0.0f);
                 mat->UVScale          = mj.value("uvScale",          1.0f);
 
-                mat->Albedo    = LoadCached(mat->AlbedoPath,    texCache);
-                mat->Normal    = LoadCached(mat->NormalPath,    texCache);
-                mat->Metallic  = LoadCached(mat->MetallicPath,  texCache);
-                mat->Roughness = LoadCached(mat->RoughnessPath, texCache);
-                mat->AO        = LoadCached(mat->AOPath,        texCache);
-                mat->Emissive  = LoadCached(mat->EmissivePath,  texCache);
+                mat->Albedo    = Assets::Load<Texture>(mat->AlbedoPath);
+                mat->Normal    = Assets::Load<Texture>(mat->NormalPath);
+                mat->Metallic  = Assets::Load<Texture>(mat->MetallicPath);
+                mat->Roughness = Assets::Load<Texture>(mat->RoughnessPath);
+                mat->AO        = Assets::Load<Texture>(mat->AOPath);
+                mat->Emissive  = Assets::Load<Texture>(mat->EmissivePath);
             }
 
             auto& mc          = reg.emplace<MeshComponent>(e, mesh, mat, bounds);
@@ -552,7 +528,7 @@ static bool FromJson(Scene& scene, const json& root)
             const auto& j = ej["uiImage"];
             auto& im = reg.emplace<UIImageComponent>(e);
             im.texturePath = j.value("texturePath", "");
-            im.texture     = LoadCached(im.texturePath, texCache);
+            im.texture     = Assets::Load<Texture>(im.texturePath);
             if (j.contains("tint"))  im.tint  = ToVec4(j["tint"]);
             if (j.contains("uvMin")) im.uvMin = ToVec2(j["uvMin"]);
             if (j.contains("uvMax")) im.uvMax = ToVec2(j["uvMax"]);
@@ -580,7 +556,7 @@ static bool FromJson(Scene& scene, const json& root)
             if (j.contains("backgroundColor")) pb.backgroundColor = ToVec4(j["backgroundColor"]);
             if (j.contains("fillColor"))       pb.fillColor       = ToVec4(j["fillColor"]);
             pb.fillTexturePath = j.value("fillTexturePath", "");
-            pb.fillTexture     = LoadCached(pb.fillTexturePath, texCache);
+            pb.fillTexture     = Assets::Load<Texture>(pb.fillTexturePath);
             pb.direction       = (UIProgressBarComponent::Direction)j.value("direction", 0);
         }
 
@@ -670,17 +646,18 @@ static bool FromJson(Scene& scene, const json& root)
             const auto& sj    = ej["skinnedMesh"];
             std::string mpath = sj.value("meshPath", "");
             if (!mpath.empty()) {
-                const ImportedModel& model = LoadSkinnedCached(mpath, skinnedCache);
-                if (!model.skeleton.bones.empty() && !model.meshes.empty()) {
+                auto model = Assets::Load<ImportedModel>(mpath);
+                if (model && !model->skeleton.bones.empty() && !model->meshes.empty()) {
+                    modelPins.push_back(model);
                     auto& smc       = reg.emplace<SkinnedMeshComponent>(e);
-                    smc.skeleton    = model.skeleton;
-                    smc.clips       = model.animations;
+                    smc.skeleton    = model->skeleton;
+                    smc.clips       = model->animations;
                     smc.meshPath    = mpath;
                     smc.visible     = sj.value("visible",     true);
                     smc.castsShadow = sj.value("castsShadow", true);
 
                     AABB bounds;
-                    for (const auto& md : model.meshes) {
+                    for (const auto& md : model->meshes) {
                         smc.meshes.push_back(Mesh::Create(md));
                         AABB b      = md.ComputeAABB();
                         bounds.min  = glm::min(bounds.min, b.min);
@@ -688,14 +665,15 @@ static bool FromJson(Scene& scene, const json& root)
                     }
                     smc.localBounds = bounds;
 
-                    // Material: start from what the .glb shipped, then apply only the
+                    // Material: start from what the .glb shipped (copied — the
+                    // imported model is a shared asset), then apply only the
                     // overrides the user set (non-empty external texture paths).
-                    smc.material = model.material
-                        ? std::make_shared<PBRMaterial>(*model.material)
+                    smc.material = model->material
+                        ? std::make_shared<PBRMaterial>(*model->material)
                         : std::make_shared<PBRMaterial>();
                     auto applyTex = [&](const char* key, std::shared_ptr<Texture>& tex, std::string& path) {
                         std::string p = sj.value(key, std::string{});
-                        if (!p.empty()) { path = p; tex = LoadCached(p, texCache); }
+                        if (!p.empty()) { path = p; tex = Assets::Load<Texture>(p); }
                     };
                     applyTex("albedoPath",    smc.material->Albedo,    smc.material->AlbedoPath);
                     applyTex("normalPath",    smc.material->Normal,    smc.material->NormalPath);

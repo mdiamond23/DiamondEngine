@@ -27,18 +27,18 @@
         "shapeType": 1
       },
       "mesh": {
-        "albedoPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Color.png",
-        "aoPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_AmbientOcclusion.png",
+        "albedoPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Color.png",
+        "aoPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_AmbientOcclusion.png",
         "castsShadow": true,
         "emissivePath": "",
         "emissiveStrength": 0.0,
         "materialPath": "",
         "meshPath": "__sphere",
         "meshSubIndex": 0,
-        "metallicPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Metalness.png",
-        "normalPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_NormalGL.png",
+        "metallicPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Metalness.png",
+        "normalPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_NormalGL.png",
         "receivesShadow": true,
-        "roughnessPath": "C:/Dev/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Roughness.png",
+        "roughnessPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Roughness.png",
         "uvScale": 1.0,
         "visible": true
       },
@@ -95,18 +95,18 @@
         "shapeType": 0
       },
       "mesh": {
-        "albedoPath": "C:/Dev/DiamondEngine/Assets/Materials/Lava004_2K-PNG/Lava004_2K-PNG_Color.png",
+        "albedoPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine/Assets/Materials/Lava004_2K-PNG/Lava004_2K-PNG_Color.png",
         "aoPath": "",
         "castsShadow": true,
-        "emissivePath": "C:/Dev/DiamondEngine/Assets/Materials/Lava004_2K-PNG/Lava004_2K-PNG_Emission.png",
+        "emissivePath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine/Assets/Materials/Lava004_2K-PNG/Lava004_2K-PNG_Emission.png",
         "emissiveStrength": 2.5,
         "materialPath": "",
         "meshPath": "__cube",
         "meshSubIndex": 0,
         "metallicPath": "",
-        "normalPath": "C:/Dev/DiamondEngine/Assets/Materials/Lava004_2K-PNG/Lava004_2K-PNG_NormalGL.png",
+        "normalPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine/Assets/Materials/Lava004_2K-PNG/Lava004_2K-PNG_NormalGL.png",
         "receivesShadow": true,
-        "roughnessPath": "C:/Dev/DiamondEngine/Assets/Materials/Lava004_2K-PNG/Lava004_2K-PNG_Roughness.png",
+        "roughnessPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine/Assets/Materials/Lava004_2K-PNG/Lava004_2K-PNG_Roughness.png",
         "uvScale": 5.0,
         "visible": true
       },
@@ -146,7 +146,7 @@
       },
       "name": "CesiumMan",
       "ragdoll": {
-        "assetPath": "C:\\Dev\\DiamondEngine\\Assets\\Models\\CesiumMan.ragdoll",
+        "assetPath": "C:\\Users\\Matt\\source\\repos\\mdiamond23\\DiamondEngine\\Assets\\Models\\CesiumMan.ragdoll",
         "mode": 0
       },
       "skinnedMesh": {
@@ -155,7 +155,7 @@
         "castsShadow": true,
         "emissivePath": "",
         "emissiveStrength": 0.0,
-        "meshPath": "C:/Dev/DiamondEngine/Assets/Models/CesiumMan.glb",
+        "meshPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine/Assets/Models/CesiumMan.glb",
         "metallicPath": "",
         "normalPath": "",
         "roughnessPath": "",
@@ -410,7 +410,7 @@
       },
       "mesh": {
         "castsShadow": true,
-        "materialPath": "C:\\Dev\\DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\Diamond.mat",
+        "materialPath": "C:\\Users\\Matt\\source\\repos\\mdiamond23\\DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\Diamond.mat",
         "meshPath": "__cube",
         "meshSubIndex": 0,
         "receivesShadow": true,
@@ -470,7 +470,7 @@
       },
       "mesh": {
         "castsShadow": true,
-        "materialPath": "C:\\Dev\\DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\Diamond.mat",
+        "materialPath": "C:\\Users\\Matt\\source\\repos\\mdiamond23\\DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\Diamond.mat",
         "meshPath": "__cube",
         "meshSubIndex": 0,
         "receivesShadow": true,
@@ -530,7 +530,7 @@
       },
       "mesh": {
         "castsShadow": true,
-        "materialPath": "C:\\Dev\\DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\Diamond.mat",
+        "materialPath": "C:\\Users\\Matt\\source\\repos\\mdiamond23\\DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\Diamond.mat",
         "meshPath": "__cube",
         "meshSubIndex": 0,
         "receivesShadow": true,
@@ -590,7 +590,7 @@
       },
       "mesh": {
         "castsShadow": true,
-        "materialPath": "C:\\Dev\\DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\Diamond.mat",
+        "materialPath": "C:\\Users\\Matt\\source\\repos\\mdiamond23\\DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\Diamond.mat",
         "meshPath": "__cube",
         "meshSubIndex": 0,
         "receivesShadow": true,
@@ -650,7 +650,7 @@
       },
       "mesh": {
         "castsShadow": true,
-        "materialPath": "C:\\Dev\\DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\Diamond.mat",
+        "materialPath": "C:\\Users\\Matt\\source\\repos\\mdiamond23\\DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\Diamond.mat",
         "meshPath": "__cube",
         "meshSubIndex": 0,
         "receivesShadow": true,
@@ -710,8 +710,8 @@
       },
       "mesh": {
         "castsShadow": true,
-        "materialPath": "C:\\Dev\\DiamondEngine\\Assets\\Models\\stairs-railings\\spiral-stairs-free\\textures\\NewMaterial.mat",
-        "meshPath": "C:/Dev/DiamondEngine\\Assets\\Models\\stairs-railings\\spiral-stairs-free\\source\\SpiralStairs.obj",
+        "materialPath": "C:\\Users\\Matt\\source\\repos\\mdiamond23\\DiamondEngine\\Assets\\Models\\stairs-railings\\spiral-stairs-free\\textures\\NewMaterial.mat",
+        "meshPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine\\Assets\\Models\\stairs-railings\\spiral-stairs-free\\source\\SpiralStairs.obj",
         "meshSubIndex": 0,
         "receivesShadow": true,
         "visible": true
