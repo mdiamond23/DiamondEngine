@@ -20,7 +20,6 @@
 #include "EditorLayers.h"
 #include "MeshThumbnailRenderer.h"
 #include "Editor/ThumbnailService.h"
-#include "Editor/MaterialAsset.h"
 #include "Assets/ImageLoader.h"
 #include "Scene/Scene.h"
 #include "Scene/Components.h"
@@ -661,19 +660,17 @@ void GLEditorBackend::RenderFrame(const Diamond::EditorFrameInput& in)
     auto&  reg   = scene.GetRegistry();
     g.scene = in.scene;
 
-    // Hot-reload: F5 force-reloads everything (shaders, textures, materials);
-    // otherwise poll source file mtimes a couple times a second and reload
-    // whatever changed on disk. Textures/materials are GL-only for now -- an
-    // in-place swap isn't safe under Vulkan's in-flight frames/descriptor
-    // caches (Docs/asset-pipeline-design.md, §2).
+    // Shader hot-reload: F5 force-recompiles everything; otherwise poll source
+    // file mtimes a couple times a second and reload whatever changed on disk.
+    // Texture/material hot-reload is driven from main.cpp instead of here --
+    // it needs to work identically for both backends (see Assets::ReloadChanged
+    // / Assets::ReloadAll and the WaitIdle sequencing they need under Vulkan).
     if (Input::IsKeyPressed(Key::F5)) {
         g.shaders.ReloadAll();
-        Assets::ReloadAll();
     } else {
         m_ShaderReloadTimer += in.dt;
         if (m_ShaderReloadTimer >= 0.5f) {
             g.shaders.ReloadChanged();
-            Assets::ReloadChanged();
             m_ShaderReloadTimer = 0.0f;
         }
     }

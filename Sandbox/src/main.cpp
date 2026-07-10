@@ -28,6 +28,7 @@
 #include "Editor/EditorBackend.h"
 #include "Editor/GLEditorBackend.h"
 #include "Editor/EditorLayers.h"
+#include "Editor/MaterialAsset.h"
 
 #include "Scene/Scene.h"
 #include "Scene/Components.h"
@@ -376,6 +377,7 @@ int main(int argc, char** argv)
 
     // --- Editor loop (backend-agnostic) ---
     float deltaTime = 0.0f, lastFrame = 0.0f, fpsTimer = 0.0f;
+    float assetReloadTimer = 0.0f;
     int   frameCount = 0;
     float smoothedFps = 0.0f;   // EMA, ~0.5s time constant (RendererStats::fps)
 
@@ -407,6 +409,32 @@ int main(int argc, char** argv)
         }
 
         processInput(window, deltaTime);
+
+        // Texture/material hot-reload (backend-agnostic — unlike shader reload,
+        // which each backend drives itself inside its own RenderFrame). F5
+        // force-reloads everything; otherwise poll a couple times a second.
+        //
+        // The precheck (HasPendingReloads) matters only for Vulkan: WaitIdle is
+        // a real GPU stall, so we only pay for it on ticks that actually have
+        // something to reload. It must run BEFORE Assets::ReloadChanged/ReloadAll
+        // -- those call Texture::Reload(), which under Vulkan destroys the old
+        // VkImage as a side effect of swapping in the new one. Without an idle
+        // device first, a prior frame's in-flight command buffer could still be
+        // sampling that image when it's freed. WaitIdle()/InvalidateSceneCaches()
+        // are no-ops on the GL backend (it re-binds by id per draw, no baked
+        // descriptor sets to go stale), so this sequencing costs GL nothing.
+        const bool forceAssetReload = Input::IsKeyPressed(Key::F5);
+        assetReloadTimer += deltaTime;
+        const bool assetReloadTick = assetReloadTimer >= 0.5f;
+        if (forceAssetReload || assetReloadTick) {
+            if (forceAssetReload || Assets::HasPendingReloads()) {
+                backend->WaitIdle();
+                if (forceAssetReload) Assets::ReloadAll();
+                else                  Assets::ReloadChanged();
+                backend->InvalidateSceneCaches();
+            }
+            if (assetReloadTick) assetReloadTimer = 0.0f;
+        }
 
         // Skip rendering while minimized; keep pumping events.
         int fbW = 0, fbH = 0;

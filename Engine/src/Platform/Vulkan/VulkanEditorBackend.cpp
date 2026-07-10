@@ -401,6 +401,10 @@ public:
         m_Renderer->InvalidateSceneCaches();
     }
 
+    void WaitIdle() override {
+        if (m_Device) m_Device->WaitIdle();
+    }
+
 private:
     static constexpr int kResizeSettleFrames = 15;
 

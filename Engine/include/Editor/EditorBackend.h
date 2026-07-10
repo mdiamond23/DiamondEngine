@@ -145,6 +145,15 @@ public:
     // the caches must be dropped or the renderer draws the old scene's
     // geometry/textures. Call after the scene has been rebuilt.
     virtual void InvalidateSceneCaches() {}
+
+    // Block until the GPU has retired every in-flight frame. Default no-op —
+    // the GL backend has no explicit in-flight-frame concept, so nothing to
+    // wait on. Required before any caller mutates or frees a GPU resource
+    // that a prior frame's command buffer might still be reading (texture
+    // hot-reload's in-place image swap, notably) — InvalidateMaterial/
+    // InvalidateSceneCaches only protect the *cache entries*, not resources
+    // destroyed before those are called.
+    virtual void WaitIdle() {}
 };
 
 // Factory for the engine-owned Vulkan implementation (the Vulkan headers and

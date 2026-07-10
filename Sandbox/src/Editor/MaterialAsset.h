@@ -123,8 +123,8 @@ namespace Assets {
         });
     }
 
-    // Umbrella entry points for the editor's hot-reload driver (GLEditorBackend
-    // ::RenderFrame): every asset type with a Reload path today. Meshes/models
+    // Umbrella entry points for the editor's hot-reload driver (main.cpp's
+    // frame loop): every asset type with a Reload path today. Meshes/models
     // are deliberately out of scope -- see Docs/asset-pipeline-design.md, §2.
     inline void ReloadChanged()
     {
@@ -136,6 +136,15 @@ namespace Assets {
     {
         ReloadAllTextures();
         ReloadAllMaterials();
+    }
+
+    // Cheap precheck for the hot-reload driver: true if ReloadChanged() would
+    // actually reload something right now. Pure mtime stats, no GPU/file work,
+    // so a caller can skip paying for a WaitIdle (Vulkan's Reload() safety
+    // requirement) on ticks where nothing changed.
+    inline bool HasPendingReloads()
+    {
+        return Detail::AnyChanged<Diamond::Texture>() || Detail::AnyChanged<Diamond::PBRMaterial>();
     }
 
 } // namespace Assets

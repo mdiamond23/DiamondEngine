@@ -102,8 +102,8 @@ ragdoll characters, active physics control, grabbing, local multiplayer.
 ## Milestone 6 — Asset Pipeline
 > Goal: load real game assets reliably and efficiently
 
-- [ ] Asset registry — track every loaded asset by path, prevent double-loading
-- [ ] Hot reload — detect file changes, reload textures and shaders without restart
+- [x] Asset registry — track every loaded asset by path, prevent double-loading
+- [x] Hot reload — detect file changes, reload textures and shaders without restart
 - [ ] Prefabs — save an entity + its components as a reusable scene template
 - [ ] Texture compression — BCn/DXT via a pre-process step (e.g. `texconv`)
 

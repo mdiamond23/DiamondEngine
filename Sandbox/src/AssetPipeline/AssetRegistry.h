@@ -128,6 +128,22 @@ void SweepReload(bool forceAll, ReloadFn&& reloadFn)
     }
 }
 
+// Cheap, read-only precheck: does any live entry's file have a newer mtime
+// than what's recorded? Pure filesystem stats -- no reload/GPU work -- so a
+// driver can decide whether a reload sweep would do anything before paying for
+// a WaitIdle (Vulkan) or just always sweeping (GL, where it's free). See
+// Assets::HasPendingReloads in MaterialAsset.h.
+template<typename T>
+bool AnyChanged()
+{
+    for (auto& [key, entry] : Cache<T>())
+    {
+        if (entry.asset.expired()) continue;
+        if (FileTime(key) != entry.mtime) return true;
+    }
+    return false;
+}
+
 } // namespace Detail
 
 // No generic definition -- every asset type must provide its own load path

@@ -40,7 +40,7 @@ std::shared_ptr<Texture> Texture::Create(const std::string& path, bool flipVerti
         }
         return std::make_shared<VulkanTexture2D>(
             s_ResourceDevice, img.Pixels.data(), img.Width, img.Height, img.Channels,
-            RHIFilter::Linear, /*generateMips*/ true);
+            RHIFilter::Linear, /*generateMips*/ true, path, flipVertically);
     }
 #endif
     switch (RendererAPI::GetAPI()) {
