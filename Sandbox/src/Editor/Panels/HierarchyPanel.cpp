@@ -1,7 +1,10 @@
 #include "HierarchyPanel.h"
 #include "../Command.h"
+#include "../SceneSerializer.h"
 #include <imgui.h>
+#include <cctype>
 #include <cstring>
+#include <string>
 #include <vector>
 #include <optional>
 #include "Scene/Components.h"
@@ -10,6 +13,17 @@
 #include "Scene/Physics/Rigidbody.h"
 #include "Scene/Physics/Collision.h"
 #include "Scene/Physics/Constraint.h"
+
+static bool IsPrefabPath(const std::string& path)
+{
+    constexpr const char* kExt = ".prefab";
+    constexpr size_t      kLen = 7;
+    if (path.size() < kLen) return false;
+    for (size_t i = 0; i < kLen; ++i)
+        if (std::tolower((unsigned char)path[path.size() - kLen + i]) != kExt[i])
+            return false;
+    return true;
+}
 
 // ---- entity snapshot --------------------------------------------------------
 // Captures enough state to fully recreate an entity (and its subtree) after
@@ -26,6 +40,7 @@ struct EntitySnapshot {
     std::optional<RigidBodyComponent>   rigidBody;
     std::optional<ColliderComponent>    collider;
     std::optional<ConstraintComponent>  constraint;
+    std::optional<PrefabInstanceComponent> prefabInstance;
     // Script components captured generically via the ComponentRegistry —
     // (registry display name, serialized state). Any DECLARE_COMPONENT type
     // is included automatically; fidelity matches its SerializeComponent impl.
@@ -54,6 +69,8 @@ static EntitySnapshot SnapshotEntity(Scene* scene, entt::entity e)
         s.constraint = reg.get<ConstraintComponent>(e);
         s.constraint->_constraintId = 0xFFFFFFFFu;  // restored entity builds its own joint
     }
+    if (reg.all_of<PrefabInstanceComponent>(e))
+        s.prefabInstance = reg.get<PrefabInstanceComponent>(e);
     for (auto& desc : ComponentRegistry::Get().GetAll()) {
         if (desc.serialize && desc.has(*scene, e)) {
             try { s.scriptComponents.emplace_back(desc.name, desc.serialize(*scene, e)); }
@@ -82,6 +99,7 @@ static entt::entity RestoreEntity(Scene* scene, const EntitySnapshot& s,
     if (s.rigidBody)  reg.emplace_or_replace<RigidBodyComponent>(e, *s.rigidBody);
     if (s.collider)   reg.emplace_or_replace<ColliderComponent>(e,  *s.collider);
     if (s.constraint) reg.emplace_or_replace<ConstraintComponent>(e, *s.constraint);
+    if (s.prefabInstance) reg.emplace_or_replace<PrefabInstanceComponent>(e, *s.prefabInstance);
 
     for (const auto& [name, data] : s.scriptComponents) {
         for (auto& desc : ComponentRegistry::Get().GetAll()) {
@@ -130,6 +148,10 @@ struct HierarchyDrawCtx {
     char*           renameBuffer;
     bool&           renameFocusSet;
     entt::entity&   selectionPivot;
+    // Prefab drop, deferred: instantiation creates entities, which would
+    // invalidate the entity-map iteration driving the tree draw.
+    std::string&    prefabToSpawn;
+    entt::entity&   prefabSpawnParent;
 };
 
 static void DrawEntityNode(entt::entity entity, const HierarchyDrawCtx& ctx)
@@ -214,6 +236,13 @@ static void DrawEntityNode(entt::entity entity, const HierarchyDrawCtx& ctx)
         if (ImGui::MenuItem("Duplicate", "Ctrl+D")) {
             ctx.toDuplicate = entity;
         }
+        // v1 prefab edit flow: tweak the instance in the scene, push it back
+        // to the .prefab it came from. Only offered on instance roots.
+        if (reg.all_of<PrefabInstanceComponent>(entity)) {
+            const auto& pi = reg.get<PrefabInstanceComponent>(entity);
+            if (ImGui::MenuItem("Save to Prefab") && !pi.sourcePath.empty())
+                PrefabSerializer::Save(*ctx.scene, entity, pi.sourcePath);
+        }
         if (ImGui::MenuItem("Rename")) {
             ctx.renamingEntity  = entity;
             ctx.renameFocusSet  = false;
@@ -295,6 +324,14 @@ static void DrawEntityNode(entt::entity entity, const HierarchyDrawCtx& ctx)
                 }
             }
         }
+        // .prefab from the Content Browser → instantiate parented under this entity.
+        if (auto* payload = ImGui::AcceptDragDropPayload("CONTENT_ITEM_PATH")) {
+            std::string path(static_cast<const char*>(payload->Data));
+            if (IsPrefabPath(path)) {
+                ctx.prefabToSpawn     = path;
+                ctx.prefabSpawnParent = entity;
+            }
+        }
         ImGui::EndDragDropTarget();
     }
 
@@ -338,6 +375,8 @@ void HierarchyPanel::OnImGuiRender() {
     entt::entity   toDelete     = entt::null;
     EntitySnapshot toDeleteSnap;
     entt::entity   toDuplicate  = entt::null;
+    std::string    prefabToSpawn;
+    entt::entity   prefabSpawnParent = entt::null;
 
     HierarchyDrawCtx ctx {
         scene,
@@ -348,7 +387,9 @@ void HierarchyPanel::OnImGuiRender() {
         m_RenamingEntity,
         m_RenameBuffer,
         m_RenameFocusSet,
-        m_SelectionPivot
+        m_SelectionPivot,
+        prefabToSpawn,
+        prefabSpawnParent
     };
 
     // Render roots only — they recurse into children.
@@ -397,7 +438,42 @@ void HierarchyPanel::OnImGuiRender() {
                         "Make Entity Root"));
                 }
             }
+            // .prefab from the Content Browser → instantiate as a scene root.
+            if (auto* payload = ImGui::AcceptDragDropPayload("CONTENT_ITEM_PATH")) {
+                std::string path(static_cast<const char*>(payload->Data));
+                if (IsPrefabPath(path)) {
+                    prefabToSpawn     = path;
+                    prefabSpawnParent = entt::null;
+                }
+            }
             ImGui::EndDragDropTarget();
+        }
+    }
+
+    // Deferred prefab instantiation (queued by the drop targets above).
+    if (!prefabToSpawn.empty()) {
+        auto* edCtx = m_Context;
+        auto sharedRoot = std::make_shared<entt::entity>(entt::null);
+        auto doSpawn = [scene, edCtx, sharedRoot,
+                        path = prefabToSpawn, parent = prefabSpawnParent]() {
+            entt::entity root = PrefabSerializer::Instantiate(*scene, path);
+            *sharedRoot = root;
+            if (root == entt::null) return;
+            if (parent != entt::null && scene->GetRegistry().valid(parent))
+                scene->SetParent(root, parent);
+            edCtx->SelectOnly(root);
+        };
+        doSpawn();
+        if (*sharedRoot != entt::null) {
+            m_SelectionPivot = *sharedRoot;
+            m_Context->Commands.RecordCommand(std::make_unique<FunctionCommand>(
+                doSpawn,
+                [scene, edCtx, sharedRoot]() {
+                    edCtx->ClearSelection();
+                    if (scene->GetRegistry().valid(*sharedRoot))
+                        scene->DestroyEntity(*sharedRoot);
+                },
+                "Instantiate Prefab"));
         }
     }
 

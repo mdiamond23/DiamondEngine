@@ -4,6 +4,7 @@
 #include "../MaterialAsset.h"
 #include <Audio/AudioAPI.h>
 #include <imgui.h>
+#include <imgui_internal.h>   // BeginDragDropTargetCustom for the window-wide entity drop
 
 #ifndef ASSETS_DIR
 #define ASSETS_DIR "Assets"
@@ -156,6 +157,7 @@ static const char* AssetTypeName(AssetType t) {
         case AssetType::Material:    return "Material";
         case AssetType::Shader:      return "Shader";
         case AssetType::Scene:       return "Scene";
+        case AssetType::Prefab:      return "Prefab";
         case AssetType::PhysicsMat:  return "Physics Mat";
         case AssetType::AnimSM:      return "State Machine";
         case AssetType::Font:        return "Font";
@@ -186,6 +188,7 @@ AssetType ContentPanel::GetAssetType(const fs::path& p) {
     if (ext == ".animsm")  return AssetType::AnimSM;
     if (ext == ".glsl" || ext == ".vert" || ext == ".frag") return AssetType::Shader;
     if (ext == ".scene")   return AssetType::Scene;
+    if (ext == ".prefab")  return AssetType::Prefab;
     if (ext == ".ttf" || ext == ".otf") return AssetType::Font;
     if (ext == ".wav" || ext == ".mp3" || ext == ".flac" || ext == ".ogg") return AssetType::Audio;
     return AssetType::File;
@@ -282,6 +285,8 @@ void ContentPanel::DrawFileIcon(ImVec2 tl, float size, const std::string& ext) {
         pageCol = IM_COL32(90, 190, 200, 255);
     else if (ext == ".animsm")
         pageCol = IM_COL32(180, 120, 210, 255);
+    else if (ext == ".prefab")
+        pageCol = IM_COL32(95, 145, 235, 255);   // unity-ish blue — reads as "prefab"
     else if (isFont)
         pageCol = IM_COL32(225, 185, 95, 255);   // warm gold — fonts stand out
     else if (isAudio)
@@ -619,6 +624,7 @@ void ContentPanel::DrawItems() {
                                          item.type == AssetType::PhysicsMat ||
                                          item.type == AssetType::AnimSM ||
                                          item.type == AssetType::Material ||
+                                         item.type == AssetType::Prefab ||
                                          item.type == AssetType::Font ||
                                          item.type == AssetType::Audio);
             const char* payloadType = isInspectorDraggable ? "CONTENT_ITEM_PATH"
@@ -719,6 +725,22 @@ void ContentPanel::OnImGuiRender() {
 
     DrawToolbar();
     DrawItems();
+
+    // Entity dragged in from the Hierarchy → save its subtree as a .prefab in
+    // the current folder. Window-wide custom target: item-level targets only
+    // accept the CONTENT_* payloads, so they don't compete for this one.
+    if (m_OnEntityDrop) {
+        ImGuiWindow* win = ImGui::GetCurrentWindow();
+        if (ImGui::BeginDragDropTargetCustom(win->InnerRect, win->GetID("##entity_drop"))) {
+            if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload("HIERARCHY_ENTITY")) {
+                uint32_t entityBits = 0;
+                std::memcpy(&entityBits, p->Data, sizeof(entityBits));
+                m_OnEntityDrop(entityBits, m_CurrentPath);
+                Refresh();
+            }
+            ImGui::EndDragDropTarget();
+        }
+    }
 
     // OS file drop — copy/extract into current folder when this panel is under the mouse
     if (!m_PendingDropFiles.empty()) {

@@ -12,7 +12,7 @@
 
 namespace Diamond { class ThumbnailService; }
 
-enum class AssetType { Folder, Texture, Mesh, SkinnedMesh, Material, Shader, Scene, PhysicsMat, AnimSM, Font, Audio, File };
+enum class AssetType { Folder, Texture, Mesh, SkinnedMesh, Material, Shader, Scene, Prefab, PhysicsMat, AnimSM, Font, Audio, File };
 
 struct ContentItem {
     std::filesystem::path path;
@@ -29,6 +29,11 @@ public:
     const char* GetName() const override { return "Content Browser"; }
 
     void SetOnSceneOpen(std::function<void(const std::string&)> cb) { m_OnSceneOpen = std::move(cb); }
+
+    // Fired when a HIERARCHY_ENTITY payload is dropped anywhere in the panel:
+    // (raw entt::entity bits, destination directory). The owner serializes the
+    // subtree to a .prefab there; the panel refreshes itself afterwards.
+    void SetOnEntityDrop(std::function<void(uint32_t, const std::filesystem::path&)> cb) { m_OnEntityDrop = std::move(cb); }
     void QueueDroppedFiles(int count, const char** paths);
     void Refresh();
 
@@ -68,6 +73,7 @@ private:
     std::unordered_map<std::string, bool>     m_SkinnedCache;
 
     std::function<void(const std::string&)> m_OnSceneOpen;
+    std::function<void(uint32_t, const std::filesystem::path&)> m_OnEntityDrop;
     std::vector<std::filesystem::path>      m_PendingDropFiles;
 
     bool m_OpenNewFolderModal = false;

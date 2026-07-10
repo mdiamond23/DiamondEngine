@@ -1,6 +1,9 @@
 #include "ViewportPanel.h"
 #include "../Command.h"
+#include "../SceneSerializer.h"
 #include <imgui.h>
+#include <cctype>
+#include <string>
 #define GLM_ENABLE_EXPERIMENTAL
 #include <glm/glm.hpp>
 #include <glm/gtc/type_ptr.hpp>
@@ -12,6 +15,17 @@
 #include "Scene/Scene.h"
 #include "Animation/IKComponent.h"
 #include "Animation/AnimationComponents.h"
+
+static bool IsPrefabPath(const std::string& path)
+{
+    constexpr const char* kExt = ".prefab";
+    constexpr size_t      kLen = 7;
+    if (path.size() < kLen) return false;
+    for (size_t i = 0; i < kLen; ++i)
+        if (std::tolower((unsigned char)path[path.size() - kLen + i]) != kExt[i])
+            return false;
+    return true;
+}
 
 void ViewportPanel::OnImGuiRender() {
     if (!m_Open) return;
@@ -38,6 +52,55 @@ void ViewportPanel::OnImGuiRender() {
             m_FlipY ? ImVec2{0, 1} : ImVec2{0, 0},
             m_FlipY ? ImVec2{1, 0} : ImVec2{1, 1}
         );
+
+        // .prefab dropped from the Content Browser → instantiate where the drop
+        // ray hits the ground plane (y = 0), falling back to a point ahead of
+        // the camera when the ray never reaches it.
+        if (m_Context && m_Context->ActiveScene
+            && vpSize.x > 0 && vpSize.y > 0
+            && ImGui::BeginDragDropTarget())
+        {
+            if (auto* payload = ImGui::AcceptDragDropPayload("CONTENT_ITEM_PATH")) {
+                std::string path(static_cast<const char*>(payload->Data));
+                if (IsPrefabPath(path)) {
+                    // Mouse → NDC → world ray (same math as the click picking below).
+                    ImVec2 mouse = ImGui::GetMousePos();
+                    float ndcX =  ((mouse.x - vpPos.x) / vpSize.x) * 2.0f - 1.0f;
+                    float ndcY = -((mouse.y - vpPos.y) / vpSize.y) * 2.0f + 1.0f;
+
+                    glm::mat4 invVP = glm::inverse(m_Context->projMatrix * m_Context->viewMatrix);
+                    glm::vec4 near4 = invVP * glm::vec4(ndcX, ndcY, -1.0f, 1.0f);
+                    glm::vec4 far4  = invVP * glm::vec4(ndcX, ndcY,  1.0f, 1.0f);
+                    glm::vec3 rayOri = glm::vec3(near4) / near4.w;
+                    glm::vec3 rayDir = glm::normalize(glm::vec3(far4) / far4.w - rayOri);
+
+                    float t = (std::abs(rayDir.y) > 1e-4f) ? -rayOri.y / rayDir.y : -1.0f;
+                    glm::vec3 spawn = (t > 0.0f) ? rayOri + rayDir * t
+                                                 : rayOri + rayDir * 10.0f;
+
+                    Scene* scene = m_Context->ActiveScene;
+                    auto*  edCtx = m_Context;
+                    auto sharedRoot = std::make_shared<entt::entity>(entt::null);
+                    auto doSpawn = [scene, edCtx, sharedRoot, path, spawn]() {
+                        entt::entity root = PrefabSerializer::Instantiate(*scene, path, spawn);
+                        *sharedRoot = root;
+                        if (root != entt::null) edCtx->SelectOnly(root);
+                    };
+                    doSpawn();
+                    if (*sharedRoot != entt::null) {
+                        m_Context->Commands.RecordCommand(std::make_unique<FunctionCommand>(
+                            doSpawn,
+                            [scene, edCtx, sharedRoot]() {
+                                edCtx->ClearSelection();
+                                if (scene->GetRegistry().valid(*sharedRoot))
+                                    scene->DestroyEntity(*sharedRoot);
+                            },
+                            "Instantiate Prefab"));
+                    }
+                }
+            }
+            ImGui::EndDragDropTarget();
+        }
     }
 
     // Debug-draw toggle overlay (top-left). One switch for collider wireframes,

@@ -150,6 +150,32 @@ EditorLayer::EditorLayer(Scene* scene, ImFont* iconFont)
             m_Context.currentScenePath = path;
         if (m_SceneCacheInvalidator) m_SceneCacheInvalidator();
     });
+
+    // Entity dragged from the Hierarchy into the Content Browser → write its
+    // subtree as EntityName.prefab in the drop folder.
+    m_Content.SetOnEntityDrop([this](uint32_t entityBits, const std::filesystem::path& destDir) {
+        namespace fs = std::filesystem;
+        Scene* s = m_Context.ActiveScene;
+        entt::entity e = (entt::entity)entityBits;
+        if (!s || !s->GetRegistry().valid(e)) return;
+
+        // Entity names are free text — strip characters Windows filenames reject.
+        const std::string forbidden = "\\/:*?\"<>|";
+        std::string stem;
+        for (char c : s->GetEntityName(e))
+            if (forbidden.find(c) == std::string::npos)
+                stem += c;
+        if (stem.empty()) stem = "Entity";
+
+        fs::path path = destDir / (stem + ".prefab");
+        for (int n = 1; fs::exists(path); ++n)
+            path = destDir / (stem + " (" + std::to_string(n) + ").prefab");
+
+        if (PrefabSerializer::Save(*s, e, path.string())) {
+            // Stamp the source entity so "Save to Prefab" can push later edits back.
+            s->GetRegistry().emplace_or_replace<PrefabInstanceComponent>(e, path.string());
+        }
+    });
 }
 
 void EditorLayer::SetupDockspace()

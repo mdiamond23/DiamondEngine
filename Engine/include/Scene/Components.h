@@ -88,6 +88,13 @@ struct IDComponent {
     uint64_t uuid;
 };
 
+// Stamped on the root of an instantiated prefab — links the instance back to
+// its source .prefab file. v1 instantiation is a plain copy (no live sync);
+// the link enables "Save to Prefab" and a future re-apply.
+struct PrefabInstanceComponent {
+    std::string sourcePath;
+};
+
 // Scene hierarchy — parent/children stored as entity handles.
 // Always mutate through Scene::SetParent / Scene::UnsetParent so the
 // TransformSystem flat arrays stay consistent.

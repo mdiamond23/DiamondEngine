@@ -39,6 +39,8 @@
         "normalPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_NormalGL.png",
         "receivesShadow": true,
         "roughnessPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Roughness.png",
+        "staticShadowCaster": true,
+        "transparent": false,
         "uvScale": 1.0,
         "visible": true
       },
@@ -107,6 +109,8 @@
         "normalPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine/Assets/Materials/Lava004_2K-PNG/Lava004_2K-PNG_NormalGL.png",
         "receivesShadow": true,
         "roughnessPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine/Assets/Materials/Lava004_2K-PNG/Lava004_2K-PNG_Roughness.png",
+        "staticShadowCaster": true,
+        "transparent": false,
         "uvScale": 5.0,
         "visible": true
       },
@@ -145,6 +149,9 @@
         "time": 0.0
       },
       "name": "CesiumMan",
+      "prefabInstance": {
+        "sourcePath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine\\Assets\\Prefabs\\CesiumMan.prefab"
+      },
       "ragdoll": {
         "assetPath": "C:\\Users\\Matt\\source\\repos\\mdiamond23\\DiamondEngine\\Assets\\Models\\CesiumMan.ragdoll",
         "mode": 0
@@ -414,6 +421,8 @@
         "meshPath": "__cube",
         "meshSubIndex": 0,
         "receivesShadow": true,
+        "staticShadowCaster": true,
+        "transparent": false,
         "visible": true
       },
       "name": "Slope",
@@ -474,6 +483,8 @@
         "meshPath": "__cube",
         "meshSubIndex": 0,
         "receivesShadow": true,
+        "staticShadowCaster": true,
+        "transparent": false,
         "visible": true
       },
       "name": "Stair",
@@ -534,6 +545,8 @@
         "meshPath": "__cube",
         "meshSubIndex": 0,
         "receivesShadow": true,
+        "staticShadowCaster": true,
+        "transparent": false,
         "visible": true
       },
       "name": "Stair (Copy)",
@@ -594,6 +607,8 @@
         "meshPath": "__cube",
         "meshSubIndex": 0,
         "receivesShadow": true,
+        "staticShadowCaster": true,
+        "transparent": false,
         "visible": true
       },
       "name": "Stair (Copy) (Copy)",
@@ -654,6 +669,8 @@
         "meshPath": "__cube",
         "meshSubIndex": 0,
         "receivesShadow": true,
+        "staticShadowCaster": true,
+        "transparent": false,
         "visible": true
       },
       "name": "Stair (Copy) (Copy) (Copy)",
@@ -714,6 +731,8 @@
         "meshPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine\\Assets\\Models\\stairs-railings\\spiral-stairs-free\\source\\SpiralStairs.obj",
         "meshSubIndex": 0,
         "receivesShadow": true,
+        "staticShadowCaster": true,
+        "transparent": false,
         "visible": true
       },
       "name": "Stairs",
@@ -800,6 +819,60 @@
         ]
       },
       "uuid": 1806891200734195669
+    },
+    {
+      "animator": {
+        "clip": 0,
+        "loop": true,
+        "playing": true,
+        "speed": 1.0,
+        "time": 0.0
+      },
+      "name": "CesiumMan",
+      "prefabInstance": {
+        "sourcePath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine\\Assets\\Prefabs\\CesiumMan.prefab"
+      },
+      "ragdoll": {
+        "assetPath": "C:\\Users\\Matt\\source\\repos\\mdiamond23\\DiamondEngine\\Assets\\Models\\CesiumMan.ragdoll",
+        "mode": 0
+      },
+      "skinnedMesh": {
+        "albedoPath": "",
+        "aoPath": "",
+        "castsShadow": true,
+        "emissivePath": "",
+        "emissiveStrength": 0.0,
+        "meshPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine/Assets/Models/CesiumMan.glb",
+        "metallicPath": "",
+        "normalPath": "",
+        "roughnessPath": "",
+        "uvScale": 1.0,
+        "visible": true
+      },
+      "transform": {
+        "eulerDegrees": [
+          269.9998779296875,
+          90.0,
+          0.0
+        ],
+        "position": [
+          6.683596611022949,
+          0.0,
+          1.3153011798858643
+        ],
+        "rotation": [
+          -0.49999940395355225,
+          0.5000005960464478,
+          -0.49999940395355225,
+          -0.5000005960464478
+        ],
+        "scale": [
+          1.0000003576278687,
+          0.9999867677688599,
+          0.9999820590019226
+        ]
+      },
+      "uuid": 12844119847765795540
     }
   ]
 }
