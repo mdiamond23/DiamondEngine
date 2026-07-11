@@ -38,3 +38,19 @@ target_compile_definitions(Sandbox PRIVATE
     FONTS_DIR="${fontawesome_SOURCE_DIR}/webfonts"
     SCRIPTS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/src/Scripts"
 )
+
+# Headless serializer tests (no window/GPU). Excluded from ALL so normal
+# builds stay fast: cmake --build build --target PrefabTests, then run
+# build/Sandbox/<config>/PrefabTests.exe (exit code = failure count).
+add_executable(PrefabTests EXCLUDE_FROM_ALL
+    tests/PrefabTests.cpp
+    src/Editor/SceneSerializer.cpp
+)
+target_link_libraries(PrefabTests PRIVATE MyEngine nlohmann_json::nlohmann_json imguizmo miniz)
+target_include_directories(PrefabTests PRIVATE
+    ${CMAKE_SOURCE_DIR}/Engine/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+target_compile_definitions(PrefabTests PRIVATE
+    ASSETS_DIR="${CMAKE_SOURCE_DIR}/Assets"
+)

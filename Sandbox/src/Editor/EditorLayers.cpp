@@ -5,6 +5,7 @@
 #include <cctype>
 #include "EditorLayers.h"
 #include "SceneSerializer.h"
+#include <spdlog/spdlog.h>
 #include "Scene/Components.h"
 #include <IconsFontAwesome5.h>
 
@@ -144,12 +145,19 @@ EditorLayer::EditorLayer(Scene* scene, ImFont* iconFont)
     m_Profiler.SetContext(&m_Context);
 
     m_Content.SetOnSceneOpen([this](const std::string& path) {
+        // Opening a scene while editing a prefab would be clobbered by the
+        // edit-mode exit restore — leave the mode (discarding unsaved prefab
+        // edits) before switching scenes.
+        if (m_PrefabEditMode) ExitPrefabEdit();
         m_Context.ClearSelection();
         m_Context.Commands.Clear();
         if (SceneSerializer::Load(*m_Context.ActiveScene, path))
             m_Context.currentScenePath = path;
         if (m_SceneCacheInvalidator) m_SceneCacheInvalidator();
     });
+
+    m_Content.SetOnPrefabOpen([this](const std::string& path) { OpenPrefabForEdit(path); });
+    m_Hierarchy.SetOnEditPrefab([this](const std::string& path) { OpenPrefabForEdit(path); });
 
     // Entity dragged from the Hierarchy into the Content Browser → write its
     // subtree as EntityName.prefab in the drop folder.
@@ -382,6 +390,133 @@ void EditorLayer::DrawNewScriptDialog()
     }
 }
 
+void EditorLayer::SaveScene()
+{
+    if (m_Context.currentScenePath.empty())
+        m_Context.currentScenePath = UniqueNewScenePath();
+    SceneSerializer::Save(*m_Context.ActiveScene, m_Context.currentScenePath);
+}
+
+void EditorLayer::OpenPrefabForEdit(const std::string& path)
+{
+    Scene* scene = m_Context.ActiveScene;
+    if (scene->IsPlaying()) {
+        spdlog::warn("Prefab edit: stop play mode first");
+        return;
+    }
+    if (m_PrefabEditMode) ExitPrefabEdit();   // back to the scene, then re-enter
+
+    std::string snapshot = SceneSerializer::Stringify(*scene);
+    m_Context.ClearSelection();
+    m_Context.Commands.Clear();
+    scene->Clear();
+
+    entt::entity root = PrefabSerializer::Instantiate(*scene, path);
+    if (root == entt::null) {
+        SceneSerializer::FromString(*scene, snapshot);
+        if (m_SceneCacheInvalidator) m_SceneCacheInvalidator();
+        return;
+    }
+
+    m_PrefabEditSnapshot = std::move(snapshot);
+    m_PrefabEditPath     = path;
+    m_PrefabEditRootUuid = scene->GetRegistry().get<IDComponent>(root).uuid;
+    m_PrefabEditMode     = true;
+    m_Context.SelectOnly(root);
+    if (m_SceneCacheInvalidator) m_SceneCacheInvalidator();
+}
+
+void EditorLayer::SavePrefabEdit()
+{
+    Scene* scene = m_Context.ActiveScene;
+    entt::entity root = scene->FindByUuid(m_PrefabEditRootUuid);
+    if (root == entt::null) {
+        // The original root was deleted during editing — save the first
+        // remaining scene root instead (a prefab is one entity's subtree).
+        auto& reg = scene->GetRegistry();
+        for (auto& [e, name] : scene->GetEntityNames()) {
+            bool isRoot = !reg.all_of<HierarchyComponent>(e)
+                       || reg.get<HierarchyComponent>(e).parent == entt::null;
+            if (isRoot) { root = e; break; }
+        }
+    }
+    if (root == entt::null) {
+        spdlog::error("Prefab save: no entities to save to '{}'", m_PrefabEditPath);
+        return;
+    }
+
+    // Everything in the edit scene belongs to the prefab, but Save writes only
+    // the root's subtree — entities added at scene-root level ("+ Add Entity")
+    // would be silently dropped. Adopt them as children of the prefab root.
+    auto& reg = scene->GetRegistry();
+    std::vector<entt::entity> strays;
+    for (auto& [e, name] : scene->GetEntityNames()) {
+        if (e == root) continue;
+        bool isRoot = !reg.all_of<HierarchyComponent>(e)
+                   || reg.get<HierarchyComponent>(e).parent == entt::null;
+        if (isRoot) strays.push_back(e);
+    }
+    for (entt::entity e : strays) {
+        scene->SetParent(e, root);
+        spdlog::info("Prefab save: parented stray root '{}' under the prefab root",
+                     scene->GetEntityName(e));
+    }
+
+    m_PrefabEditRootUuid = reg.get<IDComponent>(root).uuid;
+    if (PrefabSerializer::Save(*scene, root, m_PrefabEditPath))
+        spdlog::info("Saved prefab '{}'", m_PrefabEditPath);
+}
+
+void EditorLayer::ExitPrefabEdit()
+{
+    if (!m_PrefabEditMode) return;
+    Scene* scene = m_Context.ActiveScene;
+    if (scene->IsPlaying()) scene->StopPlay();
+    m_Context.ClearSelection();
+    m_Context.Commands.Clear();
+    SceneSerializer::FromString(*scene, m_PrefabEditSnapshot);
+    m_PrefabEditSnapshot.clear();
+    m_PrefabEditMode = false;
+    if (m_SceneCacheInvalidator) m_SceneCacheInvalidator();
+}
+
+float EditorLayer::DrawPrefabEditBanner(float y)
+{
+    ImGuiViewport* vp = ImGui::GetMainViewport();
+    float h = ImGui::GetFrameHeight() + 8.0f;
+    if (vp) {
+        ImGui::SetNextWindowPos({ vp->Pos.x, vp->Pos.y + y });
+        ImGui::SetNextWindowSize({ vp->Size.x, h });
+        ImGui::SetNextWindowViewport(vp->ID);
+    }
+    ImGuiWindowFlags flags =
+        ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+        ImGuiWindowFlags_NoDocking  | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings |
+        ImGuiWindowFlags_NoBringToFrontOnFocus;
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.10f, 0.22f, 0.42f, 1.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, { 8.0f, 4.0f });
+    ImGui::Begin("##PrefabEditBanner", nullptr, flags);
+
+    std::string fname = std::filesystem::path(m_PrefabEditPath).filename().string();
+    ImGui::Text("Editing Prefab: %s", fname.c_str());
+    ImGui::SameLine();
+    ImGui::TextDisabled("(Ctrl+S saves to the .prefab)");
+
+    float btnW  = 100.0f;
+    float gap   = ImGui::GetStyle().ItemSpacing.x;
+    ImGui::SameLine(ImGui::GetWindowWidth() - (btnW * 3 + gap * 2) - 8.0f);
+    if (ImGui::Button("Save", { btnW, 0 })) SavePrefabEdit();
+    ImGui::SameLine();
+    if (ImGui::Button("Save & Close", { btnW, 0 })) { SavePrefabEdit(); ExitPrefabEdit(); }
+    ImGui::SameLine();
+    if (ImGui::Button("Close", { btnW, 0 })) ExitPrefabEdit();
+
+    ImGui::End();
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor();
+    return h;
+}
+
 void EditorLayer::DrawMenuBar()
 {
     if (!ImGui::BeginMainMenuBar()) return;
@@ -405,7 +540,10 @@ void EditorLayer::DrawMenuBar()
     }
 
     if (ImGui::BeginMenu("File")) {
-        if (ImGui::MenuItem("New Scene", "Ctrl+N")) {
+        // Scene file ops are disabled while editing a prefab — the scene on
+        // screen is the prefab's content, not the scene the paths refer to.
+        bool sceneOps = !m_PrefabEditMode;
+        if (ImGui::MenuItem("New Scene", "Ctrl+N", false, sceneOps)) {
             m_Context.ClearSelection();
             m_Context.Commands.Clear();
             m_Context.currentScenePath = "";
@@ -413,7 +551,7 @@ void EditorLayer::DrawMenuBar()
             if (m_SceneCacheInvalidator) m_SceneCacheInvalidator();
         }
         ImGui::Separator();
-        if (ImGui::MenuItem("Open Scene...", "Ctrl+O")) {
+        if (ImGui::MenuItem("Open Scene...", "Ctrl+O", false, sceneOps)) {
             std::string path = OpenFileDialog();
             if (!path.empty()) {
                 m_Context.ClearSelection();
@@ -423,17 +561,21 @@ void EditorLayer::DrawMenuBar()
                 if (m_SceneCacheInvalidator) m_SceneCacheInvalidator();
             }
         }
-        if (ImGui::MenuItem("Save Scene", "Ctrl+S")) {
-            if (m_Context.currentScenePath.empty())
-                m_Context.currentScenePath = UniqueNewScenePath();
-            SceneSerializer::Save(*m_Context.ActiveScene, m_Context.currentScenePath);
-        }
-        if (ImGui::MenuItem("Save Scene As...", "Ctrl+Shift+S")) {
+        if (ImGui::MenuItem("Save Scene", "Ctrl+S", false, sceneOps))
+            SaveScene();
+        if (ImGui::MenuItem("Save Scene As...", "Ctrl+Shift+S", false, sceneOps)) {
             std::string path = SaveFileDialog();
             if (!path.empty()) {
                 SceneSerializer::Save(*m_Context.ActiveScene, path);
                 m_Context.currentScenePath = path;
             }
+        }
+        if (m_PrefabEditMode) {
+            ImGui::Separator();
+            if (ImGui::MenuItem("Save Prefab", "Ctrl+S"))
+                SavePrefabEdit();
+            if (ImGui::MenuItem("Close Prefab"))
+                ExitPrefabEdit();
         }
         ImGui::EndMenu();
     }
@@ -451,7 +593,7 @@ void EditorLayer::DrawMenuBar()
 
 void EditorLayer::OnImGuiRender()
 {
-    // Undo / Redo keyboard shortcuts
+    // Undo / Redo / Save keyboard shortcuts
     if (ImGui::IsKeyDown(ImGuiKey_LeftCtrl) || ImGui::IsKeyDown(ImGuiKey_RightCtrl))
     {
         bool shift = ImGui::IsKeyDown(ImGuiKey_LeftShift) || ImGui::IsKeyDown(ImGuiKey_RightShift);
@@ -460,19 +602,39 @@ void EditorLayer::OnImGuiRender()
         if ((ImGui::IsKeyPressed(ImGuiKey_Y, false)) ||
             (shift && ImGui::IsKeyPressed(ImGuiKey_Z, false)))
             m_Context.Commands.Redo();
+        if (ImGui::IsKeyPressed(ImGuiKey_S, false))
+        {
+            // Runtime state isn't worth persisting — ignore saves during play.
+            if (!m_Context.ActiveScene->IsPlaying())
+            {
+                if (m_PrefabEditMode)
+                    SavePrefabEdit();
+                else if (shift) {
+                    std::string path = SaveFileDialog();
+                    if (!path.empty()) {
+                        SceneSerializer::Save(*m_Context.ActiveScene, path);
+                        m_Context.currentScenePath = path;
+                    }
+                } else {
+                    SaveScene();
+                }
+            }
+        }
     }
 
     // Menu bar first — its height is needed to offset the dockspace host below it
     DrawMenuBar();
 
-    float menuBarH = ImGui::GetFrameHeight();
+    float topOffset = ImGui::GetFrameHeight();
+    if (m_PrefabEditMode)
+        topOffset += DrawPrefabEditBanner(topOffset);
 
-    // Fullscreen invisible host window — sits below the menu bar
+    // Fullscreen invisible host window — sits below the menu bar (and banner)
     ImGuiViewport* vp = ImGui::GetMainViewport();
     if (vp)
     {
-        ImGui::SetNextWindowPos({ vp->Pos.x, vp->Pos.y + menuBarH });
-        ImGui::SetNextWindowSize({ vp->Size.x, vp->Size.y - menuBarH });
+        ImGui::SetNextWindowPos({ vp->Pos.x, vp->Pos.y + topOffset });
+        ImGui::SetNextWindowSize({ vp->Size.x, vp->Size.y - topOffset });
         ImGui::SetNextWindowViewport(vp->ID);
     }
 

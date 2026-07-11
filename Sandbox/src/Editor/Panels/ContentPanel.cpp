@@ -668,6 +668,8 @@ void ContentPanel::DrawItems() {
             pendingNav = item.path;
         else if (dblClick && item.type == AssetType::Scene && m_OnSceneOpen)
             m_OnSceneOpen(ToUtf8(item.path));
+        else if (dblClick && item.type == AssetType::Prefab && m_OnPrefabOpen)
+            m_OnPrefabOpen(ToUtf8(item.path));
         else if (dblClick && item.type == AssetType::Audio) {
             // Toggle audition: stop if this clip is already previewing, else play it.
             std::string p = ToUtf8(item.path);

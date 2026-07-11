@@ -41,6 +41,7 @@ struct EntitySnapshot {
     std::optional<ColliderComponent>    collider;
     std::optional<ConstraintComponent>  constraint;
     std::optional<PrefabInstanceComponent> prefabInstance;
+    std::optional<PrefabChildComponent>    prefabChild;
     // Script components captured generically via the ComponentRegistry —
     // (registry display name, serialized state). Any DECLARE_COMPONENT type
     // is included automatically; fidelity matches its SerializeComponent impl.
@@ -71,6 +72,8 @@ static EntitySnapshot SnapshotEntity(Scene* scene, entt::entity e)
     }
     if (reg.all_of<PrefabInstanceComponent>(e))
         s.prefabInstance = reg.get<PrefabInstanceComponent>(e);
+    if (reg.all_of<PrefabChildComponent>(e))
+        s.prefabChild = reg.get<PrefabChildComponent>(e);
     for (auto& desc : ComponentRegistry::Get().GetAll()) {
         if (desc.serialize && desc.has(*scene, e)) {
             try { s.scriptComponents.emplace_back(desc.name, desc.serialize(*scene, e)); }
@@ -100,6 +103,7 @@ static entt::entity RestoreEntity(Scene* scene, const EntitySnapshot& s,
     if (s.collider)   reg.emplace_or_replace<ColliderComponent>(e,  *s.collider);
     if (s.constraint) reg.emplace_or_replace<ConstraintComponent>(e, *s.constraint);
     if (s.prefabInstance) reg.emplace_or_replace<PrefabInstanceComponent>(e, *s.prefabInstance);
+    if (s.prefabChild)    reg.emplace_or_replace<PrefabChildComponent>(e, *s.prefabChild);
 
     for (const auto& [name, data] : s.scriptComponents) {
         for (auto& desc : ComponentRegistry::Get().GetAll()) {
@@ -152,6 +156,11 @@ struct HierarchyDrawCtx {
     // invalidate the entity-map iteration driving the tree draw.
     std::string&    prefabToSpawn;
     entt::entity&   prefabSpawnParent;
+    // Live-link after "Save to Prefab", deferred for the same reason:
+    // propagation destroys/recreates the other instances of the file.
+    std::string&    prefabToPropagate;
+    entt::entity&   propagateExclude;
+    const std::function<void(const std::string&)>* onEditPrefab;
 };
 
 static void DrawEntityNode(entt::entity entity, const HierarchyDrawCtx& ctx)
@@ -198,7 +207,17 @@ static void DrawEntityNode(entt::entity entity, const HierarchyDrawCtx& ctx)
     if (selected)     flags |= ImGuiTreeNodeFlags_Selected;
     if (!hasChildren) flags |= ImGuiTreeNodeFlags_Leaf;
 
+    // Prefab instance roots draw blue; broken ones (source file missing) red.
+    bool isPrefabRoot = reg.all_of<PrefabInstanceComponent>(entity);
+    bool prefabBroken = isPrefabRoot && reg.get<PrefabInstanceComponent>(entity).broken;
+    if (isPrefabRoot)
+        ImGui::PushStyleColor(ImGuiCol_Text, prefabBroken ? ImVec4(0.95f, 0.38f, 0.38f, 1.0f)
+                                                          : ImVec4(0.45f, 0.68f, 1.00f, 1.0f));
+
     bool opened = ImGui::TreeNodeEx((void*)(uintptr_t)(uint32_t)entity, flags, "%s", name.c_str());
+
+    if (isPrefabRoot)
+        ImGui::PopStyleColor();
 
     if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen()) {
         if (ImGui::GetIO().KeyCtrl) {
@@ -236,12 +255,17 @@ static void DrawEntityNode(entt::entity entity, const HierarchyDrawCtx& ctx)
         if (ImGui::MenuItem("Duplicate", "Ctrl+D")) {
             ctx.toDuplicate = entity;
         }
-        // v1 prefab edit flow: tweak the instance in the scene, push it back
-        // to the .prefab it came from. Only offered on instance roots.
+        // Instance-root actions: push scene edits back to the .prefab (then
+        // live-link the file's other instances), or open it in prefab edit mode.
         if (reg.all_of<PrefabInstanceComponent>(entity)) {
             const auto& pi = reg.get<PrefabInstanceComponent>(entity);
-            if (ImGui::MenuItem("Save to Prefab") && !pi.sourcePath.empty())
-                PrefabSerializer::Save(*ctx.scene, entity, pi.sourcePath);
+            if (ImGui::MenuItem("Save to Prefab") && !pi.sourcePath.empty()) {
+                ctx.prefabToPropagate = pi.sourcePath;
+                ctx.propagateExclude  = entity;
+            }
+            if (ImGui::MenuItem("Edit Prefab") && !pi.sourcePath.empty()
+                && ctx.onEditPrefab && *ctx.onEditPrefab)
+                (*ctx.onEditPrefab)(pi.sourcePath);
         }
         if (ImGui::MenuItem("Rename")) {
             ctx.renamingEntity  = entity;
@@ -377,6 +401,8 @@ void HierarchyPanel::OnImGuiRender() {
     entt::entity   toDuplicate  = entt::null;
     std::string    prefabToSpawn;
     entt::entity   prefabSpawnParent = entt::null;
+    std::string    prefabToPropagate;
+    entt::entity   propagateExclude  = entt::null;
 
     HierarchyDrawCtx ctx {
         scene,
@@ -389,7 +415,10 @@ void HierarchyPanel::OnImGuiRender() {
         m_RenameFocusSet,
         m_SelectionPivot,
         prefabToSpawn,
-        prefabSpawnParent
+        prefabSpawnParent,
+        prefabToPropagate,
+        propagateExclude,
+        &m_OnEditPrefab
     };
 
     // Render roots only — they recurse into children.
@@ -474,6 +503,22 @@ void HierarchyPanel::OnImGuiRender() {
                         scene->DestroyEntity(*sharedRoot);
                 },
                 "Instantiate Prefab"));
+        }
+    }
+
+    // Deferred "Save to Prefab" + live-link (queued in the context menu): the
+    // save itself is cheap, but rebuilding the file's other instances
+    // destroys/creates entities, which the tree iteration can't survive.
+    // Re-instantiation invalidates arbitrary entity handles, so the undo
+    // history is dropped and dead selections pruned.
+    if (!prefabToPropagate.empty() && reg.valid(propagateExclude)) {
+        int n = PrefabSerializer::SaveAndPropagate(*scene, propagateExclude, prefabToPropagate);
+        if (n > 0) {
+            m_Context->Commands.Clear();
+            for (auto it = m_Context->selectedEntities.begin();
+                 it != m_Context->selectedEntities.end();)
+                it = reg.valid(*it) ? std::next(it) : m_Context->selectedEntities.erase(it);
+            if (!reg.valid(m_SelectionPivot)) m_SelectionPivot = entt::null;
         }
     }
 

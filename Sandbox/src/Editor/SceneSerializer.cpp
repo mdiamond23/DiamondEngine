@@ -1,8 +1,11 @@
 #include "SceneSerializer.h"
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
+#include <cctype>
+#include <filesystem>
 #include <fstream>
 #include <unordered_map>
+#include <unordered_set>
 
 #include "Scene/Components.h"
 #include "Scene/ComponentRegistry.h"
@@ -37,6 +40,61 @@ static glm::vec2 ToVec2(const json& j) { return { j[0], j[1] }; }
 static glm::vec3 ToVec3(const json& j) { return { j[0], j[1], j[2] }; }
 static glm::vec4 ToVec4(const json& j) { return { j[0], j[1], j[2], j[3] }; }
 static glm::quat ToQuat(const json& j) { return glm::quat(float(j[0]), float(j[1]), float(j[2]), float(j[3])); }
+
+// ---- prefab path / uuid helpers ----------------------------------------------
+
+// Prefab source paths appear with mixed separators and casing (absolute
+// Windows paths written by different call sites) — canonicalize before storing
+// or comparing so an instance always finds its file and its siblings.
+static std::string NormalizePrefabPath(const std::string& p)
+{
+    if (p.empty()) return p;
+    std::error_code ec;
+    auto canon = std::filesystem::weakly_canonical(std::filesystem::path(p), ec);
+    return (ec ? std::filesystem::path(p).lexically_normal() : canon).generic_string();
+}
+
+static bool SamePrefabPath(const std::string& a, const std::string& b)
+{
+    std::string na = NormalizePrefabPath(a), nb = NormalizePrefabPath(b);
+    if (na.size() != nb.size()) return false;
+    for (size_t i = 0; i < na.size(); ++i)
+        if (std::tolower((unsigned char)na[i]) != std::tolower((unsigned char)nb[i]))
+            return false;
+    return true;
+}
+
+// Deterministic per-instance UUID for prefab children: the same instance root
+// always derives the same id for the same prefab-local entity, so references
+// into an instance's interior survive scene reloads (splitmix64 finalizer).
+static uint64_t DerivePrefabChildUuid(uint64_t rootUuid, uint64_t localUuid)
+{
+    uint64_t x = rootUuid ^ (localUuid * 0x9E3779B97F4A7C15ull);
+    x ^= x >> 30; x *= 0xBF58476D1CE4E5B9ull;
+    x ^= x >> 27; x *= 0x94D049BB133111EBull;
+    x ^= x >> 31;
+    return x ? x : 1;   // 0 means "none" everywhere uuids are consumed
+}
+
+// Rewrites every "targetUuid" found in a serialized entity/component tree
+// through `map` (constraint targets, IK chain targets — at any nesting depth,
+// so registry script components are covered too). Uuids not in the map are
+// references outside the prefab and pass through untouched.
+static void RemapTargetUuids(nlohmann::json& j, const std::unordered_map<uint64_t, uint64_t>& map)
+{
+    if (j.is_object()) {
+        for (auto& [k, v] : j.items()) {
+            if (k == "targetUuid" && v.is_number_integer()) {
+                auto it = map.find(v.get<uint64_t>());
+                if (it != map.end()) v = it->second;
+            } else {
+                RemapTargetUuids(v, map);
+            }
+        }
+    } else if (j.is_array()) {
+        for (auto& v : j) RemapTargetUuids(v, map);
+    }
+}
 
 static std::shared_ptr<Font> LoadFontCached(
     const std::string& path,
@@ -386,6 +444,9 @@ struct DeserializeCtx {
     std::vector<std::shared_ptr<void>> modelPins;
 };
 
+// Components are emplace_or_replace'd (not emplace'd): besides fresh loads,
+// this also runs to apply prefab-instance overrides onto entities that already
+// carry the component from instantiation.
 static void DeserializeEntityComponents(Scene& scene, entt::entity e, const json& ej,
                                         DeserializeCtx& ctx)
 {
@@ -463,7 +524,7 @@ static void DeserializeEntityComponents(Scene& scene, entt::entity e, const json
             mat->Emissive  = Assets::Load<Texture>(mat->EmissivePath);
         }
 
-        auto& mc          = reg.emplace<MeshComponent>(e, mesh, mat, bounds);
+        auto& mc          = reg.emplace_or_replace<MeshComponent>(e, mesh, mat, bounds);
         mc.meshPath       = mpath;
         mc.meshSubIndex   = subIdx;
         mc.materialPath   = materialPath;
@@ -476,7 +537,7 @@ static void DeserializeEntityComponents(Scene& scene, entt::entity e, const json
 
     if (ej.contains("light")) {
         const auto& lj = ej["light"];
-        auto& lc          = reg.emplace<LightComponent>(e);
+        auto& lc          = reg.emplace_or_replace<LightComponent>(e);
         lc.type           = (LightType)lj.value("type", 1);
         lc.color          = ToVec3(lj["color"]);
         lc.intensity      = lj.value("intensity",      100.0f);
@@ -487,7 +548,7 @@ static void DeserializeEntityComponents(Scene& scene, entt::entity e, const json
 
     if (ej.contains("camera")) {
         const auto& cj = ej["camera"];
-        auto& cc    = reg.emplace<CameraComponent>(e);
+        auto& cc    = reg.emplace_or_replace<CameraComponent>(e);
         cc.isPrimary = cj.value("isPrimary", true);
         cc.fov       = cj.value("fov",       60.0f);
         cc.nearClip  = cj.value("nearClip",  0.1f);
@@ -496,7 +557,7 @@ static void DeserializeEntityComponents(Scene& scene, entt::entity e, const json
 
     if (ej.contains("canvas")) {
         const auto& cj = ej["canvas"];
-        auto& cv = reg.emplace<CanvasComponent>(e);
+        auto& cv = reg.emplace_or_replace<CanvasComponent>(e);
         cv.scaleMode = (CanvasComponent::ScaleMode)cj.value("scaleMode", 1);
         if (cj.contains("referenceResolution"))
             cv.referenceResolution = ToVec2(cj["referenceResolution"]);
@@ -506,7 +567,7 @@ static void DeserializeEntityComponents(Scene& scene, entt::entity e, const json
 
     if (ej.contains("rectTransform")) {
         const auto& rj = ej["rectTransform"];
-        auto& rt = reg.emplace<RectTransformComponent>(e);
+        auto& rt = reg.emplace_or_replace<RectTransformComponent>(e);
         if (rj.contains("anchorMin")) rt.anchorMin = ToVec2(rj["anchorMin"]);
         if (rj.contains("anchorMax")) rt.anchorMax = ToVec2(rj["anchorMax"]);
         if (rj.contains("pivot"))     rt.pivot     = ToVec2(rj["pivot"]);
@@ -517,7 +578,7 @@ static void DeserializeEntityComponents(Scene& scene, entt::entity e, const json
 
     if (ej.contains("uiImage")) {
         const auto& j = ej["uiImage"];
-        auto& im = reg.emplace<UIImageComponent>(e);
+        auto& im = reg.emplace_or_replace<UIImageComponent>(e);
         im.texturePath = j.value("texturePath", "");
         im.texture     = Assets::Load<Texture>(im.texturePath);
         if (j.contains("tint"))  im.tint  = ToVec4(j["tint"]);
@@ -527,7 +588,7 @@ static void DeserializeEntityComponents(Scene& scene, entt::entity e, const json
 
     if (ej.contains("uiText")) {
         const auto& j = ej["uiText"];
-        auto& tx = reg.emplace<UITextComponent>(e);
+        auto& tx = reg.emplace_or_replace<UITextComponent>(e);
         tx.text     = j.value("text", "");
         tx.fontPath = j.value("fontPath", "");
         tx.font     = LoadFontCached(tx.fontPath, ctx.fontCache);
@@ -542,7 +603,7 @@ static void DeserializeEntityComponents(Scene& scene, entt::entity e, const json
 
     if (ej.contains("uiProgressBar")) {
         const auto& j = ej["uiProgressBar"];
-        auto& pb = reg.emplace<UIProgressBarComponent>(e);
+        auto& pb = reg.emplace_or_replace<UIProgressBarComponent>(e);
         pb.progress = j.value("progress", 0.5f);
         if (j.contains("backgroundColor")) pb.backgroundColor = ToVec4(j["backgroundColor"]);
         if (j.contains("fillColor"))       pb.fillColor       = ToVec4(j["fillColor"]);
@@ -553,7 +614,7 @@ static void DeserializeEntityComponents(Scene& scene, entt::entity e, const json
 
     if (ej.contains("uiButton")) {
         const auto& j = ej["uiButton"];
-        auto& bt = reg.emplace<UIButtonComponent>(e);
+        auto& bt = reg.emplace_or_replace<UIButtonComponent>(e);
         if (j.contains("normalTint"))  bt.normalTint  = ToVec4(j["normalTint"]);
         if (j.contains("hoverTint"))   bt.hoverTint   = ToVec4(j["hoverTint"]);
         if (j.contains("pressedTint")) bt.pressedTint = ToVec4(j["pressedTint"]);
@@ -561,7 +622,7 @@ static void DeserializeEntityComponents(Scene& scene, entt::entity e, const json
 
     if (ej.contains("collider")) {
         const auto& cj = ej["collider"];
-        auto& col = reg.emplace<ColliderComponent>(e);
+        auto& col = reg.emplace_or_replace<ColliderComponent>(e);
         col.shapeType  = (CollisionShape)cj.value("shapeType", 0);
         col.radius     = cj.value("radius",    0.5f);
         col.halfHeight = cj.value("halfHeight", 0.5f);
@@ -586,7 +647,7 @@ static void DeserializeEntityComponents(Scene& scene, entt::entity e, const json
 
     if (ej.contains("rigidbody")) {
         const auto& rj = ej["rigidbody"];
-        auto& rb = reg.emplace<RigidBodyComponent>(e);
+        auto& rb = reg.emplace_or_replace<RigidBodyComponent>(e);
         rb.bodyType       = (BodyType)rj.value("bodyType",       0);
         rb.mass           = rj.value("mass",           1.0f);
         rb.linearDamping  = rj.value("linearDamping",  0.05f);
@@ -600,7 +661,7 @@ static void DeserializeEntityComponents(Scene& scene, entt::entity e, const json
 
     if (ej.contains("constraint")) {
         const auto& cj = ej["constraint"];
-        auto& cc = reg.emplace<ConstraintComponent>(e);
+        auto& cc = reg.emplace_or_replace<ConstraintComponent>(e);
         cc.type       = (ConstraintType)cj.value("type", 0);
         cc.targetUuid = cj.value("targetUuid", (uint64_t)0);
         // The target uuid must survive prefab instantiation, where every entity
@@ -627,7 +688,7 @@ static void DeserializeEntityComponents(Scene& scene, entt::entity e, const json
 
     if (ej.contains("ragdoll")) {
         const auto& rj = ej["ragdoll"];
-        auto& rag     = reg.emplace<RagdollComponent>(e);
+        auto& rag     = reg.emplace_or_replace<RagdollComponent>(e);
         rag.assetPath = rj.value("assetPath", std::string{});
         rag.mode      = (RagdollMode)rj.value("mode", 0);
         if (!rag.assetPath.empty()) {
@@ -645,7 +706,7 @@ static void DeserializeEntityComponents(Scene& scene, entt::entity e, const json
             auto model = Assets::Load<ImportedModel>(mpath);
             if (model && !model->skeleton.bones.empty() && !model->meshes.empty()) {
                 ctx.modelPins.push_back(model);
-                auto& smc       = reg.emplace<SkinnedMeshComponent>(e);
+                auto& smc       = reg.emplace_or_replace<SkinnedMeshComponent>(e);
                 smc.skeleton    = model->skeleton;
                 smc.clips       = model->animations;
                 smc.meshPath    = mpath;
@@ -685,7 +746,7 @@ static void DeserializeEntityComponents(Scene& scene, entt::entity e, const json
 
     if (ej.contains("animator")) {
         const auto& aj = ej["animator"];
-        auto& anim   = reg.emplace<AnimatorComponent>(e);
+        auto& anim   = reg.emplace_or_replace<AnimatorComponent>(e);
         anim.clip    = aj.value("clip",    0);
         anim.time    = aj.value("time",    0.0f);
         anim.speed   = aj.value("speed",   1.0f);
@@ -695,7 +756,7 @@ static void DeserializeEntityComponents(Scene& scene, entt::entity e, const json
 
     if (ej.contains("ik")) {
         const auto& ikj = ej["ik"];
-        auto& ik = reg.emplace<IKComponent>(e);
+        auto& ik = reg.emplace_or_replace<IKComponent>(e);
         ik.pelvisBone     = ikj.value("pelvisBone", std::string{});
         ik.maxPelvisDrop  = ikj.value("maxPelvisDrop",  0.5f);
         ik.pelvisEaseTime = ikj.value("pelvisEaseTime", 0.1f);
@@ -728,7 +789,7 @@ static void DeserializeEntityComponents(Scene& scene, entt::entity e, const json
 
     if (ej.contains("animStateMachine")) {
         const auto& smj = ej["animStateMachine"];
-        auto& sm = reg.emplace<AnimStateMachineComponent>(e);
+        auto& sm = reg.emplace_or_replace<AnimStateMachineComponent>(e);
         sm.assetPath = smj.value("assetPath", "");
         if (!sm.assetPath.empty()) {
             sm.assetPath = NormalizeAnimSmPath(sm.assetPath);
@@ -763,41 +824,53 @@ static void DeserializeEntityComponents(Scene& scene, entt::entity e, const json
     }
 }
 
-// Creates every entity in a scene/prefab entity array, then deserializes their
-// components (two passes so parent/target references resolve regardless of
-// order). preserveUuids: scene loads restore the stored ids so cross-file
-// references stay stable; prefab instantiation keeps the freshly generated
-// ones — the stored ids then only key the internal-reference remap. Returns
-// the created entities in file order.
-static std::vector<entt::entity> InstantiateEntities(Scene& scene, const json& entities,
-                                                     bool preserveUuids, DeserializeCtx& ctx)
+// ---- prefab machinery used by scene save/load (defined in the prefab section) --
+
+static json         SerializePrefabRef(Scene& scene, entt::entity root,
+                                       std::unordered_map<std::string, json>& prefabCache);
+static entt::entity InstantiateSceneRef(Scene& scene, const json& refJ, DeserializeCtx& sceneCtx);
+static void         CollectSubtree(Scene& scene, entt::entity e, std::vector<entt::entity>& out);
+
+// A "new-style" instance root serializes as a prefabRef node. Legacy roots
+// (baked copies loaded from old scenes — instance link but no local-id stamp)
+// keep serializing as plain entities so their tweaks aren't clobbered; broken
+// placeholders serialize as refs so the link round-trips.
+static bool IsInstanceRefRoot(entt::registry& reg, entt::entity e)
 {
-    std::vector<entt::entity> created;
-    created.reserve(entities.size());
+    if (!reg.all_of<PrefabInstanceComponent>(e)) return false;
+    return reg.all_of<PrefabChildComponent>(e) || reg.get<PrefabInstanceComponent>(e).broken;
+}
 
-    for (const auto& ej : entities) {
-        entt::entity e = scene.CreateEntity(ej.value("name", "Entity"));
-        created.push_back(e);
-        if (ej.contains("uuid")) {
-            uint64_t uuid = ej["uuid"].get<uint64_t>();
-            if (preserveUuids)
-                scene.GetRegistry().get<IDComponent>(e).uuid = uuid;
-            ctx.uuidToEntity[uuid] = e;
-        }
+static bool HasInstanceRefAncestor(Scene& scene, entt::entity e)
+{
+    auto& reg = scene.GetRegistry();
+    entt::entity p = reg.all_of<HierarchyComponent>(e)
+                   ? reg.get<HierarchyComponent>(e).parent : entt::null;
+    while (p != entt::null) {
+        if (IsInstanceRefRoot(reg, p)) return true;
+        p = reg.all_of<HierarchyComponent>(p)
+          ? reg.get<HierarchyComponent>(p).parent : entt::null;
     }
-
-    size_t i = 0;
-    for (const auto& ej : entities)
-        DeserializeEntityComponents(scene, created[i++], ej, ctx);
-
-    return created;
+    return false;
 }
 
 static json ToJson(Scene& scene)
 {
+    auto& reg = scene.GetRegistry();
+    std::unordered_map<std::string, json> prefabCache;   // one parse per .prefab per save
     json entities = json::array();
-    for (auto& [entity, name] : scene.GetEntityNames())
-        entities.push_back(SerializeEntity(scene, entity));
+    for (auto& [entity, name] : scene.GetEntityNames()) {
+        bool covered = HasInstanceRefAncestor(scene, entity);
+        if (IsInstanceRefRoot(reg, entity) && !covered)
+            entities.push_back(SerializePrefabRef(scene, entity, prefabCache));
+        else if (!covered || !reg.all_of<PrefabChildComponent>(entity))
+            // Plain entity. The second clause keeps children the user parented
+            // INTO an instance: they aren't part of the prefab, so they save as
+            // plain entities (their parentUuid — a derived instance-child id —
+            // is stable across loads).
+            entities.push_back(SerializeEntity(scene, entity));
+        // else: instance interior — reproduced by the ref node on load
+    }
     return json{ { "entities", entities } };
 }
 
@@ -805,7 +878,45 @@ static bool FromJson(Scene& scene, const json& root)
 {
     scene.Clear();
     DeserializeCtx ctx;
-    InstantiateEntities(scene, root.at("entities"), /*preserveUuids=*/true, ctx);
+    const json& entities = root.at("entities");
+
+    // Prefab references first: their (deterministic) interior uuids land in
+    // the remap map so plain entities can be parented under instance children.
+    // The refs' own parents may be plain entities created later, so instance
+    // parenting is deferred to the end.
+    std::vector<std::pair<entt::entity, uint64_t>> refParents;
+    for (const auto& ej : entities) {
+        if (!ej.contains("prefabRef")) continue;
+        const json& refJ = ej["prefabRef"];
+        entt::entity instRoot = InstantiateSceneRef(scene, refJ, ctx);
+        if (instRoot != entt::null && refJ.contains("parentUuid"))
+            refParents.push_back({ instRoot, refJ["parentUuid"].get<uint64_t>() });
+    }
+
+    // Plain entities — two passes so parent/target references resolve
+    // regardless of file order; scene loads restore the stored uuids so
+    // cross-file references stay stable.
+    std::vector<entt::entity> created;
+    std::vector<const json*>  plainNodes;
+    for (const auto& ej : entities) {
+        if (ej.contains("prefabRef")) continue;
+        entt::entity e = scene.CreateEntity(ej.value("name", "Entity"));
+        created.push_back(e);
+        plainNodes.push_back(&ej);
+        if (ej.contains("uuid")) {
+            uint64_t uuid = ej["uuid"].get<uint64_t>();
+            scene.GetRegistry().get<IDComponent>(e).uuid = uuid;
+            ctx.uuidToEntity[uuid] = e;
+        }
+    }
+    for (size_t i = 0; i < plainNodes.size(); ++i)
+        DeserializeEntityComponents(scene, created[i], *plainNodes[i], ctx);
+
+    for (auto& [instRoot, parentUuid] : refParents) {
+        auto it = ctx.uuidToEntity.find(parentUuid);
+        if (it != ctx.uuidToEntity.end() && scene.GetRegistry().valid(it->second))
+            scene.SetParent(instRoot, it->second);
+    }
     return true;
 }
 
@@ -851,6 +962,31 @@ static void CollectSubtree(Scene& scene, entt::entity e, std::vector<entt::entit
             CollectSubtree(scene, child, out);
 }
 
+// Entity-json keys that are identity/structure rather than component data —
+// excluded from the override diff (name is diffed separately).
+static bool IsNonComponentKey(const std::string& k)
+{
+    return k == "name" || k == "uuid" || k == "parentUuid" || k == "prefabInstance";
+}
+
+// Parses a .prefab through a per-save-pass cache; returns nullptr when the
+// file is missing/unreadable or has no prefab block.
+static const json* LoadPrefabJson(const std::string& path,
+                                  std::unordered_map<std::string, json>& cache)
+{
+    auto [it, inserted] = cache.emplace(NormalizePrefabPath(path), json{});
+    if (inserted) {
+        std::ifstream f(path);
+        if (f.is_open()) {
+            try { it->second = json::parse(f); }
+            catch (...) { it->second = json{}; }
+        }
+    }
+    const json& j = it->second;
+    if (!j.contains("prefab") || !j["prefab"].contains("entities")) return nullptr;
+    return &j;
+}
+
 bool PrefabSerializer::Save(Scene& scene, entt::entity root, const std::string& path)
 {
     auto& reg = scene.GetRegistry();
@@ -859,9 +995,35 @@ bool PrefabSerializer::Save(Scene& scene, entt::entity root, const std::string& 
     std::vector<entt::entity> subtree;
     CollectSubtree(scene, root, subtree);
 
+    // The file's uuids are prefab-local: a stamped entity keeps the local id it
+    // was instantiated with, so re-saving from any instance leaves the id space
+    // stable and other instances' override targets valid. Unstamped entities
+    // (fresh subtree, children added in edit mode) adopt their live uuid as the
+    // local id and are stamped with it — the saved subtree becomes the
+    // canonical, zero-override instance of the file.
+    std::unordered_map<uint64_t, uint64_t> liveToLocal;
+    std::unordered_set<uint64_t>           usedLocal;
+    for (entt::entity e : subtree) {
+        uint64_t live  = reg.get<IDComponent>(e).uuid;
+        uint64_t local = live;
+        if (auto* pc = reg.try_get<PrefabChildComponent>(e); pc && pc->prefabUuid)
+            local = pc->prefabUuid;
+        // duplicated children carry a colliding stamp — fall back to the live id
+        if (usedLocal.count(local)) local = live;
+        usedLocal.insert(local);
+        liveToLocal[live] = local;
+        reg.emplace_or_replace<PrefabChildComponent>(e, local);
+    }
+
     json entities = json::array();
     for (entt::entity e : subtree) {
         json ej = SerializeEntity(scene, e);
+        ej["uuid"] = liveToLocal[reg.get<IDComponent>(e).uuid];
+        if (ej.contains("parentUuid")) {
+            auto it = liveToLocal.find(ej["parentUuid"].get<uint64_t>());
+            if (it != liveToLocal.end()) ej["parentUuid"] = it->second;
+        }
+        RemapTargetUuids(ej, liveToLocal);
         if (e == root) {
             // The root's parent lives outside the prefab, and the instance link
             // is stamped fresh at instantiation — neither belongs in the file.
@@ -877,10 +1039,316 @@ bool PrefabSerializer::Save(Scene& scene, entt::entity root, const std::string& 
         return false;
     }
     f << json{ { "prefab", {
-        { "root",     reg.get<IDComponent>(root).uuid },
+        { "root",     liveToLocal[reg.get<IDComponent>(root).uuid] },
         { "entities", std::move(entities) }
     } } }.dump(2);
     return true;
+}
+
+// Core instantiation from a parsed prefab block. Ids are final before the
+// component pass (constraint/IK remaps read live IDComponents): the root keeps
+// its generated uuid unless `forcedRootUuid` is set (scene refs restoring a
+// stored identity); children get deterministic ids derived from the root's.
+// Fills `outLocalMap` with file-local uuid → live entity.
+static entt::entity InstantiatePrefabJson(Scene& scene, const json& pj, const std::string& path,
+                                          uint64_t forcedRootUuid,
+                                          std::unordered_map<uint64_t, entt::entity>* outLocalMap)
+{
+    auto& reg = scene.GetRegistry();
+    const json& entities = pj["entities"];
+
+    DeserializeCtx ctx;
+    std::vector<entt::entity> created;
+    created.reserve(entities.size());
+    for (const auto& ej : entities) {
+        entt::entity e = scene.CreateEntity(ej.value("name", "Entity"));
+        created.push_back(e);
+        if (ej.contains("uuid"))
+            ctx.uuidToEntity[ej["uuid"].get<uint64_t>()] = e;
+    }
+    if (created.empty()) return entt::null;
+
+    // First entity is the fallback for legacy files without a root field —
+    // Save always writes the root first.
+    entt::entity rootEntity = created.front();
+    if (pj.contains("root")) {
+        auto it = ctx.uuidToEntity.find(pj["root"].get<uint64_t>());
+        if (it != ctx.uuidToEntity.end()) rootEntity = it->second;
+    }
+
+    if (forcedRootUuid)
+        reg.get<IDComponent>(rootEntity).uuid = forcedRootUuid;
+    uint64_t rootUuid = reg.get<IDComponent>(rootEntity).uuid;
+
+    size_t i = 0;
+    for (const auto& ej : entities) {
+        entt::entity e = created[i++];
+        // legacy entities without a stored uuid stamp their generated one
+        uint64_t local = ej.contains("uuid") ? ej["uuid"].get<uint64_t>()
+                                             : reg.get<IDComponent>(e).uuid;
+        if (e != rootEntity)
+            reg.get<IDComponent>(e).uuid = DerivePrefabChildUuid(rootUuid, local);
+        reg.emplace_or_replace<PrefabChildComponent>(e, local);
+    }
+
+    i = 0;
+    for (const auto& ej : entities)
+        DeserializeEntityComponents(scene, created[i++], ej, ctx);
+
+    reg.emplace_or_replace<PrefabInstanceComponent>(rootEntity, path);
+    if (outLocalMap) *outLocalMap = std::move(ctx.uuidToEntity);
+    return rootEntity;
+}
+
+// Removes the component a serialized key refers to — override application
+// needs this for components the instance removed relative to the prefab.
+static void RemoveComponentByKey(Scene& scene, entt::entity e, const std::string& key)
+{
+    auto& reg = scene.GetRegistry();
+    if      (key == "mesh")             reg.remove<MeshComponent>(e);
+    else if (key == "light")            reg.remove<LightComponent>(e);
+    else if (key == "camera")           reg.remove<CameraComponent>(e);
+    else if (key == "canvas")           reg.remove<CanvasComponent>(e);
+    else if (key == "rectTransform")    reg.remove<RectTransformComponent>(e);
+    else if (key == "uiImage")          reg.remove<UIImageComponent>(e);
+    else if (key == "uiText")           reg.remove<UITextComponent>(e);
+    else if (key == "uiProgressBar")    reg.remove<UIProgressBarComponent>(e);
+    else if (key == "uiButton")         reg.remove<UIButtonComponent>(e);
+    else if (key == "collider")         reg.remove<ColliderComponent>(e);
+    else if (key == "rigidbody")        reg.remove<RigidBodyComponent>(e);
+    else if (key == "constraint")       reg.remove<ConstraintComponent>(e);
+    else if (key == "ragdoll")          reg.remove<RagdollComponent>(e);
+    else if (key == "skinnedMesh")      reg.remove<SkinnedMeshComponent>(e);
+    else if (key == "animator")         reg.remove<AnimatorComponent>(e);
+    else if (key == "ik")               reg.remove<IKComponent>(e);
+    else if (key == "animStateMachine") reg.remove<AnimStateMachineComponent>(e);
+    else if (key == "scriptComponents")
+        for (auto& desc : ComponentRegistry::Get().GetAll())
+            if (desc.remove && desc.has(scene, e)) desc.remove(scene, e);
+}
+
+// Applies a ref node's override entries onto a freshly instantiated instance.
+// Overrides are stored in prefab-local uuid space; target references inside
+// them are remapped to this instance's live ids before deserializing.
+static void ApplyRefOverrides(Scene& scene, const json& refJ,
+                              const std::unordered_map<uint64_t, entt::entity>& localMap)
+{
+    if (!refJ.contains("overrides")) return;
+    auto& reg = scene.GetRegistry();
+
+    std::unordered_map<uint64_t, uint64_t> localToLive;
+    DeserializeCtx ctx;   // keyed by live uuid so IK/constraint lookups resolve
+    for (auto& [local, e] : localMap) {
+        if (!reg.valid(e)) continue;
+        uint64_t live = reg.get<IDComponent>(e).uuid;
+        localToLive[local] = live;
+        ctx.uuidToEntity[live] = e;
+    }
+
+    for (const auto& entry : refJ["overrides"]) {
+        auto it = localMap.find(entry.value("target", (uint64_t)0));
+        if (it == localMap.end() || !reg.valid(it->second)) continue;
+        entt::entity e = it->second;
+
+        if (entry.contains("name"))
+            scene.SetEntityName(e, entry["name"].get<std::string>());
+
+        if (entry.contains("removed"))
+            for (const auto& k : entry["removed"])
+                RemoveComponentByKey(scene, e, k.get<std::string>());
+
+        if (entry.contains("components")) {
+            json comps = entry["components"];
+            RemapTargetUuids(comps, localToLive);
+            // A scriptComponents override is authoritative for the whole set:
+            // drop scripts the prefab added that the instance no longer has.
+            if (comps.contains("scriptComponents"))
+                for (auto& desc : ComponentRegistry::Get().GetAll())
+                    if (desc.remove && desc.has(scene, e) &&
+                        !comps["scriptComponents"].contains(desc.name))
+                        desc.remove(scene, e);
+            DeserializeEntityComponents(scene, e, comps, ctx);
+        }
+    }
+}
+
+// Serializes an instance root as a { "prefabRef": ... } node: source path, the
+// root's identity/transform, entities deleted from the instance, and per-entity
+// component blocks that differ from the .prefab. Reference fields are remapped
+// into prefab-local uuid space so an edit like "constraint targets sibling"
+// diffs clean and re-applies onto any future instantiation.
+static json SerializePrefabRef(Scene& scene, entt::entity root,
+                               std::unordered_map<std::string, json>& prefabCache)
+{
+    auto& reg = scene.GetRegistry();
+    auto& pi  = reg.get<PrefabInstanceComponent>(root);
+
+    json ref;
+    ref["path"] = pi.sourcePath;
+    ref["uuid"] = reg.get<IDComponent>(root).uuid;
+    ref["name"] = scene.GetEntityName(root);
+    if (reg.all_of<HierarchyComponent>(root)) {
+        entt::entity parent = reg.get<HierarchyComponent>(root).parent;
+        if (parent != entt::null && reg.all_of<IDComponent>(parent))
+            ref["parentUuid"] = reg.get<IDComponent>(parent).uuid;
+    }
+    auto& tc = reg.get<TransformComponent>(root);
+    ref["transform"] = {
+        { "position",     JVec3(tc.position)     },
+        { "rotation",     JQuat(tc.rotation)     },
+        { "eulerDegrees", JVec3(tc.eulerDegrees) },
+        { "scale",        JVec3(tc.scale)        }
+    };
+
+    // Broken placeholder: pass the overrides captured at load straight through.
+    if (pi.broken) {
+        if (!pi.pendingOverrides.empty()) {
+            try {
+                json pending = json::parse(pi.pendingOverrides);
+                if (pending.contains("overrides"))       ref["overrides"]       = pending["overrides"];
+                if (pending.contains("removedEntities")) ref["removedEntities"] = pending["removedEntities"];
+            } catch (...) {}
+        }
+        return json{ { "prefabRef", std::move(ref) } };
+    }
+
+    const json* fileJ = LoadPrefabJson(pi.sourcePath, prefabCache);
+    if (!fileJ) {
+        spdlog::warn("Scene save: prefab '{}' unreadable — instance '{}' saved without override diff",
+                     pi.sourcePath, scene.GetEntityName(root));
+        return json{ { "prefabRef", std::move(ref) } };
+    }
+
+    std::unordered_map<uint64_t, const json*> prefabByLocal;
+    for (const auto& ej : (*fileJ)["prefab"]["entities"])
+        if (ej.contains("uuid")) prefabByLocal[ej["uuid"].get<uint64_t>()] = &ej;
+
+    std::vector<entt::entity> subtree;
+    CollectSubtree(scene, root, subtree);
+
+    std::unordered_map<uint64_t, uint64_t> liveToLocal;
+    std::unordered_set<uint64_t>           presentLocals;
+    for (entt::entity e : subtree)
+        if (auto* pc = reg.try_get<PrefabChildComponent>(e)) {
+            liveToLocal[reg.get<IDComponent>(e).uuid] = pc->prefabUuid;
+            presentLocals.insert(pc->prefabUuid);
+        }
+
+    json overrides = json::array();
+    for (entt::entity e : subtree) {
+        auto* pc = reg.try_get<PrefabChildComponent>(e);
+        if (!pc) continue;                        // child added in-scene: saved as a plain entity
+        auto pit = prefabByLocal.find(pc->prefabUuid);
+        if (pit == prefabByLocal.end()) continue; // stamp not in the file (asset edited elsewhere)
+        const json& fj = *pit->second;
+
+        json lj = SerializeEntity(scene, e);
+        RemapTargetUuids(lj, liveToLocal);
+
+        json entry;
+        json comps   = json::object();
+        json removed = json::array();
+        for (auto& [k, v] : lj.items()) {
+            if (IsNonComponentKey(k)) continue;
+            if (e == root && k == "transform") continue;   // stored at ref level
+            if (!fj.contains(k) || fj[k] != v) comps[k] = v;
+        }
+        for (auto& [k, v] : fj.items()) {
+            if (IsNonComponentKey(k)) continue;
+            if (e == root && k == "transform") continue;
+            if (!lj.contains(k)) removed.push_back(k);
+        }
+        if (e != root && scene.GetEntityName(e) != fj.value("name", ""))
+            entry["name"] = scene.GetEntityName(e);
+        if (!comps.empty())   entry["components"] = std::move(comps);
+        if (!removed.empty()) entry["removed"]    = std::move(removed);
+        if (!entry.empty()) {
+            entry["target"] = pc->prefabUuid;
+            overrides.push_back(std::move(entry));
+        }
+    }
+
+    json removedEntities = json::array();
+    for (auto& [localUuid, ej] : prefabByLocal)
+        if (!presentLocals.count(localUuid)) removedEntities.push_back(localUuid);
+
+    if (!overrides.empty())       ref["overrides"]       = std::move(overrides);
+    if (!removedEntities.empty()) ref["removedEntities"] = std::move(removedEntities);
+    return json{ { "prefabRef", std::move(ref) } };
+}
+
+// Instantiates a scene-level { "prefabRef": ... } node: prefab content first,
+// then the stored root identity/transform, removed-entity deletions, and
+// component overrides. Falls back to a placeholder entity that keeps the
+// reference (and pending overrides) alive when the file is unreadable. The
+// instance's live uuids are registered into `sceneCtx` so plain entities can
+// resolve references into the instance's interior.
+static entt::entity InstantiateSceneRef(Scene& scene, const json& refJ, DeserializeCtx& sceneCtx)
+{
+    auto& reg = scene.GetRegistry();
+    std::string path       = refJ.value("path", "");
+    uint64_t    storedUuid = refJ.value("uuid", (uint64_t)0);
+
+    json fileJ;
+    {
+        std::ifstream f(path);
+        if (f.is_open()) {
+            try { fileJ = json::parse(f); }
+            catch (...) { fileJ = json{}; }
+        }
+    }
+
+    entt::entity root = entt::null;
+    std::unordered_map<uint64_t, entt::entity> localMap;
+    if (fileJ.contains("prefab") && fileJ["prefab"].contains("entities"))
+        root = InstantiatePrefabJson(scene, fileJ["prefab"], NormalizePrefabPath(path),
+                                     storedUuid, &localMap);
+
+    if (root == entt::null) {
+        spdlog::error("Scene load: prefab '{}' missing or unreadable — created placeholder '{}'",
+                      path, refJ.value("name", "Missing Prefab"));
+        root = scene.CreateEntity(refJ.value("name", "Missing Prefab"));
+        if (storedUuid) reg.get<IDComponent>(root).uuid = storedUuid;
+        auto& pi      = reg.emplace_or_replace<PrefabInstanceComponent>(root);
+        pi.sourcePath = path;
+        pi.broken     = true;
+        json pending;
+        if (refJ.contains("overrides"))       pending["overrides"]       = refJ["overrides"];
+        if (refJ.contains("removedEntities")) pending["removedEntities"] = refJ["removedEntities"];
+        if (!pending.empty()) pi.pendingOverrides = pending.dump();
+    }
+
+    if (refJ.contains("name"))
+        scene.SetEntityName(root, refJ["name"].get<std::string>());
+    if (refJ.contains("transform")) {
+        auto& tc       = reg.get<TransformComponent>(root);
+        const auto& tj = refJ["transform"];
+        tc.position = ToVec3(tj["position"]);
+        tc.rotation = ToQuat(tj["rotation"]);
+        tc.scale    = ToVec3(tj["scale"]);
+        tc.eulerDegrees = tj.contains("eulerDegrees")
+                        ? ToVec3(tj["eulerDegrees"])
+                        : glm::degrees(glm::eulerAngles(tc.rotation));
+    }
+
+    if (!localMap.empty()) {
+        if (refJ.contains("removedEntities"))
+            for (const auto& lu : refJ["removedEntities"]) {
+                auto it = localMap.find(lu.get<uint64_t>());
+                // guard valid(): destroying a subtree already removed a child
+                if (it != localMap.end() && it->second != root && reg.valid(it->second))
+                    scene.DestroyEntity(it->second);
+            }
+        ApplyRefOverrides(scene, refJ, localMap);
+    }
+
+    for (auto& [local, e] : localMap)
+        if (reg.valid(e))
+            sceneCtx.uuidToEntity[reg.get<IDComponent>(e).uuid] = e;
+    if (reg.valid(root))
+        sceneCtx.uuidToEntity[reg.get<IDComponent>(root).uuid] = root;
+
+    return root;
 }
 
 entt::entity PrefabSerializer::Instantiate(Scene& scene, const std::string& path)
@@ -900,23 +1368,8 @@ entt::entity PrefabSerializer::Instantiate(Scene& scene, const std::string& path
         spdlog::error("Prefab instantiate: '{}' has no prefab block", path);
         return entt::null;
     }
-    const json& pj = root["prefab"];
-
-    DeserializeCtx ctx;
-    std::vector<entt::entity> created =
-        InstantiateEntities(scene, pj["entities"], /*preserveUuids=*/false, ctx);
-    if (created.empty()) return entt::null;
-
-    // First entity is the fallback for legacy files without a root field —
-    // Save always writes the root first.
-    entt::entity rootEntity = created.front();
-    if (pj.contains("root")) {
-        auto it = ctx.uuidToEntity.find(pj["root"].get<uint64_t>());
-        if (it != ctx.uuidToEntity.end()) rootEntity = it->second;
-    }
-
-    scene.GetRegistry().emplace_or_replace<PrefabInstanceComponent>(rootEntity, path);
-    return rootEntity;
+    return InstantiatePrefabJson(scene, root["prefab"], NormalizePrefabPath(path),
+                                 /*forcedRootUuid=*/0, nullptr);
 }
 
 entt::entity PrefabSerializer::Instantiate(Scene& scene, const std::string& path,
@@ -926,4 +1379,93 @@ entt::entity PrefabSerializer::Instantiate(Scene& scene, const std::string& path
     if (root != entt::null)
         scene.GetRegistry().get<TransformComponent>(root).position = position;
     return root;
+}
+
+int PrefabSerializer::SaveAndPropagate(Scene& scene, entt::entity root, const std::string& path)
+{
+    auto& reg = scene.GetRegistry();
+
+    std::vector<entt::entity> targets;
+    for (auto [e, pi] : scene.View<PrefabInstanceComponent>().each()) {
+        if (e == root || pi.broken) continue;
+        if (!SamePrefabPath(pi.sourcePath, path)) continue;
+        if (!reg.all_of<PrefabChildComponent>(e)) {
+            spdlog::warn("Prefab propagate: '{}' is a legacy baked instance — skipped "
+                         "(Revert it to relink)", scene.GetEntityName(e));
+            continue;
+        }
+        if (HasInstanceRefAncestor(scene, e)) continue;   // interior of an outer instance
+        targets.push_back(e);
+    }
+
+    // Capture the siblings' override diffs BEFORE the file is overwritten:
+    // diffing against the old content is what separates "inherited from the
+    // previous prefab version" (must update) from "deliberate per-instance
+    // edit" (must survive). Diffing after the save would freeze every stale
+    // value in place as a spurious override.
+    std::unordered_map<std::string, json> oldPrefabCache;
+    std::vector<json>         refNodes;
+    std::vector<entt::entity> parents;
+    refNodes.reserve(targets.size());
+    parents.reserve(targets.size());
+    for (entt::entity e : targets) {
+        refNodes.push_back(SerializePrefabRef(scene, e, oldPrefabCache));
+        parents.push_back(reg.all_of<HierarchyComponent>(e)
+                        ? reg.get<HierarchyComponent>(e).parent : entt::null);
+    }
+
+    if (!Save(scene, root, path)) return -1;
+
+    int count = 0;
+    for (size_t i = 0; i < targets.size(); ++i) {
+        if (!reg.valid(targets[i])) continue;
+        scene.DestroyEntity(targets[i]);
+        DeserializeCtx ctx;
+        entt::entity newRoot = InstantiateSceneRef(scene, refNodes[i]["prefabRef"], ctx);
+        if (newRoot != entt::null && parents[i] != entt::null && reg.valid(parents[i]))
+            scene.SetParent(newRoot, parents[i]);
+        ++count;
+    }
+    return count;
+}
+
+entt::entity PrefabSerializer::Revert(Scene& scene, entt::entity instanceRoot)
+{
+    auto& reg = scene.GetRegistry();
+    if (!reg.valid(instanceRoot) || !reg.all_of<PrefabInstanceComponent>(instanceRoot))
+        return entt::null;
+
+    // Minimal ref: no name/overrides, so the file's content (and root name)
+    // comes back pristine; uuid and transform keep the instance's identity
+    // and placement.
+    json refJ;
+    refJ["path"] = reg.get<PrefabInstanceComponent>(instanceRoot).sourcePath;
+    refJ["uuid"] = reg.get<IDComponent>(instanceRoot).uuid;
+    auto& tc = reg.get<TransformComponent>(instanceRoot);
+    refJ["transform"] = {
+        { "position",     JVec3(tc.position)     },
+        { "rotation",     JQuat(tc.rotation)     },
+        { "eulerDegrees", JVec3(tc.eulerDegrees) },
+        { "scale",        JVec3(tc.scale)        }
+    };
+    entt::entity parent = reg.all_of<HierarchyComponent>(instanceRoot)
+                        ? reg.get<HierarchyComponent>(instanceRoot).parent : entt::null;
+
+    scene.DestroyEntity(instanceRoot);
+    DeserializeCtx ctx;
+    entt::entity newRoot = InstantiateSceneRef(scene, refJ, ctx);
+    if (newRoot != entt::null && parent != entt::null && reg.valid(parent))
+        scene.SetParent(newRoot, parent);
+    return newRoot;
+}
+
+void PrefabSerializer::Unpack(Scene& scene, entt::entity instanceRoot)
+{
+    auto& reg = scene.GetRegistry();
+    if (!reg.valid(instanceRoot)) return;
+    std::vector<entt::entity> subtree;
+    CollectSubtree(scene, instanceRoot, subtree);
+    for (entt::entity e : subtree)
+        reg.remove<PrefabChildComponent>(e);
+    reg.remove<PrefabInstanceComponent>(instanceRoot);
 }

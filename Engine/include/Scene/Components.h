@@ -89,10 +89,24 @@ struct IDComponent {
 };
 
 // Stamped on the root of an instantiated prefab — links the instance back to
-// its source .prefab file. v1 instantiation is a plain copy (no live sync);
-// the link enables "Save to Prefab" and a future re-apply.
+// its source .prefab file. Scenes serialize such roots as references (path +
+// root transform + override diff) and re-instantiate from the file on load, so
+// instances always reflect the current asset.
 struct PrefabInstanceComponent {
     std::string sourcePath;
+    // Set when the source file was missing/unparsable at load: the entity is an
+    // empty placeholder that keeps the reference (and its overrides, below)
+    // alive so a re-save round-trips instead of silently dropping the instance.
+    bool        broken = false;
+    std::string pendingOverrides;   // raw override JSON held while broken
+};
+
+// Stamped on every entity created by prefab instantiation (root included):
+// which entity in the .prefab file this one came from. Keys the override diff
+// on scene save and the deterministic per-instance UUID derivation that keeps
+// references into an instance's interior stable across reloads.
+struct PrefabChildComponent {
+    uint64_t prefabUuid = 0;
 };
 
 // Scene hierarchy — parent/children stored as entity handles.

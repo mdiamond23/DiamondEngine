@@ -62,10 +62,26 @@ private:
 
     void DrawNewScriptDialog();
 
+    void SaveScene();
+
+    // Prefab edit mode: the scene is snapshotted and replaced by a lone
+    // instance of the prefab, edited with the full editor toolset; Ctrl+S
+    // writes it back to the .prefab. Exiting restores the snapshot — its
+    // prefab references re-instantiate from the updated file, so open-scene
+    // instances pick up the changes on the way out.
+    void  OpenPrefabForEdit(const std::string& path);
+    void  SavePrefabEdit();
+    void  ExitPrefabEdit();
+    float DrawPrefabEditBanner(float y);   // returns the banner height
+
     std::function<void()> m_SceneCacheInvalidator;
     bool              m_LayoutInitialized   = false;
     bool              m_OpenNewScriptDialog = false;
     std::string       m_SceneSnapshot;
+    bool              m_PrefabEditMode      = false;
+    std::string       m_PrefabEditPath;
+    uint64_t          m_PrefabEditRootUuid  = 0;
+    std::string       m_PrefabEditSnapshot;
     char              m_NewScriptNameBuf[128]{};
     std::string       m_NewScriptError;
     HierarchyPanel    m_Hierarchy;

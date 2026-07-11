@@ -1,6 +1,218 @@
 {
   "entities": [
     {
+      "prefabRef": {
+        "name": "SwingSet",
+        "overrides": [
+          {
+            "components": {
+              "scriptComponents": {
+                "CameraTarget": {}
+              }
+            },
+            "target": 9673117681866319689
+          }
+        ],
+        "path": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine/Assets/Prefabs/SwingSet.prefab",
+        "transform": {
+          "eulerDegrees": [
+            0.0,
+            -0.0,
+            0.0
+          ],
+          "position": [
+            9.585553169250488,
+            5.263941764831543,
+            -5.329591274261475
+          ],
+          "rotation": [
+            1.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "uuid": 14153965491459510342
+      }
+    },
+    {
+      "name": "Button",
+      "parentUuid": 7290702978885404139,
+      "rectTransform": {
+        "anchorMax": [
+          0.5,
+          0.5
+        ],
+        "anchorMin": [
+          0.5,
+          0.5
+        ],
+        "pivot": [
+          0.5,
+          0.5
+        ],
+        "position": [
+          -500.0,
+          500.0
+        ],
+        "size": [
+          100.0,
+          100.0
+        ],
+        "zOrder": 0
+      },
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "position": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uiButton": {
+        "hoverTint": [
+          1.2000000476837158,
+          1.2000000476837158,
+          1.2000000476837158,
+          1.0
+        ],
+        "normalTint": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "pressedTint": [
+          0.800000011920929,
+          0.800000011920929,
+          0.800000011920929,
+          1.0
+        ]
+      },
+      "uiImage": {
+        "texturePath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\DiamondPlate006C_2K-PNG_Color.png",
+        "tint": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "uvMax": [
+          1.0,
+          1.0
+        ],
+        "uvMin": [
+          0.0,
+          0.0
+        ]
+      },
+      "uiText": {
+        "color": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "fontPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine\\Assets\\Fonts\\OpenSans-Regular.ttf",
+        "hAlign": 0,
+        "lineSpacing": 1.0,
+        "sizePx": 24.0,
+        "text": "Button!",
+        "underline": false,
+        "vAlign": 0,
+        "wrap": true
+      },
+      "uuid": 14907860051876901126
+    },
+    {
+      "name": "Progress Bar",
+      "parentUuid": 7290702978885404139,
+      "rectTransform": {
+        "anchorMax": [
+          0.5,
+          0.5
+        ],
+        "anchorMin": [
+          0.5,
+          0.5
+        ],
+        "pivot": [
+          0.5,
+          0.5
+        ],
+        "position": [
+          0.0,
+          0.0
+        ],
+        "size": [
+          100.0,
+          100.0
+        ],
+        "zOrder": 0
+      },
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "position": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uiProgressBar": {
+        "backgroundColor": [
+          0.10000000149011612,
+          0.10000000149011612,
+          0.11999999731779099,
+          1.0
+        ],
+        "direction": 0,
+        "fillColor": [
+          0.25,
+          0.800000011920929,
+          0.4000000059604645,
+          1.0
+        ],
+        "fillTexturePath": "",
+        "progress": 0.5
+      },
+      "uuid": 8686602789785547718
+    },
+    {
       "mesh": {
         "albedoPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Color.png",
         "aoPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_AmbientOcclusion.png",
@@ -14,22 +226,21 @@
         "normalPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_NormalGL.png",
         "receivesShadow": true,
         "roughnessPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Roughness.png",
+        "staticShadowCaster": true,
+        "transparent": false,
         "uvScale": 1.0,
         "visible": true
       },
       "name": "Sphere",
-      "scriptComponents": {
-        "CameraTarget": {}
-      },
       "transform": {
         "eulerDegrees": [
           0.0,
-          0.0,
+          -0.0,
           0.0
         ],
         "position": [
           -3.0,
-          -0.30000001192092896,
+          -0.29999998211860657,
           1.0
         ],
         "rotation": [
@@ -85,6 +296,8 @@
         "normalPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine/Assets/Materials/Lava004_2K-PNG/Lava004_2K-PNG_NormalGL.png",
         "receivesShadow": true,
         "roughnessPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine/Assets/Materials/Lava004_2K-PNG/Lava004_2K-PNG_Roughness.png",
+        "staticShadowCaster": true,
+        "transparent": false,
         "uvScale": 5.0,
         "visible": true
       },
@@ -92,12 +305,12 @@
       "transform": {
         "eulerDegrees": [
           0.0,
-          0.0,
+          -0.0,
           0.0
         ],
         "position": [
           0.0,
-          -1.7000000476837158,
+          -17.810684204101563,
           0.0
         ],
         "rotation": [
@@ -128,22 +341,21 @@
         "normalPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_NormalGL.png",
         "receivesShadow": true,
         "roughnessPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Roughness.png",
+        "staticShadowCaster": true,
+        "transparent": false,
         "uvScale": 1.0,
         "visible": true
       },
       "name": "Cube 1",
-      "scriptComponents": {
-        "CameraTarget": {}
-      },
       "transform": {
         "eulerDegrees": [
           0.0,
-          0.0,
+          -0.0,
           0.0
         ],
         "position": [
           0.5,
-          -0.30000001192092896,
+          -0.29805493354797363,
           -3.5
         ],
         "rotation": [
@@ -174,6 +386,8 @@
         "normalPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_NormalGL.png",
         "receivesShadow": true,
         "roughnessPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Roughness.png",
+        "staticShadowCaster": true,
+        "transparent": false,
         "uvScale": 1.0,
         "visible": true
       },
@@ -184,12 +398,12 @@
       "transform": {
         "eulerDegrees": [
           0.0,
-          0.0,
+          -0.0,
           0.0
         ],
         "position": [
-          3.5,
-          0.699999988079071,
+          7.5767621994018555,
+          0.7000000476837158,
           1.0
         ],
         "rotation": [
@@ -245,6 +459,8 @@
         "normalPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_NormalGL.png",
         "receivesShadow": true,
         "roughnessPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Roughness.png",
+        "staticShadowCaster": true,
+        "transparent": false,
         "uvScale": 1.0,
         "visible": true
       },
@@ -263,11 +479,11 @@
       "transform": {
         "eulerDegrees": [
           0.0,
-          0.0,
+          -0.0,
           0.0
         ],
         "position": [
-          0.33000001311302185,
+          -12.157594680786133,
           2.200000047683716,
           2.200000047683716
         ],
@@ -701,178 +917,6 @@
         "wrap": true
       },
       "uuid": 17037433089795119097
-    },
-    {
-      "name": "Progress Bar",
-      "parentUuid": 7290702978885404139,
-      "rectTransform": {
-        "anchorMax": [
-          0.5,
-          0.5
-        ],
-        "anchorMin": [
-          0.5,
-          0.5
-        ],
-        "pivot": [
-          0.5,
-          0.5
-        ],
-        "position": [
-          0.0,
-          0.0
-        ],
-        "size": [
-          100.0,
-          100.0
-        ],
-        "zOrder": 0
-      },
-      "transform": {
-        "eulerDegrees": [
-          0.0,
-          0.0,
-          0.0
-        ],
-        "position": [
-          0.0,
-          0.0,
-          0.0
-        ],
-        "rotation": [
-          1.0,
-          0.0,
-          0.0,
-          0.0
-        ],
-        "scale": [
-          1.0,
-          1.0,
-          1.0
-        ]
-      },
-      "uiProgressBar": {
-        "backgroundColor": [
-          0.10000000149011612,
-          0.10000000149011612,
-          0.11999999731779099,
-          1.0
-        ],
-        "direction": 0,
-        "fillColor": [
-          0.25,
-          0.800000011920929,
-          0.4000000059604645,
-          1.0
-        ],
-        "fillTexturePath": "",
-        "progress": 0.5
-      },
-      "uuid": 8686602789785547718
-    },
-    {
-      "name": "Button",
-      "parentUuid": 7290702978885404139,
-      "rectTransform": {
-        "anchorMax": [
-          0.5,
-          0.5
-        ],
-        "anchorMin": [
-          0.5,
-          0.5
-        ],
-        "pivot": [
-          0.5,
-          0.5
-        ],
-        "position": [
-          -500.0,
-          500.0
-        ],
-        "size": [
-          100.0,
-          100.0
-        ],
-        "zOrder": 0
-      },
-      "transform": {
-        "eulerDegrees": [
-          0.0,
-          0.0,
-          0.0
-        ],
-        "position": [
-          0.0,
-          0.0,
-          0.0
-        ],
-        "rotation": [
-          1.0,
-          0.0,
-          0.0,
-          0.0
-        ],
-        "scale": [
-          1.0,
-          1.0,
-          1.0
-        ]
-      },
-      "uiButton": {
-        "hoverTint": [
-          1.2000000476837158,
-          1.2000000476837158,
-          1.2000000476837158,
-          1.0
-        ],
-        "normalTint": [
-          1.0,
-          1.0,
-          1.0,
-          1.0
-        ],
-        "pressedTint": [
-          0.800000011920929,
-          0.800000011920929,
-          0.800000011920929,
-          1.0
-        ]
-      },
-      "uiImage": {
-        "texturePath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\DiamondPlate006C_2K-PNG_Color.png",
-        "tint": [
-          1.0,
-          1.0,
-          1.0,
-          1.0
-        ],
-        "uvMax": [
-          1.0,
-          1.0
-        ],
-        "uvMin": [
-          0.0,
-          0.0
-        ]
-      },
-      "uiText": {
-        "color": [
-          1.0,
-          1.0,
-          1.0,
-          1.0
-        ],
-        "fontPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine\\Assets\\Fonts\\OpenSans-Regular.ttf",
-        "hAlign": 0,
-        "lineSpacing": 1.0,
-        "sizePx": 24.0,
-        "text": "Button!",
-        "underline": false,
-        "vAlign": 0,
-        "wrap": true
-      },
-      "uuid": 14907860051876901126
     }
   ]
 }

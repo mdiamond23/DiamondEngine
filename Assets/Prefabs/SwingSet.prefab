@@ -1,0 +1,260 @@
+{
+  "prefab": {
+    "entities": [
+      {
+        "name": "SwingSet",
+        "transform": {
+          "eulerDegrees": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            1.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "uuid": 895289586464390792
+      },
+      {
+        "collider": {
+          "collisionGroup": 0,
+          "halfExtents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "halfHeight": 0.5,
+          "isTrigger": false,
+          "localOffset": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "localRotation": [
+            1.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "meshPath": "",
+          "physMatPath": "",
+          "radius": 0.5,
+          "shapeType": 3
+        },
+        "constraint": {
+          "anchor": [
+            0.75,
+            4.0,
+            0.0
+          ],
+          "axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "hasLimits": false,
+          "limitMax": 110.0,
+          "limitMin": 0.0,
+          "motorDamping": 1.0,
+          "motorFrequency": 2.0,
+          "motorMaxTorque": 50.0,
+          "motorMode": 0,
+          "motorTarget": 0.0,
+          "motorTargetEuler": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "swingNormalDeg": 45.0,
+          "swingPlaneDeg": 45.0,
+          "targetUuid": 0,
+          "twistMaxDeg": 45.0,
+          "twistMinDeg": -45.0,
+          "type": 0
+        },
+        "mesh": {
+          "albedoPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine\\Assets\\Models\\cut-fish\\textures\\Fish_Albedo.png",
+          "aoPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine\\Assets\\Models\\cut-fish\\textures\\Fish_Height.png",
+          "castsShadow": true,
+          "emissivePath": "",
+          "emissiveStrength": 0.0,
+          "materialPath": "",
+          "meshPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine\\Assets\\Models\\cut-fish\\source\\Fish_LP_combined\\Fish_LP_combined.obj",
+          "meshSubIndex": 0,
+          "metallicPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine\\Assets\\Models\\cut-fish\\textures\\Fish_Metallic.png",
+          "normalPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine\\Assets\\Models\\cut-fish\\textures\\Fish_Normalmap.png",
+          "receivesShadow": true,
+          "roughnessPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine\\Assets\\Models\\cut-fish\\textures\\Fish_Roughness.png",
+          "staticShadowCaster": true,
+          "transparent": false,
+          "uvScale": 1.0,
+          "visible": true
+        },
+        "name": "Fish",
+        "parentUuid": 895289586464390792,
+        "rigidbody": {
+          "angularDamping": 0.05000000074505806,
+          "bodyType": 1,
+          "continuousCollision": false,
+          "gravityScale": 1.0,
+          "linearDamping": 0.05000000074505806,
+          "lockRotX": false,
+          "lockRotY": false,
+          "lockRotZ": false,
+          "mass": 15.0
+        },
+        "transform": {
+          "eulerDegrees": [
+            0.0,
+            -0.0,
+            0.0
+          ],
+          "position": [
+            -11.835012435913086,
+            4.0,
+            0.0
+          ],
+          "rotation": [
+            1.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "uuid": 9673117681866319689
+      },
+      {
+        "collider": {
+          "collisionGroup": 0,
+          "halfExtents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "halfHeight": 0.5,
+          "isTrigger": false,
+          "localOffset": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "localRotation": [
+            1.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "meshPath": "",
+          "physMatPath": "",
+          "radius": 1.0,
+          "shapeType": 1
+        },
+        "constraint": {
+          "anchor": [
+            0.44999998807907104,
+            3.0,
+            0.0
+          ],
+          "axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "hasLimits": false,
+          "limitMax": 45.0,
+          "limitMin": -45.0,
+          "motorDamping": 1.0,
+          "motorFrequency": 2.0,
+          "motorMaxTorque": 50.0,
+          "motorMode": 0,
+          "motorTarget": 0.0,
+          "motorTargetEuler": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "swingNormalDeg": 45.0,
+          "swingPlaneDeg": 45.0,
+          "targetUuid": 9673117681866319689,
+          "twistMaxDeg": 45.0,
+          "twistMinDeg": -45.0,
+          "type": 0
+        },
+        "mesh": {
+          "albedoPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Color.png",
+          "aoPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_AmbientOcclusion.png",
+          "castsShadow": true,
+          "emissivePath": "",
+          "emissiveStrength": 0.0,
+          "materialPath": "",
+          "meshPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine\\Assets\\Models\\Cerberus_by_Andrew_Maximov\\Revolver.FBX",
+          "meshSubIndex": 0,
+          "metallicPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Metalness.png",
+          "normalPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_NormalGL.png",
+          "receivesShadow": true,
+          "roughnessPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Roughness.png",
+          "staticShadowCaster": true,
+          "transparent": false,
+          "uvScale": 1.0,
+          "visible": true
+        },
+        "name": "Link B",
+        "parentUuid": 895289586464390792,
+        "rigidbody": {
+          "angularDamping": 0.05000000074505806,
+          "bodyType": 1,
+          "continuousCollision": false,
+          "gravityScale": 1.0,
+          "linearDamping": 0.05000000074505806,
+          "lockRotX": false,
+          "lockRotY": false,
+          "lockRotZ": false,
+          "mass": 1.0
+        },
+        "transform": {
+          "eulerDegrees": [
+            0.0,
+            -0.0,
+            0.0
+          ],
+          "position": [
+            -12.335012435913086,
+            3.5,
+            -2.9802322387695313e-08
+          ],
+          "rotation": [
+            1.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            0.05000000074505806,
+            0.05000000074505806,
+            0.05000000074505806
+          ]
+        },
+        "uuid": 9392744117049427369
+      }
+    ],
+    "root": 895289586464390792
+  }
+}

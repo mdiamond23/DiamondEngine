@@ -1,6 +1,36 @@
 {
   "entities": [
     {
+      "prefabRef": {
+        "name": "SwingSet",
+        "path": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine/Assets/Prefabs/SwingSet.prefab",
+        "transform": {
+          "eulerDegrees": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "position": [
+            -17.0958251953125,
+            0.0,
+            4.488584518432617
+          ],
+          "rotation": [
+            1.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "uuid": 11848945468738718879
+      }
+    },
+    {
       "collider": {
         "collisionGroup": 0,
         "halfExtents": [
@@ -39,6 +69,8 @@
         "normalPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_NormalGL.png",
         "receivesShadow": true,
         "roughnessPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Roughness.png",
+        "staticShadowCaster": true,
+        "transparent": false,
         "uvScale": 1.0,
         "visible": true
       },
@@ -125,6 +157,8 @@
         "normalPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine/Assets/Materials/Lava004_2K-PNG/Lava004_2K-PNG_NormalGL.png",
         "receivesShadow": true,
         "roughnessPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine/Assets/Materials/Lava004_2K-PNG/Lava004_2K-PNG_Roughness.png",
+        "staticShadowCaster": true,
+        "transparent": false,
         "uvScale": 5.0,
         "visible": true
       },
@@ -224,6 +258,8 @@
         "normalPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine/Assets/Models/Cerberus_by_Andrew_Maximov/Textures/Cerberus_N.tga",
         "receivesShadow": true,
         "roughnessPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine/Assets/Models/Cerberus_by_Andrew_Maximov/Textures/Cerberus_R.tga",
+        "staticShadowCaster": true,
+        "transparent": false,
         "uvScale": 1.0,
         "visible": true
       },
@@ -562,6 +598,8 @@
         "normalPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine\\Assets\\Models\\cut-fish\\textures\\Fish_Normalmap.png",
         "receivesShadow": true,
         "roughnessPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine\\Assets\\Models\\cut-fish\\textures\\Fish_Roughness.png",
+        "staticShadowCaster": true,
+        "transparent": false,
         "uvScale": 1.0,
         "visible": true
       },
@@ -672,6 +710,8 @@
         "normalPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_NormalGL.png",
         "receivesShadow": true,
         "roughnessPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine/Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Roughness.png",
+        "staticShadowCaster": true,
+        "transparent": false,
         "uvScale": 1.0,
         "visible": true
       },
@@ -782,6 +822,8 @@
         "normalPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine\\Assets\\Models\\cut-fish\\textures\\Fish_Normalmap.png",
         "receivesShadow": true,
         "roughnessPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine\\Assets\\Models\\cut-fish\\textures\\Fish_Roughness.png",
+        "staticShadowCaster": true,
+        "transparent": false,
         "uvScale": 1.0,
         "visible": true
       },
@@ -892,6 +934,8 @@
         "normalPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\DiamondPlate006C_2K-PNG_NormalDX.png",
         "receivesShadow": true,
         "roughnessPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\DiamondPlate006C_2K-PNG_Roughness.png",
+        "staticShadowCaster": true,
+        "transparent": false,
         "uvScale": 0.5,
         "visible": true
       },
@@ -1008,6 +1052,8 @@
         "normalPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\DiamondPlate006C_2K-PNG_NormalDX.png",
         "receivesShadow": true,
         "roughnessPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\DiamondPlate006C_2K-PNG_Roughness.png",
+        "staticShadowCaster": true,
+        "transparent": false,
         "uvScale": 0.550000011920929,
         "visible": true
       },

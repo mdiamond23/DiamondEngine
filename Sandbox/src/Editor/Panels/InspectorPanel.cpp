@@ -1,6 +1,7 @@
 #include "InspectorPanel.h"
 #include "ContentPanel.h"
 #include "../Command.h"
+#include "../SceneSerializer.h"
 #include "../PhysicsMaterialAsset.h"
 #include "../AnimStateMachineAsset.h"
 #include "../MaterialAsset.h"
@@ -474,6 +475,53 @@ void InspectorPanel::OnImGuiRender() {
     }
 
     ImGui::Separator();
+
+    // Prefab instance controls — Apply pushes the instance's state to the
+    // .prefab and live-links the file's other instances; Revert rebuilds from
+    // the file discarding overrides; Unpack detaches into plain entities.
+    if (registry.all_of<PrefabInstanceComponent>(entity)) {
+        auto& pi = registry.get<PrefabInstanceComponent>(entity);
+        std::string fname = Basename(pi.sourcePath);
+
+        if (pi.broken) {
+            ImGui::TextColored(ImVec4(0.95f, 0.38f, 0.38f, 1.0f),
+                               "Missing prefab: %s", fname.c_str());
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", pi.sourcePath.c_str());
+            if (ImGui::Button("Retry Load")) {
+                entt::entity newRoot = PrefabSerializer::Revert(*scene, entity);
+                m_Context->Commands.Clear();   // old handle is gone
+                m_Context->SelectOnly(newRoot);
+                ImGui::End();
+                return;
+            }
+            ImGui::Separator();
+        } else {
+            ImGui::TextColored(ImVec4(0.45f, 0.68f, 1.0f, 1.0f),
+                               "Prefab: %s", fname.c_str());
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", pi.sourcePath.c_str());
+
+            if (ImGui::Button("Apply") && !pi.sourcePath.empty()) {
+                if (PrefabSerializer::SaveAndPropagate(*scene, entity, pi.sourcePath) > 0) {
+                    // rebuilt siblings invalidated arbitrary handles
+                    m_Context->Commands.Clear();
+                    m_Context->SelectOnly(entity);
+                }
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Revert")) {
+                entt::entity newRoot = PrefabSerializer::Revert(*scene, entity);
+                m_Context->Commands.Clear();
+                m_Context->SelectOnly(newRoot);
+                ImGui::End();
+                return;
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Unpack")) {
+                PrefabSerializer::Unpack(*scene, entity);
+            }
+            ImGui::Separator();
+        }
+    }
 
     // Transform
     if (registry.all_of<TransformComponent>(entity)) {
