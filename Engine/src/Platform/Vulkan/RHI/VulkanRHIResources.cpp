@@ -512,4 +512,9 @@ VulkanRHIResourceSet::VulkanRHIResourceSet(VulkanRHIDevice* device, VulkanRHIPip
     }
 }
 
+VulkanRHIResourceSet::~VulkanRHIResourceSet() {
+    vkFreeDescriptorSets(m_Device->Ctx().Device(), m_Device->DescriptorPool(),
+                         VulkanRHIDevice::kFramesInFlight, m_Sets.data());
+}
+
 } // namespace Diamond

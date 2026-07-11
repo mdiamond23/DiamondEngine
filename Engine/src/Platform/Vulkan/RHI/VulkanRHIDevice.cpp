@@ -340,14 +340,17 @@ void VulkanRHIDevice::DestroyDepthResources() {
 void VulkanRHIDevice::CreateDescriptorPool() {
     // Sized for the pass sets plus per-material sets (each material = one set per
     // frame slot holding 6 samplers + 2 UBOs; the deferred-lighting set alone holds
-    // 21 samplers per slot since the shadow-map bindings grew); the per-frame reset /
-    // caching-allocator strategy is a later optimization.
+    // 21 samplers per slot since the shadow-map bindings grew). FREE_DESCRIPTOR_SET
+    // lets resource sets return their slots on destruction — without it, every
+    // scene reload (editor stop-play restores the snapshot) permanently consumes
+    // pool capacity until vkAllocateDescriptorSets fails with OUT_OF_POOL_MEMORY.
     const VkDescriptorPoolSize poolSizes[] = {
         { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,         256 },
         { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1024 },
     };
 
     VkDescriptorPoolCreateInfo poolInfo{ VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO };
+    poolInfo.flags         = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
     poolInfo.maxSets       = 256;
     poolInfo.poolSizeCount = static_cast<uint32_t>(std::size(poolSizes));
     poolInfo.pPoolSizes    = poolSizes;

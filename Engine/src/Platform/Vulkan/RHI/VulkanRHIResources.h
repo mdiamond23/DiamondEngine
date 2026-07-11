@@ -116,7 +116,9 @@ public:
     VulkanRHIResourceSet(VulkanRHIDevice* device, VulkanRHIPipeline* pipeline,
                          uint32_t setIndex, const std::vector<RHIBufferBinding>& buffers,
                          const std::vector<RHITextureBinding>& textures);
-    ~VulkanRHIResourceSet() override = default;   // sets are freed with the device pool
+    // Returns the sets to the device pool. Same contract as the other RHI
+    // resources: caller must WaitIdle() before destroying a set still in flight.
+    ~VulkanRHIResourceSet() override;
 
     VkDescriptorSet Handle(uint32_t frame) const { return m_Sets[frame]; }
 
