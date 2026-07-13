@@ -55,6 +55,12 @@ struct RHITextureDesc {
     // texture path always generates mipmaps; render targets ignore it.
     bool generateMips = false;
 
+    // Pre-baked mip chain (cooked DDS): when > 0, initialData holds this many
+    // mips tightly packed largest-first, each RHIFormatLevelSize() bytes, and
+    // generateMips is ignored — block-compressed images can't be blit-downsampled.
+    // 0 = initialData is a single mip-0 image (the behavior above).
+    uint32_t mipCount = 0;
+
     // Diagnostic name shown by capture tools (RenderDoc resource inspector).
     // Empty = unnamed. Must outlive the CreateTexture call only.
     const char* debugName = nullptr;

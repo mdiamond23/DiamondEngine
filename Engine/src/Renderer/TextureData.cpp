@@ -5,6 +5,7 @@
 #ifdef DIAMOND_ENABLE_VULKAN
 #include "Platform/Vulkan/Resources/VulkanTexture2D.h"
 #include "Assets/ImageLoader.h"
+#include "Assets/DDSLoader.h"
 #include <spdlog/spdlog.h>
 #endif
 
@@ -30,6 +31,20 @@ std::shared_ptr<Texture> Texture::Create(const std::string& path, bool flipVerti
 {
 #ifdef DIAMOND_ENABLE_VULKAN
     if (s_ResourceDevice) {
+        // Cooked BCn fast path: a fresh Assets/Cache .dds skips the stb decode
+        // and runtime mip generation and stays compressed in VRAM (see
+        // Docs/asset-pipeline-design.md §4). Cooked files are baked unflipped,
+        // so flipped callers always take the source path. Any miss — no cooked
+        // file, stale (source newer), parse failure — falls through unchanged.
+        if (!flipVertically) {
+            DDSData dds = DDSLoader::LoadCookedFor(path);
+            if (dds.IsValid()) {
+                spdlog::info("[Texture] cooked load '{}' ({}, {} mips)", path, RHIFormatName(dds.Format), dds.MipCount);
+                return std::make_shared<VulkanTexture2D>(
+                    s_ResourceDevice, dds, RHIFilter::Linear, path, flipVertically);
+            }
+        }
+
         // Same decode + flip convention as the GL path (texel (0,0) maps to v=0 in
         // both APIs, so the pixels must be identical for mesh UVs to match), with
         // mips generated at upload like GL's glGenerateMipmap.

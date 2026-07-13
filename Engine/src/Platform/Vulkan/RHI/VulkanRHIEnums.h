@@ -15,6 +15,9 @@ inline VkFormat ToVkFormat(RHIFormat f) {
         case RHIFormat::RGBA16F:    return VK_FORMAT_R16G16B16A16_SFLOAT;
         case RHIFormat::R16F:       return VK_FORMAT_R16_SFLOAT;
         case RHIFormat::Depth32F:   return VK_FORMAT_D32_SFLOAT;
+        case RHIFormat::BC7:        return VK_FORMAT_BC7_UNORM_BLOCK;
+        case RHIFormat::BC5:        return VK_FORMAT_BC5_UNORM_BLOCK;
+        case RHIFormat::BC4:        return VK_FORMAT_BC4_UNORM_BLOCK;
         case RHIFormat::Undefined:  return VK_FORMAT_UNDEFINED;
     }
     return VK_FORMAT_UNDEFINED;
@@ -28,6 +31,9 @@ inline RHIFormat FromVkFormat(VkFormat f) {
         case VK_FORMAT_R16G16B16A16_SFLOAT: return RHIFormat::RGBA16F;
         case VK_FORMAT_R16_SFLOAT:          return RHIFormat::R16F;
         case VK_FORMAT_D32_SFLOAT:          return RHIFormat::Depth32F;
+        case VK_FORMAT_BC7_UNORM_BLOCK:     return RHIFormat::BC7;
+        case VK_FORMAT_BC5_UNORM_BLOCK:     return RHIFormat::BC5;
+        case VK_FORMAT_BC4_UNORM_BLOCK:     return RHIFormat::BC4;
         default:                            return RHIFormat::Undefined;
     }
 }

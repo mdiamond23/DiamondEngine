@@ -104,8 +104,8 @@ ragdoll characters, active physics control, grabbing, local multiplayer.
 
 - [x] Asset registry — track every loaded asset by path, prevent double-loading
 - [x] Hot reload — detect file changes, reload textures and shaders without restart
-- [ ] Prefabs — save an entity + its components as a reusable scene template
-- [ ] Texture compression — BCn/DXT via a pre-process step (e.g. `texconv`)
+- [x] Prefabs — save an entity + its components as a reusable scene template
+- [x] Texture compression — BCn/DXT via a pre-process step (e.g. `texconv`)
 
 ---
 

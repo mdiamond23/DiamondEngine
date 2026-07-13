@@ -128,8 +128,10 @@ bool DeviceSupportsRequiredFeatures(VkPhysicalDevice device) {
     f2.pNext = &f12;
     vkGetPhysicalDeviceFeatures2(device, &f2);
 
+    // textureCompressionBC: cooked BCn material textures (universal on desktop GPUs).
     return f13.dynamicRendering && f13.synchronization2
-        && f12.timelineSemaphore && f12.bufferDeviceAddress;
+        && f12.timelineSemaphore && f12.bufferDeviceAddress
+        && f2.features.textureCompressionBC;
 }
 
 bool DeviceSuitable(VkPhysicalDevice device, VkSurfaceKHR surface) {
@@ -287,6 +289,7 @@ void VulkanContext::CreateLogicalDevice() {
     f12.pNext = &f13;
 
     VkPhysicalDeviceFeatures2 f2{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2 };
+    f2.features.textureCompressionBC = VK_TRUE;
     f2.pNext = &f12;
 
     VkDeviceCreateInfo ci{ VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO };

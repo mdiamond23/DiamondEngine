@@ -1,6 +1,7 @@
 add_executable(Sandbox
     src/main.cpp
     src/Scripts/AllScripts.h
+    src/AssetPipeline/TextureCooker.cpp
     src/Editor/EditorLayers.cpp
     src/Editor/GLEditorBackend.cpp
     src/Editor/Command.cpp
@@ -38,6 +39,20 @@ target_compile_definitions(Sandbox PRIVATE
     FONTS_DIR="${fontawesome_SOURCE_DIR}/webfonts"
     SCRIPTS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/src/Scripts"
 )
+
+# texconv (DirectXTex) drives the texture cooker's BC7 shell-out (TextureCooker.cpp),
+# same offline-tool pattern as glslangValidator in Engine/CMakeLists.txt. Unlike
+# glslangValidator this is optional, not FATAL_ERROR: cooking is a dev-time
+# convenience (Assets/Cache is gitignored, per-machine), not required to build or
+# run the engine — TextureCooker just logs and no-ops if DIAMOND_TEXCONV is unset.
+find_program(DIAMOND_TEXCONV_PATH NAMES texconv
+    HINTS ${CMAKE_SOURCE_DIR}/Tools)
+if(DIAMOND_TEXCONV_PATH)
+    target_compile_definitions(Sandbox PRIVATE DIAMOND_TEXCONV="${DIAMOND_TEXCONV_PATH}")
+else()
+    message(WARNING "texconv not found (looked in Tools/) — texture cooking disabled; "
+                     "download DirectXTex's texconv.exe into Tools/ to enable it.")
+endif()
 
 # Headless serializer tests (no window/GPU). Excluded from ALL so normal
 # builds stay fast: cmake --build build --target PrefabTests, then run

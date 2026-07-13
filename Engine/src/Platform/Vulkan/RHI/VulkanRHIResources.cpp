@@ -3,6 +3,7 @@
 
 #include <cstring>
 #include <string>
+#include <vector>
 
 namespace Diamond {
 
@@ -61,13 +62,6 @@ VkBuffer VulkanRHIBuffer::Handle(uint32_t frame) const {
 // ── Texture ──────────────────────────────────────────────────────────────────
 
 namespace {
-// Bytes per pixel for the formats M3 can upload from CPU pixels.
-uint32_t BytesPerPixel(RHIFormat f) {
-    switch (f) {
-        case RHIFormat::RGBA8: return 4;
-        default:               return 4;   // only RGBA8 textures uploaded so far
-    }
-}
 
 // Barrier over a contiguous mip range of a single-layer color image — the mip
 // blit chain below needs per-level transitions, which the full-subresource
@@ -108,20 +102,24 @@ VulkanRHITexture::VulkanRHITexture(VulkanRHIDevice* device, const RHITextureDesc
     m_RenderTarget = isColorTarget || isDepthTarget;
     m_Aspect       = isDepthTarget ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
 
-    // Uploaded textures may carry a full mip chain, blit-downsampled from mip 0
-    // below (render targets stay single-mip).
+    // Uploaded textures may carry a full mip chain: pre-baked in initialData
+    // (mipCount > 0, e.g. a cooked BCn DDS) or blit-downsampled from mip 0 below
+    // (generateMips; render targets stay single-mip).
     uint32_t mipLevels = 1;
-    if (desc.initialData && desc.generateMips) {
+    if (desc.initialData && desc.mipCount > 0) {
+        mipLevels = desc.mipCount;
+    } else if (desc.initialData && desc.generateMips) {
         uint32_t extent = desc.width > desc.height ? desc.width : desc.height;
         while (extent >>= 1) ++mipLevels;
     }
+    const bool blitMips = mipLevels > 1 && desc.mipCount == 0;
 
     VkImageUsageFlags usage = 0;
     if (HasFlag(desc.usage, RHITextureUsage::Sampled)) usage |= VK_IMAGE_USAGE_SAMPLED_BIT;
     if (isColorTarget)        usage |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
     if (isDepthTarget)        usage |= VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
     if (desc.initialData)     usage |= VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-    if (mipLevels > 1)        usage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;   // blit source
+    if (blitMips)             usage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;   // blit source
 
     // Render targets keep one image per frame-in-flight; static textures use one.
     const uint32_t count = m_RenderTarget ? VulkanRHIDevice::kFramesInFlight : 1;
@@ -140,8 +138,25 @@ VulkanRHITexture::VulkanRHITexture(VulkanRHIDevice* device, const RHITextureDesc
     // Static textures upload their pixels once and settle in SHADER_READ_ONLY.
     if (desc.initialData) {
         VmaAllocator allocator = ctx.Allocator();
-        const VkDeviceSize bytes = static_cast<VkDeviceSize>(desc.width) * desc.height
-                                 * BytesPerPixel(desc.format);
+
+        // One copy region per uploaded mip: just mip 0 normally, the whole
+        // pre-baked chain (tightly packed, largest first) when mipCount > 0.
+        const uint32_t uploadMips = desc.mipCount > 0 ? mipLevels : 1;
+        std::vector<VkBufferImageCopy> copies(uploadMips);
+        VkDeviceSize bytes = 0;
+        for (uint32_t mip = 0; mip < uploadMips; ++mip) {
+            const uint32_t w = (desc.width  >> mip) ? desc.width  >> mip : 1;
+            const uint32_t h = (desc.height >> mip) ? desc.height >> mip : 1;
+            VkBufferImageCopy& copy = copies[mip];
+            copy = {};
+            copy.bufferOffset                = bytes;
+            copy.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            copy.imageSubresource.mipLevel   = mip;
+            copy.imageSubresource.layerCount = 1;
+            copy.imageExtent                 = { w, h, 1 };
+            bytes += RHIFormatLevelSize(desc.format, w, h);
+        }
+
         VmaAllocationInfo stagingInfo{};
         VulkanBuffer staging = CreateBuffer(
             allocator, bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_AUTO,
@@ -155,17 +170,16 @@ VulkanRHITexture::VulkanRHITexture(VulkanRHIDevice* device, const RHITextureDesc
                                   VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
                                   VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
 
-            VkBufferImageCopy copy{};
-            copy.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-            copy.imageSubresource.layerCount = 1;
-            copy.imageExtent = { desc.width, desc.height, 1 };
             vkCmdCopyBufferToImage(cmd, staging.handle, m_Images[0].image,
-                                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+                                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                   uploadMips, copies.data());
 
-            // Walk the mip chain, blitting each level from the one above. The
-            // initial transition put every level in TRANSFER_DST; each source
-            // level moves to TRANSFER_SRC just before its blit.
-            for (uint32_t mip = 1; mip < mipLevels; ++mip) {
+            // Pre-baked chains skip the blit walk entirely — every level was
+            // copied above and settles from TRANSFER_DST in one barrier below.
+            // Otherwise walk the mip chain, blitting each level from the one
+            // above. The initial transition put every level in TRANSFER_DST;
+            // each source level moves to TRANSFER_SRC just before its blit.
+            for (uint32_t mip = 1; blitMips && mip < mipLevels; ++mip) {
                 MipRangeBarrier(cmd, m_Images[0].image, mip - 1, 1,
                                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                                 VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
@@ -196,16 +210,18 @@ VulkanRHITexture::VulkanRHITexture(VulkanRHIDevice* device, const RHITextureDesc
                                1, &blit, VK_FILTER_LINEAR);
             }
 
-            // Settle every level in SHADER_READ_ONLY: blit sources are in
-            // TRANSFER_SRC, the last level (or the whole image when mips are off)
-            // still in TRANSFER_DST.
-            if (mipLevels > 1)
+            // Settle every level in SHADER_READ_ONLY. Blit sources sit in
+            // TRANSFER_SRC; whatever wasn't a blit source — the last blit level,
+            // or every level when nothing was blitted (single image, pre-baked
+            // chain) — is still in TRANSFER_DST.
+            if (blitMips)
                 MipRangeBarrier(cmd, m_Images[0].image, 0, mipLevels - 1,
                                 VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                                 VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
                                 VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
-            MipRangeBarrier(cmd, m_Images[0].image, mipLevels - 1, 1,
+            const uint32_t dstBase = blitMips ? mipLevels - 1 : 0;
+            MipRangeBarrier(cmd, m_Images[0].image, dstBase, mipLevels - dstBase,
                             VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                             VK_PIPELINE_STAGE_2_BLIT_BIT | VK_PIPELINE_STAGE_2_COPY_BIT,

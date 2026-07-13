@@ -47,6 +47,7 @@
 #include "Animation/AnimationSystem.h"
 #include "Animation/IKSystem.h"
 #include "Profiling/CPUProfiler.h"
+#include "AssetPipeline/TextureCooker.h"
 
 #include <cmath>
 #include <cstdio>
@@ -275,8 +276,9 @@ int main(int argc, char** argv)
 {
     // Renderer backend flag. `--vulkan` runs the editor through the Vulkan
     // backend; macOS is GL-only (no MoltenVK) — ignore the flag there.
-    bool wantVulkan = false;
-    bool wantTracy  = false;
+    bool wantVulkan      = false;
+    bool wantTracy       = false;
+    bool wantCookTextures = false;
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--vulkan") == 0) {
 #ifdef __APPLE__
@@ -287,7 +289,18 @@ int main(int argc, char** argv)
 #endif
         } else if (std::strcmp(argv[i], "--tracy") == 0) {
             wantTracy = true;
+        } else if (std::strcmp(argv[i], "--cook-textures") == 0) {
+            wantCookTextures = true;
         }
+    }
+
+    // Headless cooker entry point (Docs/asset-pipeline-design.md §4: "a
+    // standalone script also works") — no window/GL/Vulkan context needed,
+    // just the filesystem + texconv. Same TextureCooker::CookAll() the editor's
+    // Assets > Cook Textures menu item calls.
+    if (wantCookTextures) {
+        TextureCooker::CookAll();
+        return 0;
     }
 
     // `--tracy` spawns the version-matched Tracy GUI auto-connected to this

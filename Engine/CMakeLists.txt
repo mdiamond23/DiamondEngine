@@ -229,6 +229,7 @@ add_library(MyEngine STATIC
     src/Core/Input.cpp
     src/Application.cpp
     src/Assets/ImageLoader.cpp
+    src/Assets/DDSLoader.cpp
     src/Assets/ModelImporter.cpp
     src/Assets/GltfImporter.cpp
     src/Assets/cgltf_impl.c

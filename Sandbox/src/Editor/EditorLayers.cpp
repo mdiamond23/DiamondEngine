@@ -5,6 +5,7 @@
 #include <cctype>
 #include "EditorLayers.h"
 #include "SceneSerializer.h"
+#include "AssetPipeline/TextureCooker.h"
 #include <spdlog/spdlog.h>
 #include "Scene/Components.h"
 #include <IconsFontAwesome5.h>
@@ -535,6 +536,14 @@ void EditorLayer::DrawMenuBar()
             m_OpenNewScriptDialog = true;
             memset(m_NewScriptNameBuf, 0, sizeof(m_NewScriptNameBuf));
             m_NewScriptError.clear();
+        }
+        ImGui::EndMenu();
+    }
+
+    if (ImGui::BeginMenu("Assets")) {
+        if (ImGui::MenuItem("Cook Textures")) {
+            const int n = Diamond::TextureCooker::CookAll();
+            spdlog::info("[Assets] Cook Textures: {} cooked — press F5 to reload them now", n);
         }
         ImGui::EndMenu();
     }

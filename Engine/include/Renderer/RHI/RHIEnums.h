@@ -18,7 +18,36 @@ enum class RHIFormat {
     RGBA16F,
     R16F,
     Depth32F,
+    BC7,          // block-compressed (UNORM — cooked textures keep the manual shader gamma, upload-only, never a render target
+    BC5,          // 2-channel (RG) block-compressed normal maps; Z reconstructed in-shader
+    BC4,          // 1-channel (R) block-compressed masks (roughness/metallic/AO)
 };
+
+// Byte size of one mip level in 'format'. Block-compressed formats are 4×4-texel
+// blocks with dimensions rounded up to whole blocks — a 1×1 tail mip still
+// occupies a full block (16 bytes for BC7/BC5, 8 for BC4 — half the channels,
+// half the block).
+inline uint64_t RHIFormatLevelSize(RHIFormat format, uint32_t width, uint32_t height) {
+    switch (format) {
+        case RHIFormat::BC7:
+        case RHIFormat::BC5:
+            return uint64_t((width + 3) / 4) * ((height + 3) / 4) * 16;
+        case RHIFormat::BC4:
+            return uint64_t((width + 3) / 4) * ((height + 3) / 4) * 8;
+        case RHIFormat::RGBA16F: return uint64_t(width) * height * 8;
+        case RHIFormat::R16F:    return uint64_t(width) * height * 2;
+        default:                 return uint64_t(width) * height * 4;   // 8-bit RGBA variants, Depth32F
+    }
+}
+
+inline const char* RHIFormatName(RHIFormat format) {
+    switch (format) {
+        case RHIFormat::BC7: return "BC7";
+        case RHIFormat::BC5: return "BC5";
+        case RHIFormat::BC4: return "BC4";
+        default:             return "?";
+    }
+}
 
 // Vertex attribute component layout.
 enum class RHIVertexFormat {

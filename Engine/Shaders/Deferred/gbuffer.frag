@@ -27,8 +27,12 @@ void main()
     float roughness = texture(roughnessMap, uv).r;
     float ao        = texture(aoMap,        uv).r;
 
-    // Normal map (tangent space) → view space
-    vec3 N = texture(normalMap, uv).rgb * 2.0 - 1.0;
+    // Normal map (tangent space) → view space. Only RG is read and Z is
+    // reconstructed unconditionally: tangent-space normals always have z > 0,
+    // so this is exactly as correct for an uncooked RGBA8 normal map as for a
+    // cooked BC5 one (which only stores RG) — no per-texture flag needed.
+    vec2 nXY = texture(normalMap, uv).rg * 2.0 - 1.0;
+    vec3 N   = vec3(nXY, sqrt(max(0.0, 1.0 - dot(nXY, nXY))));
     N = normalize(TBN_view * N);
 
     // Emissive — already in linear space, scaled by per-material strength

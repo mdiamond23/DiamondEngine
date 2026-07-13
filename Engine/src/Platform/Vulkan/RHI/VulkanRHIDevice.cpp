@@ -284,12 +284,33 @@ void VulkanRHIDevice::CreateTimestampPool() {
 
 #ifdef DIAMOND_TRACY
 // Tracy GPU context — calibrates GPU↔CPU clocks by recording, submitting, and
-// waiting a one-shot command buffer internally; frame 0's is safe to lend
-// before its first real use. Same support gate as our own timestamp pools.
+// waiting a one-shot command buffer internally, beginning it several times.
+// That needs a pool with RESET_COMMAND_BUFFER_BIT (implicit re-begin resets
+// the buffer), which the frame pools deliberately lack, so lend Tracy a
+// throwaway pool instead; it only touches the buffer during construction.
+// Same support gate as our own timestamp pools.
 void VulkanRHIDevice::CreateTracyVkContext() {
     if (!m_TimestampsSupported) return;
-    m_TracyVkCtx = TracyVkContext(m_Ctx.PhysicalDevice(), m_Ctx.Device(),
-                                  m_Ctx.GraphicsQueue(), m_Frames[0].commandBuffer);
+
+    VkDevice device = m_Ctx.Device();
+    VkCommandPoolCreateInfo poolInfo{ VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO };
+    poolInfo.flags            = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT |
+                                VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+    poolInfo.queueFamilyIndex = m_Ctx.Queues().graphics;
+    VkCommandPool tracyPool = VK_NULL_HANDLE;
+    VK_CHECK(vkCreateCommandPool(device, &poolInfo, nullptr, &tracyPool));
+
+    VkCommandBufferAllocateInfo allocInfo{ VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO };
+    allocInfo.commandPool        = tracyPool;
+    allocInfo.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    allocInfo.commandBufferCount = 1;
+    VkCommandBuffer tracyCmd = VK_NULL_HANDLE;
+    VK_CHECK(vkAllocateCommandBuffers(device, &allocInfo, &tracyCmd));
+
+    m_TracyVkCtx = TracyVkContext(m_Ctx.PhysicalDevice(), device,
+                                  m_Ctx.GraphicsQueue(), tracyCmd);
+
+    vkDestroyCommandPool(device, tracyPool, nullptr);
 }
 #endif
 

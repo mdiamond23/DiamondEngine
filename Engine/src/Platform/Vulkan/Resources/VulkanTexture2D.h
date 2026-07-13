@@ -11,6 +11,7 @@ namespace Diamond {
 
 class RHIDevice;
 class RHITexture;
+struct DDSData;
 
 // A Vulkan-backed implementation of the engine's abstract Texture: it wraps an
 // RHITexture so Renderer2D (and, later, UI/material sampling) can bind an uploaded
@@ -38,6 +39,17 @@ public:
                     bool generateMips = false,
                     std::string sourcePath = {},
                     bool flipVertically = false);
+
+    // Cooked block-compressed construction: uploads a parsed .dds payload
+    // (pre-baked mip chain) untouched — no RGBA expansion, no mip generation.
+    // 'sourcePath' is the SOURCE image (the .png the registry watches), not the
+    // .dds: Reload() re-resolves cooked-vs-source freshness from it, so an
+    // edited source hot-reloads uncooked while a stale cooked file exists.
+    VulkanTexture2D(RHIDevice* device, const DDSData& dds,
+                    RHIFilter filter = RHIFilter::Linear,
+                    std::string sourcePath = {},
+                    bool flipVertically = false);
+
     ~VulkanTexture2D() override;
 
     void     Bind(uint32_t slot = 0) const override;   // no-op: Vulkan binds via sets
