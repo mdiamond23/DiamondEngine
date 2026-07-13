@@ -297,16 +297,13 @@ public:
         m_ImGui.BeginFrame();
     }
 
-    void OnImGuiPanels() override {
-        if (ImGui::Begin("Renderer")) {
-            ImGui::Text("Backend: Vulkan (deferred, RHI render graph)");
-            ImGui::Text("Scene output: %ux%u", m_SceneW, m_SceneH);
-            ImGui::Separator();
-            // Global exposure (HDR scale before the ACES tonemap; 1.0 = GL parity).
-            if (ImGui::SliderFloat("Exposure", &m_Exposure, 0.1f, 2.0f, "%.2f"))
-                m_Renderer->SetExposure(m_Exposure);
-        }
-        ImGui::End();
+    void DrawRendererSettings() override {
+        ImGui::Text("Backend: Vulkan (deferred, RHI render graph)");
+        ImGui::Text("Scene output: %ux%u", m_SceneW, m_SceneH);
+        ImGui::Separator();
+        // Global exposure (HDR scale before the ACES tonemap; 1.0 = GL parity).
+        if (ImGui::SliderFloat("Exposure", &m_Exposure, 0.1f, 2.0f, "%.2f"))
+            m_Renderer->SetExposure(m_Exposure);
     }
 
     void RenderFrame(const EditorFrameInput& input) override {

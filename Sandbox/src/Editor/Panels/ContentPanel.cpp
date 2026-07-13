@@ -134,6 +134,14 @@ void ContentPanel::Refresh() {
     if (!fs::exists(m_CurrentPath)) return;
 
     for (auto& entry : fs::directory_iterator(m_CurrentPath)) {
+        // Assets/Cache is derived, per-machine data (cooked .dds mirrors,
+        // gitignored) — not browsable content. Hidden here so it can't be
+        // navigated into, dragged from, or accidentally deleted.
+        std::error_code ec;
+        if (entry.is_directory() && entry.path().filename() == "Cache" &&
+            fs::equivalent(entry.path().parent_path(), m_AssetsDir, ec) && !ec)
+            continue;
+
         ContentItem item;
         item.path        = entry.path();
         item.isDirectory = entry.is_directory();

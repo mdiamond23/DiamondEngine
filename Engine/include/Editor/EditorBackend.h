@@ -106,9 +106,10 @@ public:
     // ImGui_Impl*_NewFrame + ImGui::NewFrame.
     virtual void BeginImGuiFrame() = 0;
 
-    // Backend-specific settings windows (exposure, FXAA, ...) — drawn between
-    // BeginImGuiFrame and ImGui::Render like any other editor window.
-    virtual void OnImGuiPanels() {}
+    // Backend-specific renderer settings (exposure, FXAA, ...): widgets only,
+    // no ImGui::Begin/End — the editor's dockable "Renderer" panel supplies the
+    // window and calls this as its body (see Sandbox RendererPanel).
+    virtual void DrawRendererSettings() {}
 
     // Renders and presents one frame: scene views, in-game UI, then the ImGui
     // draw data over everything. Call after ImGui::Render().

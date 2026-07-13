@@ -394,15 +394,12 @@ void GLEditorBackend::BeginImGuiFrame()
     ImGui::NewFrame();
 }
 
-void GLEditorBackend::OnImGuiPanels()
+void GLEditorBackend::DrawRendererSettings()
 {
-    if (ImGui::Begin("Renderer")) {
-        ImGui::Text("Backend: OpenGL (deferred)");
-        ImGui::Text("Scene output: %dx%d", m_LastFbW, m_LastFbH);
-        ImGui::Separator();
-        ImGui::Checkbox("FXAA", &m_FxaaEnabled);
-    }
-    ImGui::End();
+    ImGui::Text("Backend: OpenGL (deferred)");
+    ImGui::Text("Scene output: %dx%d", m_LastFbW, m_LastFbH);
+    ImGui::Separator();
+    ImGui::Checkbox("FXAA", &m_FxaaEnabled);
 }
 
 Diamond::EditorViewImage GLEditorBackend::SceneViewImage() const

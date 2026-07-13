@@ -376,6 +376,9 @@ int main(int argc, char** argv)
     editorLayer.SetSceneCacheInvalidator([&backend] {
         backend->InvalidateSceneCaches();
     });
+    editorLayer.SetRendererSettingsDraw([&backend] {
+        backend->DrawRendererSettings();
+    });
     if (glBackend) glBackend->AttachEditorLayer(&editorLayer);
 
     BuildDefaultScene(scene);
@@ -549,8 +552,7 @@ int main(int argc, char** argv)
         {
             DIAMOND_PROFILE_SCOPE("Editor ImGui");
             editorLayer.UpdateCamera(frame.view, frame.proj, g_camera.Position);
-            editorLayer.OnImGuiRender();
-            backend->OnImGuiPanels();
+            editorLayer.OnImGuiRender();   // includes the Renderer panel (backend widgets via SetRendererSettingsDraw)
         }
 
         // Vulkan only: gather the particle-preview panel's per-frame state into

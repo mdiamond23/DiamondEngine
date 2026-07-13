@@ -26,7 +26,7 @@ public:
 
     void SetDropHandler(std::function<void(int, const char**)> handler) override;
     void BeginImGuiFrame() override;
-    void OnImGuiPanels() override;
+    void DrawRendererSettings() override;
     void RenderFrame(const Diamond::EditorFrameInput& input) override;
 
     Diamond::EditorViewImage SceneViewImage() const override;

@@ -210,6 +210,8 @@ void EditorLayer::SetupDockspace()
     ImGui::DockBuilderDockWindow("Viewport", center);
     ImGui::DockBuilderDockWindow("Game", center);
     ImGui::DockBuilderDockWindow("Particle Preview", center);
+    // Renderer docks first so Inspector ends up the selected tab in the node.
+    ImGui::DockBuilderDockWindow("Renderer", right);
     ImGui::DockBuilderDockWindow("Inspector", right);
     ImGui::DockBuilderDockWindow("Content Browser", down);
     ImGui::DockBuilderDockWindow("Console", down);

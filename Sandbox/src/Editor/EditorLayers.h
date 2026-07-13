@@ -16,6 +16,7 @@
 #include "Panels/ParticlePreviewPanel.h"
 #include "Panels/MixerPanel.h"
 #include "Panels/ProfilerPanel.h"
+#include "Panels/RendererPanel.h"
 
 class EditorLayer {
 public:
@@ -45,6 +46,11 @@ public:
     // Last-completed-frame renderer stats, pushed once per frame by the app
     // loop (see Sandbox/src/main.cpp) and read by ProfilerPanel.
     void SetStats(const Diamond::RendererStats& stats) { m_Profiler.SetStats(stats); }
+    // The backend's renderer-settings widgets (exposure, FXAA, ...), drawn as
+    // the body of the dockable Renderer panel.
+    void SetRendererSettingsDraw(std::function<void()> fn) {
+        m_RendererSettings.SetDrawCallback(std::move(fn));
+    }
     void SetBackendIsVulkan(bool isVulkan) { m_Profiler.SetBackendIsVulkan(isVulkan); }
     void UpdateCamera(const glm::mat4& view, const glm::mat4& proj, const glm::vec3& camPos);
     EditorContext& GetContext() { return m_Context; }
@@ -94,12 +100,14 @@ private:
     ParticlePreviewPanel m_ParticlePreview;
     MixerPanel        m_Mixer;
     ProfilerPanel     m_Profiler;
+    RendererPanel     m_RendererSettings;
 
     // Every panel above, for the generic render loop and the "View" menu's
     // checkbox list. Add new panels to both the members above and this list.
-    std::array<Panel*, 10> m_Panels {
+    std::array<Panel*, 11> m_Panels {
         &m_Hierarchy, &m_Viewport, &m_GameViewport, &m_Inspector, &m_Content,
-        &m_Console, &m_Animator, &m_ParticlePreview, &m_Mixer, &m_Profiler
+        &m_Console, &m_Animator, &m_ParticlePreview, &m_Mixer, &m_Profiler,
+        &m_RendererSettings
     };
 
     EditorContext     m_Context;
