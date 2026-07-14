@@ -2,6 +2,7 @@
 #include <Renderer/Material.h>
 #include <Renderer/TextureData.h>
 #include <AssetPipeline/AssetRegistry.h>
+#include "AssetPathUtils.h"
 #include <nlohmann/json.hpp>
 #include <fstream>
 #include <filesystem>
@@ -22,12 +23,12 @@ inline std::string NormalizeMaterialPath(const std::string& path)
 // share one GPU texture (empty path -> nullptr, handled by the registry).
 inline void ApplyMaterialJson(Diamond::PBRMaterial& m, const nlohmann::json& j)
 {
-    m.AlbedoPath       = j.value("albedoPath",       std::string{});
-    m.NormalPath       = j.value("normalPath",       std::string{});
-    m.MetallicPath     = j.value("metallicPath",     std::string{});
-    m.RoughnessPath    = j.value("roughnessPath",    std::string{});
-    m.AOPath           = j.value("aoPath",           std::string{});
-    m.EmissivePath     = j.value("emissivePath",     std::string{});
+    m.AlbedoPath       = AssetPaths::Resolve(j.value("albedoPath",       std::string{}));
+    m.NormalPath       = AssetPaths::Resolve(j.value("normalPath",       std::string{}));
+    m.MetallicPath     = AssetPaths::Resolve(j.value("metallicPath",     std::string{}));
+    m.RoughnessPath    = AssetPaths::Resolve(j.value("roughnessPath",    std::string{}));
+    m.AOPath           = AssetPaths::Resolve(j.value("aoPath",           std::string{}));
+    m.EmissivePath     = AssetPaths::Resolve(j.value("emissivePath",     std::string{}));
     m.EmissiveStrength = j.value("emissiveStrength", 0.0f);
     m.UVScale          = j.value("uvScale",          1.0f);
 
@@ -69,7 +70,9 @@ inline bool SaveMaterialAsset(const std::string& path, const Diamond::PBRMateria
 {
     std::ofstream f{std::filesystem::path(path)};
     if (!f.is_open()) return false;
-    f << MaterialToJson(m).dump(4);
+    nlohmann::json j = MaterialToJson(m);
+    AssetPaths::MakePortable(j);
+    f << j.dump(4);
     return true;
 }
 

@@ -22,23 +22,23 @@
           0.0
         ],
         "meshPath": "",
-        "physMatPath": "C:\\Users\\Matt\\source\\repos\\mdiamond23\\DiamondEngine\\Assets\\Physics Materials\\Floor.physmat",
+        "physMatPath": "Assets/Physics Materials/Floor.physmat",
         "radius": 0.5,
         "shapeType": 0
       },
       "mesh": {
-        "albedoPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine/Assets/Materials/Lava004_2K-PNG/Lava004_2K-PNG_Color.png",
+        "albedoPath": "Assets/Materials/Lava004_2K-PNG/Lava004_2K-PNG_Color.png",
         "aoPath": "",
         "castsShadow": true,
-        "emissivePath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine/Assets/Materials/Lava004_2K-PNG/Lava004_2K-PNG_Emission.png",
+        "emissivePath": "Assets/Materials/Lava004_2K-PNG/Lava004_2K-PNG_Emission.png",
         "emissiveStrength": 2.5,
         "materialPath": "",
         "meshPath": "__cube",
         "meshSubIndex": 0,
         "metallicPath": "",
-        "normalPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine/Assets/Materials/Lava004_2K-PNG/Lava004_2K-PNG_NormalGL.png",
+        "normalPath": "Assets/Materials/Lava004_2K-PNG/Lava004_2K-PNG_NormalGL.png",
         "receivesShadow": true,
-        "roughnessPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine/Assets/Materials/Lava004_2K-PNG/Lava004_2K-PNG_Roughness.png",
+        "roughnessPath": "Assets/Materials/Lava004_2K-PNG/Lava004_2K-PNG_Roughness.png",
         "staticShadowCaster": true,
         "transparent": false,
         "uvScale": 5.0,
@@ -367,18 +367,18 @@
         "type": 1
       },
       "mesh": {
-        "albedoPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\DiamondPlate006C_2K-PNG_Color.png",
-        "aoPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\DiamondPlate006C_2K-PNG_AmbientOcclusion.png",
+        "albedoPath": "Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Color.png",
+        "aoPath": "Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_AmbientOcclusion.png",
         "castsShadow": true,
         "emissivePath": "",
         "emissiveStrength": 0.0,
         "materialPath": "",
         "meshPath": "__cube",
         "meshSubIndex": 0,
-        "metallicPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\DiamondPlate006C_2K-PNG_Metalness.png",
-        "normalPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\DiamondPlate006C_2K-PNG_NormalDX.png",
+        "metallicPath": "Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Metalness.png",
+        "normalPath": "Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_NormalDX.png",
         "receivesShadow": true,
-        "roughnessPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\DiamondPlate006C_2K-PNG_Roughness.png",
+        "roughnessPath": "Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Roughness.png",
         "staticShadowCaster": true,
         "transparent": false,
         "uvScale": 0.5,
@@ -485,18 +485,18 @@
         "type": 0
       },
       "mesh": {
-        "albedoPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\DiamondPlate006C_2K-PNG_Color.png",
-        "aoPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\DiamondPlate006C_2K-PNG_AmbientOcclusion.png",
+        "albedoPath": "Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Color.png",
+        "aoPath": "Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_AmbientOcclusion.png",
         "castsShadow": true,
         "emissivePath": "",
         "emissiveStrength": 0.0,
         "materialPath": "",
         "meshPath": "__cube",
         "meshSubIndex": 0,
-        "metallicPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\DiamondPlate006C_2K-PNG_Metalness.png",
-        "normalPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\DiamondPlate006C_2K-PNG_NormalDX.png",
+        "metallicPath": "Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Metalness.png",
+        "normalPath": "Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_NormalDX.png",
         "receivesShadow": true,
-        "roughnessPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\DiamondPlate006C_2K-PNG_Roughness.png",
+        "roughnessPath": "Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Roughness.png",
         "staticShadowCaster": true,
         "transparent": false,
         "uvScale": 0.550000011920929,
@@ -567,8 +567,8 @@
       },
       "mesh": {
         "castsShadow": true,
-        "materialPath": "C:\\Users\\Matt\\source\\repos\\mdiamond23\\DiamondEngine\\Assets\\Materials\\Fish.mat",
-        "meshPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine\\Assets\\Models\\cut-fish\\source\\Fish_LP_combined\\Fish_LP_combined.obj",
+        "materialPath": "Assets/Materials/Fish.mat",
+        "meshPath": "Assets/Models/cut-fish/source/Fish_LP_combined/Fish_LP_combined.obj",
         "meshSubIndex": 0,
         "receivesShadow": true,
         "staticShadowCaster": true,
@@ -640,7 +640,7 @@
       },
       "mesh": {
         "castsShadow": true,
-        "materialPath": "C:\\Users\\Matt\\source\\repos\\mdiamond23\\DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\Diamond.mat",
+        "materialPath": "Assets/Materials/DiamondPlate006C_2K-PNG/Diamond.mat",
         "meshPath": "__cube",
         "meshSubIndex": 0,
         "receivesShadow": true,
@@ -812,7 +812,7 @@
       },
       "name": "Rag",
       "ragdoll": {
-        "assetPath": "C:\\Users\\Matt\\source\\repos\\mdiamond23\\DiamondEngine\\Assets\\Models\\CesiumMan.ragdoll",
+        "assetPath": "Assets/Models/CesiumMan.ragdoll",
         "mode": 0
       },
       "scriptComponents": {
@@ -833,7 +833,7 @@
         "castsShadow": true,
         "emissivePath": "",
         "emissiveStrength": 0.0,
-        "meshPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine\\Assets\\Models\\CesiumMan.glb",
+        "meshPath": "Assets/Models/CesiumMan.glb",
         "metallicPath": "",
         "normalPath": "",
         "roughnessPath": "",
@@ -868,7 +868,7 @@
     {
       "prefabRef": {
         "name": "Rag",
-        "path": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine/Assets/Prefabs/Rag.prefab",
+        "path": "Assets/Prefabs/Rag.prefab",
         "transform": {
           "eulerDegrees": [
             -89.99998474121094,

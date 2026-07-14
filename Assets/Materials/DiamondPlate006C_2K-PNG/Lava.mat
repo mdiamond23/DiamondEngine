@@ -1,10 +1,10 @@
 {
-    "albedoPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine/Assets/Materials/Lava004_2K-PNG/Lava004_2K-PNG_Color.png",
+    "albedoPath": "Assets/Materials/Lava004_2K-PNG/Lava004_2K-PNG_Color.png",
     "aoPath": "",
-    "emissivePath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine/Assets/Materials/Lava004_2K-PNG/Lava004_2K-PNG_Emission.png",
+    "emissivePath": "Assets/Materials/Lava004_2K-PNG/Lava004_2K-PNG_Emission.png",
     "emissiveStrength": 2.5,
     "metallicPath": "",
-    "normalPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine/Assets/Materials/Lava004_2K-PNG/Lava004_2K-PNG_NormalGL.png",
-    "roughnessPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine/Assets/Materials/Lava004_2K-PNG/Lava004_2K-PNG_Roughness.png",
+    "normalPath": "Assets/Materials/Lava004_2K-PNG/Lava004_2K-PNG_NormalGL.png",
+    "roughnessPath": "Assets/Materials/Lava004_2K-PNG/Lava004_2K-PNG_Roughness.png",
     "uvScale": 5.0
 }

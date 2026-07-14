@@ -1,4 +1,5 @@
 #include "SceneSerializer.h"
+#include "AssetPathUtils.h"
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
 #include <cctype>
@@ -924,8 +925,10 @@ static bool FromJson(Scene& scene, const json& root)
 
 void SceneSerializer::Save(Scene& scene, const std::string& path)
 {
+    json root = ToJson(scene);
+    AssetPaths::MakePortable(root);
     std::ofstream f(path);
-    f << ToJson(scene).dump(2);
+    f << root.dump(2);
 }
 
 bool SceneSerializer::Load(Scene& scene, const std::string& path)
@@ -935,12 +938,15 @@ bool SceneSerializer::Load(Scene& scene, const std::string& path)
     json root;
     try { root = json::parse(f); }
     catch (...) { return false; }
+    AssetPaths::ResolveAll(root);
     return FromJson(scene, root);
 }
 
 std::string SceneSerializer::Stringify(Scene& scene)
 {
-    return ToJson(scene).dump();
+    json root = ToJson(scene);
+    AssetPaths::MakePortable(root);
+    return root.dump();
 }
 
 bool SceneSerializer::FromString(Scene& scene, const std::string& data)
@@ -948,6 +954,7 @@ bool SceneSerializer::FromString(Scene& scene, const std::string& data)
     json root;
     try { root = json::parse(data); }
     catch (...) { return false; }
+    AssetPaths::ResolveAll(root);
     return FromJson(scene, root);
 }
 
@@ -980,6 +987,7 @@ static const json* LoadPrefabJson(const std::string& path,
         if (f.is_open()) {
             try { it->second = json::parse(f); }
             catch (...) { it->second = json{}; }
+            AssetPaths::ResolveAll(it->second);
         }
     }
     const json& j = it->second;
@@ -1038,10 +1046,12 @@ bool PrefabSerializer::Save(Scene& scene, entt::entity root, const std::string& 
         spdlog::error("Prefab save: cannot open '{}'", path);
         return false;
     }
-    f << json{ { "prefab", {
+    json out{ { "prefab", {
         { "root",     liveToLocal[reg.get<IDComponent>(root).uuid] },
         { "entities", std::move(entities) }
-    } } }.dump(2);
+    } } };
+    AssetPaths::MakePortable(out);
+    f << out.dump(2);
     return true;
 }
 
@@ -1295,6 +1305,7 @@ static entt::entity InstantiateSceneRef(Scene& scene, const json& refJ, Deserial
         if (f.is_open()) {
             try { fileJ = json::parse(f); }
             catch (...) { fileJ = json{}; }
+            AssetPaths::ResolveAll(fileJ);
         }
     }
 
@@ -1368,6 +1379,7 @@ entt::entity PrefabSerializer::Instantiate(Scene& scene, const std::string& path
         spdlog::error("Prefab instantiate: '{}' has no prefab block", path);
         return entt::null;
     }
+    AssetPaths::ResolveAll(root);
     return InstantiatePrefabJson(scene, root["prefab"], NormalizePrefabPath(path),
                                  /*forcedRootUuid=*/0, nullptr);
 }

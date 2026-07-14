@@ -1,10 +1,10 @@
 {
-    "albedoPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine\\Assets\\Materials\\Lava004_2K-PNG\\Lava004_2K-PNG_Color.png",
-    "aoPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine\\Assets\\Models\\cut-fish\\textures\\Fish_Height.png",
-    "emissivePath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine\\Assets\\Materials\\Lava004_2K-PNG\\Lava004_2K-PNG_Emission.png",
+    "albedoPath": "Assets/Materials/Lava004_2K-PNG/Lava004_2K-PNG_Color.png",
+    "aoPath": "Assets/Models/cut-fish/textures/Fish_Height.png",
+    "emissivePath": "Assets/Materials/Lava004_2K-PNG/Lava004_2K-PNG_Emission.png",
     "emissiveStrength": 0.0,
-    "metallicPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine\\Assets\\Models\\cut-fish\\textures\\Fish_Metallic.png",
-    "normalPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine\\Assets\\Models\\cut-fish\\textures\\Fish_Normalmap.png",
-    "roughnessPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine\\Assets\\Models\\cut-fish\\textures\\Fish_Roughness.png",
+    "metallicPath": "Assets/Models/cut-fish/textures/Fish_Metallic.png",
+    "normalPath": "Assets/Models/cut-fish/textures/Fish_Normalmap.png",
+    "roughnessPath": "Assets/Models/cut-fish/textures/Fish_Roughness.png",
     "uvScale": 1.0
 }

@@ -1,10 +1,10 @@
 {
-    "albedoPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine/Assets\\Materials\\DiamondPlate006C_2K-PNG\\DiamondPlate006C_2K-PNG_Metalness.png",
-    "aoPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\DiamondPlate006C_2K-PNG_AmbientOcclusion.png",
+    "albedoPath": "Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Metalness.png",
+    "aoPath": "Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_AmbientOcclusion.png",
     "emissivePath": "",
     "emissiveStrength": 0.0,
-    "metallicPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\DiamondPlate006C_2K-PNG_Metalness.png",
-    "normalPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\DiamondPlate006C_2K-PNG_NormalDX.png",
-    "roughnessPath": "C:/Users/Matt/source/repos/mdiamond23/DiamondEngine\\Assets\\Materials\\DiamondPlate006C_2K-PNG\\DiamondPlate006C_2K-PNG_Roughness.png",
+    "metallicPath": "Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Metalness.png",
+    "normalPath": "Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_NormalDX.png",
+    "roughnessPath": "Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Roughness.png",
     "uvScale": 0.46000000834465027
 }
