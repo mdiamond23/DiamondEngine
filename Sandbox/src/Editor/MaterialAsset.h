@@ -4,6 +4,7 @@
 #include <AssetPipeline/AssetRegistry.h>
 #include "AssetPathUtils.h"
 #include <nlohmann/json.hpp>
+#include <array>
 #include <fstream>
 #include <filesystem>
 #include <memory>
@@ -16,6 +17,23 @@
 inline std::string NormalizeMaterialPath(const std::string& path)
 {
     return std::filesystem::path(path).make_preferred().string();
+}
+
+// JSON encoding for AlphaMode — glTF's names, lowercased to match our key style.
+inline const char* AlphaModeToString(Diamond::AlphaMode m)
+{
+    switch (m) {
+        case Diamond::AlphaMode::Mask:  return "mask";
+        case Diamond::AlphaMode::Blend: return "blend";
+        default:                        return "opaque";
+    }
+}
+
+inline Diamond::AlphaMode AlphaModeFromString(const std::string& s)
+{
+    if (s == "mask")  return Diamond::AlphaMode::Mask;
+    if (s == "blend") return Diamond::AlphaMode::Blend;
+    return Diamond::AlphaMode::Opaque;
 }
 
 // Populate a material's paths + scalars from JSON and (re)load its textures.
@@ -31,6 +49,10 @@ inline void ApplyMaterialJson(Diamond::PBRMaterial& m, const nlohmann::json& j)
     m.EmissivePath     = AssetPaths::Resolve(j.value("emissivePath",     std::string{}));
     m.EmissiveStrength = j.value("emissiveStrength", 0.0f);
     m.UVScale          = j.value("uvScale",          1.0f);
+    auto bc = j.value("baseColorFactor", std::array<float, 4>{ 1.0f, 1.0f, 1.0f, 1.0f });
+    m.BaseColorFactor  = glm::vec4(bc[0], bc[1], bc[2], bc[3]);
+    m.Mode             = AlphaModeFromString(j.value("alphaMode", std::string{ "opaque" }));
+    m.AlphaCutoff      = j.value("alphaCutoff", 0.5f);
 
     m.Albedo    = Assets::Load<Diamond::Texture>(m.AlbedoPath);
     m.Normal    = Assets::Load<Diamond::Texture>(m.NormalPath);
@@ -50,7 +72,11 @@ inline nlohmann::json MaterialToJson(const Diamond::PBRMaterial& m)
         { "aoPath",           m.AOPath           },
         { "emissivePath",     m.EmissivePath     },
         { "emissiveStrength", m.EmissiveStrength },
-        { "uvScale",          m.UVScale          }
+        { "uvScale",          m.UVScale          },
+        { "baseColorFactor",  std::array<float, 4>{ m.BaseColorFactor.x, m.BaseColorFactor.y,
+                                                     m.BaseColorFactor.z, m.BaseColorFactor.w } },
+        { "alphaMode",        AlphaModeToString(m.Mode) },
+        { "alphaCutoff",      m.AlphaCutoff             }
     };
 }
 

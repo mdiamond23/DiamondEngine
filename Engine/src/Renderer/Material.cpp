@@ -12,6 +12,10 @@ void PBRMaterial::Bind(const Shader& shader) const
     if (AO)        { AO->Bind(4);        shader.SetInt("aoMap",        4); }
 
     shader.SetFloat("uvScale", UVScale);
+    shader.SetVec4("baseColorFactor", BaseColorFactor);
+    // 0 disables the alpha test entirely (a < 0.0 never holds), so Opaque and
+    // Blend materials skip the discard without a shader variant.
+    shader.SetFloat("alphaCutoff", Mode == AlphaMode::Mask ? AlphaCutoff : 0.0f);
 
     // Emissive map — slot 5; strength=0 disables the contribution even if map is unbound
     shader.SetFloat("emissiveStrength", Emissive ? EmissiveStrength : 0.0f);

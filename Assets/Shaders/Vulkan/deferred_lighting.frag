@@ -40,13 +40,13 @@ layout(set = 0, binding = 10) uniform LightingUBO {
     vec4 cascadeSplits;      // x..w = cascade far view-depths (positive)
     vec4 sunDirView;         // .xyz sun direction in view space (normalized)
     vec4 sunColor;           // .xyz
-    vec4 pointPos[4];        // .xyz view-space position
+    vec4 pointPos[4];        // .xyz view-space position, .w = radius (falloff window)
     vec4 pointColor[4];      // .xyz radiant intensity
     vec4 pointPosWorld[4];   // .xyz world-space position (cube shadows sample by world direction)
     mat4 spotFromView[4];    // per-spot: view space → spot light clip
     vec4 spotPosView[4];     // .xyz view-space position, .w = cos(outer cone)
     vec4 spotDirView[4];     // .xyz view-space direction (normalized), .w = cos(inner cone)
-    vec4 spotColor[4];       // .xyz radiant intensity
+    vec4 spotColor[4];       // .xyz radiant intensity, .w = range (falloff window)
     vec4 counts;             // x = numPointLights, y = prefilter max LOD,
                              // z = numSpotLights, w = point-shadow far plane
 } u;
@@ -70,6 +70,16 @@ layout(set = 0, binding = 20) uniform samplerCube pointShadow2;
 layout(set = 0, binding = 21) uniform samplerCube pointShadow3;
 
 const float PI = 3.14159265359;
+
+// Windowed inverse-square falloff (Frostbite/Karis). Plain 1/d² never reaches
+// zero, but GatherLights culls each light by its radius sphere — a light whose
+// glow extended past that sphere would pop off wholesale when the sphere left
+// the camera frustum (the "moving darkening" bug). The window forces the
+// contribution to zero exactly at the radius, so culling is invisible.
+float Falloff(float dist, float radius) {
+    float w = clamp(1.0 - pow(dist / radius, 4.0), 0.0, 1.0);
+    return (w * w) / max(dist * dist, 1e-4);
+}
 
 // ── Cook-Torrance terms (ported verbatim from the GL lighting shader) ─────────
 float DistributionGGX(vec3 N, vec3 H, float roughness) {
@@ -217,29 +227,31 @@ void main() {
     vec3 worldPos = vec3(u.invView * vec4(viewPos, 1.0));
     vec3 camPosW  = u.invView[3].xyz;
 
-    // Point lights (inverse-square falloff + distance-cubemap shadow).
+    // Point lights (windowed inverse-square falloff + distance-cubemap shadow).
     int np = int(u.counts.x);
     for (int i = 0; i < np; ++i) {
         vec3  d      = u.pointPos[i].xyz - viewPos;
-        vec3  L      = normalize(d);
         float dist   = length(d);
-        vec3  rad    = u.pointColor[i].xyz / (dist * dist);
+        if (dist >= u.pointPos[i].w) continue;   // beyond the light's radius
+        vec3  L      = normalize(d);
+        vec3  rad    = u.pointColor[i].xyz * Falloff(dist, u.pointPos[i].w);
         float shadow = PointShadow(i, worldPos, camPosW);
         Lo += BRDF(N, V, L, albedo, F0, metallic, roughness, rad) * (1.0 - shadow);
     }
 
-    // Spot lights (inverse-square falloff × smooth cone attenuation + 2D shadow).
+    // Spot lights (windowed inverse-square falloff × smooth cone attenuation + 2D shadow).
     int ns = int(u.counts.z);
     for (int i = 0; i < ns; ++i) {
         vec3  d        = u.spotPosView[i].xyz - viewPos;
+        float dist     = length(d);
+        if (dist >= u.spotColor[i].w) continue;   // beyond the light's range
         vec3  L        = normalize(d);
         float cosTheta = dot(-L, u.spotDirView[i].xyz);
         float cosInner = u.spotDirView[i].w;
         float cosOuter = u.spotPosView[i].w;
         float ang      = clamp((cosTheta - cosOuter) / max(cosInner - cosOuter, 1e-4), 0.0, 1.0);
         if (ang <= 0.0) continue;
-        float dist   = length(d);
-        vec3  rad    = u.spotColor[i].xyz / (dist * dist) * ang;
+        vec3  rad    = u.spotColor[i].xyz * Falloff(dist, u.spotColor[i].w) * ang;
         float shadow = SpotShadow(i, viewPos, N, L);
         Lo += BRDF(N, V, L, albedo, F0, metallic, roughness, rad) * (1.0 - shadow);
     }

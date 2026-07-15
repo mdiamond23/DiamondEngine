@@ -202,7 +202,8 @@ void VulkanDeferredLightingPass::SetFrameData(
         const std::vector<glm::vec3>& pointColor,
         float pointShadowFar,
         const std::vector<SpotLightInfo>& spots,
-        const std::array<glm::mat4, NUM_SPOTS>& spotMatrices)
+        const std::array<glm::mat4, NUM_SPOTS>& spotMatrices,
+        const std::vector<float>& pointRadius)
 {
     // CSM: fold inverse(view) into each cascade matrix so the shader can go from a
     // view-space position straight to light clip (matches the debug shader). The
@@ -225,6 +226,10 @@ void VulkanDeferredLightingPass::SetFrameData(
         // Point positions live in world space → transform to view space (the world
         // position is kept too — the shadow cubes sample by world direction).
         m_UBOData.pointPos[i]      = view * glm::vec4(pointPosWorld[i], 1.0f);
+        // Radius rides .w (the view transform left w = 1). Callers that don't
+        // supply radii (the mesh demo) get an effectively unbounded falloff.
+        m_UBOData.pointPos[i].w    = i < static_cast<int>(pointRadius.size())
+                                       ? pointRadius[i] : 1e6f;
         m_UBOData.pointColor[i]    = glm::vec4(pointColor[i], 0.0f);
         m_UBOData.pointPosWorld[i] = glm::vec4(pointPosWorld[i], 0.0f);
     }
@@ -239,7 +244,7 @@ void VulkanDeferredLightingPass::SetFrameData(
                                               std::cos(glm::radians(s.outerDeg)));
         m_UBOData.spotDirView[i]  = glm::vec4(glm::normalize(viewRot * s.direction),
                                               std::cos(glm::radians(s.innerDeg)));
-        m_UBOData.spotColor[i]    = glm::vec4(s.color, 0.0f);
+        m_UBOData.spotColor[i]    = glm::vec4(s.color, s.range);
     }
 
     m_UBOData.counts = glm::vec4(static_cast<float>(np), m_PrefilterMaxLod,

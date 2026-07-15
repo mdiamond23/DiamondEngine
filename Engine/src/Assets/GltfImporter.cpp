@@ -467,8 +467,16 @@ static std::shared_ptr<PBRMaterial> LoadMaterial(const cgltf_material* mat, cons
     if (!mat) return nullptr;
     auto out = std::make_shared<PBRMaterial>();
 
+    out->Mode = mat->alpha_mode == cgltf_alpha_mode_blend ? AlphaMode::Blend
+              : mat->alpha_mode == cgltf_alpha_mode_mask  ? AlphaMode::Mask
+                                                          : AlphaMode::Opaque;
+    if (mat->alpha_mode == cgltf_alpha_mode_mask)
+        out->AlphaCutoff = mat->alpha_cutoff;   // cgltf defaults it to 0.5 per spec
+
     if (mat->has_pbr_metallic_roughness) {
         const cgltf_pbr_metallic_roughness& pbr = mat->pbr_metallic_roughness;
+        out->BaseColorFactor = glm::vec4(pbr.base_color_factor[0], pbr.base_color_factor[1],
+                                         pbr.base_color_factor[2], pbr.base_color_factor[3]);
         if (pbr.base_color_texture.texture)
             out->Albedo = CachedTex(pbr.base_color_texture.texture->image, baseDir, cache,
                                     &out->AlbedoPath);
@@ -626,7 +634,10 @@ ImportedScene GltfImporter::LoadScene(const std::string& path)
         const cgltf_material& mat = data->materials[mi];
         out.materials[mi]           = LoadMaterial(&mat, baseDir, cache);
         out.materialNames[mi]       = mat.name ? mat.name : ("Material " + std::to_string(mi));
-        out.materialTransparent[mi] = (mat.alpha_mode != cgltf_alpha_mode_opaque) ? 1 : 0;
+        // Blend only: MASK materials stay on the deferred path (the G-buffer
+        // shader alpha-tests them via the material's AlphaCutoff) — routing
+        // them through sorted blending is what caused decal sorting artifacts.
+        out.materialTransparent[mi] = (mat.alpha_mode == cgltf_alpha_mode_blend) ? 1 : 0;
     }
 
     // Node instances from the default scene (or the first one, or loose root

@@ -785,6 +785,44 @@ void InspectorPanel::OnImGuiRender() {
                 }
             }
 
+            // Alpha mode: Opaque/Mask render deferred (Mask alpha-tests against
+            // the cutoff in the G-buffer); Blend is a material-level hint — the
+            // per-mesh Transparent checkbox above is what routes to the forward
+            // pass. Combos commit on selection, so no drag snapshot needed.
+            {
+                static const char* kAlphaModes[] = { "Opaque", "Mask", "Blend" };
+                int mode = static_cast<int>(mc.material->Mode);
+                if (ImGui::Combo("Alpha Mode", &mode, kAlphaModes, 3)) {
+                    AlphaMode newVal = static_cast<AlphaMode>(mode), oldVal = mc.material->Mode;
+                    if (assetBacked) {
+                        mc.material->Mode = newVal;
+                        matDirty = true;
+                    } else {
+                        m_Context->Commands.ExecuteCommand(std::make_unique<FunctionCommand>(
+                            [scene, entity, newVal]() { scene->GetRegistry().get<MeshComponent>(entity).material->Mode = newVal; },
+                            [scene, entity, oldVal]() { scene->GetRegistry().get<MeshComponent>(entity).material->Mode = oldVal; },
+                            "Change Alpha Mode"));
+                    }
+                    anyMaterialEdit = true;
+                }
+            }
+            if (mc.material->Mode == AlphaMode::Mask) {
+                ImGui::DragFloat("Alpha Cutoff", &mc.material->AlphaCutoff, 0.01f, 0.0f, 1.0f);
+                if (assetBacked) {
+                    if (ImGui::IsItemDeactivatedAfterEdit()) { matDirty = true; anyMaterialEdit = true; }
+                } else {
+                    if (ImGui::IsItemActivated())   m_OldAlphaCutoff = mc.material->AlphaCutoff;
+                    if (ImGui::IsItemDeactivatedAfterEdit()) {
+                        float newVal = mc.material->AlphaCutoff, oldVal = m_OldAlphaCutoff;
+                        m_Context->Commands.ExecuteCommand(std::make_unique<FunctionCommand>(
+                            [scene, entity, newVal]() { scene->GetRegistry().get<MeshComponent>(entity).material->AlphaCutoff = newVal; },
+                            [scene, entity, oldVal]() { scene->GetRegistry().get<MeshComponent>(entity).material->AlphaCutoff = oldVal; },
+                            "Change Alpha Cutoff"));
+                        anyMaterialEdit = true;
+                    }
+                }
+            }
+
             ImGui::Spacing();
             ImGui::TextDisabled("Textures");
             ImGui::Separator();

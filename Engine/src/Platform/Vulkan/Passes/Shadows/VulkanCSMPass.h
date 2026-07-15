@@ -5,6 +5,7 @@
 #include <glm/glm.hpp>
 
 #include <array>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <string>
@@ -34,11 +35,15 @@ public:
 
     // Recompute the per-cascade light-space matrices + split depths from the camera
     // frustum and sun direction. 'near'/'far' bound the shadowed range (typically
-    // tighter than the camera's far plane).
+    // tighter than the camera's far plane). 'shadowRes' is the cascade depth
+    // target's resolution — the fit snaps each cascade's translation to whole
+    // shadow-map texels, so it must match the textures passed to AddToGraph or
+    // shadows swim as the camera moves.
     void ComputeCascades(const glm::vec3& lightDir,
                          const glm::mat4& cameraView,
                          const glm::mat4& cameraProj,
-                         float near, float far);
+                         float near, float far,
+                         uint32_t shadowRes = 2048);
 
     // Register one depth pass per cascade. 'cascades' are caller-declared Depth32F
     // targets (one per cascade). drawScene records the scene; it receives the current

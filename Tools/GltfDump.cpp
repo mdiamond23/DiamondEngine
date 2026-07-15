@@ -56,7 +56,7 @@ static void DumpScene(const char* path)
         ++loadedMats;
         if (scene.materialTransparent[i]) ++transparentMats;
     }
-    printf("Materials: %zu loaded of %zu in file  (%zu non-opaque)\n",
+    printf("Materials: %zu loaded of %zu in file  (%zu blended)\n",
            loadedMats, scene.materials.size(), transparentMats);
     for (size_t i = 0; i < scene.materials.size(); ++i) {
         const auto& m = scene.materials[i];
@@ -66,7 +66,8 @@ static void DumpScene(const char* path)
                m->AlbedoPath.empty()   ? "-" : "yes",
                m->NormalPath.empty()   ? "-" : "yes",
                m->EmissivePath.empty() ? "-" : "yes",
-               scene.materialTransparent[i] ? "  [transparent]" : "");
+               scene.materialTransparent[i]              ? "  [blend]"
+               : m->Mode == Diamond::AlphaMode::Mask     ? "  [mask]" : "");
     }
 
     // Index-mapping invariants: every node primitive index in range, every

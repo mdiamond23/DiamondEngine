@@ -2,10 +2,16 @@
 
 #include <memory>
 #include <string>
+#include <glm/glm.hpp>
 #include "TextureData.h"
 #include "Shader.h"
 
 namespace Diamond {
+
+// glTF alpha handling. Opaque and Mask render through the deferred G-buffer
+// (Mask alpha-tests against AlphaCutoff there); only Blend routes to the
+// forward transparency pass, since it's the only mode that needs sorting.
+enum class AlphaMode : uint8_t { Opaque, Mask, Blend };
 
 // PBR material using the metallic-roughness workflow.
 // Call Bind() before drawing a mesh to bind all texture slots and set sampler uniforms.
@@ -18,6 +24,17 @@ struct PBRMaterial {
     std::shared_ptr<Texture> Metallic;
     std::shared_ptr<Texture> Roughness;
     std::shared_ptr<Texture> AO;
+
+    // Constant base color, multiplied into the albedo sample (or standing alone
+    // when Albedo is unassigned, against the default-white fallback). glTF's
+    // pbrMetallicRoughness.baseColorFactor — linear, not sRGB.
+    glm::vec4 BaseColorFactor { 1.0f };
+
+    // Cutoff only applies when Mode == Mask: fragments whose base-color alpha
+    // (texture.a * BaseColorFactor.a) falls below it are discarded in the
+    // G-buffer pass.
+    AlphaMode Mode        = AlphaMode::Opaque;
+    float     AlphaCutoff = 0.5f;
 
     // Emissive (bind slot 5)
     std::shared_ptr<Texture> Emissive;

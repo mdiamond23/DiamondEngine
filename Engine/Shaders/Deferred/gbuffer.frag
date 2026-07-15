@@ -17,12 +17,19 @@ uniform sampler2D aoMap;
 uniform sampler2D emissiveMap;
 uniform float     emissiveStrength;
 uniform float     uvScale;
+uniform vec4      baseColorFactor;
+uniform float     alphaCutoff;   // 0 for Opaque/Blend materials — test never fires
 
 void main()
 {
     vec2 uv = TexCoords * uvScale;
 
-    vec3  albedo    = pow(texture(albedoMap,    uv).rgb, vec3(2.2));
+    // Alpha-MASK materials (decals) render deferred like opaques but discard
+    // below the cutoff — glTF defines the tested alpha as texture.a * factor.a.
+    vec4 baseSample = texture(albedoMap, uv);
+    if (baseSample.a * baseColorFactor.a < alphaCutoff) discard;
+
+    vec3  albedo    = pow(baseSample.rgb, vec3(2.2)) * baseColorFactor.rgb;
     float metallic  = texture(metallicMap,  uv).r;
     float roughness = texture(roughnessMap, uv).r;
     float ao        = texture(aoMap,        uv).r;

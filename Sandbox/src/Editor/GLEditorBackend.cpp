@@ -714,7 +714,11 @@ void GLEditorBackend::RenderFrame(const Diamond::EditorFrameInput& in)
             continue;
         }
         if (!mc.material) continue;
-        DrawCall dc{ mc.mesh.get(), world, mc.localBounds, mc.castsShadow };
+        // Mask materials don't cast: shadow depth shaders don't sample albedo,
+        // so a masked decal would throw its full quad's shadow (same exclusion
+        // as the Vulkan renderer).
+        const bool casts = mc.castsShadow && mc.material->Mode != Diamond::AlphaMode::Mask;
+        DrawCall dc{ mc.mesh.get(), world, mc.localBounds, casts };
         g.materialBatches[mc.material.get()].push_back(dc);
         g.allDraws.push_back(dc);
     }
@@ -734,8 +738,10 @@ void GLEditorBackend::RenderFrame(const Diamond::EditorFrameInput& in)
         }
 
         glm::mat4 world = scene.GetTransformSystem().GetWorldMatrix(entity);
+        // Same Mask shadow exclusion as static meshes above.
+        const bool casts = smc.castsShadow && smc.material->Mode != Diamond::AlphaMode::Mask;
         for (auto& mesh : smc.meshes) {
-            DrawCall dc{ mesh.get(), world, smc.localBounds, smc.castsShadow };
+            DrawCall dc{ mesh.get(), world, smc.localBounds, casts };
             dc.bonePalette = palette;
             dc.boneCount   = boneCount;
             g.materialBatches[smc.material.get()].push_back(dc);

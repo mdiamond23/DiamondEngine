@@ -19,6 +19,7 @@ public:
     virtual void SetFloat(const std::string& name, float value)           const = 0;
     virtual void SetVec2 (const std::string& name, const glm::vec2& v)    const = 0;
     virtual void SetVec3 (const std::string& name, const glm::vec3& v)    const = 0;
+    virtual void SetVec4 (const std::string& name, const glm::vec4& v)    const = 0;
     virtual void SetMat3 (const std::string& name, const glm::mat3& mat)  const = 0;
     virtual void SetMat4 (const std::string& name, const glm::mat4& mat)  const = 0;
     virtual void SetMat4Array(const std::string& name, const glm::mat4* mats, int count) const = 0;

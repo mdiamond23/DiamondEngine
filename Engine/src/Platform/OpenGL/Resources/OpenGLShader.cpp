@@ -138,6 +138,9 @@ void OpenGLShader::SetVec2(const std::string& name, const glm::vec2& v) const
 void OpenGLShader::SetVec3(const std::string& name, const glm::vec3& v) const
     { glUniform3fv(GetLocation(m_RendererID, name), 1, &v[0]); }
 
+void OpenGLShader::SetVec4(const std::string& name, const glm::vec4& v) const
+    { glUniform4fv(GetLocation(m_RendererID, name), 1, &v[0]); }
+
 void OpenGLShader::SetMat3(const std::string& name, const glm::mat3& mat) const
     { glUniformMatrix3fv(GetLocation(m_RendererID, name), 1, GL_FALSE, &mat[0][0]); }
 

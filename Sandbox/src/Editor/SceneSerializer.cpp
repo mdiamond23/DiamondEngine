@@ -2,6 +2,7 @@
 #include "AssetPathUtils.h"
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
+#include <array>
 #include <cctype>
 #include <filesystem>
 #include <fstream>
@@ -165,6 +166,10 @@ static json SerializeEntity(Scene& scene, entt::entity entity)
             mj["emissivePath"]     = mc.material->EmissivePath;
             mj["emissiveStrength"] = mc.material->EmissiveStrength;
             mj["uvScale"]          = mc.material->UVScale;
+            mj["baseColorFactor"]  = std::array<float, 4>{ mc.material->BaseColorFactor.x, mc.material->BaseColorFactor.y,
+                                                            mc.material->BaseColorFactor.z, mc.material->BaseColorFactor.w };
+            mj["alphaMode"]        = AlphaModeToString(mc.material->Mode);
+            mj["alphaCutoff"]      = mc.material->AlphaCutoff;
         }
         ej["mesh"] = mj;
     }
@@ -388,6 +393,10 @@ static json SerializeEntity(Scene& scene, entt::entity entity)
             sj["emissivePath"]     = smc.material->EmissivePath;
             sj["emissiveStrength"] = smc.material->EmissiveStrength;
             sj["uvScale"]          = smc.material->UVScale;
+            sj["baseColorFactor"]  = std::array<float, 4>{ smc.material->BaseColorFactor.x, smc.material->BaseColorFactor.y,
+                                                            smc.material->BaseColorFactor.z, smc.material->BaseColorFactor.w };
+            sj["alphaMode"]        = AlphaModeToString(smc.material->Mode);
+            sj["alphaCutoff"]      = smc.material->AlphaCutoff;
         }
         ej["skinnedMesh"] = sj;
     }
@@ -548,6 +557,15 @@ static void DeserializeEntityComponents(Scene& scene, entt::entity e, const json
             applyTex("emissivePath",  mat->Emissive,  mat->EmissivePath);
             mat->EmissiveStrength = mj.value("emissiveStrength", mat->EmissiveStrength);
             mat->UVScale          = mj.value("uvScale",          mat->UVScale);
+            {
+                std::array<float, 4> def{ mat->BaseColorFactor.x, mat->BaseColorFactor.y,
+                                          mat->BaseColorFactor.z, mat->BaseColorFactor.w };
+                auto bc = mj.value("baseColorFactor", def);
+                mat->BaseColorFactor = glm::vec4(bc[0], bc[1], bc[2], bc[3]);
+            }
+            // Missing keys keep what the glTF shipped, like the fields above.
+            mat->Mode        = AlphaModeFromString(mj.value("alphaMode", std::string{ AlphaModeToString(mat->Mode) }));
+            mat->AlphaCutoff = mj.value("alphaCutoff", mat->AlphaCutoff);
         }
 
         auto& mc          = reg.emplace_or_replace<MeshComponent>(e, mesh, mat, bounds);
@@ -766,6 +784,15 @@ static void DeserializeEntityComponents(Scene& scene, entt::entity e, const json
                 applyTex("emissivePath",  smc.material->Emissive,  smc.material->EmissivePath);
                 smc.material->EmissiveStrength = sj.value("emissiveStrength", smc.material->EmissiveStrength);
                 smc.material->UVScale          = sj.value("uvScale",          smc.material->UVScale);
+                {
+                    std::array<float, 4> def{ smc.material->BaseColorFactor.x, smc.material->BaseColorFactor.y,
+                                              smc.material->BaseColorFactor.z, smc.material->BaseColorFactor.w };
+                    auto bc = sj.value("baseColorFactor", def);
+                    smc.material->BaseColorFactor = glm::vec4(bc[0], bc[1], bc[2], bc[3]);
+                }
+                // Missing keys keep what the glTF shipped, like the fields above.
+                smc.material->Mode        = AlphaModeFromString(sj.value("alphaMode", std::string{ AlphaModeToString(smc.material->Mode) }));
+                smc.material->AlphaCutoff = sj.value("alphaCutoff", smc.material->AlphaCutoff);
             }
         }
     }

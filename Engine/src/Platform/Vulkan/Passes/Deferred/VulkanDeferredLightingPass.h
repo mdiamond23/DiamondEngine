@@ -86,8 +86,11 @@ public:
     // Upload this frame's lighting data into the UBO. The sun direction + point/
     // spot lights are given in WORLD space and transformed to view space here (the
     // shader works in view space). 'lightMatrices'/'splits' come from the CSM pass,
-    // 'spotMatrices' from the spot-shadow pass. Call after RHIDevice::BeginFrame
-    // and before graph.Execute.
+    // 'spotMatrices' from the spot-shadow pass. 'pointRadius' is each point
+    // light's influence range — the shader's falloff window reaches zero there,
+    // which must match the sphere GatherLights culls with or lights pop at the
+    // frustum edge; missing entries mean "unbounded" (plain inverse-square).
+    // Call after RHIDevice::BeginFrame and before graph.Execute.
     void SetFrameData(const glm::mat4& view,
                       const glm::vec3& sunDirWorld, const glm::vec3& sunColor,
                       const std::array<glm::mat4, NUM_CASCADES>& lightMatrices,
@@ -96,7 +99,8 @@ public:
                       const std::vector<glm::vec3>& pointColor,
                       float pointShadowFar = 25.0f,
                       const std::vector<SpotLightInfo>& spots = {},
-                      const std::array<glm::mat4, NUM_SPOTS>& spotMatrices = {});
+                      const std::array<glm::mat4, NUM_SPOTS>& spotMatrices = {},
+                      const std::vector<float>& pointRadius = {});
 
     // Hot-reload (editor only): recompiles fullscreen.vert + deferred_lighting.frag
     // from shaderDir's current .spv and rebuilds the pipeline IN PLACE (same
@@ -117,13 +121,13 @@ private:
         glm::vec4 cascadeSplits;
         glm::vec4 sunDirView;
         glm::vec4 sunColor;
-        glm::vec4 pointPos[4];
+        glm::vec4 pointPos[4];              // .xyz view-space position, .w radius
         glm::vec4 pointColor[4];
         glm::vec4 pointPosWorld[4];
         glm::mat4 spotFromView[NUM_SPOTS];
         glm::vec4 spotPosView[NUM_SPOTS];   // .xyz view-space position, .w cos(outer)
         glm::vec4 spotDirView[NUM_SPOTS];   // .xyz view-space direction, .w cos(inner)
-        glm::vec4 spotColor[NUM_SPOTS];
+        glm::vec4 spotColor[NUM_SPOTS];     // .xyz radiant intensity, .w range
         glm::vec4 counts;   // x = numPointLights, y = prefilter max LOD,
                             // z = numSpotLights, w = point-shadow far plane
     };

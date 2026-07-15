@@ -45,7 +45,7 @@ struct ImportedScene {
     std::vector<int>                           primitiveMaterial;    // per mesh: index into materials, -1 = none
     std::vector<std::shared_ptr<PBRMaterial>>  materials;
     std::vector<std::string>                   materialNames;
-    std::vector<uint8_t>                       materialTransparent;  // glTF alphaMode != OPAQUE
+    std::vector<uint8_t>                       materialTransparent;  // glTF alphaMode == BLEND (MASK stays deferred, alpha-tested)
     std::vector<SceneNodeInstance>             nodes;
 };
 

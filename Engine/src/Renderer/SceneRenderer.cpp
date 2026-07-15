@@ -89,11 +89,13 @@ constexpr float kShadowFar = 25.0f;
 constexpr uint32_t kShadowRes     = 2048;
 
 // Per-material params, std140 layout matching gbuffer.frag's MaterialUBO
-// (scalars at offsets 0/4, padded to 16).
+// (vec4 at offset 0, scalars at 16/20/24, padded to 32).
 struct MaterialParams {
+    glm::vec4 baseColorFactor { 1.0f };
     float uvScale          = 1.0f;
     float emissiveStrength = 0.0f;
-    float _pad0 = 0.0f, _pad1 = 0.0f;
+    float alphaCutoff      = 0.0f;   // 0 = alpha test off (Opaque/Blend materials)
+    float _pad0 = 0.0f;
 };
 
 // Fallback albedo for meshes with no material assigned: a checkerboard so
@@ -849,12 +851,13 @@ private:
         v.ssao->SetProjection(proj);
         v.skybox->SetFrameData(view, proj);
         v.transparency->SetCamera(view, proj);
-        m_CSM->ComputeCascades(m_SunDir, view, proj, kNear, kShadowFar);
+        m_CSM->ComputeCascades(m_SunDir, view, proj, kNear, kShadowFar, kShadowRes);
         v.lighting->SetFrameData(view, m_SunDir, m_SunColor,
                                  m_CSM->GetLightMatrices(), m_CSM->GetSplitDepths(),
                                  m_PointPos, m_PointColor,
                                  m_PointShadow->FarPlane(),
-                                 m_SpotLights, m_SpotShadow->GetLightMatrices());
+                                 m_SpotLights, m_SpotShadow->GetLightMatrices(),
+                                 m_PointRadius);
         if (v.debugDraw) v.debugDraw->SetFrameData(proj * view);
 
         v.graph.Execute(cmd);
@@ -1081,7 +1084,12 @@ private:
             }
 
             const AABB worldBounds = it->second.bounds.Transform(world);
-            if (mc.castsShadow) {
+            // Mask materials don't cast: the shadow depth shaders don't sample
+            // albedo, so a masked decal would throw its full quad's shadow.
+            // Matches their pre-Mask behavior (routed as transparent = no
+            // shadow); alpha-tested shadow shaders are the eventual fix.
+            const bool masked = mc.material && mc.material->Mode == AlphaMode::Mask;
+            if (mc.castsShadow && !masked) {
                 // Static-cache eligibility: honor the mesh's flag, but a moving
                 // rigidbody (Dynamic/Kinematic) forces dynamic even if the flag is
                 // set — its shadow can't be cached. Static-type bodies (level
@@ -1117,10 +1125,12 @@ private:
             const AABB bounds        = smc.localBounds.Transform(world);
             const bool  visible      = frustum.TestAABB(bounds);
 
+            // Same Mask exclusion as static meshes above.
+            const bool masked = smc.material && smc.material->Mode == AlphaMode::Mask;
             for (const auto& meshPtr : smc.meshes) {
                 const GpuMesh* gm = GetOrRegisterSkinnedMesh(meshPtr.get());
                 if (!gm) continue;
-                if (smc.castsShadow)
+                if (smc.castsShadow && !masked)
                     m_SkinnedShadowDraws.push_back({ gm, bones, world, bounds });
                 if (visible) {
                     m_Device->RecordVisible(1);
@@ -1197,9 +1207,13 @@ private:
             if (mat) {
                 gm.keepAlive = { mat->Albedo, mat->Normal, mat->Metallic,
                                  mat->Roughness, mat->AO, mat->Emissive };
+                params.baseColorFactor = mat->BaseColorFactor;
                 params.uvScale = mat->UVScale;
                 // Strength 0 disables the contribution when no map is bound (GL parity).
                 params.emissiveStrength = mat->Emissive ? mat->EmissiveStrength : 0.0f;
+                // Cutoff 0 turns the G-buffer alpha test into a no-op for
+                // non-Mask materials (a < 0.0 never holds).
+                params.alphaCutoff = mat->Mode == AlphaMode::Mask ? mat->AlphaCutoff : 0.0f;
             }
 
             RHIBufferDesc pb;
@@ -1301,6 +1315,7 @@ private:
     void GatherLights(Scene& scene, const Frustum& mainFrustum, const Frustum* gameFrustum) {
         m_PointPos.clear();
         m_PointColor.clear();
+        m_PointRadius.clear();
         m_SpotLights.clear();
         m_SunDir   = glm::vec3(0.0f, -1.0f, 0.0f);
         m_SunColor = glm::vec3(0.0f);
@@ -1321,6 +1336,7 @@ private:
                 if (!visible(pos, lc.radius)) continue;
                 m_PointPos.push_back(pos);
                 m_PointColor.push_back(lc.color * lc.intensity);
+                m_PointRadius.push_back(lc.radius);
             } else if (lc.type == LightType::Spot
                        && m_SpotLights.size() < VulkanSpotShadowPass::MAX_SPOTS) {
                 if (!visible(pos, lc.radius)) continue;
@@ -1472,6 +1488,7 @@ private:
     glm::vec3              m_SunColor { 0.0f };
     std::vector<glm::vec3> m_PointPos;      // world space
     std::vector<glm::vec3> m_PointColor;
+    std::vector<float>     m_PointRadius;   // falloff window = the GatherLights cull sphere
     std::vector<SpotLightInfo> m_SpotLights;
 
     // The camera the graph's particle callback billboards against — set per view
