@@ -50,10 +50,14 @@ struct MaterialParams {
 };
 
 // Per-frame camera data for the G-buffer pass. view alone produces view-space
-// position/normal; viewProj transforms to clip space.
+// position/normal; viewProj transforms to clip space. The unjittered pair feeds
+// gbuffer.vert's velocity output — this demo has no jitter and no TAA resolve, so
+// both are just set equal to viewProj (zero velocity everywhere).
 struct GBufferUBO {
     glm::mat4 view;
     glm::mat4 viewProj;
+    glm::mat4 viewProjUnjittered;
+    glm::mat4 prevViewProjUnjittered;
 };
 
 struct PushConstants {
@@ -185,6 +189,10 @@ int RunVulkanMeshDemo() {
         "gMaterial",   { kOffscreenW, kOffscreenH, RHIFormat::RGBA8 });
     const RGTextureHandle gEmissive   = graph.DeclareTexture(
         "gEmissive",   { kOffscreenW, kOffscreenH, RHIFormat::RGBA16F });
+    // Motion vectors (TAA). Unused by this demo (no resolve pass here) — declared
+    // only because the shared G-buffer pipeline now always writes it.
+    const RGTextureHandle gVelocity   = graph.DeclareTexture(
+        "gVelocity",   { kOffscreenW, kOffscreenH, RHIFormat::RG16F });
     const RGTextureHandle gDepth      = graph.DeclareTexture(
         "gDepth",      { kOffscreenW, kOffscreenH, RHIFormat::Depth32F });
     // SSAO targets — single-channel occlusion (raw, then blurred). Declared at the
@@ -310,7 +318,7 @@ int RunVulkanMeshDemo() {
     // inside the pass scope after the pass binds its pipeline; each draw run binds
     // its material set (one shared material here).
     gbuffer.AddToGraph(graph, gViewPos, gViewNormal, gAlbedo, gMaterial, gEmissive,
-                       gDepth,
+                       gVelocity, gDepth,
                        [&](RHICommandList* cmd) {
                            cmd->BindResourceSet(0, materialSet.get());
                            cmd->BindVertexBuffer(vertexBuffer.get());
@@ -395,8 +403,10 @@ int RunVulkanMeshDemo() {
         const glm::mat4 proj = glm::perspectiveRH_ZO(glm::radians(55.0f), aspect, 0.1f, 100.0f);
 
         GBufferUBO ubo{};
-        ubo.view     = view;
-        ubo.viewProj = proj * view;
+        ubo.view                   = view;
+        ubo.viewProj               = proj * view;
+        ubo.viewProjUnjittered     = ubo.viewProj;   // no jitter/TAA in this demo
+        ubo.prevViewProjUnjittered = ubo.viewProj;
         uniformBuffer->Update(&ubo, sizeof(ubo));
 
         // SSAO projects view-space samples into screen space — it needs this frame's

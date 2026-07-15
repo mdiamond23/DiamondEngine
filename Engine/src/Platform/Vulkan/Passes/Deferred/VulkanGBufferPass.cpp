@@ -8,10 +8,13 @@
 namespace Diamond {
 
 namespace {
-// Per-draw push constant — the model matrix, matching gbuffer.vert's Push block
-// (the normal matrix is derived from it in-shader).
+// Per-draw push constant, matching gbuffer.vert's Push block (the normal matrix
+// is derived from 'model' in-shader). 'prevModel' is TAA's velocity input — this
+// is 128 bytes, the guaranteed-minimum Vulkan push-constant budget, so nothing
+// else fits in this block.
 struct GBufferPush {
     glm::mat4 model;
+    glm::mat4 prevModel;
 };
 
 // Vertex layout the G-buffer pipeline reads: interleaved position + normal + UV
@@ -70,7 +73,7 @@ void VulkanGBufferPass::Build(bool isReload)
         { 7, RHIResourceType::UniformBuffer,        RHIShaderStage::Fragment },
     };
     desc.pushConstants = { RHIShaderStage::Vertex, sizeof(GBufferPush) };
-    // Five color attachments, in frag `location` order — the MRT the graph opens a
+    // Six color attachments, in frag `location` order — the MRT the graph opens a
     // grouped render scope on. Formats mirror the GL G-buffer (RGB16F emissive →
     // RGBA16F; the RHI has no 48-bit color format and Vulkan rarely supports one).
     desc.colorFormats = {
@@ -79,6 +82,7 @@ void VulkanGBufferPass::Build(bool isReload)
         RHIFormat::RGBA8,     // 2 gAlbedo
         RHIFormat::RGBA8,     // 3 gMaterial
         RHIFormat::RGBA16F,   // 4 gEmissive
+        RHIFormat::RG16F,     // 5 gVelocity — screen-space motion (TAA)
     };
     desc.depthFormat = RHIFormat::Depth32F;
     desc.depthTest   = true;
@@ -119,7 +123,8 @@ std::unique_ptr<RHIResourceSet> VulkanGBufferPass::CreateMaterialSet(
 void VulkanGBufferPass::AddToGraph(RHIRenderGraph& graph,
                                    RGTextureHandle viewPos, RGTextureHandle viewNormal,
                                    RGTextureHandle albedo,  RGTextureHandle material,
-                                   RGTextureHandle emissive, RGTextureHandle depth,
+                                   RGTextureHandle emissive, RGTextureHandle velocity,
+                                   RGTextureHandle depth,
                                    std::function<void(RHICommandList*)> drawScene)
 {
     // Writes added in attachment order — the graph forwards them to BeginRendering
@@ -131,6 +136,7 @@ void VulkanGBufferPass::AddToGraph(RHIRenderGraph& graph,
         .Write(albedo)
         .Write(material)
         .Write(emissive)
+        .Write(velocity)
         .Write(depth)
         .SetClearColor({ 0.0f, 0.0f, 0.0f, 1.0f })
         .SetExecute([this, drawScene = std::move(drawScene)](RHICommandList* cmd) {

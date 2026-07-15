@@ -48,15 +48,17 @@ public:
         const std::array<RHITexture*, MapCount>& maps,
         RHIBuffer* materialUBO) const;
 
-    // Register the geometry pass. Writes the five G-buffer targets (in frag
-    // `location` order) plus depth. 'drawScene' records the geometry inside the
-    // pass scope — bind the material set, vertex/index buffers, push the per-draw
-    // model matrix, draw — after the pass has bound the (static) pipeline. Skinned
-    // geometry rebinds SkinnedPipeline() itself before its draws.
+    // Register the geometry pass. Writes the six G-buffer targets (in frag
+    // `location` order, including velocity) plus depth. 'drawScene' records the
+    // geometry inside the pass scope — bind the material set, vertex/index
+    // buffers, push the per-draw model + prevModel matrices, draw — after the
+    // pass has bound the (static) pipeline. Skinned geometry rebinds
+    // SkinnedPipeline() itself before its draws.
     void AddToGraph(RHIRenderGraph& graph,
                     RGTextureHandle viewPos, RGTextureHandle viewNormal,
                     RGTextureHandle albedo,  RGTextureHandle material,
-                    RGTextureHandle emissive, RGTextureHandle depth,
+                    RGTextureHandle emissive, RGTextureHandle velocity,
+                    RGTextureHandle depth,
                     std::function<void(RHICommandList*)> drawScene);
 
     // The skinned-geometry pipeline: identical set-0 material layout to the static

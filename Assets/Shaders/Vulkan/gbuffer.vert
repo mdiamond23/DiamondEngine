@@ -15,14 +15,22 @@ layout(location = 3) in vec3 inTangent;
 layout(location = 0) out vec3 vViewPos;
 layout(location = 1) out vec2 vUV;
 layout(location = 2) out mat3 vTBN;   // consumes locations 2, 3, 4
+// TAA motion: current/previous NDC xy (.xy = current, .zw = previous), already
+// perspective-divided here and interpolated as NDC across the triangle — the
+// standard TAA approximation (curved per-pixel motion vs. this linear
+// interpolation differs by a sub-pixel amount in practice).
+layout(location = 5) out vec4 vNdcCurrPrev;
 
 layout(set = 0, binding = 0) uniform FrameUBO {
     mat4 view;
-    mat4 viewProj;
+    mat4 viewProj;               // JITTERED — feeds gl_Position only
+    mat4 viewProjUnjittered;     // clean, this frame — velocity "current"
+    mat4 prevViewProjUnjittered; // clean, last frame — velocity "previous"
 } ubo;
 
 layout(push_constant) uniform Push {
     mat4 model;
+    mat4 prevModel;   // TAA velocity's per-object "previous" term
 } pc;
 
 void main() {
@@ -40,4 +48,8 @@ void main() {
     vTBN = mat3(ubo.view) * mat3(T, B, N);
 
     gl_Position = ubo.viewProj * worldPos;
+
+    vec4 currClip = ubo.viewProjUnjittered * worldPos;
+    vec4 prevClip = ubo.prevViewProjUnjittered * (pc.prevModel * vec4(inPos, 1.0));
+    vNdcCurrPrev = vec4(currClip.xy / currClip.w, prevClip.xy / prevClip.w);
 }

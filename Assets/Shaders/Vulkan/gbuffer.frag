@@ -9,18 +9,21 @@
 //   2 gAlbedo     RGBA8    base color (linear)
 //   3 gMaterial   RGBA8    r=metallic g=roughness b=ao
 //   4 gEmissive   RGBA16F  emissive (HDR)
+//   5 gVelocity   RG16F    screen-space motion vector (UV space, TAA)
 // Bindings 1-6 + the params UBO live in the per-material descriptor set the
 // SceneRenderer's MaterialCache builds (binding 0 is the shared camera UBO).
 
 layout(location = 0) in vec3 vViewPos;
 layout(location = 1) in vec2 vUV;
 layout(location = 2) in mat3 vTBN;
+layout(location = 5) in vec4 vNdcCurrPrev;   // .xy current NDC, .zw previous NDC
 
 layout(location = 0) out vec4 gViewPos;
 layout(location = 1) out vec4 gViewNormal;
 layout(location = 2) out vec4 gAlbedo;
 layout(location = 3) out vec4 gMaterial;
 layout(location = 4) out vec4 gEmissive;
+layout(location = 5) out vec2 gVelocity;
 
 layout(set = 0, binding = 1) uniform sampler2D albedoMap;
 layout(set = 0, binding = 2) uniform sampler2D normalMap;
@@ -67,4 +70,11 @@ void main() {
     gAlbedo     = vec4(albedo, 1.0);
     gMaterial   = vec4(metallic, roughness, ao, 1.0);
     gEmissive   = vec4(emissive, 1.0);
+
+    // NDC → UV-space delta. x: uv = ndc*0.5+0.5, so Δuv = Δndc*0.5. y is
+    // NEGATED: the backend's negative-height viewport puts NDC y=+1 at texel
+    // row 0 and sampler v=0 reads row 0 (see fullscreen.vert), so v runs
+    // opposite to NDC y. Stored as a true UV offset: historyUV = uv - gVelocity.
+    vec2 dNdc = vNdcCurrPrev.xy - vNdcCurrPrev.zw;
+    gVelocity = vec2(dNdc.x, -dNdc.y) * 0.5;
 }

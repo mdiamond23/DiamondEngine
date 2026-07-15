@@ -20,21 +20,33 @@ layout(location = 5) in vec4  inWeights;
 layout(location = 0) out vec3 vViewPos;
 layout(location = 1) out vec2 vUV;
 layout(location = 2) out mat3 vTBN;   // consumes locations 2, 3, 4
+// TAA motion — see gbuffer.vert (already perspective-divided NDC, .xy current /
+// .zw previous). Fully per-bone: the previous position is skinned with LAST
+// frame's palette (BoneUBO's second half) under last frame's model matrix, so
+// a character animating in place gets correct velocity on its moving parts.
+layout(location = 5) out vec4 vNdcCurrPrev;
 
 layout(set = 0, binding = 0) uniform FrameUBO {
     mat4 view;
-    mat4 viewProj;
+    mat4 viewProj;               // JITTERED — feeds gl_Position only
+    mat4 viewProjUnjittered;     // clean, this frame — velocity "current"
+    mat4 prevViewProjUnjittered; // clean, last frame — velocity "previous"
 } ubo;
 
 // Palette: bones[i] = boneWorld(i) * inverseBind(i). MAX_BONES matches the GL
-// shader (humanoid skeletons stay well under it).
+// shader (humanoid skeletons stay well under it). prevBones is LAST frame's
+// palette (uploaded by UpdateSkinnedPalettes as the buffer's second half) —
+// TAA velocity's per-bone "previous" pose. The skinned shadow shaders keep
+// declaring only bones[]; they bind the same (larger) buffer, which is legal.
 const int MAX_BONES = 100;
 layout(set = 1, binding = 0) uniform BoneUBO {
     mat4 bones[MAX_BONES];
+    mat4 prevBones[MAX_BONES];
 } skin;
 
 layout(push_constant) uniform Push {
     mat4 model;
+    mat4 prevModel;   // TAA velocity's per-object "previous" term
 } pc;
 
 void main() {
@@ -63,4 +75,17 @@ void main() {
     vTBN = mat3(ubo.view) * mat3(T, B, N);
 
     gl_Position = ubo.viewProj * worldPos;
+
+    // Previous position: last frame's pose (prevBones) under last frame's
+    // model matrix — the same identity fallback as the current blend.
+    mat4 prevSkinMat = inWeights.x * skin.prevBones[inBoneIDs.x]
+                     + inWeights.y * skin.prevBones[inBoneIDs.y]
+                     + inWeights.z * skin.prevBones[inBoneIDs.z]
+                     + inWeights.w * skin.prevBones[inBoneIDs.w];
+    if (inWeights.x + inWeights.y + inWeights.z + inWeights.w < 1e-4)
+        prevSkinMat = mat4(1.0);
+
+    vec4 currClip = ubo.viewProjUnjittered * worldPos;
+    vec4 prevClip = ubo.prevViewProjUnjittered * (pc.prevModel * (prevSkinMat * vec4(inPos, 1.0)));
+    vNdcCurrPrev = vec4(currClip.xy / currClip.w, prevClip.xy / prevClip.w);
 }

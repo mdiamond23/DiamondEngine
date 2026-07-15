@@ -304,6 +304,9 @@ public:
         // Global exposure (HDR scale before the ACES tonemap; 1.0 = GL parity).
         if (ImGui::SliderFloat("Exposure", &m_Exposure, 0.1f, 2.0f, "%.2f"))
             m_Renderer->SetExposure(m_Exposure);
+        // Temporal AA — off also disables the projection jitter + history copy.
+        if (ImGui::Checkbox("TAA", &m_TAAEnabled))
+            m_Renderer->SetTAAEnabled(m_TAAEnabled);
     }
 
     void RenderFrame(const EditorFrameInput& input) override {
@@ -487,7 +490,8 @@ private:
     ImageSets m_GameSets {};
     ImageSets m_PreviewSets {};
 
-    float m_Exposure = 1.0f;
+    float m_Exposure   = 1.0f;
+    bool  m_TAAEnabled = true;   // mirrors the renderer default
 };
 
 } // namespace

@@ -127,6 +127,12 @@ public:
     // darken the whole frame. Takes effect next frame; survives Resize.
     virtual void SetExposure(float exposure) = 0;
 
+    // Temporal anti-aliasing (default on). Checked per frame: off = no
+    // projection jitter, no history blend, no history copy — the resolve pass
+    // degrades to a passthrough. Re-enabling self-seeds over two frames (one
+    // passthrough frame, then accumulation resumes); survives Resize.
+    virtual void SetTAAEnabled(bool enabled) = 0;
+
     // Live material edits (Inspector): drop the baked G-buffer descriptor set
     // for 'mat' so the next frame rebuilds it from the material's current
     // textures/params. A no-op if the material was never drawn (nothing baked

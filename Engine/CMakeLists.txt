@@ -335,6 +335,7 @@ if(DIAMOND_ENABLE_VULKAN)
         src/Platform/Vulkan/RHI/VulkanRHIDevice.cpp
         src/Platform/Vulkan/RHI/VulkanRHIResources.cpp
         src/Platform/Vulkan/Passes/PostProcess/VulkanTonemapPass.cpp
+        src/Platform/Vulkan/Passes/PostProcess/VulkanTAAPass.cpp
         src/Platform/Vulkan/Passes/PostProcess/VulkanFXAAPass.cpp
         src/Platform/Vulkan/Passes/PostProcess/VulkanBloomPass.cpp
         src/Platform/Vulkan/Passes/Deferred/VulkanGBufferPass.cpp
@@ -389,6 +390,7 @@ if(DIAMOND_ENABLE_VULKAN)
                     gbuffer.vert gbuffer.frag gbuffer_debug.frag
                     gbuffer_skinned.vert
                     ssao.frag ssao_blur.frag ssr.frag ssr_composite.frag
+                    taa_resolve.frag
                     csm_depth.vert csm_depth.frag csm_depth_skinned.vert
                     spot_depth_copy.frag
                     point_shadow.vert point_shadow.frag point_shadow_skinned.vert

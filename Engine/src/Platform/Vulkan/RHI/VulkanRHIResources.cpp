@@ -99,8 +99,9 @@ VulkanRHITexture::VulkanRHITexture(VulkanRHIDevice* device, const RHITextureDesc
 
     const bool isColorTarget = HasFlag(desc.usage, RHITextureUsage::ColorAttachment);
     const bool isDepthTarget = HasFlag(desc.usage, RHITextureUsage::DepthAttachment);
-    m_RenderTarget = isColorTarget || isDepthTarget;
-    m_Aspect       = isDepthTarget ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
+    m_RenderTarget   = isColorTarget || isDepthTarget;
+    m_SingleBuffered = desc.singleBuffered;
+    m_Aspect         = isDepthTarget ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
 
     // Uploaded textures may carry a full mip chain: pre-baked in initialData
     // (mipCount > 0, e.g. a cooked BCn DDS) or blit-downsampled from mip 0 below
@@ -121,8 +122,10 @@ VulkanRHITexture::VulkanRHITexture(VulkanRHIDevice* device, const RHITextureDesc
     if (desc.initialData)     usage |= VK_IMAGE_USAGE_TRANSFER_DST_BIT;
     if (blitMips)             usage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;   // blit source
 
-    // Render targets keep one image per frame-in-flight; static textures use one.
-    const uint32_t count = m_RenderTarget ? VulkanRHIDevice::kFramesInFlight : 1;
+    // Render targets keep one image per frame-in-flight; static textures and
+    // single-buffered accumulation targets (TAA history) use one.
+    const uint32_t count =
+        (m_RenderTarget && !m_SingleBuffered) ? VulkanRHIDevice::kFramesInFlight : 1;
     for (uint32_t i = 0; i < count; ++i) {
         m_Images[i]  = CreateImage(ctx, desc.width, desc.height, m_Format, usage, m_Aspect, mipLevels);
         m_Layouts[i] = VK_IMAGE_LAYOUT_UNDEFINED;

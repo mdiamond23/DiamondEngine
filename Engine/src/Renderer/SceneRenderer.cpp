@@ -29,6 +29,7 @@
 #include "Platform/Vulkan/Passes/Shadows/VulkanPointShadowPass.h"
 #include "Platform/Vulkan/Passes/Forward/VulkanTransparencyPass.h"
 #include "Platform/Vulkan/Passes/PostProcess/VulkanTonemapPass.h"
+#include "Platform/Vulkan/Passes/PostProcess/VulkanTAAPass.h"
 #include "Platform/Vulkan/Passes/IBL/VulkanIBLPass.h"
 #include "Platform/Vulkan/Passes/VulkanPassCommon.h"   // RecompileSpirv (shader hot-reload)
 #include "Platform/Vulkan/Resources/VulkanParticleRenderer.h"
@@ -80,6 +81,16 @@ constexpr int kMaxBones = 100;
 struct CameraUBO {
     glm::mat4 view;
     glm::mat4 viewProj;
+    glm::mat4 viewProjUnjittered;   // for TAA, the viewProj matrix before the Halton jitter is applied
+    glm::mat4 prevViewProjUnjittered;   // for TAA, the viewProj matrix before the Halton jitter is applied
+};
+
+// G-buffer per-draw push constants — matches Push in gbuffer.vert/gbuffer_skinned.vert.
+// 128 bytes: the guaranteed-minimum Vulkan push-constant budget, so there's no
+// room left in this block for anything else.
+struct GBufferPushConstants {
+    glm::mat4 model;
+    glm::mat4 prevModel;   // TAA velocity's per-object "previous" term
 };
 
 // The shadowed range is kept tighter than the camera far plane so the cascades
@@ -88,6 +99,33 @@ constexpr float kNear      = 0.1f;
 constexpr float kFar       = 100.0f;
 constexpr float kShadowFar = 25.0f;
 constexpr uint32_t kShadowRes     = 2048;
+
+// TAA jitter — Halton(2,3), 1-indexed (Halton(0,b) == 0, so start at i=1). Cycled
+// over kTAASampleCount frames. A low-discrepancy sequence spreads sub-pixel
+// samples evenly over the accumulation window; uniform random clusters and
+// leaves gaps, which converges slower for the same frame count.
+constexpr uint32_t kTAASampleCount = 8;
+
+float Halton(uint32_t index, uint32_t base) {
+    float result = 0.0f;
+    float f = 1.0f;
+    while (index > 0) {
+        f /= static_cast<float>(base);
+        result += f * static_cast<float>(index % base);
+        index /= base;
+    }
+    return result;
+}
+
+// Desired sub-pixel screen-space shift for this frame, in NDC units. Applied by
+// subtracting it from proj[2][0]/[2][1] (see RenderView) — adding a delta there
+// shifts clip-space x/y by a constant amount independent of view-space depth,
+// since the z term cancels out in the perspective divide.
+glm::vec2 ComputeTAAJitter(uint64_t frameIndex, uint32_t width, uint32_t height) {
+    const uint32_t haltonIndex = static_cast<uint32_t>(frameIndex % kTAASampleCount) + 1;
+    const glm::vec2 texelOffset = glm::vec2(Halton(haltonIndex, 2), Halton(haltonIndex, 3)) - 0.5f;
+    return texelOffset * 2.0f / glm::vec2(static_cast<float>(width), static_cast<float>(height));
+}
 
 // Per-material params, std140 layout matching gbuffer.frag's MaterialUBO
 // (vec4 at offset 0, scalars at 16/20/24, padded to 32).
@@ -211,6 +249,11 @@ public:
         for (auto& v : m_Views)
             if (v) v->tonemap->SetExposure(exposure);
     }
+
+    // Checked once per view per frame (RenderView): gates the projection
+    // jitter and the history copy; the resolve pass itself always runs but
+    // degrades to a passthrough draw while off (invalid history → alpha 1).
+    void SetTAAEnabled(bool enabled) override { m_TAAEnabled = enabled; }
 
     // Drop the baked G-buffer descriptor set(s) for a material edited in the
     // Inspector, so the next frame's GetOrCreateMaterialSet rebuilds it from
@@ -338,6 +381,7 @@ public:
         // Culling (RebuildDrawList, below) runs before BeginFrame, so the frame
         // stats window brackets this whole call, not just BeginFrame/EndFrame.
         m_Device->ResetFrameStats();
+        ++m_FrameIndex;
 
         View& main = *m_Views[kMainView];
         const float aspect = static_cast<float>(main.width) / static_cast<float>(main.height);
@@ -388,6 +432,10 @@ public:
         if (m_GameViewActive)
             RebuildDrawList(scene, gameFrustum,
                             glm::vec3(glm::inverse(gameView)[3]), *game, kGameView);
+
+        // Snapshot this frame's transforms for next frame's TAA velocity — after
+        // both draw lists above have read last frame's snapshot via PrevWorld.
+        CommitPrevTransforms();
 
         RHICommandList* cmd = m_Device->BeginFrame();
         if (!cmd) return;   // swapchain unavailable (minimized / rebuilding)
@@ -500,6 +548,7 @@ private:
         const GpuMesh*  mesh;
         RHIResourceSet* material;   // G-buffer set 0 for this draw (view-specific)
         glm::mat4       world;
+        glm::mat4       prevWorld;  // last frame's world — TAA velocity (see m_PrevWorld)
     };
     // A shadow caster — depth passes need no material, but each light view culls
     // against the caster's world-space bounds (cached here once per rebuild).
@@ -524,6 +573,9 @@ private:
         RHIResourceSet* material;   // set 0 (view-specific)
         RHIResourceSet* bones;      // set 1 (per entity, view-independent)
         glm::mat4       world;
+        glm::mat4       prevWorld;  // last frame's world — TAA velocity (see m_PrevWorld).
+                                    // Captures entity-level motion only, not per-bone
+                                    // animation — the bone palette isn't double-buffered.
     };
     // A skinned shadow caster — depth passes need only the bone set + world (no
     // material). Shared across views/lights like the static m_ShadowDraws.
@@ -538,8 +590,13 @@ private:
     // keyed by entity, and kept for the renderer's lifetime (skinned entities are
     // few; a destroyed entity's slot simply lingers).
     struct SkinnedInstance {
-        std::unique_ptr<RHIBuffer>      bonesUBO;   // dynamic mat4[kMaxBones]
+        std::unique_ptr<RHIBuffer>      bonesUBO;   // dynamic mat4[kMaxBones]*2 (current | previous)
         std::unique_ptr<RHIResourceSet> bonesSet;   // set 1, binding 0 = bonesUBO
+        // Last frame's palette, kept CPU-side so UpdateSkinnedPalettes can upload
+        // it as the UBO's second half — per-bone TAA velocity. hasPrev false =
+        // first frame: previous is seeded from current (zero velocity).
+        std::array<glm::mat4, kMaxBones> prevPalette;
+        bool hasPrev = false;
     };
     struct PBatch {
         RHITexture* tex = nullptr;
@@ -564,9 +621,18 @@ private:
         RHIRenderGraph  graph;
         RGTextureHandle outputColor;   // valid when offscreen
 
+        // Last frame's unjittered viewProj for THIS camera — TAA velocity's
+        // "previous" term. Per-view (not global) since main/game are different
+        // cameras. hasPrevViewProj is false until RenderView has run once, so
+        // the first frame seeds prevViewProj from the current frame instead of
+        // reading identity (which would report a spurious full-screen velocity).
+        glm::mat4 prevViewProj { 1.0f };
+        bool      hasPrevViewProj = false;
+
         std::unique_ptr<RHIBuffer>                  cameraUBO;
         std::unique_ptr<VulkanSSAOPass>             ssao;
         std::unique_ptr<VulkanSSRPass>              ssr;
+        std::unique_ptr<VulkanTAAPass>              taa;
         std::unique_ptr<VulkanDeferredLightingPass> lighting;
         std::unique_ptr<VulkanSkyboxPass>           skybox;
         std::unique_ptr<VulkanTransparencyPass>     transparency;
@@ -669,6 +735,7 @@ private:
         const std::string shaderDir = DIAMOND_VULKAN_SHADER_DIR;
         v->ssao         = std::make_unique<VulkanSSAOPass>(m_Device, shaderDir, width, height);
         v->ssr          = std::make_unique<VulkanSSRPass>(m_Device, shaderDir, width, height);
+        v->taa          = std::make_unique<VulkanTAAPass>(m_Device, shaderDir, width, height);
         v->lighting     = std::make_unique<VulkanDeferredLightingPass>(m_Device, shaderDir);
         v->skybox       = std::make_unique<VulkanSkyboxPass>(m_Device, shaderDir);
         v->transparency = std::make_unique<VulkanTransparencyPass>(m_Device, shaderDir);
@@ -710,6 +777,9 @@ private:
         const std::string shaderDir = DIAMOND_VULKAN_SHADER_DIR;
         v.ssao     = std::make_unique<VulkanSSAOPass>(m_Device, shaderDir, width, height);
         v.ssr      = std::make_unique<VulkanSSRPass>(m_Device, shaderDir, width, height);
+        // TAA holds a size-dependent history texture; recreating it also resets
+        // its history-valid flag, so the first post-resize frame passes through.
+        v.taa      = std::make_unique<VulkanTAAPass>(m_Device, shaderDir, width, height);
         v.lighting = std::make_unique<VulkanDeferredLightingPass>(m_Device, shaderDir);
         v.tonemap  = std::make_unique<VulkanTonemapPass>(m_Device, shaderDir, RHIFormat::RGBA8);
         v.tonemap->SetExposure(m_Exposure);   // the recreated pass defaults to 1.0
@@ -728,6 +798,7 @@ private:
         const RGTextureHandle gAlbedo     = g.DeclareTexture("gAlbedo",     { v.width, v.height, RHIFormat::RGBA8   });
         const RGTextureHandle gMaterial   = g.DeclareTexture("gMaterial",   { v.width, v.height, RHIFormat::RGBA8   });
         const RGTextureHandle gEmissive   = g.DeclareTexture("gEmissive",   { v.width, v.height, RHIFormat::RGBA16F });
+        const RGTextureHandle gVelocity   = g.DeclareTexture("gVelocity",   { v.width, v.height, RHIFormat::RG16F   });
         const RGTextureHandle gDepth      = g.DeclareTexture("gDepth",      { v.width, v.height, RHIFormat::Depth32F });
         const RGTextureHandle ssaoRaw     = g.DeclareTexture("ssaoRaw",     { v.width, v.height, RHIFormat::R16F     });
         const RGTextureHandle ssaoBlurred = g.DeclareTexture("ssaoBlurred", { v.width, v.height, RHIFormat::R16F     });
@@ -738,6 +809,12 @@ private:
         // writer — the SSR trace reading hdrLit while a later pass writes it back
         // would be a dependency cycle. Everything after SSR consumes this.
         const RGTextureHandle hdrSSR      = g.DeclareTexture("hdrSSR",      { v.width, v.height, RHIFormat::RGBA16F });
+        // TAA-resolved scene — same separate-target rule as hdrSSR. Everything
+        // after the resolve (transparency/particles/tonemap) consumes this.
+        const RGTextureHandle hdrTAA      = g.DeclareTexture("hdrTAA",      { v.width, v.height, RHIFormat::RGBA16F });
+        // Second MRT copy of the resolve, untouched by transparency/particles —
+        // the post-graph history copy reads this, never hdrTAA (see VulkanTAAPass).
+        const RGTextureHandle taaHistorySrc = g.DeclareTexture("taaHistorySrc", { v.width, v.height, RHIFormat::RGBA16F });
 
         std::array<RGTextureHandle, VulkanCSMPass::NUM_CASCADES> cascades;
         for (int i = 0; i < VulkanCSMPass::NUM_CASCADES; ++i)
@@ -747,7 +824,7 @@ private:
         // G-buffer — fill from the view's draw list; each draw binds its
         // material's descriptor set (built lazily by GetOrCreateMaterialSet).
         m_GBuffer->AddToGraph(g, gViewPos, gViewNormal, gAlbedo, gMaterial, gEmissive,
-                              gDepth,
+                              gVelocity, gDepth,
                               [this, &v](RHICommandList* cmd) { DrawGeometry(cmd, v); });
 
         // SSAO occlusion + blur over the G-buffer.
@@ -784,15 +861,24 @@ private:
         // into hdrSSR. Later passes composite over hdrSSR, not hdrLit.
         v.ssr->AddToGraph(g, gViewPos, gViewNormal, hdrLit, ssrColor, gMaterial, hdrSSR);
 
-        // Forward transparency blends over the lit scene + skybox, depth-testing
+        // TAA — accumulates the jittered frames against its pass-owned history,
+        // reprojected through gVelocity. Before transparency/particles: neither
+        // has motion vectors, so they draw over the resolved image rather than
+        // smearing into the history. Its history copy is recorded raw after
+        // graph.Execute (RenderView), not as a graph pass — taaHistorySrc's
+        // consumer is outside the graph, so keep it from being culled.
+        v.taa->AddToGraph(g, hdrSSR, gVelocity, hdrTAA, taaHistorySrc);
+        g.MarkOutput(taaHistorySrc);
+
+        // Forward transparency blends over the resolved scene, depth-testing
         // (not writing) against the G-buffer depth — before particles, matching
         // the GL frame order (lighting → skybox → transparency → particles).
-        v.transparency->AddToGraph(g, hdrSSR, gDepth,
+        v.transparency->AddToGraph(g, hdrTAA, gDepth,
             [this, &v](RHICommandList* cmd) { DrawTransparent(cmd, v); });
 
         // Particles composite over the lit HDR scene (before tonemap). The
         // frame view/proj members are re-set per view before its Execute.
-        v.particles->AddToGraph(g, hdrSSR, gDepth,
+        v.particles->AddToGraph(g, hdrTAA, gDepth,
             [this](VulkanParticleRenderer& particles) {
                 particles.Begin(m_FrameView, m_FrameProj);
                 for (PBatch& b : m_ParticleBatches) {
@@ -806,7 +892,7 @@ private:
         // for offscreen views.
         if (v.offscreen)
             v.outputColor = g.DeclareTexture("outputColor", { v.width, v.height, RHIFormat::RGBA8 });
-        v.tonemap->AddToGraph(g, hdrSSR, v.offscreen ? v.outputColor : RGTextureHandle{});
+        v.tonemap->AddToGraph(g, hdrTAA, v.offscreen ? v.outputColor : RGTextureHandle{});
 
         // Collider/ragdoll/IK/audio debug wireframes — on top of the tonemapped
         // LDR scene, read-only depth test against the G-buffer depth. Matches
@@ -854,19 +940,42 @@ private:
     // clobber each other's data.
     void RenderView(View& v, const glm::mat4& view, const glm::mat4& proj,
                     RHICommandList* cmd) {
+        // Sub-pixel jitter for TAA — everything that ends up in this view's HDR
+        // target uses jitteredProj; CSM and debug-draw stay on the clean 'proj'
+        // (shadow cascades and wireframes have no business jittering). With TAA
+        // off there's no resolve to average the jitter away, so it must be zero
+        // or the whole image vibrates.
+        const glm::vec2 jitter = m_TAAEnabled
+            ? ComputeTAAJitter(m_FrameIndex, v.width, v.height)
+            : glm::vec2(0.0f);
+        glm::mat4 jitteredProj = proj;
+        jitteredProj[2][0] -= jitter.x;
+        jitteredProj[2][1] -= jitter.y;
+
         // Read at record time by the particle pass callback during Execute.
         m_FrameView = view;
-        m_FrameProj = proj;
+        m_FrameProj = jitteredProj;
+
+        // TAA velocity's two clean (unjittered) viewProj terms. Cold-start: seed
+        // prevViewProj from this frame so frame 1 reads zero velocity instead of
+        // diffing against identity.
+        const glm::mat4 unjitteredViewProj = proj * view;
+        if (!v.hasPrevViewProj) {
+            v.prevViewProj    = unjitteredViewProj;
+            v.hasPrevViewProj = true;
+        }
 
         CameraUBO ubo{};
-        ubo.view     = view;
-        ubo.viewProj = proj * view;
+        ubo.view                    = view;
+        ubo.viewProj                = jitteredProj * view;
+        ubo.viewProjUnjittered      = unjitteredViewProj;
+        ubo.prevViewProjUnjittered  = v.prevViewProj;
         v.cameraUBO->Update(&ubo, sizeof(ubo));
 
-        v.ssao->SetProjection(proj);
-        v.ssr->SetProjection(proj);
-        v.skybox->SetFrameData(view, proj);
-        v.transparency->SetCamera(view, proj);
+        v.ssao->SetProjection(jitteredProj);
+        v.ssr->SetProjection(jitteredProj);
+        v.skybox->SetFrameData(view, jitteredProj);
+        v.transparency->SetCamera(view, jitteredProj);
         m_CSM->ComputeCascades(m_SunDir, view, proj, kNear, kShadowFar, kShadowRes);
         v.lighting->SetFrameData(view, m_SunDir, m_SunColor,
                                  m_CSM->GetLightMatrices(), m_CSM->GetSplitDepths(),
@@ -876,13 +985,29 @@ private:
                                  m_PointRadius);
         if (v.debugDraw) v.debugDraw->SetFrameData(proj * view);
 
+        // First frame only: put the never-written TAA history in a sampleable
+        // layout — the resolve's descriptor set binds it even when passthrough.
+        v.taa->Prepare(cmd);
+
         v.graph.Execute(cmd);
+
+        // TAA history upkeep, raw after the graph: enabled → copy this frame's
+        // resolve into the history (marks it valid); disabled → drop the
+        // accumulation, so re-enabling self-seeds with a passthrough frame
+        // instead of blending against stale history. The bool gate is the whole
+        // cost switch — no copy, no blend, no jitter while off.
+        if (m_TAAEnabled) v.taa->RecordHistoryCopy(cmd);
+        else              v.taa->InvalidateHistory();
 
         // Hand an externally-consumed output (the game image) to its sampler —
         // inside this graph nothing reads it, so nothing else transitions it.
         if (v.external)
             cmd->TransitionTexture(v.graph.GetTexture(v.outputColor),
                                    RHITextureState::SampledRead);
+
+        // Commit for next frame's "previous" term — after ubo.prevViewProjUnjittered
+        // above already read the old value.
+        v.prevViewProj = unjitteredViewProj;
     }
 
     // Records a visible draw's material as "bound" this frame, plus its 6
@@ -911,7 +1036,8 @@ private:
             }
             cmd->BindVertexBuffer(d.mesh->vertexBuffer.get());
             cmd->BindIndexBuffer(d.mesh->indexBuffer.get(), RHIIndexType::U32);
-            cmd->PushConstants(RHIShaderStage::Vertex, 0, sizeof(glm::mat4), &d.world);
+            const GBufferPushConstants pc{ d.world, d.prevWorld };
+            cmd->PushConstants(RHIShaderStage::Vertex, 0, sizeof(pc), &pc);
             cmd->DrawIndexed(d.mesh->indexCount);
         }
 
@@ -927,7 +1053,8 @@ private:
             if (d.bones    != boundBone) { cmd->BindResourceSet(1, d.bones);    boundBone = d.bones;    }
             cmd->BindVertexBuffer(d.mesh->vertexBuffer.get());
             cmd->BindIndexBuffer(d.mesh->indexBuffer.get(), RHIIndexType::U32);
-            cmd->PushConstants(RHIShaderStage::Vertex, 0, sizeof(glm::mat4), &d.world);
+            const GBufferPushConstants pc{ d.world, d.prevWorld };
+            cmd->PushConstants(RHIShaderStage::Vertex, 0, sizeof(pc), &pc);
             cmd->DrawIndexed(d.mesh->indexCount);
         }
     }
@@ -1057,6 +1184,17 @@ private:
         }
     }
 
+    // Last frame's world matrix for TAA velocity, or 'world' itself for an entity
+    // seen for the first time (zero velocity — correct for a just-spawned object).
+    // m_PrevWorld is only ever READ here; it's written once per frame by
+    // CommitPrevTransforms after both views' RebuildDrawList calls, so the game
+    // view (rebuilt second) doesn't read back a value the main view already
+    // overwrote with this frame's transform.
+    glm::mat4 PrevWorld(entt::entity entity, const glm::mat4& world) const {
+        auto it = m_PrevWorld.find(entity);
+        return it != m_PrevWorld.end() ? it->second : world;
+    }
+
     void RebuildDrawList(Scene& scene, const Frustum& frustum, const glm::vec3& cameraPos,
                          View& v, int viewIdx) {
         v.drawList.clear();
@@ -1122,7 +1260,9 @@ private:
                 m_Device->RecordVisible(1);
                 RecordMaterialUsage(mc.material.get());
                 v.drawList.push_back({ &it->second,
-                                       GetOrCreateMaterialSet(mc.material.get(), viewIdx), world });
+                                       GetOrCreateMaterialSet(mc.material.get(), viewIdx), world,
+                                       PrevWorld(entity, world) });
+                m_VisibleThisFrame.push_back({ entity, world });
             } else {
                 m_Device->RecordCulled(1);
             }
@@ -1140,6 +1280,7 @@ private:
             const glm::mat4& world   = ts.GetWorldMatrix(entity);
             const AABB bounds        = smc.localBounds.Transform(world);
             const bool  visible      = frustum.TestAABB(bounds);
+            if (visible) m_VisibleThisFrame.push_back({ entity, world });   // once per entity, not per primitive
 
             // Same Mask exclusion as static meshes above.
             const bool masked = smc.material && smc.material->Mode == AlphaMode::Mask;
@@ -1151,7 +1292,7 @@ private:
                 if (visible) {
                     m_Device->RecordVisible(1);
                     RecordMaterialUsage(smc.material.get());
-                    v.skinnedDraws.push_back({ gm, material, bones, world });
+                    v.skinnedDraws.push_back({ gm, material, bones, world, PrevWorld(entity, world) });
                 } else {
                     m_Device->RecordCulled(1);
                 }
@@ -1167,6 +1308,22 @@ private:
         // Farther first, so nearer transparents blend over them.
         std::sort(v.transparentDraws.begin(), v.transparentDraws.end(),
                   [](const TransparentDraw& a, const TransparentDraw& b) { return a.dist > b.dist; });
+    }
+
+    // Snapshots this frame's world matrices into m_PrevWorld for next frame's TAA
+    // velocity, from m_VisibleThisFrame rather than a full registry walk — a
+    // culled entity isn't drawn, so there's no velocity to compute for it either;
+    // skipping it here avoids paying an unordered_map upsert for every entity in
+    // a scene where most are off-screen. Called exactly ONCE per RenderToSwapchain,
+    // after both views' RebuildDrawList calls (main, then optionally game) have
+    // already read the OLD values via PrevWorld and finished appending to
+    // m_VisibleThisFrame — committing first would make the game view read back
+    // the main view's just-committed current-frame transform and report zero
+    // velocity for anything visible in both.
+    void CommitPrevTransforms() {
+        for (const auto& [entity, world] : m_VisibleThisFrame)
+            m_PrevWorld[entity] = world;
+        m_VisibleThisFrame.clear();
     }
 
     // Transparency set for a material's albedo map (white when absent). Cached by
@@ -1293,7 +1450,12 @@ private:
 
         SkinnedInstance inst;
         RHIBufferDesc bd;
-        bd.size    = sizeof(glm::mat4) * kMaxBones;
+        // Two palettes back to back — bones[kMaxBones] then prevBones[kMaxBones],
+        // matching gbuffer_skinned.vert's BoneUBO. The shadow skinned shaders
+        // declare only the first array; binding the larger buffer there is fine
+        // (Vulkan requires bound range >= declared block size, not equality).
+        // 2 * 100 * 64B = 12.8KB, under the 16KB minimum uniform-range guarantee.
+        bd.size    = sizeof(glm::mat4) * kMaxBones * 2;
         bd.usage   = RHIBufferUsage::Uniform;
         bd.dynamic = true;
         inst.bonesUBO = m_Device->CreateBuffer(bd);
@@ -1306,8 +1468,13 @@ private:
     // after BeginFrame (dynamic Update targets the now-idle frame slot), before any
     // view records. A skinned entity without a live palette uploads identity (bind
     // pose). Palettes longer than kMaxBones are clamped, matching the GL renderer.
+    //
+    // The UBO's second half is LAST frame's palette (cached CPU-side per entity),
+    // so gbuffer_skinned.vert can skin the previous position with the previous
+    // pose — per-bone TAA velocity, not just whole-entity motion. First sighting
+    // seeds previous = current (zero velocity), like every other TAA cold start.
     void UpdateSkinnedPalettes(Scene& scene) {
-        std::array<glm::mat4, kMaxBones> palette;
+        std::array<glm::mat4, kMaxBones * 2> upload;   // [0,kMaxBones) current | prev
         for (auto [entity, smc] : scene.GetRegistry().view<SkinnedMeshComponent>().each()) {
             if (!smc.visible || smc.meshes.empty()) continue;
 
@@ -1316,10 +1483,23 @@ private:
             const size_t count = (anim && !anim->palette.empty())
                 ? std::min(anim->palette.size(), static_cast<size_t>(kMaxBones)) : 0;
 
-            for (size_t i = 0; i < count; ++i)          palette[i] = anim->palette[i];
-            for (size_t i = count; i < kMaxBones; ++i)  palette[i] = glm::mat4(1.0f);
+            for (size_t i = 0; i < count; ++i)          upload[i] = anim->palette[i];
+            for (size_t i = count; i < kMaxBones; ++i)  upload[i] = glm::mat4(1.0f);
 
-            GetOrCreateSkinned(entity).bonesUBO->Update(palette.data(), sizeof(palette));
+            SkinnedInstance& inst = GetOrCreateSkinned(entity);
+            if (inst.hasPrev)
+                std::copy(inst.prevPalette.begin(), inst.prevPalette.end(),
+                          upload.begin() + kMaxBones);
+            else
+                std::copy(upload.begin(), upload.begin() + kMaxBones,
+                          upload.begin() + kMaxBones);
+
+            inst.bonesUBO->Update(upload.data(), sizeof(upload));
+
+            // Cache this frame's palette as next frame's "previous".
+            std::copy(upload.begin(), upload.begin() + kMaxBones,
+                      inst.prevPalette.begin());
+            inst.hasPrev = true;
         }
     }
 
@@ -1495,6 +1675,15 @@ private:
 
     // Per-skinned-entity GPU state (SkinnedInstance defined above), keyed by entity.
     std::unordered_map<entt::entity, SkinnedInstance> m_Skinned;
+    // Last frame's world matrix per entity — TAA velocity input (PrevWorld reads
+    // it, CommitPrevTransforms writes it once per frame). A stale entry from a
+    // destroyed entity simply lingers, like m_Skinned above.
+    std::unordered_map<entt::entity, glm::mat4> m_PrevWorld;
+    // (entity, world) pairs accumulated by RebuildDrawList for every VISIBLE draw
+    // this frame (both views) — CommitPrevTransforms drains this into m_PrevWorld
+    // and clears it. Cleared here (not per-view) since it accumulates across the
+    // main+game RebuildDrawList calls in one frame.
+    std::vector<std::pair<entt::entity, glm::mat4>> m_VisibleThisFrame;
     std::vector<SkinnedShadowItem> m_SkinnedShadowDraws;   // skinned casters — culled per light view
     // Albedo textures behind cached transparency sets, kept alive with them.
     std::unordered_map<RHITexture*, std::shared_ptr<Texture>> m_TransparentAlbedos;
@@ -1511,6 +1700,11 @@ private:
     // right before that view's Execute (read at record time).
     glm::mat4 m_FrameView { 1.0f };
     glm::mat4 m_FrameProj { 1.0f };
+
+    // TAA jitter phase — advances once per RenderToSwapchain call (both views in
+    // a frame share the same Halton sample).
+    uint64_t m_FrameIndex = 0;
+    bool     m_TAAEnabled = true;
 
     std::unique_ptr<RHITexture> m_DefaultParticleRHI;
     std::shared_ptr<Texture>    m_DefaultParticleTexture;

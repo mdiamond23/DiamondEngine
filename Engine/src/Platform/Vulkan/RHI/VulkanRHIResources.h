@@ -58,10 +58,15 @@ public:
     VkImageLayout& LayoutRef(uint32_t frame)   { return m_Layouts[Slot(frame)]; }
 
 private:
-    uint32_t Slot(uint32_t frame) const { return m_RenderTarget ? frame : 0; }
+    // Static textures and single-buffered render targets (TAA history) always
+    // resolve to image 0; normal render targets pick the frame-in-flight slot.
+    uint32_t Slot(uint32_t frame) const {
+        return (m_RenderTarget && !m_SingleBuffered) ? frame : 0;
+    }
 
     VulkanRHIDevice*   m_Device;
-    bool               m_RenderTarget = false;
+    bool               m_RenderTarget   = false;
+    bool               m_SingleBuffered = false;
     VkSampler          m_Sampler = VK_NULL_HANDLE;
     VkFormat           m_Format  = VK_FORMAT_UNDEFINED;
     VkExtent2D         m_Extent  { 0, 0 };

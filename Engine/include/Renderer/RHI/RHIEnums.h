@@ -17,6 +17,7 @@ enum class RHIFormat {
     BGRA8_SRGB,   // sRGB variant (hardware-encoded; unused by the swapchain, see BGRA8)
     RGBA16F,
     R16F,
+    RG16F,        // 2-channel HDR (screen-space motion vectors)
     Depth32F,
     BC7,          // block-compressed (UNORM — cooked textures keep the manual shader gamma, upload-only, never a render target
     BC5,          // 2-channel (RG) block-compressed normal maps; Z reconstructed in-shader
@@ -36,6 +37,7 @@ inline uint64_t RHIFormatLevelSize(RHIFormat format, uint32_t width, uint32_t he
             return uint64_t((width + 3) / 4) * ((height + 3) / 4) * 8;
         case RHIFormat::RGBA16F: return uint64_t(width) * height * 8;
         case RHIFormat::R16F:    return uint64_t(width) * height * 2;
+        case RHIFormat::RG16F:   return uint64_t(width) * height * 4;
         default:                 return uint64_t(width) * height * 4;   // 8-bit RGBA variants, Depth32F
     }
 }

@@ -61,6 +61,14 @@ struct RHITextureDesc {
     // 0 = initialData is a single mip-0 image (the behavior above).
     uint32_t mipCount = 0;
 
+    // Render targets only: keep ONE image instead of one per frame-in-flight, so
+    // content written in frame N is what frame N+1 samples — required for
+    // GPU-persistent accumulation buffers (TAA history). Only safe for textures
+    // that are exclusively GPU-written/GPU-read with explicit transitions: the
+    // per-FIF duplication this opts out of protects attachment reuse across
+    // concurrent frames, which same-queue barriers already order here.
+    bool singleBuffered = false;
+
     // Diagnostic name shown by capture tools (RenderDoc resource inspector).
     // Empty = unnamed. Must outlive the CreateTexture call only.
     const char* debugName = nullptr;
