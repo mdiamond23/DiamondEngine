@@ -20,6 +20,7 @@
 
 #include "Platform/Vulkan/Passes/Deferred/VulkanGBufferPass.h"
 #include "Platform/Vulkan/Passes/Deferred/VulkanSSAOPass.h"
+#include "Platform/Vulkan/Passes/Deferred/VulkanSSRPass.h"
 #include "Platform/Vulkan/Passes/Deferred/VulkanDeferredLightingPass.h"
 #include "Platform/Vulkan/Passes/Deferred/VulkanSkyboxPass.h"
 #include "Platform/Vulkan/Passes/Debug/VulkanDebugDrawPass.h"
@@ -565,6 +566,7 @@ private:
 
         std::unique_ptr<RHIBuffer>                  cameraUBO;
         std::unique_ptr<VulkanSSAOPass>             ssao;
+        std::unique_ptr<VulkanSSRPass>              ssr;
         std::unique_ptr<VulkanDeferredLightingPass> lighting;
         std::unique_ptr<VulkanSkyboxPass>           skybox;
         std::unique_ptr<VulkanTransparencyPass>     transparency;
@@ -666,6 +668,7 @@ private:
 
         const std::string shaderDir = DIAMOND_VULKAN_SHADER_DIR;
         v->ssao         = std::make_unique<VulkanSSAOPass>(m_Device, shaderDir, width, height);
+        v->ssr          = std::make_unique<VulkanSSRPass>(m_Device, shaderDir, width, height);
         v->lighting     = std::make_unique<VulkanDeferredLightingPass>(m_Device, shaderDir);
         v->skybox       = std::make_unique<VulkanSkyboxPass>(m_Device, shaderDir);
         v->transparency = std::make_unique<VulkanTransparencyPass>(m_Device, shaderDir);
@@ -706,6 +709,7 @@ private:
         // re-wire as-is.
         const std::string shaderDir = DIAMOND_VULKAN_SHADER_DIR;
         v.ssao     = std::make_unique<VulkanSSAOPass>(m_Device, shaderDir, width, height);
+        v.ssr      = std::make_unique<VulkanSSRPass>(m_Device, shaderDir, width, height);
         v.lighting = std::make_unique<VulkanDeferredLightingPass>(m_Device, shaderDir);
         v.tonemap  = std::make_unique<VulkanTonemapPass>(m_Device, shaderDir, RHIFormat::RGBA8);
         v.tonemap->SetExposure(m_Exposure);   // the recreated pass defaults to 1.0
@@ -727,7 +731,13 @@ private:
         const RGTextureHandle gDepth      = g.DeclareTexture("gDepth",      { v.width, v.height, RHIFormat::Depth32F });
         const RGTextureHandle ssaoRaw     = g.DeclareTexture("ssaoRaw",     { v.width, v.height, RHIFormat::R16F     });
         const RGTextureHandle ssaoBlurred = g.DeclareTexture("ssaoBlurred", { v.width, v.height, RHIFormat::R16F     });
+        const RGTextureHandle ssrColor    = g.DeclareTexture("ssrColor",    { v.width, v.height, RHIFormat::RGBA16F });
         const RGTextureHandle hdrLit      = g.DeclareTexture("hdrLit",      { v.width, v.height, RHIFormat::RGBA16F });
+        // Scene + reflections resolved by SSRComposite. A separate target (not a
+        // blend into hdrLit) because the graph points readers at a texture's LAST
+        // writer — the SSR trace reading hdrLit while a later pass writes it back
+        // would be a dependency cycle. Everything after SSR consumes this.
+        const RGTextureHandle hdrSSR      = g.DeclareTexture("hdrSSR",      { v.width, v.height, RHIFormat::RGBA16F });
 
         std::array<RGTextureHandle, VulkanCSMPass::NUM_CASCADES> cascades;
         for (int i = 0; i < VulkanCSMPass::NUM_CASCADES; ++i)
@@ -769,15 +779,20 @@ private:
         v.skybox->AddToGraph(g, hdrLit, gDepth);
         v.skybox->BindIBL(*m_IBL);
 
+        // SSR — reflections ray-marched off the lit scene (post-skybox so rays
+        // can hit the sky), then material-weighted and resolved with the scene
+        // into hdrSSR. Later passes composite over hdrSSR, not hdrLit.
+        v.ssr->AddToGraph(g, gViewPos, gViewNormal, hdrLit, ssrColor, gMaterial, hdrSSR);
+
         // Forward transparency blends over the lit scene + skybox, depth-testing
         // (not writing) against the G-buffer depth — before particles, matching
         // the GL frame order (lighting → skybox → transparency → particles).
-        v.transparency->AddToGraph(g, hdrLit, gDepth,
+        v.transparency->AddToGraph(g, hdrSSR, gDepth,
             [this, &v](RHICommandList* cmd) { DrawTransparent(cmd, v); });
 
         // Particles composite over the lit HDR scene (before tonemap). The
         // frame view/proj members are re-set per view before its Execute.
-        v.particles->AddToGraph(g, hdrLit, gDepth,
+        v.particles->AddToGraph(g, hdrSSR, gDepth,
             [this](VulkanParticleRenderer& particles) {
                 particles.Begin(m_FrameView, m_FrameProj);
                 for (PBatch& b : m_ParticleBatches) {
@@ -791,7 +806,7 @@ private:
         // for offscreen views.
         if (v.offscreen)
             v.outputColor = g.DeclareTexture("outputColor", { v.width, v.height, RHIFormat::RGBA8 });
-        v.tonemap->AddToGraph(g, hdrLit, v.offscreen ? v.outputColor : RGTextureHandle{});
+        v.tonemap->AddToGraph(g, hdrSSR, v.offscreen ? v.outputColor : RGTextureHandle{});
 
         // Collider/ragdoll/IK/audio debug wireframes — on top of the tonemapped
         // LDR scene, read-only depth test against the G-buffer depth. Matches
@@ -849,6 +864,7 @@ private:
         v.cameraUBO->Update(&ubo, sizeof(ubo));
 
         v.ssao->SetProjection(proj);
+        v.ssr->SetProjection(proj);
         v.skybox->SetFrameData(view, proj);
         v.transparency->SetCamera(view, proj);
         m_CSM->ComputeCascades(m_SunDir, view, proj, kNear, kShadowFar, kShadowRes);

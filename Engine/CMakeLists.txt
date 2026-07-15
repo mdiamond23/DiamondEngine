@@ -339,6 +339,7 @@ if(DIAMOND_ENABLE_VULKAN)
         src/Platform/Vulkan/Passes/PostProcess/VulkanBloomPass.cpp
         src/Platform/Vulkan/Passes/Deferred/VulkanGBufferPass.cpp
         src/Platform/Vulkan/Passes/Deferred/VulkanSSAOPass.cpp
+        src/Platform/Vulkan/Passes/Deferred/VulkanSSRPass.cpp
         src/Platform/Vulkan/Passes/Deferred/VulkanDeferredLightingPass.cpp
         src/Platform/Vulkan/Passes/Deferred/VulkanSkyboxPass.cpp
         src/Platform/Vulkan/Passes/Debug/VulkanDebugDrawPass.cpp
@@ -387,7 +388,7 @@ if(DIAMOND_ENABLE_VULKAN)
                     bloom_extract.frag bloom_blur.frag bloom_composite.frag
                     gbuffer.vert gbuffer.frag gbuffer_debug.frag
                     gbuffer_skinned.vert
-                    ssao.frag ssao_blur.frag
+                    ssao.frag ssao_blur.frag ssr.frag ssr_composite.frag
                     csm_depth.vert csm_depth.frag csm_depth_skinned.vert
                     spot_depth_copy.frag
                     point_shadow.vert point_shadow.frag point_shadow_skinned.vert
