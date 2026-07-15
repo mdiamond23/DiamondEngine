@@ -365,14 +365,19 @@ void VulkanRHIDevice::CreateDescriptorPool() {
     // lets resource sets return their slots on destruction — without it, every
     // scene reload (editor stop-play restores the snapshot) permanently consumes
     // pool capacity until vkAllocateDescriptorSets fails with OUT_OF_POOL_MEMORY.
+    // Sized for imported level scenes / stress tests: a Sponza-class import is
+    // ~30 materials but a heavy scene can reach hundreds (each material = one
+    // set per frame slot × 6 samplers + 2 UBOs). Pools are host-side and cheap;
+    // running one dry aborts via VK_CHECK(OUT_OF_POOL_MEMORY) at draw time, so
+    // headroom here is the difference between a stress test and a crash.
     const VkDescriptorPoolSize poolSizes[] = {
-        { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,         256 },
-        { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1024 },
+        { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,         4096 },
+        { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 16384 },
     };
 
     VkDescriptorPoolCreateInfo poolInfo{ VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO };
     poolInfo.flags         = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
-    poolInfo.maxSets       = 256;
+    poolInfo.maxSets       = 4096;
     poolInfo.poolSizeCount = static_cast<uint32_t>(std::size(poolSizes));
     poolInfo.pPoolSizes    = poolSizes;
     VK_CHECK(vkCreateDescriptorPool(m_Ctx.Device(), &poolInfo, nullptr, &m_DescriptorPool));

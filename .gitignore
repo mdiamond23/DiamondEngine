@@ -10,4 +10,6 @@ compile_commands.json
 *.xcworkspace
 imgui.ini
 Assets/Cache/
+Assets/Models/Sponza
+Assets/Scenes/SponzaTest.Scene
 Tools/texconv.exe

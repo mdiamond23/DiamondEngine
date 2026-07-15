@@ -477,6 +477,18 @@ static void DeserializeEntityComponents(Scene& scene, entt::entity e, const json
 
         std::shared_ptr<Mesh> mesh;
         AABB bounds;
+        // glTF-shipped material for this submesh (embedded textures, no file
+        // paths) — the fallback when the entity has neither a .mat nor inline
+        // texture paths.
+        std::shared_ptr<PBRMaterial> shippedMat;
+
+        auto isGltf = [](const std::string& p) {
+            auto dot = p.find_last_of('.');
+            if (dot == std::string::npos) return false;
+            std::string ext = p.substr(dot + 1);
+            for (auto& c : ext) c = (char)std::tolower((unsigned char)c);
+            return ext == "gltf" || ext == "glb";
+        };
 
         if (mpath == "__sphere") {
             auto md = MeshData::UVSphere();
@@ -486,6 +498,19 @@ static void DeserializeEntityComponents(Scene& scene, entt::entity e, const json
             auto md = MeshData::UnitCube();
             bounds  = md.ComputeAABB();
             mesh    = Mesh::Create(md);
+        } else if (isGltf(mpath)) {
+            // The full scene import instead of the geometry-only MeshAsset:
+            // same primitive order (so subIdx is interchangeable), but it also
+            // carries the per-primitive materials.
+            if (auto sceneAsset = Assets::Load<ImportedScene>(mpath)) {
+                ctx.modelPins.push_back(sceneAsset);
+                if (subIdx < (int)sceneAsset->meshes.size()) {
+                    bounds = sceneAsset->meshes[subIdx].ComputeAABB();
+                    mesh   = Mesh::Create(sceneAsset->meshes[subIdx]);
+                    int mi = sceneAsset->primitiveMaterial[subIdx];
+                    if (mi >= 0) shippedMat = sceneAsset->materials[mi];
+                }
+            }
         } else if (!mpath.empty()) {
             if (auto meshAsset = Assets::Load<Assets::MeshAsset>(mpath)) {
                 ctx.modelPins.push_back(meshAsset);
@@ -506,23 +531,23 @@ static void DeserializeEntityComponents(Scene& scene, entt::entity e, const json
             mat = MaterialLibrary::Get(materialPath);
             if (!mat) mat = std::make_shared<PBRMaterial>();
         } else {
-            // Inline: material stored directly in the scene (legacy / default).
-            mat = std::make_shared<PBRMaterial>();
-            mat->AlbedoPath       = mj.value("albedoPath",       "");
-            mat->NormalPath       = mj.value("normalPath",       "");
-            mat->MetallicPath     = mj.value("metallicPath",     "");
-            mat->RoughnessPath    = mj.value("roughnessPath",    "");
-            mat->AOPath           = mj.value("aoPath",           "");
-            mat->EmissivePath     = mj.value("emissivePath",     "");
-            mat->EmissiveStrength = mj.value("emissiveStrength", 0.0f);
-            mat->UVScale          = mj.value("uvScale",          1.0f);
-
-            mat->Albedo    = Assets::Load<Texture>(mat->AlbedoPath);
-            mat->Normal    = Assets::Load<Texture>(mat->NormalPath);
-            mat->Metallic  = Assets::Load<Texture>(mat->MetallicPath);
-            mat->Roughness = Assets::Load<Texture>(mat->RoughnessPath);
-            mat->AO        = Assets::Load<Texture>(mat->AOPath);
-            mat->Emissive  = Assets::Load<Texture>(mat->EmissivePath);
+            // Inline: start from what the glTF shipped (copied — the imported
+            // scene is a shared asset), then apply only the overrides the user
+            // set (non-empty texture paths). Same convention as skinned meshes.
+            mat = shippedMat ? std::make_shared<PBRMaterial>(*shippedMat)
+                             : std::make_shared<PBRMaterial>();
+            auto applyTex = [&](const char* key, std::shared_ptr<Texture>& tex, std::string& path) {
+                std::string p = mj.value(key, std::string{});
+                if (!p.empty()) { path = p; tex = Assets::Load<Texture>(p); }
+            };
+            applyTex("albedoPath",    mat->Albedo,    mat->AlbedoPath);
+            applyTex("normalPath",    mat->Normal,    mat->NormalPath);
+            applyTex("metallicPath",  mat->Metallic,  mat->MetallicPath);
+            applyTex("roughnessPath", mat->Roughness, mat->RoughnessPath);
+            applyTex("aoPath",        mat->AO,        mat->AOPath);
+            applyTex("emissivePath",  mat->Emissive,  mat->EmissivePath);
+            mat->EmissiveStrength = mj.value("emissiveStrength", mat->EmissiveStrength);
+            mat->UVScale          = mj.value("uvScale",          mat->UVScale);
         }
 
         auto& mc          = reg.emplace_or_replace<MeshComponent>(e, mesh, mat, bounds);

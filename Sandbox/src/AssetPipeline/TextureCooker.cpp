@@ -63,6 +63,17 @@ Usage ClassifyUsage(const std::string& sourcePath)
         (stem.size() > 2 && stem.compare(stem.size() - 2, 2, "_n") == 0))
         return Usage::Normal;
 
+    // Positive color evidence beats the mask keywords: names like
+    // "metal_door_01_BaseColor" or "dirt_decal_mask_..._Opacity" are albedo
+    // maps whose *material* name happens to contain a mask keyword. Cooking an
+    // albedo as BC4 keeps only the red channel and drops alpha — solid-red
+    // geometry in the scene. "opacity" is color because alpha only survives
+    // in BC7.
+    if (Contains(stem, "basecolor") || Contains(stem, "albedo") ||
+        Contains(stem, "diffuse")   || Contains(stem, "_diff") ||
+        Contains(stem, "opacity")   || Contains(stem, "emissive"))
+        return Usage::Color;
+
     if (Contains(stem, "rough") || Contains(stem, "metal") ||
         Contains(stem, "occlusion") || Contains(stem, "_ao") || Contains(stem, "mask"))
         return Usage::Mask;

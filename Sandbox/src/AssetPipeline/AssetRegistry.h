@@ -210,4 +210,17 @@ inline std::shared_ptr<Diamond::ImportedModel> Load<Diamond::ImportedModel>(cons
     });
 }
 
+// Multi-material static scenes (glTF only): geometry + per-primitive materials
+// + node instances. Used by "Import into Scene" and by scene load to restore
+// the glTF-shipped material of a static submesh.
+template<>
+inline std::shared_ptr<Diamond::ImportedScene> Load<Diamond::ImportedScene>(const std::string& path)
+{
+    return Detail::LoadCached<Diamond::ImportedScene>(path, [](const std::string& p) -> std::shared_ptr<Diamond::ImportedScene> {
+        auto scene = std::make_shared<Diamond::ImportedScene>(Diamond::GltfImporter::LoadScene(p));
+        if (scene->meshes.empty()) return nullptr;
+        return scene;
+    });
+}
+
 } // namespace Assets

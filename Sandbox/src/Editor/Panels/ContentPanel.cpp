@@ -444,6 +444,17 @@ void ContentPanel::DrawItems() {
 
         // Right-click context menu
         if (ImGui::BeginPopupContextItem("##ctx")) {
+            // Static glTF scenes spawn their full node hierarchy with the
+            // materials the file ships. glTF/GLB only — the Assimp formats
+            // (OBJ/FBX) come through geometry-only, with no materials to place.
+            if (item.type == AssetType::Mesh) {
+                std::string ext = LowerExt(item.path);
+                if (ext == ".gltf" || ext == ".glb") {
+                    if (ImGui::MenuItem("Import into Scene") && m_OnModelImport)
+                        m_OnModelImport(ToUtf8(item.path));
+                    ImGui::Separator();
+                }
+            }
             // Audio assets can be auditioned straight from the menu.
             if (item.type == AssetType::Audio) {
                 std::string p = ToUtf8(item.path);

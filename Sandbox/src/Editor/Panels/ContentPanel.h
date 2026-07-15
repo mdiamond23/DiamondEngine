@@ -34,6 +34,10 @@ public:
     // into prefab edit mode for that file.
     void SetOnPrefabOpen(std::function<void(const std::string&)> cb) { m_OnPrefabOpen = std::move(cb); }
 
+    // Fired by "Import into Scene" on a static glTF/GLB — the owner spawns the
+    // file's node hierarchy (per-primitive materials included) into the scene.
+    void SetOnModelImport(std::function<void(const std::string&)> cb) { m_OnModelImport = std::move(cb); }
+
     // Fired when a HIERARCHY_ENTITY payload is dropped anywhere in the panel:
     // (raw entt::entity bits, destination directory). The owner serializes the
     // subtree to a .prefab there; the panel refreshes itself afterwards.
@@ -78,6 +82,7 @@ private:
 
     std::function<void(const std::string&)> m_OnSceneOpen;
     std::function<void(const std::string&)> m_OnPrefabOpen;
+    std::function<void(const std::string&)> m_OnModelImport;
     std::function<void(uint32_t, const std::filesystem::path&)> m_OnEntityDrop;
     std::vector<std::filesystem::path>      m_PendingDropFiles;
 

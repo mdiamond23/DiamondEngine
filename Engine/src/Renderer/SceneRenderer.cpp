@@ -345,7 +345,7 @@ public:
         const glm::mat4 proj = glm::perspectiveRH_ZO(glm::radians(camera.Zoom), aspect, kNear, kFar);
         const Frustum mainFrustum = Frustum::Extract(proj * view, /*zeroToOneDepth*/ true);
 
-        scene.GetTransformSystem().Update(scene.GetRegistry());
+        //scene.GetTransformSystem().Update(scene.GetRegistry());
 
         // Game view: rendered only when enabled AND the scene has a primary
         // camera to render from (mirrors the GL editor's game viewport).

@@ -6,6 +6,7 @@
 #include "EditorLayers.h"
 #include "SceneSerializer.h"
 #include "AssetPipeline/TextureCooker.h"
+#include "AssetPipeline/AssetRegistry.h"
 #include <spdlog/spdlog.h>
 #include "Scene/Components.h"
 #include <IconsFontAwesome5.h>
@@ -158,6 +159,7 @@ EditorLayer::EditorLayer(Scene* scene, ImFont* iconFont)
     });
 
     m_Content.SetOnPrefabOpen([this](const std::string& path) { OpenPrefabForEdit(path); });
+    m_Content.SetOnModelImport([this](const std::string& path) { ImportModelIntoScene(path); });
     m_Hierarchy.SetOnEditPrefab([this](const std::string& path) { OpenPrefabForEdit(path); });
 
     // Entity dragged from the Hierarchy into the Content Browser → write its
@@ -185,6 +187,93 @@ EditorLayer::EditorLayer(Scene* scene, ImFont* iconFont)
             s->GetRegistry().emplace_or_replace<PrefabInstanceComponent>(e, path.string());
         }
     });
+}
+
+void EditorLayer::ImportModelIntoScene(const std::string& path)
+{
+    namespace fs = std::filesystem;
+    Scene* scene = m_Context.ActiveScene;
+    if (!scene) return;
+
+    // First load is the expensive one (geometry + every texture the file's
+    // materials reference); redo re-runs this and hits the registry cache.
+    auto model = Assets::Load<Diamond::ImportedScene>(path);
+    if (!model || model->nodes.empty()) {
+        spdlog::error("Import into Scene: '{}' has no importable geometry", path);
+        return;
+    }
+
+    auto* edCtx     = &m_Context;
+    auto sharedRoot = std::make_shared<entt::entity>(entt::null);
+    auto doSpawn    = [scene, edCtx, sharedRoot, path]() {
+        auto model = Assets::Load<Diamond::ImportedScene>(path);
+        if (!model) return;
+        auto& reg = scene->GetRegistry();
+
+        entt::entity root = scene->CreateEntity(fs::path(path).stem().string());
+        *sharedRoot = root;
+
+        // One copy per glTF material, shared by every entity of this import —
+        // same sharing semantics as .mat assets, and it keeps GPU state
+        // (Vulkan descriptor sets) at #materials, not #entities. Copied off
+        // the registry asset so inspector edits can't mutate the shared cache.
+        std::vector<std::shared_ptr<Diamond::PBRMaterial>> mats(model->materials.size());
+        auto materialFor = [&](int mi) -> std::shared_ptr<Diamond::PBRMaterial> {
+            if (mi < 0 || !model->materials[mi])
+                return std::make_shared<Diamond::PBRMaterial>();
+            if (!mats[mi])
+                mats[mi] = std::make_shared<Diamond::PBRMaterial>(*model->materials[mi]);
+            return mats[mi];
+        };
+
+        auto addMesh = [&](entt::entity e, int prim) {
+            int mi  = model->primitiveMaterial[prim];
+            auto mat = materialFor(mi);
+            auto& mc = reg.emplace<MeshComponent>(e,
+                Diamond::Mesh::Create(model->meshes[prim]), mat,
+                model->meshes[prim].ComputeAABB());
+            mc.meshPath     = path;
+            mc.meshSubIndex = prim;
+            if (mi >= 0 && model->materialTransparent[mi])
+                mc.transparent = true;
+        };
+
+        for (const auto& node : model->nodes) {
+            entt::entity nodeEnt = scene->CreateEntity(node.name);
+            auto& tc        = reg.get<TransformComponent>(nodeEnt);
+            tc.position     = node.position;
+            tc.rotation     = node.rotation;
+            tc.scale        = node.scale;
+            tc.eulerDegrees = glm::degrees(glm::eulerAngles(node.rotation));
+            scene->SetParent(nodeEnt, root);
+
+            if (node.primitives.size() == 1) {
+                addMesh(nodeEnt, node.primitives[0]);
+            } else {
+                // Multi-primitive node: identity-transform child per primitive
+                // so each keeps its own material and stays selectable.
+                for (size_t k = 0; k < node.primitives.size(); ++k) {
+                    entt::entity primEnt =
+                        scene->CreateEntity(node.name + " [" + std::to_string(k) + "]");
+                    scene->SetParent(primEnt, nodeEnt);
+                    addMesh(primEnt, node.primitives[k]);
+                }
+            }
+        }
+        edCtx->SelectOnly(root);
+    };
+
+    doSpawn();
+    if (*sharedRoot != entt::null) {
+        m_Context.Commands.RecordCommand(std::make_unique<FunctionCommand>(
+            doSpawn,
+            [scene, edCtx, sharedRoot]() {
+                edCtx->ClearSelection();
+                if (scene->GetRegistry().valid(*sharedRoot))
+                    scene->DestroyEntity(*sharedRoot);
+            },
+            "Import Model"));
+    }
 }
 
 void EditorLayer::SetupDockspace()

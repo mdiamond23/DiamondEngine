@@ -70,6 +70,12 @@ private:
 
     void SaveScene();
 
+    // "Import into Scene" (Content Browser context menu on a static glTF):
+    // spawns the file's node hierarchy under a fresh root entity — one child
+    // per glTF node, one entity per primitive, each with the material the file
+    // ships for it. One undoable command.
+    void ImportModelIntoScene(const std::string& path);
+
     // Prefab edit mode: the scene is snapshotted and replaced by a lone
     // instance of the prefab, edited with the full editor toolset; Ctrl+S
     // writes it back to the .prefab. Exiting restores the snapshot — its

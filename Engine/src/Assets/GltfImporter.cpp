@@ -6,11 +6,13 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <glm/gtc/type_ptr.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 #include <spdlog/spdlog.h>
 
 #include <unordered_map>
 #include <filesystem>
 #include <cstring>
+#include <array>
 
 namespace Diamond {
 
@@ -40,6 +42,17 @@ static cgltf_data* ParseFile(const std::string& path)
     return data;
 }
 
+// Decomposes an affine matrix to TRS. Mirrored rotations (negative scale) are
+// not detected — same limitation the rest of the pipeline has.
+static void DecomposeTRS(const glm::mat4& m, glm::vec3& T, glm::quat& R, glm::vec3& S)
+{
+    T = glm::vec3(m[3]);
+    glm::vec3 c0(m[0]), c1(m[1]), c2(m[2]);
+    S = glm::vec3(glm::length(c0), glm::length(c1), glm::length(c2));
+    glm::mat3 rot(c0 / S.x, c1 / S.y, c2 / S.z);
+    R = glm::quat_cast(rot);
+}
+
 // A node's local rest transform, decomposed to TRS. glTF nodes carry either
 // explicit T/R/S (the common case for joints) or a baked matrix; handle both.
 static void NodeLocalTRS(const cgltf_node* node, glm::vec3& T, glm::quat& R, glm::vec3& S)
@@ -49,12 +62,7 @@ static void NodeLocalTRS(const cgltf_node* node, glm::vec3& T, glm::quat& R, glm
     S = glm::vec3(1.0f);
 
     if (node->has_matrix) {
-        glm::mat4 m = glm::make_mat4(node->matrix);
-        T = glm::vec3(m[3]);
-        glm::vec3 c0(m[0]), c1(m[1]), c2(m[2]);
-        S = glm::vec3(glm::length(c0), glm::length(c1), glm::length(c2));
-        glm::mat3 rot(c0 / S.x, c1 / S.y, c2 / S.z);
-        R = glm::quat_cast(rot);
+        DecomposeTRS(glm::make_mat4(node->matrix), T, R, S);
         return;
     }
     if (node->has_translation) T = glm::vec3(node->translation[0], node->translation[1], node->translation[2]);
@@ -388,7 +396,73 @@ static std::shared_ptr<Texture> SingleChannel(const ImageData& img, int channel)
     return Texture::CreateFromPixels(out.data(), img.Width, img.Height, 1);
 }
 
-static std::shared_ptr<PBRMaterial> LoadMaterial(const cgltf_material* mat, const std::string& baseDir)
+// Per-import texture dedup: level files share images heavily across materials
+// (Sponza reuses one normal map across a dozen materials), so upload each image
+// once per import instead of once per material referencing it. Decoded pixels
+// are NOT held for the import's duration — a 4K level's set would be GBs — only
+// a single-slot decode cache, which covers the one back-to-back reuse pattern
+// (roughness then metallic split from the same packed MR image).
+struct ImportCache {
+    const cgltf_image* lastImage = nullptr;
+    ImageData          lastData;
+    std::unordered_map<const cgltf_image*, std::shared_ptr<Texture>>                fullTex;
+    std::unordered_map<const cgltf_image*, std::array<std::shared_ptr<Texture>, 4>> channelTex;
+};
+
+static const ImageData& CachedImage(const cgltf_image* img, const std::string& baseDir, ImportCache& c)
+{
+    if (c.lastImage != img) {
+        c.lastData  = DecodeImage(img, baseDir);
+        c.lastImage = img;
+    }
+    return c.lastData;
+}
+
+// The external-file source path of an image, empty for embedded/data: images.
+static std::string ImageFilePath(const cgltf_image* img, const std::string& baseDir)
+{
+    if (!img || !img->uri || std::strncmp(img->uri, "data:", 5) == 0) return {};
+    return baseDir + "/" + img->uri;
+}
+
+// Full-RGB(A) use of an image. External (uri) images go through
+// Texture::Create so the cooked-BCn cache applies and the material keeps a
+// real source path (outPath — enables hot reload and path-based
+// serialization); embedded GLB images decode from the buffer.
+static std::shared_ptr<Texture> CachedTex(const cgltf_image* img, const std::string& baseDir,
+                                          ImportCache& c, std::string* outPath = nullptr)
+{
+    if (!img) return nullptr;
+    std::string filePath = ImageFilePath(img, baseDir);
+
+    auto it = c.fullTex.find(img);
+    if (it == c.fullTex.end()) {
+        auto tex = !filePath.empty()
+            ? Texture::Create(filePath, /*flipVertically=*/false)
+            : TexFrom(CachedImage(img, baseDir, c));
+        it = c.fullTex.emplace(img, std::move(tex)).first;
+    }
+    // Recorded even when the GPU upload failed/was skipped — the path is the
+    // serializable source of truth; a later load can retry from it.
+    if (outPath && !filePath.empty())
+        *outPath = filePath;
+    return it->second;
+}
+
+// Single-channel use (packed metallic/roughness, occlusion): always needs the
+// pixels, so this path can't ride the cooked cache.
+static std::shared_ptr<Texture> CachedChannel(const cgltf_image* img, int channel,
+                                              const std::string& baseDir, ImportCache& c)
+{
+    if (!img) return nullptr;
+    auto& slots = c.channelTex[img];
+    if (!slots[channel])
+        slots[channel] = SingleChannel(CachedImage(img, baseDir, c), channel);
+    return slots[channel];
+}
+
+static std::shared_ptr<PBRMaterial> LoadMaterial(const cgltf_material* mat, const std::string& baseDir,
+                                                 ImportCache& cache)
 {
     if (!mat) return nullptr;
     auto out = std::make_shared<PBRMaterial>();
@@ -396,22 +470,25 @@ static std::shared_ptr<PBRMaterial> LoadMaterial(const cgltf_material* mat, cons
     if (mat->has_pbr_metallic_roughness) {
         const cgltf_pbr_metallic_roughness& pbr = mat->pbr_metallic_roughness;
         if (pbr.base_color_texture.texture)
-            out->Albedo = TexFrom(DecodeImage(pbr.base_color_texture.texture->image, baseDir));
+            out->Albedo = CachedTex(pbr.base_color_texture.texture->image, baseDir, cache,
+                                    &out->AlbedoPath);
 
         // glTF packs roughness in G and metallic in B of one texture; our material
         // uses separate single-channel maps, so split it.
         if (pbr.metallic_roughness_texture.texture) {
-            ImageData mr = DecodeImage(pbr.metallic_roughness_texture.texture->image, baseDir);
-            out->Roughness = SingleChannel(mr, 1);
-            out->Metallic  = SingleChannel(mr, 2);
+            const cgltf_image* mr = pbr.metallic_roughness_texture.texture->image;
+            out->Roughness = CachedChannel(mr, 1, baseDir, cache);
+            out->Metallic  = CachedChannel(mr, 2, baseDir, cache);
         }
     }
     if (mat->normal_texture.texture)
-        out->Normal = TexFrom(DecodeImage(mat->normal_texture.texture->image, baseDir));
+        out->Normal = CachedTex(mat->normal_texture.texture->image, baseDir, cache,
+                                &out->NormalPath);
     if (mat->occlusion_texture.texture)
-        out->AO = SingleChannel(DecodeImage(mat->occlusion_texture.texture->image, baseDir), 0);
+        out->AO = CachedChannel(mat->occlusion_texture.texture->image, 0, baseDir, cache);
     if (mat->emissive_texture.texture) {
-        out->Emissive         = TexFrom(DecodeImage(mat->emissive_texture.texture->image, baseDir));
+        out->Emissive         = CachedTex(mat->emissive_texture.texture->image, baseDir, cache,
+                                          &out->EmissivePath);
         out->EmissiveStrength = mat->has_emissive_strength
             ? mat->emissive_strength.emissive_strength : 1.0f;
     }
@@ -472,7 +549,8 @@ ImportedModel GltfImporter::LoadModel(const std::string& path)
     // Single-material assumption: load the first material the primitives reference.
     if (firstMaterial) {
         std::string baseDir = std::filesystem::path(path).parent_path().string();
-        model.material = LoadMaterial(firstMaterial, baseDir);
+        ImportCache cache;
+        model.material = LoadMaterial(firstMaterial, baseDir, cache);
     }
 
     if (skin)
@@ -480,6 +558,102 @@ ImportedModel GltfImporter::LoadModel(const std::string& path)
 
     cgltf_free(data);
     return model;
+}
+
+// Depth-first walk accumulating world transforms; emits one instance per node
+// that carries geometry. Geometry-less intermediate nodes contribute only
+// their transform (flattened away — no empty entities for them).
+static void WalkSceneNode(const cgltf_node* node, const glm::mat4& parentWorld,
+                          const std::unordered_map<const cgltf_primitive*, int>& primFlatIndex,
+                          std::vector<SceneNodeInstance>& out)
+{
+    glm::vec3 T; glm::quat R; glm::vec3 S;
+    NodeLocalTRS(node, T, R, S);
+    glm::mat4 world = parentWorld
+        * glm::translate(glm::mat4(1.0f), T)
+        * glm::mat4_cast(R)
+        * glm::scale(glm::mat4(1.0f), S);
+
+    if (node->mesh) {
+        SceneNodeInstance inst;
+        inst.name = node->name ? node->name
+                  : (node->mesh->name ? node->mesh->name : "Node");
+        DecomposeTRS(world, inst.position, inst.rotation, inst.scale);
+        for (cgltf_size p = 0; p < node->mesh->primitives_count; ++p) {
+            auto it = primFlatIndex.find(&node->mesh->primitives[p]);
+            if (it != primFlatIndex.end()) inst.primitives.push_back(it->second);
+        }
+        if (!inst.primitives.empty()) out.push_back(std::move(inst));
+    }
+
+    for (cgltf_size c = 0; c < node->children_count; ++c)
+        WalkSceneNode(node->children[c], world, primFlatIndex, out);
+}
+
+ImportedScene GltfImporter::LoadScene(const std::string& path)
+{
+    ImportedScene out;
+    cgltf_data* data = ParseFile(path);
+    if (!data) return out;
+
+    // Flat primitive enumeration in file order. The skip rules (non-triangles,
+    // empty geometry) MUST match Load() exactly — meshSubIndex refers to the
+    // same submesh whichever path a MeshComponent was populated through.
+    std::unordered_map<const cgltf_primitive*, int> primFlatIndex;
+    for (cgltf_size m = 0; m < data->meshes_count; ++m) {
+        const cgltf_mesh& mesh = data->meshes[m];
+        for (cgltf_size p = 0; p < mesh.primitives_count; ++p) {
+            const cgltf_primitive& prim = mesh.primitives[p];
+            if (prim.type != cgltf_primitive_type_triangles) continue;
+            MeshData md = ProcessPrimitive(&prim, nullptr);
+            if (md.Vertices.empty()) continue;
+            primFlatIndex[&prim] = (int)out.meshes.size();
+            out.meshes.push_back(std::move(md));
+            out.primitiveMaterial.push_back(
+                prim.material ? (int)(prim.material - data->materials) : -1);
+        }
+    }
+
+    // Load only materials a surviving primitive references; unreferenced slots
+    // stay null so primitiveMaterial can index by file material order.
+    out.materials.resize(data->materials_count);
+    out.materialNames.resize(data->materials_count);
+    out.materialTransparent.assign(data->materials_count, 0);
+    std::string baseDir = std::filesystem::path(path).parent_path().string();
+    ImportCache cache;
+    for (int mi : out.primitiveMaterial) {
+        if (mi < 0 || out.materials[mi]) continue;
+        const cgltf_material& mat = data->materials[mi];
+        out.materials[mi]           = LoadMaterial(&mat, baseDir, cache);
+        out.materialNames[mi]       = mat.name ? mat.name : ("Material " + std::to_string(mi));
+        out.materialTransparent[mi] = (mat.alpha_mode != cgltf_alpha_mode_opaque) ? 1 : 0;
+    }
+
+    // Node instances from the default scene (or the first one, or loose root
+    // nodes — exporters vary).
+    const cgltf_scene* sc = data->scene ? data->scene
+                          : (data->scenes_count > 0 ? &data->scenes[0] : nullptr);
+    if (sc) {
+        for (cgltf_size i = 0; i < sc->nodes_count; ++i)
+            WalkSceneNode(sc->nodes[i], glm::mat4(1.0f), primFlatIndex, out.nodes);
+    } else {
+        for (cgltf_size i = 0; i < data->nodes_count; ++i)
+            if (!data->nodes[i].parent)
+                WalkSceneNode(&data->nodes[i], glm::mat4(1.0f), primFlatIndex, out.nodes);
+    }
+
+    // Mesh-library file with no scene graph: expose everything under one
+    // identity-transform instance so the import still produces entities.
+    if (out.nodes.empty() && !out.meshes.empty()) {
+        SceneNodeInstance inst;
+        inst.name = std::filesystem::path(path).stem().string();
+        inst.primitives.resize(out.meshes.size());
+        for (int i = 0; i < (int)out.meshes.size(); ++i) inst.primitives[i] = i;
+        out.nodes.push_back(std::move(inst));
+    }
+
+    cgltf_free(data);
+    return out;
 }
 
 bool GltfImporter::HasSkeleton(const std::string& path)
