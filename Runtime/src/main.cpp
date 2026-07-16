@@ -25,6 +25,7 @@
 
 #include "Scene/Scene.h"
 #include "Scene/SceneSerializer.h"
+#include "Scene/SceneSystem.h"
 #include "Assets/AssetPathUtils.h"
 #include "Assets/ImageLoader.h"
 #include "Scene/Components.h"
@@ -278,6 +279,21 @@ int main(int argc, char** argv)
         return 1;
     }
     spdlog::info("[Runtime] playing '{}'", scenePath);
+
+    // Scene transitions: the build's scene list is boot.json's (dev mode: just
+    // the loaded scene). Current = the loaded scene's list entry, if it has
+    // one — an argv override outside the list plays fine but can't Reload.
+    {
+        std::vector<std::string> list = boot.scenes;
+        if (list.empty()) list.push_back(AssetPaths::ToPortable(scenePath));
+        const std::string loaded = AssetPaths::LowerGeneric(AssetPaths::ToPortable(scenePath));
+        uint32_t current = SceneSystem::kNoScene;
+        for (uint32_t i = 0; i < (uint32_t)list.size(); ++i)
+            if (AssetPaths::LowerGeneric(list[i]) == loaded) { current = i; break; }
+        SceneSystem::SetSceneList(std::move(list));
+        SceneSystem::SetCurrent(current);
+    }
+
     scene.StartPlay();
 
     // In-game UI over the tonemapped scene: resolve canvases at window size,
@@ -329,6 +345,27 @@ int main(int argc, char** argv)
             renderer->Resize((uint32_t)w, (uint32_t)h);
             fbW = w;
             fbH = h;
+        }
+
+        // Deferred scene transition, requested by a script last frame via
+        // SceneSystem::LoadScene. Swapped here, at the frame boundary — never
+        // mid-UpdateSystems (the load destroys the systems and the registry
+        // they iterate). GPU must be idle before the old scene's resources
+        // die; InvalidateSceneCaches WaitIdles and drops the pointer-keyed
+        // renderer caches a same-address reallocation would alias.
+        if (const auto next = SceneSystem::ConsumePendingRequest()) {
+            const std::string nextPath = AssetPaths::Resolve(SceneSystem::SceneList()[*next]);
+            spdlog::info("[Runtime] scene transition -> '{}'", nextPath);
+            renderer->InvalidateSceneCaches();
+            scene.StopPlay();
+            if (SceneSerializer::Load(scene, nextPath)) {   // clears the old scene itself
+                scene.StartPlay();
+                SceneSystem::SetCurrent(*next);
+            } else {
+                // The old world is already cleared — nothing sane to render.
+                spdlog::critical("[Runtime] transition failed to load '{}' — exiting", nextPath);
+                glfwSetWindowShouldClose(window, true);
+            }
         }
 
         // One engine frame: systems → transforms → state machines → animators

@@ -5,8 +5,11 @@
 #include <cctype>
 #include "EditorLayers.h"
 #include "Scene/SceneSerializer.h"
+#include "Scene/SceneSystem.h"
+#include "Assets/AssetPathUtils.h"
 #include "AssetPipeline/TextureCooker.h"
 #include "AssetPipeline/AssetRegistry.h"
+#include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
 #include "Scene/Components.h"
 #include <IconsFontAwesome5.h>
@@ -379,6 +382,7 @@ void EditorLayer::DrawToolbar()
         if (ImGui::Button(ICON_FA_PLAY, ImVec2(btnW, 0)))
         {
             m_SceneSnapshot = SceneSerializer::Stringify(*scene);
+            SetupPlayModeSceneList();
             scene->StartPlay();
         }
         ImGui::PopStyleColor(3);
@@ -570,6 +574,81 @@ void EditorLayer::ExitPrefabEdit()
     m_PrefabEditSnapshot.clear();
     m_PrefabEditMode = false;
     if (m_SceneCacheInvalidator) m_SceneCacheInvalidator();
+}
+
+// Play-mode scene list for SceneSystem transitions: the packager's list
+// (ProjectSettings/Package.json, the same list boot.json ships) when present,
+// plus the currently open scene if it isn't already listed — so transitions
+// out of AND back into the working scene both resolve during a play session.
+void EditorLayer::SetupPlayModeSceneList()
+{
+    std::vector<std::string> list;
+    const std::filesystem::path pkg =
+        AssetPaths::ProjectRoot() / "ProjectSettings" / "Package.json";
+    std::ifstream f(pkg);
+    if (f.is_open()) {
+        try {
+            list = nlohmann::json::parse(f).value("scenes", list);
+        } catch (const std::exception& e) {
+            spdlog::warn("[SceneSystem] failed to parse '{}': {}", pkg.string(), e.what());
+        }
+    }
+
+    uint32_t current = SceneSystem::kNoScene;
+    if (!m_Context.currentScenePath.empty()) {
+        const std::string portable = AssetPaths::ToPortable(m_Context.currentScenePath);
+        const std::string key      = AssetPaths::LowerGeneric(portable);
+        for (uint32_t i = 0; i < (uint32_t)list.size(); ++i)
+            if (AssetPaths::LowerGeneric(list[i]) == key) { current = i; break; }
+        if (current == SceneSystem::kNoScene) {
+            // Appended, not prepended: indices of the packaged list must stay
+            // stable or LoadSceneByIndex would mean different scenes in the
+            // editor vs the shipped build.
+            list.push_back(portable);
+            current = (uint32_t)list.size() - 1;
+        }
+    }
+
+    SceneSystem::SetSceneList(std::move(list));
+    SceneSystem::SetCurrent(current);
+}
+
+// Called by the app loop just before Scene::TickFrame — the same frame
+// boundary the Runtime uses. Consumes a transition requested by a script
+// during the previous frame's UpdateSystems.
+void EditorLayer::ProcessSceneTransition()
+{
+    Scene* scene = m_Context.ActiveScene;
+    if (!scene || !scene->IsPlaying()) {
+        // Drop a stale request (e.g. queued the same frame Stop was pressed)
+        // so it can't fire at the start of the next play session.
+        (void)SceneSystem::ConsumePendingRequest();
+        return;
+    }
+    const auto next = SceneSystem::ConsumePendingRequest();
+    if (!next) return;
+
+    const std::string path = AssetPaths::Resolve(SceneSystem::SceneList()[*next]);
+    spdlog::info("[SceneSystem] transition -> '{}'", path);
+
+    // Same ritual as opening a scene (see SetOnSceneOpen): selection and undo
+    // hold entity handles into the registry the load is about to destroy.
+    // m_SceneSnapshot stays untouched — Stop still restores the edited scene.
+    m_Context.ClearSelection();
+    m_Context.Commands.Clear();
+    scene->StopPlay();
+    if (SceneSerializer::Load(*scene, path)) {
+        if (m_SceneCacheInvalidator) m_SceneCacheInvalidator();
+        scene->StartPlay();
+        SceneSystem::SetCurrent(*next);
+    } else {
+        // Load cleared the world before failing — fall back to edit mode on
+        // the pre-play snapshot instead of playing an empty scene.
+        spdlog::error("[SceneSystem] transition failed to load '{}' — stopping play", path);
+        if (!m_SceneSnapshot.empty())
+            SceneSerializer::FromString(*scene, m_SceneSnapshot);
+        if (m_SceneCacheInvalidator) m_SceneCacheInvalidator();
+    }
 }
 
 float EditorLayer::DrawPrefabEditBanner(float y)

@@ -55,6 +55,9 @@ public:
     void SetBackendIsVulkan(bool isVulkan) { m_Profiler.SetBackendIsVulkan(isVulkan); }
     void UpdateCamera(const glm::mat4& view, const glm::mat4& proj, const glm::vec3& camPos);
     EditorContext& GetContext() { return m_Context; }
+    // Deferred SceneSystem transition, consumed at the frame boundary — the
+    // app loop calls this just before Scene::TickFrame. Play mode only.
+    void ProcessSceneTransition();
     bool IsViewportActive() const     { return m_Viewport.IsActive(); }
     bool IsGameViewportActive() const { return m_GameViewport.IsActive(); }
     ParticlePreviewPanel& GetParticlePreviewPanel() { return m_ParticlePreview; }
@@ -70,6 +73,11 @@ private:
     void DrawNewScriptDialog();
 
     void SaveScene();
+
+    // Feeds SceneSystem the packager's scene list (+ the open scene) at play
+    // start, so script-driven transitions resolve the same names a packaged
+    // build would.
+    void SetupPlayModeSceneList();
 
     // "Import into Scene" (Content Browser context menu on a static glTF):
     // spawns the file's node hierarchy under a fresh root entity — one child

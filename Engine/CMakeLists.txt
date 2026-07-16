@@ -271,6 +271,7 @@ add_library(MyEngine STATIC
     src/Renderer/TextureData.cpp
     src/Scene/Scene.cpp
     src/Scene/SceneSerializer.cpp
+    src/Scene/SceneSystem.cpp
     src/Scene/DebugVisualization.cpp
     src/Scene/AudioSystem.cpp
     src/Scene/ParticleSystem.cpp

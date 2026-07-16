@@ -458,6 +458,10 @@ int main(int argc, char** argv)
             continue;
         }
 
+        // Deferred SceneSystem transition (requested by a script last frame) —
+        // swapped at the frame boundary, before anything touches the registry.
+        editorLayer.ProcessSceneTransition();
+
         // One engine frame: systems → transforms → state machines → animators →
         // IK → ragdoll readback (ordering rationale lives in Scene::TickFrame).
         // Gameplay input only reaches scripts during unpaused play with the

@@ -13,6 +13,7 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <string>
+#include "Scene/SceneSystem.h"
 
 // ---- Data -------------------------------------------------------------------
 // A move-and-grab test, Gang Beasts style. Put this on a skinned character that
@@ -125,11 +126,20 @@ public:
         Input::BindAxis("ArmX",        GamepadAxis::LeftX);
         Input::BindAxis("ArmY",        GamepadAxis::LeftY);
         Input::BindAxis("GrabTrigger", GamepadAxis::LeftTrigger);
+        Input::BindAction("ChangeScene", GamepadButton::South);
     }
 
     void OnUpdate(Scene& scene, float dt) override
     {
         constexpr float kDeadzone = 0.2f;   // ignore stick noise / rest drift
+
+        // Cycle to the next listed scene (kNoScene wraps to 0). Empty list =
+        // no-op: possible when playing an unsaved scene with no packager list.
+        if (Input::IsPressed("ChangeScene") && !SceneSystem::SceneList().empty())
+        {
+            SceneSystem::LoadSceneByIndex(
+                (SceneSystem::CurrentIndex() + 1) % SceneSystem::SceneList().size());
+        }
 
         const float h        = Input::GetAxis("ArmX");
         const float f        = Input::GetAxis("ArmY");

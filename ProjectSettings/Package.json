@@ -3,9 +3,10 @@
   "fullAssetCopy": false,
   "height": 900,
   "icon": "Assets/Materials/Lava004_2K-PNG/Lava004_2K-PNG_Color.png",
-  "outputDir": "C:\\Dev\\Builds\\Assets",
+  "outputDir": "C:\\Dev\\Builds\\Test",
   "scenes": [
-    "Assets/Scenes/ProceduralTest.scene"
+    "Assets/Scenes/ProceduralTest.scene",
+    "Assets/Scenes/PhysicsTesting.scene"
   ],
   "title": "DiamondEngine",
   "width": 1600
