@@ -112,8 +112,8 @@ ragdoll characters, active physics control, grabbing, local multiplayer.
 ## Milestone 7 — Shipping
 > Goal: export a standalone game without the editor
 
-- [ ] Separate engine runtime from editor (editor code stays in Sandbox)
-- [ ] Packager / build step that bundles assets + executable
+- [x] Separate engine runtime from editor (editor code stays in Sandbox)
+- [x] Packager / build step that bundles assets + executable
 
 ---
 

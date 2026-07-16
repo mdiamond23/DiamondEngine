@@ -51,6 +51,12 @@ public:
                                                  uint32_t width, uint32_t height,
                                                  bool offscreen = false);
 
+    // Packaged builds: override the compiled-in dev-tree SPIR-V directory
+    // (DIAMOND_VULKAN_SHADER_DIR) with an exe-relative one. Must be called
+    // before Create() — every pass loads its modules from here, including
+    // ones rebuilt later by resize and hot-reload.
+    static void SetShaderDirectory(std::string dir);
+
     virtual ~SceneRenderer() = default;
 
     // Upload a mesh's GPU vertex/index buffers once, keyed on 'key' (the same

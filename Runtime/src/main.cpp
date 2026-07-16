@@ -4,8 +4,17 @@
 // ("the VulkanScene demo / a shipped game"); this target isn't built when
 // DIAMOND_ENABLE_VULKAN is off (see the root CMakeLists).
 //
-// Boot: Runtime.exe [path/to/scene.scene] — defaults to a test scene for now;
-// the M7 packager step replaces this with a boot config next to the exe.
+// Boot: a boot.json next to the exe (what the packager writes) makes this a
+// packaged game — assets + shaders resolve relative to the exe and the config
+// picks the scene/window/icon. No boot.json = dev mode: compile-time dev-tree
+// paths, optional scene from argv[1] (which also overrides a boot.json scene).
+
+// windows.h must precede glfw3.h (APIENTRY redefinition otherwise).
+#ifdef _WIN32
+    #define WIN32_LEAN_AND_MEAN
+    #define NOMINMAX
+    #include <windows.h>
+#endif
 
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
@@ -14,6 +23,8 @@
 
 #include "Scene/Scene.h"
 #include "Scene/SceneSerializer.h"
+#include "Assets/AssetPathUtils.h"
+#include "Assets/ImageLoader.h"
 #include "Scene/Components.h"
 #include "Scene/UISystem.h"
 #include "Scene/UIRenderSystem.h"
@@ -39,15 +50,132 @@
 // include, scripted components in the scene file fail to deserialize).
 #include "Scripts/AllScripts.h"
 
+#include <nlohmann/json.hpp>
+
 #include <cstdio>
+#include <filesystem>
+#include <fstream>
 #include <memory>
 #include <string>
+#include <vector>
 
 using namespace Diamond;
+namespace fs = std::filesystem;
+
+namespace {
+
+// Directory holding the running executable — the root of a packaged game.
+// argv[0] is the fallback: unreliable in general (PATH lookups), but only
+// reached on non-Windows, where a packaged Runtime doesn't ship yet anyway.
+fs::path ExecutableDir(const char* argv0)
+{
+#ifdef _WIN32
+    wchar_t buf[MAX_PATH];
+    const DWORD n = GetModuleFileNameW(nullptr, buf, MAX_PATH);
+    if (n > 0 && n < MAX_PATH) return fs::path(buf).parent_path();
+#endif
+    std::error_code ec;
+    const fs::path p = fs::canonical(fs::path(argv0), ec);
+    return ec ? fs::current_path() : p.parent_path();
+}
+
+// boot.json, written by the editor's packager. All fields optional. "scenes"
+// is the build's scene list (portable "Assets/..." paths, entry 0 = boot
+// scene) — the single source of truth the packager copies from and the future
+// SceneManager transition API will load by name/index through. The legacy
+// single-"scene" field still reads as a one-entry list.
+struct BootConfig {
+    std::vector<std::string> scenes;
+    std::string title  = "DiamondEngine";
+    int         width  = 1600;
+    int         height = 900;
+    std::string icon;   // portable path to a PNG for the window/taskbar icon
+};
+
+bool LoadBootConfig(const fs::path& path, BootConfig& out)
+{
+    std::ifstream f(path);
+    if (!f.is_open()) return false;
+    try {
+        const nlohmann::json j = nlohmann::json::parse(f);
+        if (j.contains("scenes"))
+            out.scenes = j["scenes"].get<std::vector<std::string>>();
+        else if (j.contains("scene"))
+            out.scenes = { j["scene"].get<std::string>() };
+        out.title  = j.value("title",  out.title);
+        out.width  = j.value("width",  out.width);
+        out.height = j.value("height", out.height);
+        out.icon   = j.value("icon",   out.icon);
+        return true;
+    } catch (const std::exception& e) {
+        spdlog::error("[Runtime] boot.json is malformed ({}) — falling back to dev mode", e.what());
+        return false;
+    }
+}
+
+// Every listed scene must be present in the package — a missing one means a
+// transition would fail mid-game, so say it at boot while someone is looking.
+// Only a missing BOOT scene is fatal (the load itself catches that below).
+void ValidateSceneList(const std::vector<std::string>& scenes)
+{
+    for (const std::string& s : scenes) {
+        std::error_code ec;
+        if (!fs::exists(AssetPaths::Resolve(s), ec))
+            spdlog::error("[Runtime] boot.json lists '{}' but it is not in the package", s);
+    }
+}
+
+// Window/taskbar icon (not the exe's Explorer icon — that's baked at package
+// time). GLFW wants tightly-packed RGBA8; expand RGB, reject anything odder.
+void SetWindowIcon(GLFWwindow* window, const std::string& pngPath)
+{
+    const ImageData img = ImageLoader::Load(pngPath, /*flipVertically*/ false);
+    if (img.Pixels.empty()) return;   // ImageLoader already logged the failure
+    if (img.Channels != 3 && img.Channels != 4) {
+        spdlog::warn("[Runtime] icon '{}' has {} channels — expected RGB/RGBA, skipping",
+                     pngPath, img.Channels);
+        return;
+    }
+
+    std::vector<uint8_t> rgba;
+    const uint8_t* pixels = img.Pixels.data();
+    if (img.Channels == 3) {
+        rgba.resize((size_t)img.Width * img.Height * 4);
+        for (size_t i = 0, n = (size_t)img.Width * img.Height; i < n; ++i) {
+            rgba[i * 4 + 0] = img.Pixels[i * 3 + 0];
+            rgba[i * 4 + 1] = img.Pixels[i * 3 + 1];
+            rgba[i * 4 + 2] = img.Pixels[i * 3 + 2];
+            rgba[i * 4 + 3] = 255;
+        }
+        pixels = rgba.data();
+    }
+
+    GLFWimage icon { img.Width, img.Height, const_cast<unsigned char*>(pixels) };
+    glfwSetWindowIcon(window, 1, &icon);
+}
+
+} // namespace
 
 int main(int argc, char** argv)
 {
+    // Packaged mode is declared by a boot.json next to the exe: rebase the
+    // asset root and SPIR-V dir onto the exe's directory BEFORE anything
+    // resolves a path or loads a shader.
+    const fs::path exeDir = ExecutableDir(argv[0]);
+    BootConfig boot;
+    const bool packaged = LoadBootConfig(exeDir / "boot.json", boot);
+
+    std::string shaderDir = DIAMOND_VULKAN_SHADER_DIR;
     std::string scenePath = ASSETS_DIR "/Scenes/ProceduralTest.scene";
+    if (packaged) {
+        AssetPaths::SetProjectRoot(exeDir);
+        shaderDir = (exeDir / "shaders").string();
+        SceneRenderer::SetShaderDirectory(shaderDir);
+        if (!boot.scenes.empty()) scenePath = AssetPaths::Resolve(boot.scenes[0]);
+        spdlog::info("[Runtime] packaged mode — root '{}', {} scene(s) in build",
+                     exeDir.string(), boot.scenes.size());
+        ValidateSceneList(boot.scenes);
+    }
     if (argc > 1) scenePath = argv[1];
 
     if (!glfwInit()) {
@@ -65,12 +193,15 @@ int main(int argc, char** argv)
     // size, and SceneRenderer::Resize is offscreen-mode-only. Resizable window
     // + swapchain-mode target rebuild is a follow-up.
     glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
-    GLFWwindow* window = glfwCreateWindow(1600, 900, "DiamondEngine", nullptr, nullptr);
+    GLFWwindow* window = glfwCreateWindow(boot.width, boot.height,
+                                          boot.title.c_str(), nullptr, nullptr);
     if (!window) {
         spdlog::critical("[Runtime] glfwCreateWindow failed");
         glfwTerminate();
         return 1;
     }
+    if (!boot.icon.empty())
+        SetWindowIcon(window, AssetPaths::Resolve(boot.icon));
 
     // Device must outlive everything GPU-backed (declared first → reset last).
     std::unique_ptr<RHIDevice> device = RHIDevice::Create(window, RHIBackend::Vulkan);
@@ -106,7 +237,7 @@ int main(int argc, char** argv)
     // In-game UI batcher, recorded into the swapchain overlay scope (so it
     // targets the swapchain's format, not the editor's RGBA8 offscreen one).
     auto r2d = std::make_unique<VulkanRenderer2D>(
-        device.get(), DIAMOND_VULKAN_SHADER_DIR, device->SwapchainFormat());
+        device.get(), shaderDir, device->SwapchainFormat());
 
     Input::Init(window);
 

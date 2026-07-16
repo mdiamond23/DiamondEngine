@@ -18,12 +18,21 @@ namespace AssetPaths {
 
 namespace fs = std::filesystem;
 
-// Parent of the compile-time assets dir, e.g. "C:/Dev/DiamondEngine".
-inline const fs::path& ProjectRoot()
+// Parent of the assets dir. Defaults to the compile-time dev-tree root
+// (e.g. "C:/Dev/DiamondEngine"); a packaged runtime overrides it with the
+// executable's directory before loading anything (see SetProjectRoot).
+inline fs::path& MutableProjectRoot()
 {
-    static const fs::path root = fs::path(ASSETS_DIR).parent_path();
+    static fs::path root = fs::path(ASSETS_DIR).parent_path();
     return root;
 }
+
+inline const fs::path& ProjectRoot() { return MutableProjectRoot(); }
+
+// Packaged builds: assets live next to the exe, not at the dev-tree root the
+// binary was compiled with. Must be called before any scene/asset load —
+// paths resolved against the old root are already absolute and stay stale.
+inline void SetProjectRoot(const fs::path& root) { MutableProjectRoot() = root; }
 
 // Lowercase, forward-slash copy for case/separator-insensitive comparison
 // (Windows paths in old files mix casing and separators freely).

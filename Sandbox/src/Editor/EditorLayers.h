@@ -15,6 +15,7 @@
 #include "Panels/AnimatorPanel.h"
 #include "Panels/ParticlePreviewPanel.h"
 #include "Panels/MixerPanel.h"
+#include "Panels/PackagePanel.h"
 #include "Panels/ProfilerPanel.h"
 #include "Panels/RendererPanel.h"
 
@@ -105,15 +106,16 @@ private:
     AnimatorPanel     m_Animator;
     ParticlePreviewPanel m_ParticlePreview;
     MixerPanel        m_Mixer;
+    PackagePanel      m_Packager;
     ProfilerPanel     m_Profiler;
     RendererPanel     m_RendererSettings;
 
     // Every panel above, for the generic render loop and the "View" menu's
     // checkbox list. Add new panels to both the members above and this list.
-    std::array<Panel*, 11> m_Panels {
+    std::array<Panel*, 12> m_Panels {
         &m_Hierarchy, &m_Viewport, &m_GameViewport, &m_Inspector, &m_Content,
-        &m_Console, &m_Animator, &m_ParticlePreview, &m_Mixer, &m_Profiler,
-        &m_RendererSettings
+        &m_Console, &m_Animator, &m_ParticlePreview, &m_Mixer, &m_Packager,
+        &m_Profiler, &m_RendererSettings
     };
 
     EditorContext     m_Context;

@@ -15,6 +15,7 @@ add_executable(Sandbox
     src/Editor/Panels/AnimatorPanel.cpp
     src/Editor/Panels/ParticlePreviewPanel.cpp
     src/Editor/Panels/MixerPanel.cpp
+    src/Editor/Panels/PackagePanel.cpp
     src/Editor/Panels/ProfilerPanel.cpp
 )
 
@@ -37,6 +38,9 @@ target_compile_definitions(Sandbox PRIVATE
     ASSETS_DIR="${CMAKE_SOURCE_DIR}/Assets"
     FONTS_DIR="${fontawesome_SOURCE_DIR}/webfonts"
     SCRIPTS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/src/Scripts"
+    # The Packager panel shells out to `cmake --build <this>` and copies
+    # Runtime.exe + build/shaders/*.spv out of it.
+    DIAMOND_BUILD_DIR="${CMAKE_BINARY_DIR}"
 )
 
 # texconv (DirectXTex) drives the texture cooker's BC7 shell-out (TextureCooker.cpp),

@@ -12,6 +12,7 @@
 #include "Renderer/MeshData.h"
 #include "Renderer/Material.h"
 #include "Renderer/Frustum.h"
+#include "Assets/AssetPathUtils.h"   // default IBL HDR resolves via ProjectRoot
 #include "Core/Camera.h"
 #include "Scene/Scene.h"
 #include "Scene/Components.h"
@@ -48,6 +49,14 @@
 namespace Diamond {
 
 namespace {
+
+// Where every pass loads its SPIR-V from. Defaults to the build tree's baked
+// DIAMOND_VULKAN_SHADER_DIR; a packaged runtime points it next to the exe via
+// SceneRenderer::SetShaderDirectory before Create().
+std::string& ShaderDir() {
+    static std::string dir = DIAMOND_VULKAN_SHADER_DIR;
+    return dir;
+}
 
 // gbuffer.vert's vertex inputs — a repacked subset of the engine's full Vertex
 // (position + normal + UV + tangent; the bitangent is rebuilt in-shader from
@@ -291,7 +300,7 @@ public:
 
         if (!m_Preview) {
             m_Preview = std::make_unique<ParticlePreview>(m_Device);
-            const std::string shaderDir = DIAMOND_VULKAN_SHADER_DIR;
+            const std::string shaderDir = ShaderDir();
             m_Preview->particles =
                 std::make_unique<VulkanParticleRenderer>(m_Device, shaderDir, RHIFormat::RGBA8);
         }
@@ -718,7 +727,7 @@ private:
         m_DefaultBlack  = makePixel(0, 0, 0);         // metallic = 0, emissive off
         m_DefaultGray   = makePixel(128, 128, 128);   // roughness = 0.5
 
-        const std::string shaderDir = DIAMOND_VULKAN_SHADER_DIR;
+        const std::string shaderDir = ShaderDir();
         m_GBuffer     = std::make_unique<VulkanGBufferPass>(m_Device, shaderDir);
         m_CSM         = std::make_unique<VulkanCSMPass>(m_Device, shaderDir);
         m_SpotShadow  = std::make_unique<VulkanSpotShadowPass>(m_Device, shaderDir);
@@ -742,7 +751,8 @@ private:
         // Bake a default environment so the deferred ambient term is valid even if
         // the caller never sets one. SetEnvironment can re-bake later.
         m_IBL = std::make_unique<VulkanIBLPass>(m_Device, shaderDir);
-        m_IBL->BakeEnvironment(DIAMOND_ASSETS_DIR "/Textures/citrus_orchard_road_puresky_4k.hdr");
+        m_IBL->BakeEnvironment(AssetPaths::Resolve(
+            "Assets/Textures/citrus_orchard_road_puresky_4k.hdr"));
     }
 
     std::unique_ptr<View> CreateView(uint32_t width, uint32_t height,
@@ -763,7 +773,7 @@ private:
         ubo.dynamic = true;
         v->cameraUBO = m_Device->CreateBuffer(ubo);
 
-        const std::string shaderDir = DIAMOND_VULKAN_SHADER_DIR;
+        const std::string shaderDir = ShaderDir();
         v->ssao         = std::make_unique<VulkanSSAOPass>(m_Device, shaderDir, width, height);
         v->ssr          = std::make_unique<VulkanSSRPass>(m_Device, shaderDir, width, height);
         v->taa          = std::make_unique<VulkanTAAPass>(m_Device, shaderDir, width, height);
@@ -805,7 +815,7 @@ private:
         // passes (G-buffer, shadows, skybox, transparency, particles) hold no
         // graph-texture sets and their pipelines are size-independent, so they
         // re-wire as-is.
-        const std::string shaderDir = DIAMOND_VULKAN_SHADER_DIR;
+        const std::string shaderDir = ShaderDir();
         v.ssao     = std::make_unique<VulkanSSAOPass>(m_Device, shaderDir, width, height);
         v.ssr      = std::make_unique<VulkanSSRPass>(m_Device, shaderDir, width, height);
         // TAA holds a size-dependent history texture; recreating it also resets
@@ -1633,7 +1643,7 @@ private:
     // the corresponding pass(es) in place. One WaitIdle for the whole batch —
     // reloads across groups in the same poll share the stall.
     void DoReload(bool gbuffer, bool lighting, bool skybox, bool transparency, bool particles) {
-        const std::string spvDir = DIAMOND_VULKAN_SHADER_DIR;
+        const std::string spvDir = ShaderDir();
         auto recompile = [&](std::vector<ShaderWatch>& files) {
             for (ShaderWatch& f : files) RecompileSpirv(m_ShaderSrcDir, spvDir, f.name);
         };
@@ -1762,6 +1772,10 @@ std::unique_ptr<SceneRenderer> SceneRenderer::Create(RHIDevice* device,
     return std::make_unique<SceneRendererVk>(device, width, height, offscreen);
 }
 
+void SceneRenderer::SetShaderDirectory(std::string dir) {
+    ShaderDir() = std::move(dir);
+}
+
 } // namespace Diamond
 
 #else  // !DIAMOND_ENABLE_VULKAN — no backend to render through.
@@ -1770,6 +1784,7 @@ namespace Diamond {
 std::unique_ptr<SceneRenderer> SceneRenderer::Create(RHIDevice*, uint32_t, uint32_t, bool) {
     return nullptr;
 }
+void SceneRenderer::SetShaderDirectory(std::string) {}
 } // namespace Diamond
 
 #endif
