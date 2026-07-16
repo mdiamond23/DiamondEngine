@@ -270,6 +270,7 @@ add_library(MyEngine STATIC
     src/Renderer/Shader.cpp
     src/Renderer/TextureData.cpp
     src/Scene/Scene.cpp
+    src/Scene/SceneSerializer.cpp
     src/Scene/DebugVisualization.cpp
     src/Scene/AudioSystem.cpp
     src/Scene/ParticleSystem.cpp
@@ -309,8 +310,19 @@ target_link_libraries(MyEngine
         imgui
         glad_gl
         assimp::assimp
+        # Public: scene/prefab/asset serialization (Scene/SceneSerializer.h,
+        # Assets/*Asset.h, Scene/ComponentRegistry.h) exposes nlohmann types in
+        # engine headers consumed by the editor and (M7) the runtime.
+        nlohmann_json::nlohmann_json
     PRIVATE
         Jolt
+)
+
+# AssetPathUtils.h anchors portable "Assets/..." paths at the compile-time asset
+# root (same value Sandbox defines for its own TUs; ODR-safe because identical).
+# The M7 packager will replace this with an exe-relative root resolved at runtime.
+target_compile_definitions(MyEngine PRIVATE
+    ASSETS_DIR="${CMAKE_SOURCE_DIR}/Assets"
 )
 
 # PUBLIC on both: the DIAMOND_PROFILE_* macros live in the public CPUProfiler.h

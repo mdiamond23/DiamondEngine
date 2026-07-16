@@ -28,7 +28,15 @@
       },
       "mesh": {
         "albedoPath": "Assets/Materials/Lava004_2K-PNG/Lava004_2K-PNG_Color.png",
+        "alphaCutoff": 0.5,
+        "alphaMode": "opaque",
         "aoPath": "",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
         "castsShadow": true,
         "emissivePath": "Assets/Materials/Lava004_2K-PNG/Lava004_2K-PNG_Emission.png",
         "emissiveStrength": 2.5,
@@ -368,7 +376,15 @@
       },
       "mesh": {
         "albedoPath": "Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Color.png",
+        "alphaCutoff": 0.5,
+        "alphaMode": "opaque",
         "aoPath": "Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_AmbientOcclusion.png",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
         "castsShadow": true,
         "emissivePath": "",
         "emissiveStrength": 0.0,
@@ -486,7 +502,15 @@
       },
       "mesh": {
         "albedoPath": "Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_Color.png",
+        "alphaCutoff": 0.5,
+        "alphaMode": "opaque",
         "aoPath": "Assets/Materials/DiamondPlate006C_2K-PNG/DiamondPlate006C_2K-PNG_AmbientOcclusion.png",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
         "castsShadow": true,
         "emissivePath": "",
         "emissiveStrength": 0.0,
@@ -829,7 +853,15 @@
       },
       "skinnedMesh": {
         "albedoPath": "",
+        "alphaCutoff": 0.5,
+        "alphaMode": "opaque",
         "aoPath": "",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
         "castsShadow": true,
         "emissivePath": "",
         "emissiveStrength": 0.0,
@@ -864,36 +896,6 @@
         ]
       },
       "uuid": 6818450401873832087
-    },
-    {
-      "prefabRef": {
-        "name": "Rag",
-        "path": "Assets/Prefabs/Rag.prefab",
-        "transform": {
-          "eulerDegrees": [
-            -89.99998474121094,
-            -6.513776063671317e-12,
-            0.00012291788880247623
-          ],
-          "position": [
-            0.7608069181442261,
-            2.136711597442627,
-            0.06586860865354538
-          ],
-          "rotation": [
-            0.70710688829422,
-            -0.7071066498756409,
-            -7.584857257825206e-07,
-            7.584858963127772e-07
-          ],
-          "scale": [
-            2.0,
-            0.9998459815979004,
-            0.999832272529602
-          ]
-        },
-        "uuid": 18166415407339056831
-      }
     }
   ]
 }

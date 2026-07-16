@@ -378,18 +378,49 @@ public:
 
     void RenderToSwapchain(Scene& scene, const Camera& camera,
                            const OverlayFn& overlay) override {
+        const View& main = *m_Views[kMainView];
+        const float aspect = static_cast<float>(main.width) / static_cast<float>(main.height);
+        // Explicitly the [0,1]-depth variant: plain glm::perspective resolves its
+        // depth range from a per-TU define, and its inline instantiations
+        // COMDAT-fold across TUs — a GL TU's [-1,1] version can silently win.
+        const glm::mat4 proj = glm::perspectiveRH_ZO(glm::radians(camera.Zoom), aspect, kNear, kFar);
+        RenderFrame(scene, camera.GetViewMatrix(), proj, camera.Position, overlay);
+    }
+
+    void RenderToSwapchain(Scene& scene, const OverlayFn& overlay) override {
+        // Runtime path: the main view IS the game camera — same derivation as
+        // the game view below, but feeding the primary view/swapchain.
+        const View& main = *m_Views[kMainView];
+        const float aspect = static_cast<float>(main.width) / static_cast<float>(main.height);
+        glm::mat4 view(1.0f);
+        glm::mat4 proj = glm::perspectiveRH_ZO(glm::radians(60.0f), aspect, kNear, kFar);
+        const entt::entity camEntity = scene.GetPrimaryCamera();
+        if (camEntity != entt::null) {
+            const auto& cc = scene.GetRegistry().get<CameraComponent>(camEntity);
+            view = glm::inverse(scene.GetTransformSystem().GetWorldMatrix(camEntity));
+            proj = glm::perspectiveRH_ZO(glm::radians(cc.fov), aspect,
+                                         cc.nearClip, cc.farClip);
+        } else {
+            static bool warned = false;
+            if (!warned) {
+                spdlog::warn("[SceneRenderer] scene has no primary camera — "
+                             "rendering from the origin");
+                warned = true;
+            }
+        }
+        RenderFrame(scene, view, proj, glm::vec3(glm::inverse(view)[3]), overlay);
+    }
+
+    // The shared frame body behind both RenderToSwapchain overloads: everything
+    // after the main view's matrices are known.
+    void RenderFrame(Scene& scene, const glm::mat4& view, const glm::mat4& proj,
+                     const glm::vec3& camPos, const OverlayFn& overlay) {
         // Culling (RebuildDrawList, below) runs before BeginFrame, so the frame
         // stats window brackets this whole call, not just BeginFrame/EndFrame.
         m_Device->ResetFrameStats();
         ++m_FrameIndex;
 
         View& main = *m_Views[kMainView];
-        const float aspect = static_cast<float>(main.width) / static_cast<float>(main.height);
-        const glm::mat4 view = camera.GetViewMatrix();
-        // Explicitly the [0,1]-depth variant: plain glm::perspective resolves its
-        // depth range from a per-TU define, and its inline instantiations
-        // COMDAT-fold across TUs — a GL TU's [-1,1] version can silently win.
-        const glm::mat4 proj = glm::perspectiveRH_ZO(glm::radians(camera.Zoom), aspect, kNear, kFar);
         const Frustum mainFrustum = Frustum::Extract(proj * view, /*zeroToOneDepth*/ true);
 
         //scene.GetTransformSystem().Update(scene.GetRegistry());
@@ -428,7 +459,7 @@ public:
         // BeginFrame so lazy mesh/material uploads keep their pre-frame timing.
         // The shadow list is view-independent and shared — each shadow pass
         // culls it against its own light frustum / range at draw time.
-        RebuildDrawList(scene, mainFrustum, camera.Position, main, kMainView);
+        RebuildDrawList(scene, mainFrustum, camPos, main, kMainView);
         if (m_GameViewActive)
             RebuildDrawList(scene, gameFrustum,
                             glm::vec3(glm::inverse(gameView)[3]), *game, kGameView);

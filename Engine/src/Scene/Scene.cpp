@@ -1,6 +1,9 @@
 #include "Scene/Scene.h"
 #include "Profiling/CPUProfiler.h"
 #include "UUIDGenerator.h"
+#include "Animation/AnimationSystem.h"
+#include "Animation/IKSystem.h"
+#include "Scene/Physics/PhysicsAPI.h"
 #include <algorithm>
 #define GLM_ENABLE_EXPERIMENTAL
 #include <glm/gtx/matrix_decompose.hpp>
@@ -181,6 +184,32 @@ void Scene::UpdateSystems(float dt)
     // Drain any events posted via enqueue() this frame. trigger() dispatches
     // immediately and is unaffected.
     m_Registry.ctx().get<entt::dispatcher>().update();
+}
+
+void Scene::TickFrame(float dt)
+{
+    // Scripts/physics first — they move entities, so everything downstream
+    // reads this frame's positions.
+    UpdateSystems(dt);
+
+    // World transforms: rebuilds sorted arrays if the hierarchy changed, then
+    // one linear pass.
+    m_TransformSystem.Update(m_Registry);
+
+    // State machines pick this frame's clip BEFORE the animators advance it;
+    // both hold the current pose while paused / in edit mode.
+    const bool advance = m_Playing && !m_Paused;
+    Diamond::UpdateStateMachines(m_Registry, dt, advance);
+    Diamond::UpdateAnimators(m_Registry, dt, advance);
+
+    // IK blends into the pose the animators just built, before skinning
+    // consumes the palette; skips entities whose ragdoll owns the pose.
+    Diamond::UpdateIK(*this, dt);
+
+    // Limp-ragdoll readback overwrites the animated palette with the simulated
+    // body transforms — after the physics step (UpdateSystems) and after the
+    // animators, so it wins.
+    Physics::SyncRagdollPoses(*this);
 }
 
 // ---- camera -----------------------------------------------------------------

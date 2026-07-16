@@ -1,5 +1,5 @@
-#include "SceneSerializer.h"
-#include "AssetPathUtils.h"
+#include "Scene/SceneSerializer.h"
+#include "Assets/AssetPathUtils.h"
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
 #include <array>
@@ -19,11 +19,11 @@
 #include "Assets/ModelImporter.h"
 #include "Assets/GltfImporter.h"
 #include "Animation/AnimationComponents.h"
-#include "PhysicsMaterialAsset.h"
-#include "AnimStateMachineAsset.h"
-#include "MaterialAsset.h"
+#include "Assets/PhysicsMaterialAsset.h"
+#include "Assets/AnimStateMachineAsset.h"
+#include "Assets/MaterialAsset.h"
 #include "AssetPipeline/AssetRegistry.h"
-#include "RagdollAsset.h"
+#include "Assets/RagdollAsset.h"
 #include "Assets/ImageLoader.h"
 #include "Renderer/MeshData.h"
 #include "Renderer/TextureData.h"

@@ -50,6 +50,13 @@ endif()
 add_subdirectory(Engine)
 add_subdirectory(Sandbox)
 
+# Standalone game runtime (Milestone 7) — Vulkan-only: it renders through
+# SceneRenderer's swapchain mode, which doesn't exist in a GL-only build
+# (macOS keeps the editor; there's no GL shipping path).
+if(DIAMOND_ENABLE_VULKAN)
+    add_subdirectory(Runtime)
+endif()
+
 # PRIVATE and Sandbox-only on purpose: only main.cpp's --tracy handler needs
 # the GUI path, and keeping it off MyEngine's PUBLIC defines means changing it
 # never rebuilds the engine.

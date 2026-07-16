@@ -76,6 +76,15 @@ public:
     void Pause();
     void Resume();
     void UpdateSystems(float dt);
+
+    // One engine frame of scene simulation, in the canonical order every host
+    // (editor loop, standalone runtime) must run it: game systems (scripts,
+    // physics, audio, particles) → world transforms → animation state machines
+    // → animators → IK → ragdoll pose readback. Rendering and host concerns
+    // (input gating, audio-voice housekeeping) stay outside. Safe in edit mode:
+    // UpdateSystems no-ops and animation holds the current pose.
+    void TickFrame(float dt);
+
     bool IsPlaying() const { return m_Playing; }
     bool IsPaused()  const { return m_Paused;  }
 

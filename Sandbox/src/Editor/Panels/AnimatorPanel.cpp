@@ -1,5 +1,5 @@
 #include "AnimatorPanel.h"
-#include "../AnimStateMachineAsset.h"
+#include "Assets/AnimStateMachineAsset.h"
 #include "Animation/AnimationComponents.h"
 #include <algorithm>
 #include <cmath>

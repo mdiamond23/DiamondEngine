@@ -60,7 +60,7 @@ ragdoll characters, active physics control, grabbing, local multiplayer.
 
 ---
 
-## Milestone 3 — Physics Completion & Editor Polish
+## Milestone 3 — Physics Completion & Editor Polish ✓
 > Goal: finish the physics surface before building on top of it
 
 - [x] Convex hull collider shape — exposed in Inspector and scripting API
@@ -72,7 +72,7 @@ ragdoll characters, active physics control, grabbing, local multiplayer.
 
 ---
 
-## Milestone 4 — Character & Animation Systems
+## Milestone 4 — Character & Animation Systems ✓
 > Goal: lay the foundation for physics-based characters (prerequisite for the game)
 > Dependency order matters: GLTF importer → Skeletal animation → Constraints → Ragdoll → IK
 
@@ -99,7 +99,7 @@ ragdoll characters, active physics control, grabbing, local multiplayer.
 
 ---
 
-## Milestone 6 — Asset Pipeline
+## Milestone 6 — Asset Pipeline ✓
 > Goal: load real game assets reliably and efficiently
 
 - [x] Asset registry — track every loaded asset by path, prevent double-loading
@@ -114,7 +114,6 @@ ragdoll characters, active physics control, grabbing, local multiplayer.
 
 - [ ] Separate engine runtime from editor (editor code stays in Sandbox)
 - [ ] Packager / build step that bundles assets + executable
-- [ ] Basic in-game UI — ImGui in game mode or a dedicated UI layer
 
 ---
 

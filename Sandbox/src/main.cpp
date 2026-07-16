@@ -28,7 +28,7 @@
 #include "Editor/EditorBackend.h"
 #include "Editor/GLEditorBackend.h"
 #include "Editor/EditorLayers.h"
-#include "Editor/MaterialAsset.h"
+#include "Assets/MaterialAsset.h"
 
 #include "Scene/Scene.h"
 #include "Scene/Components.h"
@@ -44,8 +44,6 @@
 #include "Audio/AudioEngine.h"
 #include "Audio/AudioAPI.h"
 #include "Animation/AnimationComponents.h"
-#include "Animation/AnimationSystem.h"
-#include "Animation/IKSystem.h"
 #include "Profiling/CPUProfiler.h"
 #include "AssetPipeline/TextureCooker.h"
 
@@ -460,37 +458,16 @@ int main(int argc, char** argv)
             continue;
         }
 
+        // One engine frame: systems → transforms → state machines → animators →
+        // IK → ragdoll readback (ordering rationale lives in Scene::TickFrame).
         // Gameplay input only reaches scripts during unpaused play with the
         // game viewport focused.
         Input::SetEnabled(scene.IsPlaying() && !scene.IsPaused() && editorLayer.IsGameViewportActive());
-        scene.UpdateSystems(deltaTime);
+        scene.TickFrame(deltaTime);
         Input::SetEnabled(true);
 
         // Audio housekeeping: reclaim finished one-shot voices, enforce the voice cap.
         audioEngine.Update();
-
-        // Update world transforms — rebuilds sorted arrays if hierarchy changed,
-        // then linear pass.
-        scene.GetTransformSystem().Update(scene.GetRegistry());
-
-        // Drive animation state machines, then advance the animators they control
-        // and rebuild bone palettes. Both gated on play mode (paused/editor holds
-        // the current pose); the SM must run first so the animator advances the
-        // clip the SM selected this frame.
-        const bool animAdvance = scene.IsPlaying() && !scene.IsPaused();
-        UpdateStateMachines(scene.GetRegistry(), deltaTime, animAdvance);
-        UpdateAnimators(scene.GetRegistry(), deltaTime, animAdvance);
-
-        // Procedural IK (hand reach / foot placement): pull end-effector bones to
-        // their targets and blend into the pose UpdateAnimators just built, before
-        // skinning consumes the palette. Skips entities whose ragdoll owns the pose.
-        UpdateIK(scene, deltaTime);
-
-        // Ragdoll readback: for any limp ragdoll, overwrite the palette
-        // UpdateAnimators just produced with the simulated body transforms. Must
-        // run after the physics step (in UpdateSystems above) and after
-        // UpdateAnimators, so it wins.
-        Physics::SyncRagdollPoses(scene);
 
         // --- Frame input for the backend ---
         EditorFrameInput frame;

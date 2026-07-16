@@ -4,7 +4,7 @@
 #include <fstream>
 #include <cctype>
 #include "EditorLayers.h"
-#include "SceneSerializer.h"
+#include "Scene/SceneSerializer.h"
 #include "AssetPipeline/TextureCooker.h"
 #include "AssetPipeline/AssetRegistry.h"
 #include <spdlog/spdlog.h>

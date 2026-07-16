@@ -79,6 +79,14 @@ public:
     virtual void RenderToSwapchain(Scene& scene, const Camera& camera,
                                    const OverlayFn& overlay = {}) = 0;
 
+    // Runtime variant: the main view renders from the scene's primary
+    // CameraComponent — the same matrix derivation the editor's game view
+    // uses — instead of an editor free-camera. A scene with no primary camera
+    // still presents frames (from the origin, warned once) so a bad boot scene
+    // shows a window instead of appearing to hang. Meant for swapchain mode
+    // (a shipped game's whole frame); in offscreen mode prefer the game view.
+    virtual void RenderToSwapchain(Scene& scene, const OverlayFn& overlay = {}) = 0;
+
     // The scene's tonemapped LDR output texture (offscreen mode only; nullptr in
     // swapchain mode). Invalidated by Resize — re-query (and re-register with
     // ImGui) after any resize.

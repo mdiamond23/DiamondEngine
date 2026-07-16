@@ -6,7 +6,7 @@
 // Build:  cmake --build build --target PrefabTests
 // Run:    build/Sandbox/Debug/PrefabTests.exe   (exit code = failure count)
 
-#include "Editor/SceneSerializer.h"
+#include "Scene/SceneSerializer.h"
 #include "Scene/Scene.h"
 #include "Scene/Components.h"
 #include "Scene/Physics/Constraint.h"

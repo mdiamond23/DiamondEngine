@@ -5,7 +5,6 @@ add_executable(Sandbox
     src/Editor/EditorLayers.cpp
     src/Editor/GLEditorBackend.cpp
     src/Editor/Command.cpp
-    src/Editor/SceneSerializer.cpp
     src/Editor/MeshThumbnailRenderer.cpp
     src/Editor/Panels/HierarchyPanel.cpp
     src/Editor/Panels/ViewportPanel.cpp
@@ -59,7 +58,6 @@ endif()
 # build/Sandbox/<config>/PrefabTests.exe (exit code = failure count).
 add_executable(PrefabTests EXCLUDE_FROM_ALL
     tests/PrefabTests.cpp
-    src/Editor/SceneSerializer.cpp
 )
 target_link_libraries(PrefabTests PRIVATE MyEngine nlohmann_json::nlohmann_json imguizmo miniz)
 target_include_directories(PrefabTests PRIVATE

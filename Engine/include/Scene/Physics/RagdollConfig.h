@@ -7,8 +7,8 @@
 // Ragdoll configuration — the data model loaded from a .ragdoll asset and used by
 // PhysicsSystem to build a chain of rigid bodies + joints for a skinned character.
 // Plain data only — no Jolt, no JSON — mirroring RigidBodyComponent / ConstraintComponent
-// so the engine's public headers stay dependency-free. JSON load/save lives in
-// Sandbox (RagdollAsset.h), same split as AnimationStateMachine.h / AnimStateMachineAsset.h.
+// so this header stays dependency-free. JSON load/save lives in the header-only
+// Assets/RagdollAsset.h, same split as AnimationStateMachine.h / AnimStateMachineAsset.h.
 //
 // A ragdoll maps a SUBSET of a skeleton's bones onto physics bodies (the simplified
 // ~15-bone physics skeleton). Bones with no body still skin off their nearest

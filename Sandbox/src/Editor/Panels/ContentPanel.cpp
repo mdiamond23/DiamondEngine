@@ -1,7 +1,7 @@
 #include "ContentPanel.h"
-#include "../PhysicsMaterialAsset.h"
-#include "../AnimStateMachineAsset.h"
-#include "../MaterialAsset.h"
+#include "Assets/PhysicsMaterialAsset.h"
+#include "Assets/AnimStateMachineAsset.h"
+#include "Assets/MaterialAsset.h"
 #include <Audio/AudioAPI.h>
 #include <imgui.h>
 #include <imgui_internal.h>   // BeginDragDropTargetCustom for the window-wide entity drop

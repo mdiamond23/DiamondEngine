@@ -1,6 +1,6 @@
 #include "HierarchyPanel.h"
 #include "../Command.h"
-#include "../SceneSerializer.h"
+#include "Scene/SceneSerializer.h"
 #include <imgui.h>
 #include <cctype>
 #include <cstring>

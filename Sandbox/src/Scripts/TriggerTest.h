@@ -2,6 +2,7 @@
 #include "Scene/Scripting.h"
 #include "Scene/Scene.h"
 #include "Scene/ComponentRegistry.h"
+#include "Scene/Physics/Collision.h"   // ColliderComponent
 #include <imgui.h>
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>

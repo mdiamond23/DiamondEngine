@@ -1,11 +1,11 @@
 #include "InspectorPanel.h"
 #include "ContentPanel.h"
 #include "../Command.h"
-#include "../SceneSerializer.h"
-#include "../PhysicsMaterialAsset.h"
-#include "../AnimStateMachineAsset.h"
-#include "../MaterialAsset.h"
-#include "../RagdollAsset.h"      // ragdoll auto-gen + .ragdoll I/O (BuildDefaultRagdoll, SaveRagdoll)
+#include "Scene/SceneSerializer.h"
+#include "Assets/PhysicsMaterialAsset.h"
+#include "Assets/AnimStateMachineAsset.h"
+#include "Assets/MaterialAsset.h"
+#include "Assets/RagdollAsset.h"  // ragdoll auto-gen + .ragdoll I/O (BuildDefaultRagdoll, SaveRagdoll)
 #include "AssetPipeline/AssetRegistry.h"
 #include <spdlog/spdlog.h>
 #include <imgui.h>
