@@ -7,6 +7,12 @@ add_executable(Runtime
 
 target_link_libraries(Runtime PRIVATE MyEngine)
 
+# Windows subsystem: no console window pops up behind the game. main() stays
+# the entry point (main.cpp provides a forwarding WinMain); logs go to
+# runtime.log next to the exe, mirrored to the parent terminal when launched
+# from one (AttachConsole). Ignored on non-Windows.
+set_target_properties(Runtime PROPERTIES WIN32_EXECUTABLE TRUE)
+
 target_include_directories(Runtime PRIVATE
     # VulkanRenderer2D for the in-game UI overlay — an engine-internal header
     # (same private-include access Sandbox has). The header is Vulkan-free

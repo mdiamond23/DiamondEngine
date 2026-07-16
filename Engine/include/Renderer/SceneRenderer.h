@@ -98,10 +98,12 @@ public:
     // ImGui) after any resize.
     virtual RHITexture* OutputColor() const = 0;
 
-    // Rebuild the graph's render targets at a new resolution (offscreen mode
-    // only; a no-op otherwise or when the size is unchanged). Waits for the GPU
-    // to go idle and recreates the size-dependent passes — call it between
-    // frames, not mid-record, and expect it to be a hitch, not a per-frame op.
+    // Rebuild the graph's render targets at a new resolution (a no-op when the
+    // size is unchanged). In swapchain mode this is the window-resize hook: the
+    // device recreates the backbuffer on its own, this resizes the internal
+    // G-buffer/HDR chain to match. Waits for the GPU to go idle and recreates
+    // the size-dependent passes — call it between frames, not mid-record, and
+    // expect it to be a hitch, not a per-frame op.
     virtual void Resize(uint32_t width, uint32_t height) = 0;
 
     // ── Second render view: the game viewport ────────────────────────────────

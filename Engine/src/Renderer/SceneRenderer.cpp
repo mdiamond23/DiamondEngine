@@ -355,7 +355,9 @@ public:
     RendererStats GetStats() const override { return m_Device->GetStats(); }
 
     void Resize(uint32_t width, uint32_t height) override {
-        if (!m_Offscreen) return;
+        // Both modes: offscreen rebuilds the ImGui-sampled targets; swapchain
+        // mode is a window resize (the device recreates the backbuffer itself
+        // on OUT_OF_DATE — this rebuilds the internal targets to match).
         ResizeView(*m_Views[kMainView], kMainView, width, height);
     }
 
@@ -801,7 +803,7 @@ private:
     }
 
     void ResizeView(View& v, int viewIdx, uint32_t width, uint32_t height) {
-        if (!v.offscreen || width == 0 || height == 0) return;
+        if (width == 0 || height == 0) return;
         if (width == v.width && height == v.height) return;
 
         // Nothing referencing the old targets may be in flight while the pool
@@ -822,7 +824,11 @@ private:
         // its history-valid flag, so the first post-resize frame passes through.
         v.taa      = std::make_unique<VulkanTAAPass>(m_Device, shaderDir, width, height);
         v.lighting = std::make_unique<VulkanDeferredLightingPass>(m_Device, shaderDir);
-        v.tonemap  = std::make_unique<VulkanTonemapPass>(m_Device, shaderDir, RHIFormat::RGBA8);
+        // Same format split as CreateView: offscreen tonemaps into the LDR
+        // texture, swapchain mode straight into the backbuffer.
+        v.tonemap  = std::make_unique<VulkanTonemapPass>(
+            m_Device, shaderDir,
+            v.offscreen ? RHIFormat::RGBA8 : m_Device->SwapchainFormat());
         v.tonemap->SetExposure(m_Exposure);   // the recreated pass defaults to 1.0
 
         v.graph.ResetPasses();

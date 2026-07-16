@@ -20,6 +20,8 @@
 #include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
 #include <spdlog/spdlog.h>
+#include <spdlog/sinks/basic_file_sink.h>
+#include <spdlog/sinks/stdout_color_sinks.h>
 
 #include "Scene/Scene.h"
 #include "Scene/SceneSerializer.h"
@@ -162,6 +164,29 @@ int main(int argc, char** argv)
     // asset root and SPIR-V dir onto the exe's directory BEFORE anything
     // resolves a path or loads a shader.
     const fs::path exeDir = ExecutableDir(argv[0]);
+
+    // Windows-subsystem exe: there is no console, so stdout goes nowhere. If a
+    // parent terminal launched us, re-attach to it (dev runs still print);
+    // either way the durable record is runtime.log next to the exe.
+#ifdef _WIN32
+    if (AttachConsole(ATTACH_PARENT_PROCESS)) {
+        FILE* io = nullptr;
+        freopen_s(&io, "CONOUT$", "w", stdout);
+        freopen_s(&io, "CONOUT$", "w", stderr);
+    }
+#endif
+    try {
+        auto consoleSink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
+        auto fileSink    = std::make_shared<spdlog::sinks::basic_file_sink_mt>(
+            (exeDir / "runtime.log").string(), /*truncate*/ true);
+        spdlog::set_default_logger(std::make_shared<spdlog::logger>(
+            "runtime", spdlog::sinks_init_list{ consoleSink, fileSink }));
+        // A crash is exactly when the log matters — don't buffer it away.
+        spdlog::flush_on(spdlog::level::info);
+    } catch (const spdlog::spdlog_ex& e) {
+        // Read-only install dir etc. — keep the default console-only logger.
+        std::fprintf(stderr, "runtime.log unavailable: %s\n", e.what());
+    }
     BootConfig boot;
     const bool packaged = LoadBootConfig(exeDir / "boot.json", boot);
 
@@ -189,10 +214,6 @@ int main(int argc, char** argv)
     }
 
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-    // Fixed-size for now: the deferred render targets are built once at window
-    // size, and SceneRenderer::Resize is offscreen-mode-only. Resizable window
-    // + swapchain-mode target rebuild is a follow-up.
-    glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
     GLFWwindow* window = glfwCreateWindow(boot.width, boot.height,
                                           boot.title.c_str(), nullptr, nullptr);
     if (!window) {
@@ -301,6 +322,15 @@ int main(int argc, char** argv)
         glfwGetFramebufferSize(window, &w, &h);
         if (w == 0 || h == 0) continue;
 
+        // Window resized (or restored at a new size): rebuild the renderer's
+        // internal targets to match. WaitIdle hitch, so only on change — the
+        // device recreates the swapchain itself via OUT_OF_DATE.
+        if (w != fbW || h != fbH) {
+            renderer->Resize((uint32_t)w, (uint32_t)h);
+            fbW = w;
+            fbH = h;
+        }
+
         // One engine frame: systems → transforms → state machines → animators
         // → IK → ragdoll readback.
         scene.TickFrame(deltaTime);
@@ -342,3 +372,13 @@ int main(int argc, char** argv)
     glfwTerminate();
     return 0;
 }
+
+#ifdef _WIN32
+// WIN32_EXECUTABLE (no console window behind the game) makes the CRT expect
+// WinMain; forward to the portable main. __argc/__argv are the CRT's already-
+// parsed command line, so argv[1] scene overrides keep working.
+int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
+{
+    return main(__argc, __argv);
+}
+#endif

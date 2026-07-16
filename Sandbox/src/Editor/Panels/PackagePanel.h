@@ -25,8 +25,8 @@
 // stays live (and cancellable) while cmake builds and gigabytes copy.
 class PackagePanel : public Panel {
 public:
-    PackagePanel() { m_Open = false; }   // opt-in via the View menu
-    ~PackagePanel() override;
+    PackagePanel();                      // loads ProjectSettings/Package.json
+    ~PackagePanel() override;            // saves it back
     void OnImGuiRender() override;
     const char* GetName() const override { return "Packager"; }
 
@@ -44,9 +44,11 @@ private:
         bool fullAssetCopy = false;        // whole Assets/ tree instead of the dep walk
     };
 
-    enum class Stage : int { Idle, Building, Collecting, Copying, Finalizing,
-                             Done, Failed, Cancelled };
+    enum class Stage : int { Idle, Building, Collecting, Cooking, Copying,
+                             Finalizing, Done, Failed, Cancelled };
 
+    void LoadSettings();
+    void SaveSettings();
     void StartJob();
     void RunJob(Config cfg);               // worker-thread body
     bool RunBuild(bool debugBuild);        // shells out to cmake, streams output to the log

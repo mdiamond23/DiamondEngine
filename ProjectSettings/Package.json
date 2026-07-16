@@ -1,0 +1,12 @@
+{
+  "debugBuild": false,
+  "fullAssetCopy": false,
+  "height": 900,
+  "icon": "Assets/Materials/Lava004_2K-PNG/Lava004_2K-PNG_Color.png",
+  "outputDir": "C:\\Dev\\Builds\\Assets",
+  "scenes": [
+    "Assets/Scenes/ProceduralTest.scene"
+  ],
+  "title": "DiamondEngine",
+  "width": 1600
+}
