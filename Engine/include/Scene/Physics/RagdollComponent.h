@@ -2,6 +2,8 @@
 #include <memory>
 #include <string>
 #include <cstdint>
+#include <glm/glm.hpp>
+#include <glm/gtc/quaternion.hpp>
 #include "RagdollConfig.h"
 
 // Runtime ragdoll on a skinned-character entity. Plain data — no Jolt — like
@@ -32,6 +34,27 @@ struct RagdollComponent {
     // knob for hit-reactions, get-up blends and partial give. Ignored unless
     // mode == Powered. See Physics::SetRagdollStrength.
     float strength = 1.0f;
+
+    // Locomotion root drive (runtime, not serialized). The root/hips body has no
+    // parent joint, so Powered-mode motors can't move or support it (see
+    // Docs/character-locomotion-design.md) -- a locomotion controller must steer it
+    // directly. When true, PhysicsSystem holds the root body KINEMATIC and moves it
+    // toward locomotionTargetPos/Rot every substep (speed/turn-rate clamped so a
+    // discontinuous target glides instead of slamming); every other body stays
+    // Dynamic with its Powered motors chasing AnimatorComponent::pose as usual.
+    // A locomotion controller script sets these three fields every frame. Ignored
+    // unless mode == Powered, and yielded to any active hit-react/get-up reaction
+    // (which owns the root while it runs) -- see Physics::SetRagdollMode/RagdollGetUp.
+    //
+    // locomotionTargetPos is WORLD space (ragdoll bodies live in world space, not
+    // entity-local). locomotionTargetRot is a WORLD HEADING composed on top of the
+    // root's bind orientation: identity = standing upright facing the way the rig
+    // faced at build; a yaw-about-Y quat turns the character. It is NOT the raw
+    // target orientation of the hips bone -- bone frames are model-specific
+    // (CesiumMan's hips are Z-up) and the engine composes that detail away.
+    bool      locomotionActive    = false;
+    glm::vec3 locomotionTargetPos { 0.0f };
+    glm::quat locomotionTargetRot { 1.0f, 0.0f, 0.0f, 0.0f };
 
     // Runtime handle into PhysicsSystem's ragdoll table; invalid sentinel mirrors
     // RigidBodyComponent::_bodyId. Set by PhysicsSystem at build, never serialized.

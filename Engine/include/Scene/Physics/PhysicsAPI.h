@@ -133,6 +133,20 @@ namespace Physics {
     // hit-reactions and get-up blends. Only affects Powered mode.
     void SetRagdollStrength(RagdollComponent& rag, float strength);
 
+    // The rig's standing hip clearance, measured from the .ragdoll's bind pose at
+    // build time (hips body height above the lowest body). The natural hip-height
+    // target for a locomotion controller -- the same reference the procedural get-up
+    // stands back up to. Returns 0 until the ragdoll is built (play start), so poll
+    // it from OnUpdate and treat 0 as "not ready yet".
+    float GetRagdollStandHipClearance(const RagdollComponent& rag);
+
+    // Skeleton bone index of the ragdoll's ROOT body (the hips body the locomotion/
+    // get-up root drives move). -1 until the ragdoll is built. A locomotion
+    // controller must anchor its world<->model foot-target math on exactly this
+    // bone -- guessing a "pelvis" by name anchors the mapping on the wrong joint
+    // and displaces every target by the bone offset.
+    int GetRagdollRootBone(const RagdollComponent& rag);
+
     // Start a procedural get-up: the rig heaves itself upright by driving its motors
     // toward the bind/stand pose (cones opened, strength ramping up with wobble), then
     // hands back to Animated. Works from Limp (the usual trigger) or any built ragdoll.

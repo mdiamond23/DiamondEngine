@@ -12,3 +12,4 @@
 #include "AudioComponentsEditor.h"
 #include "PlayAudioOnSpace.h"
 #include "AudioEventLogger.h"
+#include "LocamotionController.h"

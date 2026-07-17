@@ -375,6 +375,12 @@ struct RagdollInstance {
     RagReaction reaction;
     // Auto get-up: how long the limp rig has been ~at rest, vs cfg->getupDelay.
     float       restTimer = 0.0f;
+
+    // True while RagdollComponent::locomotionActive currently holds the root body
+    // Kinematic (see DriveRagdollLocomotionRoot). Tracked here so the drive only
+    // flips the root's motion type on an actual on/off transition, and so a reaction
+    // taking over the root (ReleaseLocomotionRoot) leaves consistent bookkeeping.
+    bool        _locomotionDriving = false;
 };
 
 // ---------------------------------------------------------------------------
@@ -1461,6 +1467,80 @@ static void DriveRagdollGetUpRoot(PhysicsSystem::Impl& impl, RagdollInstance& in
     bi.MoveKinematic(root.id, ToJolt(targetPos), ToJolt(glm::normalize(targetRot)), FIXED_DT);
 }
 
+// If a locomotion controller currently holds the root Kinematic, hand it back to
+// Dynamic so a reaction (flinch impulse, get-up's own kinematic heave) can take over
+// the root cleanly. Called at the start of every reaction; the controller reclaims
+// the root next frame (DriveRagdollLocomotionRoot) once the reaction ends and clears
+// itself via ClearRagdollReaction / SetRagdollMode, if it's still commanding movement.
+static void ReleaseLocomotionRoot(PhysicsSystem::Impl& impl, RagdollInstance& inst)
+{
+    if (!inst._locomotionDriving || inst.rootBodySlot < 0) return;
+    JPH::BodyInterface& bi = impl.joltSystem->GetBodyInterface();
+    bi.SetMotionType(inst.bodies[inst.rootBodySlot].id, JPH::EMotionType::Dynamic, JPH::EActivation::Activate);
+    inst._locomotionDriving = false;
+}
+
+// Continuous root drive for locomotion (unlike DriveRagdollGetUpRoot, not a timed
+// reaction -- it just tracks a live external target set by a game script every
+// frame). Joint motors alone can't move/support the rootless pelvis (see the
+// DriveRagdollGetUpRoot comment above), so while RagdollComponent::locomotionActive
+// is set, the hips are held KINEMATIC and MoveKinematic'd toward locomotionTargetPos/
+// Rot each substep; the rest of the rig stays Dynamic with Powered motors chasing the
+// gait pose (SyncRagdollPowered), so the character is dragged by its hips while its
+// limbs animate underneath. Yields entirely to an active reaction -- flinch/get-up
+// own the root while they run (ReleaseLocomotionRoot hands it to them at the start).
+static void DriveRagdollLocomotionRoot(PhysicsSystem::Impl& impl, RagdollInstance& inst,
+                                       const RagdollComponent& rag)
+{
+    if (inst.rootBodySlot < 0) return;
+    if (inst.reaction.kind != RagReaction::Kind::None) return;   // a reaction owns the root
+
+    JPH::BodyInterface& bi = impl.joltSystem->GetBodyInterface();
+    const RagdollBody& root = inst.bodies[inst.rootBodySlot];
+    const bool want = rag.locomotionActive &&
+                      std::isfinite(rag.locomotionTargetPos.x) &&
+                      std::isfinite(rag.locomotionTargetPos.y) &&
+                      std::isfinite(rag.locomotionTargetPos.z);
+
+    if (want != inst._locomotionDriving) {
+        bi.SetMotionType(root.id, want ? JPH::EMotionType::Kinematic : JPH::EMotionType::Dynamic,
+                         JPH::EActivation::Activate);
+        inst._locomotionDriving = want;
+    }
+    if (!want) return;
+
+    // The script's target rotation is a WORLD heading (yaw) composed ON TOP OF the
+    // root's bind orientation (rootBindRot = the hips body's world frame at build,
+    // i.e. "standing upright" -- the same reference the get-up heave drives toward).
+    // Driving to the raw script quat instead would ignore the hips BONE's authored
+    // frame (CesiumMan's is Z-up) and lay the whole rig down sideways.
+    const glm::quat targetRot =
+        glm::normalize(glm::normalize(rag.locomotionTargetRot) * inst.rootBindRot);
+
+    // Clamp per-substep travel: MoveKinematic reaches its target in ONE substep, so a
+    // discontinuous target (the engage frame, a script teleport) becomes an enormous
+    // velocity that whips the dangling limbs into the floor hard enough to read as
+    // knockdown-level impacts. Clamped, any gap turns into a fast bounded glide.
+    constexpr float kMaxDriveSpeed = 6.0f;                   // m/s root glide cap
+    constexpr float kMaxTurnSpeed  = glm::radians(540.0f);   // rad/s root spin cap
+
+    const glm::vec3 curPos = FromJolt(bi.GetPosition(root.id));
+    const glm::vec3 toTarget = rag.locomotionTargetPos - curPos;
+    const float     dist     = glm::length(toTarget);
+    const float     maxStep  = kMaxDriveSpeed * FIXED_DT;
+    const glm::vec3 stepPos  = (dist > maxStep)
+        ? curPos + toTarget * (maxStep / dist) : rag.locomotionTargetPos;
+
+    const glm::quat curRot  = FromJolt(bi.GetRotation(root.id));
+    const float cosHalf     = glm::clamp(glm::abs(glm::dot(curRot, targetRot)), 0.0f, 1.0f);
+    const float angle       = 2.0f * std::acos(cosHalf);
+    const float maxAngle    = kMaxTurnSpeed * FIXED_DT;
+    const glm::quat stepRot = (angle > maxAngle && angle > 1e-4f)
+        ? glm::slerp(curRot, targetRot, maxAngle / angle) : targetRot;
+
+    bi.MoveKinematic(root.id, ToJolt(stepPos), ToJolt(glm::normalize(stepRot)), FIXED_DT);
+}
+
 // Per sub-step (Powered mode): drive every joint motor toward the live animation
 // pose so the ragdoll actively holds / recovers an animated stance (active ragdoll).
 // Unlike SyncRagdollKinematic the bodies are Dynamic — the motors, not MoveKinematic,
@@ -1575,6 +1655,9 @@ static void SyncRagdollPowered(Scene& scene, PhysicsSystem::Impl& impl)
         if (inst.reaction.kind == RagReaction::Kind::GetUp)
             DriveRagdollGetUpRoot(impl, inst, strength,
                                   (rag && rag->config) ? rag->config->getupBalance : 1.0f);
+
+        // Locomotion controller root drive (no-ops while a reaction owns the root).
+        if (rag) DriveRagdollLocomotionRoot(impl, inst, *rag);
 
         // Keep the dynamic bodies awake so the motors keep correcting toward the pose.
         for (const RagdollBody& b : inst.bodies)
@@ -1814,14 +1897,19 @@ static void ClearRagdollReaction(PhysicsSystem::Impl& impl, RagdollInstance& ins
                              JPH::EActivation::Activate);
         }
     }
+    // The root is Dynamic again either way (get-up/blend restored it above; a flinch's
+    // ReleaseLocomotionRoot never re-kinematized it) -- keep the flag in sync so a
+    // locomotion controller still commanding movement cleanly reclaims the root next frame.
+    inst._locomotionDriving = false;
     inst.reaction  = RagReaction{};
     inst.restTimer = 0.0f;
 }
 
 // Begin (or refresh) a flinch: go Powered, snapshot the timing from the config, apply
 // the initial strength dip. The caller adds the directional impulse to the struck bone.
-static void StartRagdollFlinch(RagdollInstance& inst, RagdollComponent& rag)
+static void StartRagdollFlinch(PhysicsSystem::Impl& impl, RagdollInstance& inst, RagdollComponent& rag)
 {
+    ReleaseLocomotionRoot(impl, inst);   // let the impulse move the whole body, hips included
     Physics::SetRagdollMode(rag, RagdollMode::Powered);   // kinematic -> dynamic, motors on
     RagReaction& r  = inst.reaction;
     r.kind          = RagReaction::Kind::Flinch;
@@ -1839,6 +1927,7 @@ static void StartRagdollFlinch(RagdollInstance& inst, RagdollComponent& rag)
 // Limp (the usual case) or any mode. Deliberately under-powered + wobbly = sloppy.
 static void StartRagdollGetUp(PhysicsSystem::Impl& impl, RagdollInstance& inst, RagdollComponent& rag)
 {
+    ReleaseLocomotionRoot(impl, inst);   // the heave takes the root over next, kinematically
     Physics::SetRagdollMode(rag, RagdollMode::Powered);   // clears any prior reaction first
     WidenRagdollJoints(impl, inst, true);                 // ...then open the cones for the heave
 
@@ -2078,7 +2167,7 @@ static void AutoTriggerRagdollImpacts(PhysicsSystem::Impl& impl, Scene& scene,
                 // flinch goes Powered with a strength dip that recovers. Then kick the
                 // struck bone directionally so the reaction spins from the hit.
                 if (doKnock) Physics::SetRagdollMode(*rag, RagdollMode::Limp);
-                else         StartRagdollFlinch(inst, *rag);
+                else         StartRagdollFlinch(impl, inst, *rag);
                 glm::vec3 impulse = ev.contactNormal * (side.dirSign * ev.impactMagnitude);
                 bi.AddImpulse(inst.bodies[slot].id, ToJolt(impulse), ToJolt(ev.contactPoint));
                 spdlog::info("Ragdoll {} auto-{}: impact {:.1f} (knock>={:.1f}, flinch>={:.1f}) bone slot {}",
@@ -2419,6 +2508,10 @@ void SetRagdollMode(RagdollComponent& rag, RagdollMode mode) {
         // Motors drive only in Powered mode; Animated (kinematic) and Limp run passive.
         SetRagdollMotorsEnabled(*s_Impl, inst, mode == RagdollMode::Powered);
         inst.mode = mode;
+        // This block just force-set every body's motion type (including root), so any
+        // locomotion kinematic hold is moot -- keep the flag in sync so a later resume
+        // of locomotion re-establishes it cleanly instead of thinking it's still held.
+        inst._locomotionDriving = false;
     }
     rag.mode = mode;
 }
@@ -2427,6 +2520,21 @@ void SetRagdollMode(RagdollComponent& rag, RagdollMode mode) {
 // by SyncRagdollPowered each substep to scale motor torque; takes effect next step.
 void SetRagdollStrength(RagdollComponent& rag, float strength) {
     rag.strength = glm::clamp(strength, 0.0f, 1.0f);
+}
+
+// Bind-pose standing hip clearance -- 0 until the ragdoll is built.
+float GetRagdollStandHipClearance(const RagdollComponent& rag) {
+    if (!s_Impl || rag._ragdollId == 0xFFFFFFFFu) return 0.0f;
+    auto it = s_Impl->ragdolls.find(rag._ragdollId);
+    return it == s_Impl->ragdolls.end() ? 0.0f : it->second.standHipClearance;
+}
+
+// Bone index of the root (hips) body -- -1 until the ragdoll is built.
+int GetRagdollRootBone(const RagdollComponent& rag) {
+    if (!s_Impl || rag._ragdollId == 0xFFFFFFFFu) return -1;
+    auto it = s_Impl->ragdolls.find(rag._ragdollId);
+    if (it == s_Impl->ragdolls.end() || it->second.rootBodySlot < 0) return -1;
+    return it->second.bodies[it->second.rootBodySlot].boneIndex;
 }
 
 // Kick off a procedural get-up (the auto-on-settle path uses the same StartRagdollGetUp).
