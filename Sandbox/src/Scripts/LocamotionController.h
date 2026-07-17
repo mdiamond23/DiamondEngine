@@ -58,6 +58,20 @@ struct LocamotionControllerComponent
     std::string pelvisBone    = "torso_joint_3";
     std::string leftFootBone  = "leg_joint_L_3";
     std::string rightFootBone = "leg_joint_R_3";
+    // Bone the accel-lean tips (Phase 3). The spine base above the pelvis root, so
+    // the whole torso/arms/head ride the lean. Its MEDIUM motor torque (see the
+    // .ragdoll preset) is what makes it trail a beat behind -- the code sets a
+    // leaned target, the mushy motor reads as inertial lag.
+    std::string spineBone     = "Skeleton_torso_joint_2";
+
+    // Per-leg knee-roll correction (degrees, twist about the shin's own long axis).
+    // Some rigs (CesiumMan) have asymmetric left/right leg BIND roll -- not a clean
+    // mirror -- and the swing-only IK preserves it, so one calf reads rolled (inward).
+    // Per-leg because the asymmetry is per-leg; 0 = untouched. Dial the offending
+    // side until the calf/foot untwists.
+    float leftKneeRollDeg  = 0.0f;
+    float rightKneeRollDeg = 0.0f;
+    float footSwingPitchDeg = 22.0f;   // toe-up pitch at swing apex (foot clearance + roll-through)
 
     // Gait diagnostics: ~4 Hz spdlog state dump + viewport markers (drawn into the
     // same DebugDraw batch as colliders/ragdolls, so the viewport "Debug Draw"
@@ -73,6 +87,8 @@ struct LocamotionControllerComponent
         glm::vec3 swingStart   { 0.0f };  // world point the foot lifted off from
         glm::vec3 lastSwingEnd { 0.0f };  // where the current swing will plant
         glm::vec3 stanceModel  { 0.0f };  // bind foot offset from pelvis (model space)
+        glm::quat plantedRotW    { 1, 0, 0, 0 };  // WORLD foot orientation frozen at plant
+        glm::quat swingStartRotW { 1, 0, 0, 0 };  // WORLD foot orientation at liftoff
         bool wasPlanted = true, init = false, bindResolved = false;
     };
     glm::vec3 _velocity     { 0.0f };
@@ -83,7 +99,10 @@ struct LocamotionControllerComponent
     float     _gaitPhase    = 0.0f;    // cycles; L leg at phase, R leg at phase+0.5
     float     _dbgTimer     = 0.0f;    // gaitDebug log throttle
     int       _pelvisIdx    = -1;
+    int       _spineIdx     = -1;      // resolved spineBone index (accel lean)
     glm::vec3 _poleWorld    { 0, 0, -1 }; // last movement dir (world); knee-bend hint
+    glm::vec3 _prevVel      { 0.0f };  // last frame's velocity (accel finite-diff)
+    glm::vec3 _accelSmooth  { 0.0f };  // EMA-smoothed accel driving the spine lean
     LegState  _legL, _legR;
 };
 
@@ -116,6 +135,10 @@ inline void DrawComponentInspector<LocamotionControllerComponent>(LocamotionCont
     boneField("Pelvis Bone",     c.pelvisBone);
     boneField("Left Foot Bone",  c.leftFootBone);
     boneField("Right Foot Bone", c.rightFootBone);
+    boneField("Spine Bone",      c.spineBone);   // accel lean pivot (PR3)
+    ImGui::DragFloat("Left Knee Roll",  &c.leftKneeRollDeg,  1.0f, -180.0f, 180.0f, "%.0f deg");
+    ImGui::DragFloat("Right Knee Roll", &c.rightKneeRollDeg, 1.0f, -180.0f, 180.0f, "%.0f deg");
+    ImGui::DragFloat("Foot Swing Pitch", &c.footSwingPitchDeg, 1.0f, -90.0f, 90.0f, "%.0f deg");
     ImGui::Checkbox("Gait Debug", &c.gaitDebug);
     if (c.gaitDebug)
         ImGui::TextDisabled("needs viewport Debug Draw ON; green/orange=targets,\nred=actual foot, yellow=hips");
@@ -147,8 +170,12 @@ inline std::string SerializeComponent<LocamotionControllerComponent>(const Locam
     j["pelvisBone"]      = c.pelvisBone;
     j["leftFootBone"]    = c.leftFootBone;
     j["rightFootBone"]   = c.rightFootBone;
+    j["spineBone"]       = c.spineBone;
     j["gaitDebug"]       = c.gaitDebug;
     j["ankleHeight"]     = c.ankleHeight;
+    j["leftKneeRollDeg"]  = c.leftKneeRollDeg;
+    j["rightKneeRollDeg"] = c.rightKneeRollDeg;
+    j["footSwingPitchDeg"] = c.footSwingPitchDeg;
     return j.dump();
 }
 
@@ -172,8 +199,12 @@ inline void DeserializeComponent<LocamotionControllerComponent>(LocamotionContro
     c.pelvisBone        = j.value("pelvisBone",      std::string("torso_joint_3"));
     c.leftFootBone      = j.value("leftFootBone",    std::string("leg_joint_L_3"));
     c.rightFootBone     = j.value("rightFootBone",   std::string("leg_joint_R_3"));
+    c.spineBone         = j.value("spineBone",       std::string("Skeleton_torso_joint_2"));
     c.gaitDebug         = j.value("gaitDebug",       false);
     c.ankleHeight       = j.value("ankleHeight",     0.08f);
+    c.leftKneeRollDeg   = j.value("leftKneeRollDeg",  0.0f);
+    c.rightKneeRollDeg  = j.value("rightKneeRollDeg", 0.0f);
+    c.footSwingPitchDeg = j.value("footSwingPitchDeg", 22.0f);
 }
 
 // ---- Registration -----------------------------------------------------------
@@ -309,12 +340,32 @@ public:
                                              glm::vec3(0, -1, 0), comp.groundRayLength, entity);
             const float groundY = hit.hit ? hit.point.y : (xf.position.y - comp.hipHeight);
 
+            // --- Phase 3 sloppiness: hip bob + accel bookkeeping ---
+            // Hip bob: a vertical dip once per STEP (2x the stride cycle), synced to the
+            // same _gaitPhase the feet ride (advanced last frame -- one frame stale, so
+            // invisible). Lowest at foot strike (phase 0 / 0.5, double support), highest
+            // at mid-stance. Faded in with speed so idle -- where the phase freezes --
+            // stands perfectly still instead of holding a frozen offset. The kinematic
+            // hips physically rise/fall; the strong-motored legs flex to keep feet
+            // pinned, so it reads as a real weight-shift, not a slide.
+            const float speedH  = glm::length(glm::vec2(comp._velocity.x, comp._velocity.z));
+            const float bobFade = glm::clamp(speedH / glm::max(comp.maxSpeed * 0.25f, 1e-3f), 0.0f, 1.0f);
+            const float bob     = comp.bobAltitude * bobFade *
+                                  -std::cos(4.0f * glm::pi<float>() * comp._gaitPhase);
+
+            // Horizontal acceleration for the spine lean, EMA-smoothed to kill the
+            // per-frame jitter of a raw finite difference (which swings the full
+            // accel/decel rate frame-to-frame). Consumed in UpdateGait.
+            const glm::vec3 accelRaw = (comp._velocity - comp._prevVel) / glm::max(dt, 1e-4f);
+            comp._accelSmooth = glm::mix(comp._accelSmooth, accelRaw, glm::clamp(dt * 10.0f, 0.0f, 1.0f));
+            comp._prevVel     = comp._velocity;
+
             // locomotionTargetRot is a WORLD HEADING: the engine composes it on top
             // of the hips bone's bind orientation (rootBindRot), so identity = upright
             // -- never build the bone's raw orientation here (model bone frames vary;
             // driving CesiumMan's Z-up hips to a raw yaw laid the rig down sideways).
             rag.locomotionActive    = true;
-            rag.locomotionTargetPos = glm::vec3(comp._rootPos.x, groundY + comp.hipHeight, comp._rootPos.z);
+            rag.locomotionTargetPos = glm::vec3(comp._rootPos.x, groundY + comp.hipHeight + bob, comp._rootPos.z);
             rag.locomotionTargetRot =
                 glm::angleAxis(comp._yaw + glm::radians(comp.facingOffsetDeg), glm::vec3(0, 1, 0));
 
@@ -456,8 +507,9 @@ private:
                          hipsW.x, hipsW.y, hipsW.z, xf.position.y, comp.hipHeight,
                          speedH, comp._gaitPhase, moving);
 
-        struct LegRun { LocamotionControllerComponent::LegState& leg; float phaseOffset; const char* name; };
-        LegRun legs[2] = { { comp._legL, 0.0f, "L" }, { comp._legR, 0.5f, "R" } };
+        struct LegRun { LocamotionControllerComponent::LegState& leg; float phaseOffset; const char* name; float rollDeg; };
+        LegRun legs[2] = { { comp._legL, 0.0f, "L", comp.leftKneeRollDeg },
+                           { comp._legR, 0.5f, "R", comp.rightKneeRollDeg } };
 
         for (LegRun& lr : legs) {
             auto& leg = lr.leg;
@@ -480,28 +532,50 @@ private:
             legPhase -= std::floor(legPhase);
             const bool planted = !moving || legPhase < comp.dutyFactor;
 
+            // Foot orientation target lives in WORLD (flat, facing the CURRENT heading).
+            // Tracked in world (not model) so a planted foot can be frozen against the
+            // ground while the body turns; the writeback maps it back to the pose.
+            const glm::quat footBindModelR = OrientationOf(glm::inverse(skel.bones[leg.tip].inverseBind));
+            const glm::quat flatFacingNow  = glm::normalize(heading * xf.rotation * footBindModelR);
+            const glm::vec3 rightW = glm::length(comp._poleWorld) > 1e-4f
+                ? glm::normalize(glm::cross(glm::vec3(0, 1, 0), comp._poleWorld)) : glm::vec3(1, 0, 0);
+
             float swingT = -1.0f;   // >=0 only while swinging (diagnostics)
             glm::vec3 targetW;
+            glm::quat footDesiredWorld = flatFacingNow;
             if (!leg.init) {
                 leg.planted      = GroundAt(scene, entity, stanceProbe, comp, hipsW);
                 leg.lastSwingEnd = leg.planted;
                 leg.init         = true;
                 leg.wasPlanted   = true;
+                leg.plantedRotW  = flatFacingNow;
                 targetW          = leg.planted;
+                footDesiredWorld = leg.plantedRotW;
             } else if (planted) {
-                if (!leg.wasPlanted)
-                    leg.planted = leg.lastSwingEnd;   // plant: pin where the swing ended
+                if (!leg.wasPlanted) {
+                    leg.planted     = leg.lastSwingEnd;   // plant: pin where the swing ended
+                    leg.plantedRotW = flatFacingNow;      // ...and freeze its orientation here
+                }
                 if (!moving) {
                     // Idle: re-home a foot left far from its stance (e.g. after a stop
                     // mid-stride) instead of standing twisted forever.
                     const glm::vec3 home = GroundAt(scene, entity, stanceProbe, comp, hipsW);
-                    if (glm::length(home - leg.planted) > comp.strideLength * 0.75f)
-                        leg.planted = home;
+                    if (glm::length(home - leg.planted) > comp.strideLength * 0.75f) {
+                        leg.planted     = home;
+                        leg.plantedRotW = flatFacingNow;
+                    }
                 }
                 targetW = leg.planted;
+                // Frozen in WORLD: a planted foot must NOT swivel to follow the heading
+                // as the body turns (that was the "foot faces the wrong way"). The
+                // writeback maps this fixed world orientation back through the CURRENT
+                // heading, so it holds still on the ground until the foot lifts.
+                footDesiredWorld = leg.plantedRotW;
             } else {
-                if (leg.wasPlanted)
-                    leg.swingStart = leg.planted;     // liftoff
+                if (leg.wasPlanted) {
+                    leg.swingStart     = leg.planted;       // liftoff
+                    leg.swingStartRotW = leg.plantedRotW;   // ...carry its orientation
+                }
                 const float t = glm::clamp((legPhase - comp.dutyFactor) /
                                            glm::max(1.0f - comp.dutyFactor, 1e-3f), 0.0f, 1.0f);
                 // Predicted plant point, grounded there (follows slopes/steps). Ahead
@@ -516,6 +590,11 @@ private:
                         + glm::vec3(0, 1, 0) * (comp.stepHeight * std::sin(glm::pi<float>() * t));
                 leg.lastSwingEnd = plantPoint;
                 swingT = t;
+                // Swing: ease orientation from the liftoff pose toward flat-facing-heading,
+                // plus a toe-up pitch arc (sin, peaks mid-swing) for clearance + roll-through.
+                const float     pitch  = glm::radians(comp.footSwingPitchDeg) * std::sin(glm::pi<float>() * t);
+                const glm::quat pitchQ = glm::angleAxis(pitch, rightW);
+                footDesiredWorld = glm::normalize(pitchQ * glm::slerp(leg.swingStartRotW, flatFacingNow, ts));
             }
             leg.wasPlanted = planted;
 
@@ -527,10 +606,30 @@ private:
             const glm::vec3 c     = glm::vec3(world[leg.tip][3]);
             const glm::quat rootR = OrientationOf(world[leg.hip]);
             const glm::quat midR  = OrientationOf(world[leg.knee]);
-            const glm::vec3 pole  = b + dirToModel(comp._poleWorld) * 0.5f;
+            // Pole = a point in front of the HIP along the character's forward. Anchored
+            // at the hip (not the knee) and pointing pure-forward, it never goes parallel
+            // to the always-downward leg, so the solver's bend plane is stable. The old
+            // knee-anchored `b + forward*0.5` went near-parallel to the hip->foot line
+            // when a foot planted in front -> the solver's degenerate `AnyPerp` fallback
+            // picked an arbitrary bend dir -> the knee twisted once per stride.
+            const glm::vec3 pole  = a + dirToModel(comp._poleWorld);
 
             glm::quat newRootR, newMidR;
             Diamond::SolveTwoBone(a, b, c, rootR, midR, targetM, pole, newRootR, newMidR);
+
+            // Per-leg knee-roll correction: twist the shin about its OWN long axis to
+            // undo the rig's asymmetric bind roll (see the field comment). The axis is
+            // derived from the bind pose (knee bone -> its child), so it's model-
+            // agnostic; the knee joint POSITION is unaffected (roll about the long axis
+            // moves nothing), only the calf/foot roll. Applied before the write-back so
+            // the foot pin below (built from newMidR) compensates and stays put.
+            if (glm::abs(lr.rollDeg) > 1e-3f) {
+                const glm::mat4 bindKnee   = glm::inverse(skel.bones[leg.knee].inverseBind);
+                const glm::vec3 bindAnkleP = glm::vec3(glm::inverse(skel.bones[leg.tip].inverseBind)[3]);
+                const glm::vec3 shinDir    = glm::normalize(bindAnkleP - glm::vec3(bindKnee[3]));
+                const glm::vec3 shinAxis   = glm::normalize(glm::conjugate(OrientationOf(bindKnee)) * shinDir);
+                newMidR = glm::normalize(newMidR * glm::angleAxis(glm::radians(lr.rollDeg), shinAxis));
+            }
 
             // Solved MODEL-space rotations -> LOCAL, full weight (IKSystem's pattern).
             const int       hipParent  = skel.bones[leg.hip].parent;
@@ -538,6 +637,15 @@ private:
                                                         : glm::quat(1, 0, 0, 0);
             anim.pose[leg.hip].rotation  = glm::normalize(glm::conjugate(hipParentR) * newRootR);
             anim.pose[leg.knee].rotation = glm::normalize(glm::conjugate(newRootR)   * newMidR);
+
+            // Foot: SolveTwoBone leaves the tip orientation to us. Map the WORLD target
+            // built above (frozen while planted, eased + toe-pitched while swinging) back
+            // to model space (world = heading*entityRot*model), then to LOCAL under the
+            // shin. Model-agnostic: the "flat" reference is the bind orientation, so no
+            // per-rig foot-axis assumptions. footLocal = conj(shinModelR) * footModel.
+            const glm::quat footModel = glm::normalize(
+                glm::conjugate(xf.rotation) * glm::conjugate(heading) * footDesiredWorld);
+            anim.pose[leg.tip].rotation = glm::normalize(glm::conjugate(newMidR) * footModel);
 
             // ---- Per-leg diagnostics ----
             if (comp.gaitDebug) {
@@ -572,6 +680,40 @@ private:
                                  need, reach, need > reach ? " UNREACHABLE" : "", err);
                 }
             }
+        }
+
+        // ---- Phase 3: acceleration lean on the spine target ----
+        // Tip the spine toward the horizontal acceleration: lean INTO a start, lean
+        // BACK on a stop. Only the target leans here; the spine's MEDIUM motor torque
+        // (the .ragdoll preset) tracks it a beat late, so the whole upper body reads
+        // as lagging from inertia. Applied as a single bend at the spine base, so the
+        // chest/arms/head ride along and trail off their own weak motors.
+        //
+        // Built in WORLD (lean axis = up x accelDir) then mapped to MODEL. The physics
+        // recomposes model rotations from the LOCAL pose (see SyncRagdollPowered), so we
+        // pre-rotate the spine's model orientation and rewrite its local:
+        //   model_new = qLeanM * model_bind  =>  local_new = conj(parentR)*qLeanM*parentR*local
+        // Independent of the leg IK above (the spine branches off the root, not a leg),
+        // so order doesn't matter. Model-agnostic: axis comes through dirToModel.
+        if (comp._spineIdx < 0 || comp._spineIdx >= n ||
+            skel.bones[comp._spineIdx].name != comp.spineBone)
+            comp._spineIdx = skel.Find(comp.spineBone);
+
+        const glm::vec3 accelH { comp._accelSmooth.x, 0.0f, comp._accelSmooth.z };
+        const float     accelMag = glm::length(accelH);
+        if (comp._spineIdx >= 0 && skel.bones[comp._spineIdx].parent >= 0 && accelMag > 1e-3f) {
+            const int sp       = comp._spineIdx;
+            const int spParent = skel.bones[sp].parent;
+            // Clamp so a hard accel/decel spike bends the torso, not folds it over.
+            const float angle  = glm::min(comp.leanGain * accelMag, glm::radians(35.0f));
+            const glm::vec3 dirW  = accelH / accelMag;
+            const glm::vec3 axisW = glm::cross(glm::vec3(0, 1, 0), dirW);   // horizontal dir => non-zero
+            const glm::vec3 axisM = glm::normalize(dirToModel(axisW));
+            const glm::quat qLeanM      = glm::angleAxis(angle, axisM);
+            const glm::quat parentModelR = OrientationOf(world[spParent]);
+            anim.pose[sp].rotation = glm::normalize(
+                glm::conjugate(parentModelR) * qLeanM * parentModelR *
+                glm::normalize(anim.pose[sp].rotation));
         }
     }
 

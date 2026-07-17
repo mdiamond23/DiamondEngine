@@ -300,10 +300,10 @@
           "collisionSkin": 0.20000000298023224,
           "distanceDeadzone": 0.25,
           "framingMargin": 1.2999999523162842,
-          "maxDistance": 30.0,
+          "maxDistance": 13.0,
           "minClearance": 0.5,
-          "minDistance": 6.0,
-          "pitchDeg": 25.0,
+          "minDistance": 5.900000095367432,
+          "pitchDeg": 26.5,
           "pivotHeightOffset": 1.0,
           "recoverSmoothing": 3.0,
           "smoothing": 6.0,
@@ -385,25 +385,25 @@
       },
       "transform": {
         "eulerDegrees": [
-          0.0,
-          -0.0,
-          0.0
+          -89.99998474121094,
+          6.513776063671317e-12,
+          0.000122917874250561
         ],
         "position": [
-          1.8959846496582031,
-          3.2484633922576904,
-          3.7403724193573
+          0.9072602987289429,
+          5.665347099304199,
+          0.5381700992584229
         ],
         "rotation": [
-          1.0,
-          0.0,
-          0.0,
-          0.0
+          0.70710688829422,
+          -0.7071066498756409,
+          -7.58485555252264e-07,
+          7.584858394693583e-07
         ],
         "scale": [
-          0.33000001311302185,
-          0.33000001311302185,
-          0.33000001311302185
+          0.330000102519989,
+          0.3299483358860016,
+          0.32994380593299866
         ]
       },
       "uuid": 14798919303152814476
@@ -621,16 +621,20 @@
           "deceleration": 15.0,
           "dutyFactor": 0.6000000238418579,
           "facingOffsetDeg": 90.0,
+          "footSwingPitchDeg": 22.0,
           "gaitDebug": false,
           "groundRayLength": 1.0,
           "hipHeight": 0.800000011920929,
           "leanGain": 0.25,
           "leftFootBone": "leg_joint_L_3",
+          "leftKneeRollDeg": 90.0,
           "maxSpeed": 3.0,
           "pelvisBone": "torso_joint_3",
           "rightFootBone": "leg_joint_R_3",
-          "stepHeight": 0.11999999731779099,
-          "strideLength": 1.0,
+          "rightKneeRollDeg": 0.0,
+          "spineBone": "Skeleton_torso_joint_2",
+          "stepHeight": 0.30000001192092896,
+          "strideLength": 1.5,
           "turnRate": 8.0
         }
       },
@@ -663,7 +667,7 @@
         ],
         "position": [
           -0.9887168407440186,
-          1.9256064891815186,
+          2.0800576210021973,
           3.786123275756836
         ],
         "rotation": [
@@ -674,8 +678,8 @@
         ],
         "scale": [
           1.000000238418579,
-          0.999843418598175,
-          0.9998297095298767
+          0.9998363852500916,
+          0.9998226761817932
         ]
       },
       "uuid": 6818450401873832087
