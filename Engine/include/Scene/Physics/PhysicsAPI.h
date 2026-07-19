@@ -106,6 +106,8 @@ namespace Physics {
     // ---- Raycasting ----
     // Casts a ray from origin along direction for up to distance units.
     // Only hits entities with a ColliderComponent registered in the physics world.
+    // SENSOR bodies (isTrigger colliders) are never hit — casts probe solid geometry;
+    // detect trigger volumes with the onTrigger* callbacks instead.
     // Returns a HitResult with hit=false if nothing is hit or the session is not active.
     HitResult Raycast(glm::vec3 origin, glm::vec3 direction, float distance,
                       entt::entity ignore = entt::null, bool drawDebug = false);
@@ -146,6 +148,16 @@ namespace Physics {
     // bone -- guessing a "pelvis" by name anchors the mapping on the wrong joint
     // and displaces every target by the bone offset.
     int GetRagdollRootBone(const RagdollComponent& rag);
+
+    // Instant impulse (N*s, world space) on the ragdoll body mapped to a skeleton
+    // bone (exact bone->body match only). The gameplay "launch" primitive for an
+    // active ragdoll: position motors can FOLLOW a fast move but can't GENERATE one
+    // (a punch-speed swing wants torque far beyond anything that still feels floppy),
+    // so scripts kick the limb's momentum directly and let the motors ride it to the
+    // pose. Applied at the body's center of mass; only meaningful on a dynamic
+    // (Powered/Limp) rig. Returns false if the ragdoll isn't built or the bone has
+    // no body.
+    bool AddRagdollBoneImpulse(const RagdollComponent& rag, int boneIndex, glm::vec3 impulse);
 
     // Start a procedural get-up: the rig heaves itself upright by driving its motors
     // toward the bind/stand pose (cones opened, strength ramping up with wobble), then

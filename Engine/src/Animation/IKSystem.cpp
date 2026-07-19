@@ -49,9 +49,19 @@ void UpdateIK(Scene& scene, float dt)
         const int n = (int)skel.bones.size();
         if (n == 0 || (int)anim.pose.size() != n) continue;
 
-        // A ragdoll in Limp/Powered owns the pose; don't fight it.
-        if (auto* rag = reg.try_get<RagdollComponent>(entity); rag && rag->mode != RagdollMode::Animated)
-            continue;
+        // A ragdoll in Limp owns the pose outright (physics readback) — don't fight
+        // it. A POWERED ragdoll is different: anim.pose is the TARGET its joint
+        // motors chase, and hand/arm chains legitimately shape that target (punches,
+        // reaches, grabs — e.g. the punch system on a locomotion character). Foot
+        // chains + pelvis correction stay off on a powered rig though: the feet
+        // belong to whatever drives locomotion (the gait writes leg bones directly),
+        // and Phase 1's animated-ankle raycasts are meaningless against a
+        // physics-driven body.
+        bool poweredRagdoll = false;
+        if (auto* rag = reg.try_get<RagdollComponent>(entity); rag && rag->mode != RagdollMode::Animated) {
+            if (rag->mode != RagdollMode::Powered) continue;
+            poweredRagdoll = true;
+        }
 
         const glm::mat4 worldMat       = scene.GetTransformSystem().GetWorldMatrix(entity);
         const glm::mat4 modelFromWorld = glm::inverse(worldMat);
@@ -92,7 +102,7 @@ void UpdateIK(Scene& scene, float dt)
 
         for (int ci = 0; ci < numChains; ++ci) {
             IKChain& chain = ik.chains[ci];
-            if (!chain.isFootChain) continue;
+            if (!chain.isFootChain || poweredRagdoll) continue;
 
             // Resolve tip bone.
             if (chain._tipBone < 0 || chain._tipBone >= n ||
@@ -180,6 +190,9 @@ void UpdateIK(Scene& scene, float dt)
         for (int ci = 0; ci < numChains; ++ci) {
             IKChain& chain = ik.chains[ci];
             if (chain.solver != IKSolverType::TwoBone) continue;
+            // Powered rig: foot chains are the locomotion driver's, not ours (their
+            // Phase 1 targets were never refreshed — solving would chase stale data).
+            if (poweredRagdoll && chain.isFootChain) continue;
 
             // -1 sentinel means non-foot chain; fall back to authored weight.
             const float wTarget = glm::clamp(

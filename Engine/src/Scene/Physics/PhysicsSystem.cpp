@@ -1624,6 +1624,39 @@ static void SyncRagdollPowered(Scene& scene, PhysicsSystem::Impl& impl)
                 jt *= glm::max(0.0f, 1.0f + wobble * nz);
             }
 
+            // TEMP punch diagnostics (~2 Hz): every ARM joint plus two LEG joints as the
+            // known-good control group. tgtOff = how far the pose ASKS the joint to be
+            // from bind; actOff = how far the simulated bodies ACTUALLY are from build;
+            // motor = live Jolt motor state (0=Off 1=Velocity 2=Position — 0 here means
+            // the motor never engaged and the joint is passive).
+            static double s_lastDiagLog = -1.0;
+            const bool diagWindow = impl.simTime - s_lastDiagLog >= 0.5;
+            if (diagWindow && &j == &inst.joints.back()) s_lastDiagLog = impl.simTime;
+            const std::string& cname = skel.bones[cb].name;
+            const bool diagJoint = diagWindow &&
+                (cname.find("arm") != std::string::npos ||
+                 cname == "leg_joint_L_1" || cname == "leg_joint_L_2");
+            if (diagJoint) {
+                auto angDeg = [](const glm::quat& a, const glm::quat& b) {
+                    return glm::degrees(2.0f * std::acos(
+                        glm::clamp(glm::abs(glm::dot(glm::normalize(a), glm::normalize(b))), 0.0f, 1.0f)));
+                };
+                const glm::quat pRot = FromJolt(bi.GetRotation(inst.bodies[j.parentSlot].id));
+                const glm::quat cRot = FromJolt(bi.GetRotation(inst.bodies[j.childSlot].id));
+                const glm::quat actualRel = glm::normalize(glm::conjugate(pRot) * cRot);
+                const char* type = "?"; int motor = -1;
+                if (c->GetSubType() == JPH::EConstraintSubType::SwingTwist) {
+                    type  = "ST";
+                    motor = (int)static_cast<JPH::SwingTwistConstraint*>(c)->GetSwingMotorState();
+                } else if (c->GetSubType() == JPH::EConstraintSubType::Hinge) {
+                    type  = "H";
+                    motor = (int)static_cast<JPH::HingeConstraint*>(c)->GetMotorState();
+                }
+                spdlog::info("[RagMotor] {} {} tgtOff={:.0f} actOff={:.0f} torque={:.0f} motor={} strength={:.2f}",
+                             cname, type, angDeg(target, restRel), angDeg(actualRel, j.buildRel),
+                             jt, motor, strength);
+            }
+
             switch (c->GetSubType()) {
                 case JPH::EConstraintSubType::SwingTwist: {
                     auto* st = static_cast<JPH::SwingTwistConstraint*>(c);
@@ -1640,8 +1673,15 @@ static void SyncRagdollPowered(Scene& scene, PhysicsSystem::Impl& impl)
                     // rebuild — so a get-up reads it from buildRel rather than assuming bind.
                     glm::quat zeroRel = toStand ? glm::normalize(j.buildRel) : restRel;
                     glm::quat delta   = glm::normalize(glm::conjugate(zeroRel) * target);
-                    glm::vec3 axisP   = glm::normalize(zeroRel * SafeAxis(j.twistAxisLocal, j.twistAxisLocal));
-                    float angle = 2.0f * std::atan2(glm::dot(glm::vec3(delta.x, delta.y, delta.z), axisP), delta.w);
+                    // delta lives in the CHILD body's local frame (target = zeroRel * delta),
+                    // so extract the twist about the child-local hinge axis. (Projecting onto
+                    // zeroRel*axis — the parent-frame axis — only coincides when zeroRel ≈
+                    // identity, true for knees but not elbows: arm hinges read ~0° commanded
+                    // while the pose asked 30-117°.) The twist angle about the shared hinge
+                    // axis is the same scalar in either frame, matching Jolt's convention.
+                    if (delta.w < 0.0f) delta = -delta;   // shortest arc: keep angle in (-180°, 180°]
+                    glm::vec3 axisC = glm::normalize(SafeAxis(j.twistAxisLocal, j.twistAxisLocal));
+                    float angle = 2.0f * std::atan2(glm::dot(glm::vec3(delta.x, delta.y, delta.z), axisC), delta.w);
                     hinge->GetMotorSettings().SetTorqueLimit(jt);
                     hinge->SetTargetAngle(angle);
                     break;
@@ -2537,6 +2577,21 @@ int GetRagdollRootBone(const RagdollComponent& rag) {
     return it->second.bodies[it->second.rootBodySlot].boneIndex;
 }
 
+// Instant impulse on the ragdoll body mapped to a skeleton bone. See PhysicsAPI.h —
+// the launch primitive for gameplay moves (punches) the position motors are too
+// slow to generate momentum for.
+bool AddRagdollBoneImpulse(const RagdollComponent& rag, int boneIndex, glm::vec3 impulse) {
+    if (!s_Impl || rag._ragdollId == 0xFFFFFFFFu || boneIndex < 0) return false;
+    auto it = s_Impl->ragdolls.find(rag._ragdollId);
+    if (it == s_Impl->ragdolls.end()) return false;
+    for (const RagdollBody& b : it->second.bodies) {
+        if (b.boneIndex != boneIndex) continue;
+        s_Impl->joltSystem->GetBodyInterface().AddImpulse(b.id, ToJolt(impulse));
+        return true;
+    }
+    return false;
+}
+
 // Kick off a procedural get-up (the auto-on-settle path uses the same StartRagdollGetUp).
 void RagdollGetUp(RagdollComponent& rag) {
     if (!s_Impl || rag._ragdollId == 0xFFFFFFFFu) return;
@@ -2651,13 +2706,18 @@ private:
 // single BodyID isn't enough — a downward foot raycast would still hit the character's
 // other limb capsules. The UserData lives on the Body, so the filtering happens in the
 // locked callback; the broadphase pass passes everything through.
+//
+// Also rejects SENSOR bodies (isTrigger colliders): casts probe for solid geometry
+// (camera collision, ground rays, grab/punch sweeps), and non-solid trigger volumes —
+// e.g. the punch system's hand proxies riding a character's hands — must not read as
+// walls. Detect trigger volumes with the onTrigger* callbacks, not casts.
 class EntityIgnoreFilter final : public JPH::BodyFilter {
 public:
     explicit EntityIgnoreFilter(entt::entity e)
         : m_ignore(e == entt::null ? ~0ull : (JPH::uint64)entt::to_integral(e)) {}
     bool ShouldCollide(const JPH::BodyID&)         const override { return true; }
     bool ShouldCollideLocked(const JPH::Body& b)   const override {
-        return b.GetUserData() != m_ignore;
+        return !b.IsSensor() && b.GetUserData() != m_ignore;
     }
 private:
     JPH::uint64 m_ignore;
