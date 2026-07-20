@@ -1,607 +1,609 @@
 {
-    "bodies": [
-        {
-            "bone": "Skeleton_torso_joint_1",
-            "mass": 12.0,
-            "parent": "",
-            "shape": {
-                "halfExtents": [
-                    0.043625056743621826,
-                    0.07270842790603638,
-                    0.043625056743621826
-                ],
-                "halfHeight": 0.04653339087963104,
-                "radius": 0.026175035163760185,
-                "type": "box"
-            }
-        },
-        {
-            "bone": "Skeleton_torso_joint_2",
-            "joint": {
-                "hingeMaxDeg": 150.0,
-                "hingeMinDeg": 0.0,
-                "motorDamping": 1.0,
-                "motorFrequency": 7.0,
-                "motorMaxTorque": 28.0,
-                "swingNormalDeg": 25.0,
-                "swingPlaneDeg": 20.0,
-                "twistAxis": [
-                    -0.9999998807907104,
-                    2.6217060167255113e-06,
-                    -0.0002906460431404412
-                ],
-                "twistMaxDeg": 15.0,
-                "twistMinDeg": -15.0,
-                "type": "swingtwist"
-            },
-            "mass": 8.0,
-            "parent": "Skeleton_torso_joint_1",
-            "shape": {
-                "halfExtents": [
-                    0.07515504956245422,
-                    0.1252584159374237,
-                    0.07515504956245422
-                ],
-                "halfHeight": 0.08016538619995117,
-                "radius": 0.045093029737472534,
-                "type": "capsule"
-            }
-        },
-        {
-            "bone": "torso_joint_3",
-            "joint": {
-                "hingeMaxDeg": 150.0,
-                "hingeMinDeg": 0.0,
-                "motorDamping": 1.0,
-                "motorFrequency": 7.0,
-                "motorMaxTorque": 28.0,
-                "swingNormalDeg": 25.0,
-                "swingPlaneDeg": 20.0,
-                "twistAxis": [
-                    -3.767748057725839e-05,
-                    3.6765308323083445e-05,
-                    1.0
-                ],
-                "twistMaxDeg": 15.0,
-                "twistMinDeg": -15.0,
-                "type": "swingtwist"
-            },
-            "mass": 8.0,
-            "parent": "Skeleton_torso_joint_2",
-            "shape": {
-                "halfExtents": [
-                    0.029999999329447746,
-                    0.03241802379488945,
-                    0.029999999329447746
-                ],
-                "halfHeight": 0.012418024241924286,
-                "radius": 0.019999999552965164,
-                "type": "capsule"
-            }
-        },
-        {
-            "bone": "Skeleton_neck_joint_1",
-            "joint": {
-                "hingeMaxDeg": 150.0,
-                "hingeMinDeg": 0.0,
-                "motorDamping": 1.0,
-                "motorFrequency": 3.0,
-                "motorMaxTorque": 7.0,
-                "swingNormalDeg": 25.0,
-                "swingPlaneDeg": 20.0,
-                "twistAxis": [
-                    -1.0,
-                    -1.6797433444182275e-09,
-                    -5.0529997679404914e-05
-                ],
-                "twistMaxDeg": 15.0,
-                "twistMinDeg": -15.0,
-                "type": "swingtwist"
-            },
-            "mass": 2.0,
-            "parent": "torso_joint_3",
-            "shape": {
-                "halfExtents": [
-                    0.029999999329447746,
-                    0.029999999329447746,
-                    0.029999999329447746
-                ],
-                "halfHeight": 0.009999999776482582,
-                "radius": 0.019999999552965164,
-                "type": "capsule"
-            }
-        },
-        {
-            "bone": "Skeleton_neck_joint_2",
-            "joint": {
-                "hingeMaxDeg": 150.0,
-                "hingeMinDeg": 0.0,
-                "motorDamping": 1.0,
-                "motorFrequency": 3.0,
-                "motorMaxTorque": 7.0,
-                "swingNormalDeg": 25.0,
-                "swingPlaneDeg": 20.0,
-                "twistAxis": [
-                    0.0,
-                    1.0,
-                    0.0
-                ],
-                "twistMaxDeg": 15.0,
-                "twistMinDeg": -15.0,
-                "type": "swingtwist"
-            },
-            "mass": 2.0,
-            "parent": "Skeleton_neck_joint_1",
-            "shape": {
-                "halfExtents": [
-                    0.036000002175569534,
-                    0.05999999865889549,
-                    0.036000002175569534
-                ],
-                "halfHeight": 0.03839999809861183,
-                "radius": 0.02160000056028366,
-                "type": "capsule"
-            }
-        },
-        {
-            "bone": "Skeleton_arm_joint_L__4_",
-            "joint": {
-                "hingeMaxDeg": 150.0,
-                "hingeMinDeg": 0.0,
-                "motorDamping": 1.0,
-                "motorFrequency": 16.0,
-                "motorMaxTorque": 200.0,
-                "swingNormalDeg": 95.0,
-                "swingPlaneDeg": 80.0,
-                "twistAxis": [
-                    0.054633162915706635,
-                    0.8904612064361572,
-                    0.45176780223846436
-                ],
-                "twistMaxDeg": 45.0,
-                "twistMinDeg": -45.0,
-                "type": "swingtwist"
-            },
-            "mass": 2.5,
-            "parent": "torso_joint_3",
-            "shape": {
-                "halfExtents": [
-                    0.07260263711214066,
-                    0.12100439518690109,
-                    0.07260263711214066
-                ],
-                "halfHeight": 0.07744280993938446,
-                "radius": 0.04356158524751663,
-                "type": "capsule"
-            }
-        },
-        {
-            "bone": "Skeleton_arm_joint_R",
-            "joint": {
-                "hingeMaxDeg": 150.0,
-                "hingeMinDeg": 0.0,
-                "motorDamping": 1.0,
-                "motorFrequency": 16.0,
-                "motorMaxTorque": 200.0,
-                "swingNormalDeg": 95.0,
-                "swingPlaneDeg": 80.0,
-                "twistAxis": [
-                    -0.14688096940517426,
-                    -0.8904622197151184,
-                    0.43070074915885925
-                ],
-                "twistMaxDeg": 45.0,
-                "twistMinDeg": -45.0,
-                "type": "swingtwist"
-            },
-            "mass": 2.5,
-            "parent": "torso_joint_3",
-            "shape": {
-                "halfExtents": [
-                    0.07260243594646454,
-                    0.12100405246019363,
-                    0.07260243594646454
-                ],
-                "halfHeight": 0.07744258642196655,
-                "radius": 0.04356146231293678,
-                "type": "capsule"
-            }
-        },
-        {
-            "bone": "Skeleton_arm_joint_L__3_",
-            "joint": {
-                "hingeMaxDeg": 150.0,
-                "hingeMinDeg": 0.0,
-                "motorDamping": 1.0,
-                "motorFrequency": 16.0,
-                "motorMaxTorque": 140.0,
-                "swingNormalDeg": 30.0,
-                "swingPlaneDeg": 30.0,
-                "twistAxis": [
-                    -0.49695903062820435,
-                    0.761483907699585,
-                    0.4161417484283447
-                ],
-                "twistMaxDeg": 15.0,
-                "twistMinDeg": -15.0,
-                "type": "hinge"
-            },
-            "mass": 1.5,
-            "parent": "Skeleton_arm_joint_L__4_",
-            "shape": {
-                "halfExtents": [
-                    0.05633745715022087,
-                    0.09389575570821762,
-                    0.05633745715022087
-                ],
-                "halfHeight": 0.06009328365325928,
-                "radius": 0.033802472054958344,
-                "type": "capsule"
-            }
-        },
-        {
-            "bone": "Skeleton_arm_joint_R__2_",
-            "joint": {
-                "hingeMaxDeg": 150.0,
-                "hingeMinDeg": 0.0,
-                "motorDamping": 1.0,
-                "motorFrequency": 16.0,
-                "motorMaxTorque": 140.0,
-                "swingNormalDeg": 30.0,
-                "swingPlaneDeg": 30.0,
-                "twistAxis": [
-                    0.16704794764518738,
-                    -0.7614859342575073,
-                    -0.6262861490249634
-                ],
-                "twistMaxDeg": 15.0,
-                "twistMinDeg": -15.0,
-                "type": "hinge"
-            },
-            "mass": 1.5,
-            "parent": "Skeleton_arm_joint_R",
-            "shape": {
-                "halfExtents": [
-                    0.056337662041187286,
-                    0.09389609843492508,
-                    0.056337662041187286
-                ],
-                "halfHeight": 0.06009350344538689,
-                "radius": 0.03380259498953819,
-                "type": "capsule"
-            }
-        },
-        {
-            "bone": "Skeleton_arm_joint_L__2_",
-            "joint": {
-                "hingeMaxDeg": 150.0,
-                "hingeMinDeg": 0.0,
-                "motorDamping": 1.0,
-                "motorFrequency": 16.0,
-                "motorMaxTorque": 50.0,
-                "swingNormalDeg": 60.0,
-                "swingPlaneDeg": 45.0,
-                "twistAxis": [
-                    0.0,
-                    1.0,
-                    0.0
-                ],
-                "twistMaxDeg": 45.0,
-                "twistMinDeg": -45.0,
-                "type": "swingtwist"
-            },
-            "mass": 0.5,
-            "parent": "Skeleton_arm_joint_L__3_",
-            "shape": {
-                "halfExtents": [
-                    0.036000002175569534,
-                    0.05999999865889549,
-                    0.036000002175569534
-                ],
-                "halfHeight": 0.03839999809861183,
-                "radius": 0.02160000056028366,
-                "type": "capsule"
-            }
-        },
-        {
-            "bone": "Skeleton_arm_joint_R__3_",
-            "joint": {
-                "hingeMaxDeg": 150.0,
-                "hingeMinDeg": 0.0,
-                "motorDamping": 1.0,
-                "motorFrequency": 16.0,
-                "motorMaxTorque": 50.0,
-                "swingNormalDeg": 60.0,
-                "swingPlaneDeg": 45.0,
-                "twistAxis": [
-                    0.0,
-                    1.0,
-                    0.0
-                ],
-                "twistMaxDeg": 45.0,
-                "twistMinDeg": -45.0,
-                "type": "swingtwist"
-            },
-            "mass": 0.5,
-            "parent": "Skeleton_arm_joint_R__2_",
-            "shape": {
-                "halfExtents": [
-                    0.036000002175569534,
-                    0.05999999865889549,
-                    0.036000002175569534
-                ],
-                "halfHeight": 0.03839999809861183,
-                "radius": 0.02160000056028366,
-                "type": "capsule"
-            }
-        },
-        {
-            "bone": "leg_joint_L_1",
-            "joint": {
-                "hingeMaxDeg": 150.0,
-                "hingeMinDeg": 0.0,
-                "motorDamping": 1.0,
-                "motorFrequency": 16.0,
-                "motorMaxTorque": 90.0,
-                "swingNormalDeg": 60.0,
-                "swingPlaneDeg": 45.0,
-                "twistAxis": [
-                    0.7859975695610046,
-                    0.034028805792331696,
-                    -0.6172922253608704
-                ],
-                "twistMaxDeg": 45.0,
-                "twistMinDeg": -45.0,
-                "type": "swingtwist"
-            },
-            "mass": 7.0,
-            "parent": "Skeleton_torso_joint_1",
-            "shape": {
-                "halfExtents": [
-                    0.07983383536338806,
-                    0.1330563873052597,
-                    0.07983383536338806
-                ],
-                "halfHeight": 0.08515608310699463,
-                "radius": 0.04790030047297478,
-                "type": "capsule"
-            }
-        },
-        {
-            "bone": "leg_joint_R_1",
-            "joint": {
-                "hingeMaxDeg": 150.0,
-                "hingeMinDeg": 0.0,
-                "motorDamping": 1.0,
-                "motorFrequency": 16.0,
-                "motorMaxTorque": 90.0,
-                "swingNormalDeg": 60.0,
-                "swingPlaneDeg": 45.0,
-                "twistAxis": [
-                    0.9803812503814697,
-                    -0.033918265253305435,
-                    0.1941700279712677
-                ],
-                "twistMaxDeg": 45.0,
-                "twistMinDeg": -45.0,
-                "type": "swingtwist"
-            },
-            "mass": 7.0,
-            "parent": "Skeleton_torso_joint_1",
-            "shape": {
-                "halfExtents": [
-                    0.0798334851861,
-                    0.13305580615997314,
-                    0.0798334851861
-                ],
-                "halfHeight": 0.08515571057796478,
-                "radius": 0.04790009185671806,
-                "type": "capsule"
-            }
-        },
-        {
-            "bone": "leg_joint_L_2",
-            "joint": {
-                "hingeMaxDeg": 150.0,
-                "hingeMinDeg": 0.0,
-                "motorDamping": 1.0,
-                "motorFrequency": 16.0,
-                "motorMaxTorque": 90.0,
-                "swingNormalDeg": 30.0,
-                "swingPlaneDeg": 30.0,
-                "twistAxis": [
-                    0.999875545501709,
-                    0.00506574148312211,
-                    0.014945951290428638
-                ],
-                "twistMaxDeg": 15.0,
-                "twistMinDeg": -15.0,
-                "type": "hinge"
-            },
-            "mass": 4.0,
-            "parent": "leg_joint_L_1",
-            "shape": {
-                "halfExtents": [
-                    0.08274732530117035,
-                    0.13791219890117645,
-                    0.08274732530117035
-                ],
-                "halfHeight": 0.08826380968093872,
-                "radius": 0.04964839294552803,
-                "type": "capsule"
-            }
-        },
-        {
-            "bone": "leg_joint_R_2",
-            "joint": {
-                "hingeMaxDeg": 150.0,
-                "hingeMinDeg": 0.0,
-                "motorDamping": 1.0,
-                "motorFrequency": 16.0,
-                "motorMaxTorque": 90.0,
-                "swingNormalDeg": 30.0,
-                "swingPlaneDeg": 30.0,
-                "twistAxis": [
-                    0.9986781477928162,
-                    -0.005190640687942505,
-                    -0.05113685131072998
-                ],
-                "twistMaxDeg": 15.0,
-                "twistMinDeg": -15.0,
-                "type": "hinge"
-            },
-            "mass": 4.0,
-            "parent": "leg_joint_R_1",
-            "shape": {
-                "halfExtents": [
-                    0.08274747431278229,
-                    0.13791245222091675,
-                    0.08274747431278229
-                ],
-                "halfHeight": 0.08826396614313126,
-                "radius": 0.04964848607778549,
-                "type": "capsule"
-            }
-        },
-        {
-            "bone": "leg_joint_L_3",
-            "joint": {
-                "hingeMaxDeg": 150.0,
-                "hingeMinDeg": 0.0,
-                "motorDamping": 1.0,
-                "motorFrequency": 16.0,
-                "motorMaxTorque": 90.0,
-                "swingNormalDeg": 60.0,
-                "swingPlaneDeg": 45.0,
-                "twistAxis": [
-                    -0.9129649996757507,
-                    0.015182319097220898,
-                    0.40775546431541443
-                ],
-                "twistMaxDeg": 45.0,
-                "twistMinDeg": -45.0,
-                "type": "swingtwist"
-            },
-            "mass": 1.0,
-            "parent": "leg_joint_L_2",
-            "shape": {
-                "halfExtents": [
-                    0.029999999329447746,
-                    0.03591799736022949,
-                    0.029999999329447746
-                ],
-                "halfHeight": 0.015917997807264328,
-                "radius": 0.019999999552965164,
-                "type": "capsule"
-            }
-        },
-        {
-            "bone": "leg_joint_R_3",
-            "joint": {
-                "hingeMaxDeg": 150.0,
-                "hingeMinDeg": 0.0,
-                "motorDamping": 1.0,
-                "motorFrequency": 16.0,
-                "motorMaxTorque": 90.0,
-                "swingNormalDeg": 60.0,
-                "swingPlaneDeg": 45.0,
-                "twistAxis": [
-                    -0.9301695823669434,
-                    -0.014926708303391933,
-                    0.36682674288749695
-                ],
-                "twistMaxDeg": 45.0,
-                "twistMinDeg": -45.0,
-                "type": "swingtwist"
-            },
-            "mass": 1.0,
-            "parent": "leg_joint_R_2",
-            "shape": {
-                "halfExtents": [
-                    0.029999999329447746,
-                    0.035917967557907104,
-                    0.029999999329447746
-                ],
-                "halfHeight": 0.01591796800494194,
-                "radius": 0.019999999552965164,
-                "type": "capsule"
-            }
-        },
-        {
-            "bone": "leg_joint_L_5",
-            "joint": {
-                "hingeMaxDeg": 150.0,
-                "hingeMinDeg": 0.0,
-                "motorDamping": 1.0,
-                "motorFrequency": 10.0,
-                "motorMaxTorque": 45.0,
-                "swingNormalDeg": 60.0,
-                "swingPlaneDeg": 45.0,
-                "twistAxis": [
-                    0.0,
-                    1.0,
-                    0.0
-                ],
-                "twistMaxDeg": 45.0,
-                "twistMinDeg": -45.0,
-                "type": "swingtwist"
-            },
-            "mass": 1.0,
-            "parent": "leg_joint_L_3",
-            "shape": {
-                "halfExtents": [
-                    0.036000002175569534,
-                    0.05999999865889549,
-                    0.036000002175569534
-                ],
-                "halfHeight": 0.03839999809861183,
-                "radius": 0.02160000056028366,
-                "type": "capsule"
-            }
-        },
-        {
-            "bone": "leg_joint_R_5",
-            "joint": {
-                "hingeMaxDeg": 150.0,
-                "hingeMinDeg": 0.0,
-                "motorDamping": 1.0,
-                "motorFrequency": 10.0,
-                "motorMaxTorque": 45.0,
-                "swingNormalDeg": 60.0,
-                "swingPlaneDeg": 45.0,
-                "twistAxis": [
-                    0.0,
-                    1.0,
-                    0.0
-                ],
-                "twistMaxDeg": 45.0,
-                "twistMinDeg": -45.0,
-                "type": "swingtwist"
-            },
-            "mass": 1.0,
-            "parent": "leg_joint_R_3",
-            "shape": {
-                "halfExtents": [
-                    0.036000002175569534,
-                    0.05999999865889549,
-                    0.036000002175569534
-                ],
-                "halfHeight": 0.03839999809861183,
-                "radius": 0.02160000056028366,
-                "type": "capsule"
-            }
-        }
-    ],
-    "flinchRecovery": 0.4000000059604645,
-    "flinchStrength": 0.30000001192092896,
-    "flinchThreshold": 2000.0,
-    "getupBalance": 1.0,
-    "getupBlend": 0.25,
-    "getupDelay": 0.6000000238418579,
-    "getupDuration": 3.0,
-    "getupHold": 0.5,
-    "getupStrength": 1.0,
-    "getupWobble": 0.30000001192092896,
-    "impactThreshold": 2000.0,
-    "version": 1
+  "bodies": [
+    {
+      "bone": "Skeleton_torso_joint_1",
+      "mass": 12.0,
+      "parent": "",
+      "shape": {
+        "halfExtents": [
+          0.043625056743621826,
+          0.07270842790603638,
+          0.043625056743621826
+        ],
+        "halfHeight": 0.04653339087963104,
+        "radius": 0.026175035163760185,
+        "type": "box"
+      }
+    },
+    {
+      "bone": "Skeleton_torso_joint_2",
+      "joint": {
+        "hingeMaxDeg": 150.0,
+        "hingeMinDeg": 0.0,
+        "motorDamping": 1.0,
+        "motorFrequency": 7.0,
+        "motorMaxTorque": 28.0,
+        "swingNormalDeg": 25.0,
+        "swingPlaneDeg": 20.0,
+        "twistAxis": [
+          -0.9999998807907104,
+          2.6217060167255113e-06,
+          -0.0002906460431404412
+        ],
+        "twistMaxDeg": 15.0,
+        "twistMinDeg": -15.0,
+        "type": "swingtwist"
+      },
+      "mass": 8.0,
+      "parent": "Skeleton_torso_joint_1",
+      "shape": {
+        "halfExtents": [
+          0.07515504956245422,
+          0.1252584159374237,
+          0.07515504956245422
+        ],
+        "halfHeight": 0.08016538619995117,
+        "radius": 0.045093029737472534,
+        "type": "capsule"
+      }
+    },
+    {
+      "bone": "torso_joint_3",
+      "joint": {
+        "hingeMaxDeg": 150.0,
+        "hingeMinDeg": 0.0,
+        "motorDamping": 1.0,
+        "motorFrequency": 7.0,
+        "motorMaxTorque": 28.0,
+        "swingNormalDeg": 25.0,
+        "swingPlaneDeg": 20.0,
+        "twistAxis": [
+          -3.767748057725839e-05,
+          3.6765308323083445e-05,
+          1.0
+        ],
+        "twistMaxDeg": 15.0,
+        "twistMinDeg": -15.0,
+        "type": "swingtwist"
+      },
+      "mass": 8.0,
+      "parent": "Skeleton_torso_joint_2",
+      "shape": {
+        "halfExtents": [
+          0.029999999329447746,
+          0.03241802379488945,
+          0.029999999329447746
+        ],
+        "halfHeight": 0.012418024241924286,
+        "radius": 0.019999999552965164,
+        "type": "capsule"
+      }
+    },
+    {
+      "bone": "Skeleton_neck_joint_1",
+      "joint": {
+        "hingeMaxDeg": 150.0,
+        "hingeMinDeg": 0.0,
+        "motorDamping": 1.0,
+        "motorFrequency": 3.0,
+        "motorMaxTorque": 7.0,
+        "swingNormalDeg": 25.0,
+        "swingPlaneDeg": 20.0,
+        "twistAxis": [
+          -1.0,
+          -1.6797433444182275e-09,
+          -5.0529997679404914e-05
+        ],
+        "twistMaxDeg": 15.0,
+        "twistMinDeg": -15.0,
+        "type": "swingtwist"
+      },
+      "mass": 2.0,
+      "parent": "torso_joint_3",
+      "shape": {
+        "halfExtents": [
+          0.029999999329447746,
+          0.029999999329447746,
+          0.029999999329447746
+        ],
+        "halfHeight": 0.009999999776482582,
+        "radius": 0.019999999552965164,
+        "type": "capsule"
+      }
+    },
+    {
+      "bone": "Skeleton_neck_joint_2",
+      "joint": {
+        "hingeMaxDeg": 150.0,
+        "hingeMinDeg": 0.0,
+        "motorDamping": 1.0,
+        "motorFrequency": 3.0,
+        "motorMaxTorque": 7.0,
+        "swingNormalDeg": 25.0,
+        "swingPlaneDeg": 20.0,
+        "twistAxis": [
+          0.0,
+          1.0,
+          0.0
+        ],
+        "twistMaxDeg": 15.0,
+        "twistMinDeg": -15.0,
+        "type": "swingtwist"
+      },
+      "mass": 2.0,
+      "parent": "Skeleton_neck_joint_1",
+      "shape": {
+        "halfExtents": [
+          0.036000002175569534,
+          0.05999999865889549,
+          0.036000002175569534
+        ],
+        "halfHeight": 0.03839999809861183,
+        "radius": 0.02160000056028366,
+        "type": "capsule"
+      }
+    },
+    {
+      "bone": "Skeleton_arm_joint_L__4_",
+      "joint": {
+        "hingeMaxDeg": 150.0,
+        "hingeMinDeg": 0.0,
+        "motorDamping": 1.0,
+        "motorFrequency": 16.0,
+        "motorMaxTorque": 200.0,
+        "swingNormalDeg": 95.0,
+        "swingPlaneDeg": 80.0,
+        "twistAxis": [
+          0.054633162915706635,
+          0.8904612064361572,
+          0.45176780223846436
+        ],
+        "twistMaxDeg": 45.0,
+        "twistMinDeg": -45.0,
+        "type": "swingtwist"
+      },
+      "mass": 2.5,
+      "parent": "torso_joint_3",
+      "shape": {
+        "halfExtents": [
+          0.07260263711214066,
+          0.12100439518690109,
+          0.07260263711214066
+        ],
+        "halfHeight": 0.07744280993938446,
+        "radius": 0.04356158524751663,
+        "type": "capsule"
+      }
+    },
+    {
+      "bone": "Skeleton_arm_joint_R",
+      "joint": {
+        "hingeMaxDeg": 150.0,
+        "hingeMinDeg": 0.0,
+        "motorDamping": 1.0,
+        "motorFrequency": 16.0,
+        "motorMaxTorque": 200.0,
+        "swingNormalDeg": 95.0,
+        "swingPlaneDeg": 80.0,
+        "twistAxis": [
+          -0.14688096940517426,
+          -0.8904622197151184,
+          0.43070074915885925
+        ],
+        "twistMaxDeg": 45.0,
+        "twistMinDeg": -45.0,
+        "type": "swingtwist"
+      },
+      "mass": 2.5,
+      "parent": "torso_joint_3",
+      "shape": {
+        "halfExtents": [
+          0.07260243594646454,
+          0.12100405246019363,
+          0.07260243594646454
+        ],
+        "halfHeight": 0.07744258642196655,
+        "radius": 0.04356146231293678,
+        "type": "capsule"
+      }
+    },
+    {
+      "bone": "Skeleton_arm_joint_L__3_",
+      "joint": {
+        "hingeMaxDeg": 150.0,
+        "hingeMinDeg": 0.0,
+        "motorDamping": 1.0,
+        "motorFrequency": 16.0,
+        "motorMaxTorque": 140.0,
+        "swingNormalDeg": 30.0,
+        "swingPlaneDeg": 30.0,
+        "twistAxis": [
+          -0.49695903062820435,
+          0.761483907699585,
+          0.4161417484283447
+        ],
+        "twistMaxDeg": 15.0,
+        "twistMinDeg": -15.0,
+        "type": "hinge"
+      },
+      "mass": 1.5,
+      "parent": "Skeleton_arm_joint_L__4_",
+      "shape": {
+        "halfExtents": [
+          0.05633745715022087,
+          0.09389575570821762,
+          0.05633745715022087
+        ],
+        "halfHeight": 0.06009328365325928,
+        "radius": 0.033802472054958344,
+        "type": "capsule"
+      }
+    },
+    {
+      "bone": "Skeleton_arm_joint_R__2_",
+      "joint": {
+        "hingeMaxDeg": 150.0,
+        "hingeMinDeg": 0.0,
+        "motorDamping": 1.0,
+        "motorFrequency": 16.0,
+        "motorMaxTorque": 140.0,
+        "swingNormalDeg": 30.0,
+        "swingPlaneDeg": 30.0,
+        "twistAxis": [
+          0.16704794764518738,
+          -0.7614859342575073,
+          -0.6262861490249634
+        ],
+        "twistMaxDeg": 15.0,
+        "twistMinDeg": -15.0,
+        "type": "hinge"
+      },
+      "mass": 1.5,
+      "parent": "Skeleton_arm_joint_R",
+      "shape": {
+        "halfExtents": [
+          0.056337662041187286,
+          0.09389609843492508,
+          0.056337662041187286
+        ],
+        "halfHeight": 0.06009350344538689,
+        "radius": 0.03380259498953819,
+        "type": "capsule"
+      }
+    },
+    {
+      "bone": "Skeleton_arm_joint_L__2_",
+      "joint": {
+        "hingeMaxDeg": 150.0,
+        "hingeMinDeg": 0.0,
+        "motorDamping": 1.0,
+        "motorFrequency": 16.0,
+        "motorMaxTorque": 50.0,
+        "swingNormalDeg": 60.0,
+        "swingPlaneDeg": 45.0,
+        "twistAxis": [
+          0.0,
+          1.0,
+          0.0
+        ],
+        "twistMaxDeg": 45.0,
+        "twistMinDeg": -45.0,
+        "type": "swingtwist"
+      },
+      "mass": 0.5,
+      "parent": "Skeleton_arm_joint_L__3_",
+      "shape": {
+        "halfExtents": [
+          0.036000002175569534,
+          0.05999999865889549,
+          0.036000002175569534
+        ],
+        "halfHeight": 0.03839999809861183,
+        "radius": 0.02160000056028366,
+        "type": "capsule"
+      }
+    },
+    {
+      "bone": "Skeleton_arm_joint_R__3_",
+      "joint": {
+        "hingeMaxDeg": 150.0,
+        "hingeMinDeg": 0.0,
+        "motorDamping": 1.0,
+        "motorFrequency": 16.0,
+        "motorMaxTorque": 50.0,
+        "swingNormalDeg": 60.0,
+        "swingPlaneDeg": 45.0,
+        "twistAxis": [
+          0.0,
+          1.0,
+          0.0
+        ],
+        "twistMaxDeg": 45.0,
+        "twistMinDeg": -45.0,
+        "type": "swingtwist"
+      },
+      "mass": 0.5,
+      "parent": "Skeleton_arm_joint_R__2_",
+      "shape": {
+        "halfExtents": [
+          0.036000002175569534,
+          0.05999999865889549,
+          0.036000002175569534
+        ],
+        "halfHeight": 0.03839999809861183,
+        "radius": 0.02160000056028366,
+        "type": "capsule"
+      }
+    },
+    {
+      "bone": "leg_joint_L_1",
+      "joint": {
+        "hingeMaxDeg": 150.0,
+        "hingeMinDeg": 0.0,
+        "motorDamping": 1.0,
+        "motorFrequency": 16.0,
+        "motorMaxTorque": 90.0,
+        "swingNormalDeg": 60.0,
+        "swingPlaneDeg": 45.0,
+        "twistAxis": [
+          0.7859975695610046,
+          0.034028805792331696,
+          -0.6172922253608704
+        ],
+        "twistMaxDeg": 45.0,
+        "twistMinDeg": -45.0,
+        "type": "swingtwist"
+      },
+      "mass": 7.0,
+      "parent": "Skeleton_torso_joint_1",
+      "shape": {
+        "halfExtents": [
+          0.07983383536338806,
+          0.1330563873052597,
+          0.07983383536338806
+        ],
+        "halfHeight": 0.08515608310699463,
+        "radius": 0.04790030047297478,
+        "type": "capsule"
+      }
+    },
+    {
+      "bone": "leg_joint_R_1",
+      "joint": {
+        "hingeMaxDeg": 150.0,
+        "hingeMinDeg": 0.0,
+        "motorDamping": 1.0,
+        "motorFrequency": 16.0,
+        "motorMaxTorque": 90.0,
+        "swingNormalDeg": 60.0,
+        "swingPlaneDeg": 45.0,
+        "twistAxis": [
+          0.9803812503814697,
+          -0.033918265253305435,
+          0.1941700279712677
+        ],
+        "twistMaxDeg": 45.0,
+        "twistMinDeg": -45.0,
+        "type": "swingtwist"
+      },
+      "mass": 7.0,
+      "parent": "Skeleton_torso_joint_1",
+      "shape": {
+        "halfExtents": [
+          0.0798334851861,
+          0.13305580615997314,
+          0.0798334851861
+        ],
+        "halfHeight": 0.08515571057796478,
+        "radius": 0.04790009185671806,
+        "type": "capsule"
+      }
+    },
+    {
+      "bone": "leg_joint_L_2",
+      "joint": {
+        "hingeMaxDeg": 150.0,
+        "hingeMinDeg": 0.0,
+        "motorDamping": 1.0,
+        "motorFrequency": 16.0,
+        "motorMaxTorque": 90.0,
+        "swingNormalDeg": 30.0,
+        "swingPlaneDeg": 30.0,
+        "twistAxis": [
+          0.999875545501709,
+          0.00506574148312211,
+          0.014945951290428638
+        ],
+        "twistMaxDeg": 15.0,
+        "twistMinDeg": -15.0,
+        "type": "hinge"
+      },
+      "mass": 4.0,
+      "parent": "leg_joint_L_1",
+      "shape": {
+        "halfExtents": [
+          0.08274732530117035,
+          0.13791219890117645,
+          0.08274732530117035
+        ],
+        "halfHeight": 0.08826380968093872,
+        "radius": 0.04964839294552803,
+        "type": "capsule"
+      }
+    },
+    {
+      "bone": "leg_joint_R_2",
+      "joint": {
+        "hingeMaxDeg": 150.0,
+        "hingeMinDeg": 0.0,
+        "motorDamping": 1.0,
+        "motorFrequency": 16.0,
+        "motorMaxTorque": 90.0,
+        "swingNormalDeg": 30.0,
+        "swingPlaneDeg": 30.0,
+        "twistAxis": [
+          0.9986781477928162,
+          -0.005190640687942505,
+          -0.05113685131072998
+        ],
+        "twistMaxDeg": 15.0,
+        "twistMinDeg": -15.0,
+        "type": "hinge"
+      },
+      "mass": 4.0,
+      "parent": "leg_joint_R_1",
+      "shape": {
+        "halfExtents": [
+          0.08274747431278229,
+          0.13791245222091675,
+          0.08274747431278229
+        ],
+        "halfHeight": 0.08826396614313126,
+        "radius": 0.04964848607778549,
+        "type": "capsule"
+      }
+    },
+    {
+      "bone": "leg_joint_L_3",
+      "joint": {
+        "hingeMaxDeg": 150.0,
+        "hingeMinDeg": 0.0,
+        "motorDamping": 1.0,
+        "motorFrequency": 16.0,
+        "motorMaxTorque": 90.0,
+        "swingNormalDeg": 60.0,
+        "swingPlaneDeg": 45.0,
+        "twistAxis": [
+          -0.9129649996757507,
+          0.015182319097220898,
+          0.40775546431541443
+        ],
+        "twistMaxDeg": 45.0,
+        "twistMinDeg": -45.0,
+        "type": "swingtwist"
+      },
+      "mass": 1.0,
+      "parent": "leg_joint_L_2",
+      "shape": {
+        "halfExtents": [
+          0.029999999329447746,
+          0.03591799736022949,
+          0.029999999329447746
+        ],
+        "halfHeight": 0.015917997807264328,
+        "radius": 0.019999999552965164,
+        "type": "capsule"
+      }
+    },
+    {
+      "bone": "leg_joint_R_3",
+      "joint": {
+        "hingeMaxDeg": 150.0,
+        "hingeMinDeg": 0.0,
+        "motorDamping": 1.0,
+        "motorFrequency": 16.0,
+        "motorMaxTorque": 90.0,
+        "swingNormalDeg": 60.0,
+        "swingPlaneDeg": 45.0,
+        "twistAxis": [
+          -0.9301695823669434,
+          -0.014926708303391933,
+          0.36682674288749695
+        ],
+        "twistMaxDeg": 45.0,
+        "twistMinDeg": -45.0,
+        "type": "swingtwist"
+      },
+      "mass": 1.0,
+      "parent": "leg_joint_R_2",
+      "shape": {
+        "halfExtents": [
+          0.029999999329447746,
+          0.035917967557907104,
+          0.029999999329447746
+        ],
+        "halfHeight": 0.01591796800494194,
+        "radius": 0.019999999552965164,
+        "type": "capsule"
+      }
+    },
+    {
+      "bone": "leg_joint_L_5",
+      "joint": {
+        "hingeMaxDeg": 150.0,
+        "hingeMinDeg": 0.0,
+        "motorDamping": 1.0,
+        "motorFrequency": 10.0,
+        "motorMaxTorque": 45.0,
+        "swingNormalDeg": 60.0,
+        "swingPlaneDeg": 45.0,
+        "twistAxis": [
+          0.0,
+          1.0,
+          0.0
+        ],
+        "twistMaxDeg": 45.0,
+        "twistMinDeg": -45.0,
+        "type": "swingtwist"
+      },
+      "mass": 1.0,
+      "parent": "leg_joint_L_3",
+      "shape": {
+        "halfExtents": [
+          0.036000002175569534,
+          0.05999999865889549,
+          0.036000002175569534
+        ],
+        "halfHeight": 0.03839999809861183,
+        "radius": 0.02160000056028366,
+        "type": "capsule"
+      },
+      "isFoot": true
+    },
+    {
+      "bone": "leg_joint_R_5",
+      "joint": {
+        "hingeMaxDeg": 150.0,
+        "hingeMinDeg": 0.0,
+        "motorDamping": 1.0,
+        "motorFrequency": 10.0,
+        "motorMaxTorque": 45.0,
+        "swingNormalDeg": 60.0,
+        "swingPlaneDeg": 45.0,
+        "twistAxis": [
+          0.0,
+          1.0,
+          0.0
+        ],
+        "twistMaxDeg": 45.0,
+        "twistMinDeg": -45.0,
+        "type": "swingtwist"
+      },
+      "mass": 1.0,
+      "parent": "leg_joint_R_3",
+      "shape": {
+        "halfExtents": [
+          0.036000002175569534,
+          0.05999999865889549,
+          0.036000002175569534
+        ],
+        "halfHeight": 0.03839999809861183,
+        "radius": 0.02160000056028366,
+        "type": "capsule"
+      },
+      "isFoot": true
+    }
+  ],
+  "flinchRecovery": 0.4000000059604645,
+  "flinchStrength": 0.30000001192092896,
+  "flinchThreshold": 2000.0,
+  "getupBalance": 1.0,
+  "getupBlend": 0.25,
+  "getupDelay": 0.6000000238418579,
+  "getupDuration": 3.0,
+  "getupHold": 0.5,
+  "getupStrength": 1.0,
+  "getupWobble": 0.30000001192092896,
+  "impactThreshold": 2000.0,
+  "version": 1
 }

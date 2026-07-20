@@ -98,6 +98,7 @@ inline bool LoadRagdoll(const std::string& path, RagdollConfig& out)
             d.halfHeight  = sj.value("halfHeight", 0.10f);
             d.halfExtents = Vec3FromJson(sj.value("halfExtents", nlohmann::json{}), d.halfExtents);
         }
+        d.isFoot = bj.value("isFoot", false);
 
         if (bj.contains("joint") && bj["joint"].is_object()) {
             const auto& jj = bj["joint"];
@@ -152,6 +153,7 @@ inline bool SaveRagdoll(const std::string& path, const RagdollConfig& cfg)
             { "halfHeight",  d.halfHeight },
             { "halfExtents", Vec3ToJson(d.halfExtents) }
         };
+        if (d.isFoot) bj["isFoot"] = true;
         // Root bodies have no joint to a parent.
         if (!d.parentBoneName.empty()) {
             bj["joint"] = {

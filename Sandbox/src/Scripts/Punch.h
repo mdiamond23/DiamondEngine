@@ -9,7 +9,6 @@
 #include "Animation/AnimationComponents.h"
 #include "Animation/AnimationSampler.h"
 #include <imgui.h>
-#include <spdlog/spdlog.h>
 #include <nlohmann/json.hpp>
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -193,13 +192,6 @@ public:
         const bool held[2]    = { Input::IsHeld("PunchLeft"),    Input::IsHeld("PunchRight") };
         const bool pressed[2] = { Input::IsPressed("PunchLeft"), Input::IsPressed("PunchRight") };
 
-        // TEMP punch diagnostics (~2 Hz while a bumper is held): proves the input,
-        // the IK weight ramp, and where the target/hand are in world space.
-        static float s_diagTimer = 0.0f;
-        s_diagTimer += dt;
-        const bool diagLog = s_diagTimer >= 0.5f;
-        if (diagLog) s_diagTimer = 0.0f;
-
         for (auto [entity, punch] : scene.View<PunchComponent>().each())
         {
             // UpdateIK only runs on entities with a skinned mesh + animator; without
@@ -265,12 +257,6 @@ public:
                 // as a slow reach — see punchImpulse.
                 if (pressed[side])
                     LaunchPunch(scene, entity, worldMat, handBone, punch.modelForward, punch.punchImpulse);
-
-                if (diagLog && held[side])
-                    spdlog::info("[Punch] {} curW={:.2f} tip={} target=({:.2f},{:.2f},{:.2f}) hand=({:.2f},{:.2f},{:.2f}) cast=({:.2f},{:.2f},{:.2f})",
-                                 side == 0 ? "L" : "R", chain->_curWeight, chain->_tipBone,
-                                 chain->targetWorldPos.x, chain->targetWorldPos.y, chain->targetWorldPos.z,
-                                 handPos.x, handPos.y, handPos.z, castDir.x, castDir.y, castDir.z);
 
                 entt::entity proxy = EnsureHandProxy(scene, arm, side == 0 ? "HandProxyL" : "HandProxyR");
                 if (haveHand && proxy != entt::null && scene.Has<TransformComponent>(proxy))

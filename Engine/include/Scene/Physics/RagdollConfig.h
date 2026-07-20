@@ -28,6 +28,11 @@ struct RagdollBodyDef {
     float     halfHeight  = 0.10f;            // capsule cylinder half-length (excludes the hemispheres)
     glm::vec3 halfExtents { 0.08f, 0.08f, 0.08f }; // box
 
+    // Foot sole: override the shape with a wide, flat, WORLD-aligned box so the foot
+    // presents a real contact patch to stand/balance on (a capsule only touches the
+    // floor on a line and rolls). Set on the lowest leg body of each leg. See BuildRagdoll.
+    bool      isFoot      = false;
+
     float     mass        = 1.0f;             // kilograms
 
     // --- joint to the parent body (ignored for the root) -----------------------

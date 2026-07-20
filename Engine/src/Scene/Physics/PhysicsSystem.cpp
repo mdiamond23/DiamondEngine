@@ -296,6 +296,7 @@ struct RagdollBody {
     glm::vec3             halfExtents { 0.0f };
     glm::vec3             localOffset { 0.0f };           // shape offset from the bone frame
     glm::quat             localRotation { 1, 0, 0, 0 };
+    bool                  isFoot = false;                  // planted sole; balance torque acts here
     float                 mass = 1.0f;                     // kg (for the get-up root lift force)
     // World transform captured when the get-up->animation cross-blend begins; the body is
     // driven kinematically from here toward its live animation transform over the blend.
@@ -375,11 +376,14 @@ struct RagdollInstance {
     RagReaction reaction;
     // Auto get-up: how long the limp rig has been ~at rest, vs cfg->getupDelay.
     float       restTimer = 0.0f;
+    // How long the hips have continuously exceeded locomotionTipLimpDeg (tip-limp grace).
+    float       tipTimer  = 0.0f;
 
-    // True while RagdollComponent::locomotionActive currently holds the root body
-    // Kinematic (see DriveRagdollLocomotionRoot). Tracked here so the drive only
-    // flips the root's motion type on an actual on/off transition, and so a reaction
-    // taking over the root (ReleaseLocomotionRoot) leaves consistent bookkeeping.
+    // True while the locomotion root drive is engaged (see DriveRagdollLocomotionRoot;
+    // the root is held Kinematic in legacy mode, stays Dynamic in the physical mode).
+    // Tracked here so the drive only flips the root's motion type on an actual on/off
+    // transition, and so a reaction taking over the root (ReleaseLocomotionRoot)
+    // leaves consistent bookkeeping.
     bool        _locomotionDriving = false;
 };
 
@@ -1037,6 +1041,21 @@ static JPH::ShapeRefC CreateRagdollShape(const RagdollBodyDef& def, float scale,
     return shape;
 }
 
+// A flat, WORLD-aligned box sole for a foot body. The body is created with the foot
+// bone's world orientation, so we un-rotate the box by conjugate(boneRot) to leave it
+// lying flat on the ground at bind (the ankle motor holds it there in sim). This gives
+// the foot a real contact PATCH instead of a capsule's rolling line contact — the base
+// of support the character balances over.
+static JPH::ShapeRefC CreateFootSole(const glm::vec3& he, const glm::quat& boneRot)
+{
+    JPH::BoxShapeSettings bs(ToJolt(he), glm::min(glm::min(he.x, he.y), he.z) * 0.5f);
+    auto br = bs.Create(); if (!br.IsValid()) return nullptr;
+    const glm::quat local = glm::conjugate(boneRot);   // world-align the box inside the body frame
+    JPH::RotatedTranslatedShapeSettings rt(JPH::Vec3::sZero(), ToJolt(local), br.Get());
+    auto rr = rt.Create(); if (!rr.IsValid()) return nullptr;
+    return rr.Get();
+}
+
 // Builds the kinematic body chain + joints for one RagdollComponent and records a
 // RagdollInstance. Bodies start at the bind pose; the per-frame follow then drives
 // them to the live animation. Called at play start (and never re-entered for an
@@ -1089,8 +1108,13 @@ static void BuildRagdoll(PhysicsSystem::Impl& impl, Scene& scene,
         anchor[k]    = pos;
         axisWorld[k] = SafeAxis(glm::mat3(bw) * def.twistAxisLocal, def.twistAxisLocal);
 
-        glm::vec3 shapeOffset; glm::quat shapeRot;
-        JPH::ShapeRefC shapeRef = CreateRagdollShape(def, scale, shapeOffset, shapeRot);
+        // Default offset/rot so the foot path (CreateFootSole, which bakes its own
+        // world-align into the shape) leaves the body-level transform at identity —
+        // CreateRagdollShape overwrites these, but CreateFootSole doesn't touch them.
+        glm::vec3 shapeOffset(0.0f); glm::quat shapeRot(1.0f, 0.0f, 0.0f, 0.0f);
+        const glm::vec3 footHE = glm::vec3(0.055f, 0.02f, 0.09f) * scale; // half width / thickness / length
+        JPH::ShapeRefC shapeRef = def.isFoot ? CreateFootSole(footHE, rot)
+                                             : CreateRagdollShape(def, scale, shapeOffset, shapeRot);
         if (!shapeRef) continue;
 
         JPH::BodyCreationSettings settings(shapeRef, ToJolt(pos), ToJolt(rot),
@@ -1099,6 +1123,11 @@ static void BuildRagdoll(PhysicsSystem::Impl& impl, Scene& scene,
         // CCD: ragdoll bones are thin, fast-moving capsules once limp — sweep them so a
         // flung limb doesn't tunnel through the floor/stairs (or get tunnelled by a hit).
         settings.mMotionQuality = JPH::EMotionQuality::LinearCast;
+        // Grip: ragdoll bodies default to Jolt's 0.2 friction, so planted feet skate and
+        // limbs slide off everything. High friction makes the rig bite the ground — feet
+        // hold, a shoved character scuffs to a stop instead of gliding. (TODO Stage B:
+        // per-bone friction so only the soles are sticky.)
+        settings.mFriction = 0.8f;
         // Mass set now (ignored while kinematic) so it's correct the instant we flip to Dynamic.
         settings.mOverrideMassProperties       = JPH::EOverrideMassProperties::CalculateInertia;
         settings.mMassPropertiesOverride.mMass = glm::max(def.mass, 0.001f);
@@ -1113,12 +1142,16 @@ static void BuildRagdoll(PhysicsSystem::Impl& impl, Scene& scene,
         RagdollBody rb;
         rb.id            = id;
         rb.boneIndex     = bone;
-        rb.shape         = def.shape;
+        // Feet draw as their real box sole (localRotation stays identity so the readback
+        // is unaffected — the debug box is bone-oriented, but its POSITION is exact, which
+        // is what tells us whether the sole reaches the floor).
+        rb.shape         = def.isFoot ? RagdollBodyDef::Shape::Box : def.shape;
         rb.radius        = def.radius     * scale;
         rb.halfHeight    = def.halfHeight * scale;
-        rb.halfExtents   = def.halfExtents * scale;
+        rb.halfExtents   = def.isFoot ? footHE : def.halfExtents * scale;
         rb.localOffset   = shapeOffset;
         rb.localRotation = shapeRot;
+        rb.isFoot        = def.isFoot;
         rb.mass          = glm::max(def.mass, 0.001f);
         minBindY = glm::min(minBindY, pos.y);
         nameToSlot[def.boneName] = (int)inst.bodies.size();
@@ -1467,11 +1500,11 @@ static void DriveRagdollGetUpRoot(PhysicsSystem::Impl& impl, RagdollInstance& in
     bi.MoveKinematic(root.id, ToJolt(targetPos), ToJolt(glm::normalize(targetRot)), FIXED_DT);
 }
 
-// If a locomotion controller currently holds the root Kinematic, hand it back to
-// Dynamic so a reaction (flinch impulse, get-up's own kinematic heave) can take over
-// the root cleanly. Called at the start of every reaction; the controller reclaims
-// the root next frame (DriveRagdollLocomotionRoot) once the reaction ends and clears
-// itself via ClearRagdollReaction / SetRagdollMode, if it's still commanding movement.
+// Disengage the locomotion root drive so a reaction (flinch impulse, get-up's own
+// kinematic heave) can take over the root cleanly. Ensures the root is Dynamic (a
+// no-op under the physical drive, which never kinematizes it) and clears the flag;
+// the controller reclaims the root next frame (DriveRagdollLocomotionRoot) once the
+// reaction ends via ClearRagdollReaction / SetRagdollMode, if still commanding movement.
 static void ReleaseLocomotionRoot(PhysicsSystem::Impl& impl, RagdollInstance& inst)
 {
     if (!inst._locomotionDriving || inst.rootBodySlot < 0) return;
@@ -1480,17 +1513,16 @@ static void ReleaseLocomotionRoot(PhysicsSystem::Impl& impl, RagdollInstance& in
     inst._locomotionDriving = false;
 }
 
-// Continuous root drive for locomotion (unlike DriveRagdollGetUpRoot, not a timed
-// reaction -- it just tracks a live external target set by a game script every
-// frame). Joint motors alone can't move/support the rootless pelvis (see the
-// DriveRagdollGetUpRoot comment above), so while RagdollComponent::locomotionActive
-// is set, the hips are held KINEMATIC and MoveKinematic'd toward locomotionTargetPos/
-// Rot each substep; the rest of the rig stays Dynamic with Powered motors chasing the
-// gait pose (SyncRagdollPowered), so the character is dragged by its hips while its
-// limbs animate underneath. Yields entirely to an active reaction -- flinch/get-up
-// own the root while they run (ReleaseLocomotionRoot hands it to them at the start).
+// Continuous root drive for locomotion: tracks the live target a controller script
+// sets every frame (joint motors can't move/support the rootless pelvis — see
+// DriveRagdollGetUpRoot above). Yields to reactions, which own the root while they
+// run. Two modes (RagdollComponent::locomotionDynamicRoot): PHYSICAL (default) —
+// dynamic root, real gravity, grounded support spring, capped pursuit/balance, so
+// walls/shoves/falls act on the character; or the LEGACY kinematic MoveKinematic
+// hold (infinite force), kept as a fallback. Knob semantics and sizing notes live
+// on RagdollComponent.
 static void DriveRagdollLocomotionRoot(PhysicsSystem::Impl& impl, RagdollInstance& inst,
-                                       const RagdollComponent& rag)
+                                       RagdollComponent& rag)
 {
     if (inst.rootBodySlot < 0) return;
     if (inst.reaction.kind != RagReaction::Kind::None) return;   // a reaction owns the root
@@ -1503,7 +1535,12 @@ static void DriveRagdollLocomotionRoot(PhysicsSystem::Impl& impl, RagdollInstanc
                       std::isfinite(rag.locomotionTargetPos.z);
 
     if (want != inst._locomotionDriving) {
-        bi.SetMotionType(root.id, want ? JPH::EMotionType::Kinematic : JPH::EMotionType::Dynamic,
+        // Only the legacy mode holds the root Kinematic; the physical drive's whole
+        // point is a root the world can act on. (SetMotionType on engage still runs
+        // in physical mode: a legacy hold or blend may have left the root Kinematic.)
+        bi.SetMotionType(root.id,
+                         (want && !rag.locomotionDynamicRoot) ? JPH::EMotionType::Kinematic
+                                                              : JPH::EMotionType::Dynamic,
                          JPH::EActivation::Activate);
         inst._locomotionDriving = want;
     }
@@ -1517,28 +1554,139 @@ static void DriveRagdollLocomotionRoot(PhysicsSystem::Impl& impl, RagdollInstanc
     const glm::quat targetRot =
         glm::normalize(glm::normalize(rag.locomotionTargetRot) * inst.rootBindRot);
 
-    // Clamp per-substep travel: MoveKinematic reaches its target in ONE substep, so a
-    // discontinuous target (the engage frame, a script teleport) becomes an enormous
-    // velocity that whips the dangling limbs into the floor hard enough to read as
-    // knockdown-level impacts. Clamped, any gap turns into a fast bounded glide.
+    // Both modes bound their pursuit: a discontinuous target (the engage frame, a
+    // script teleport) becomes a fast bounded glide instead of an enormous velocity
+    // that whips the dangling limbs into the floor as knockdown-level impacts.
     constexpr float kMaxDriveSpeed = 6.0f;                   // m/s root glide cap
     constexpr float kMaxTurnSpeed  = glm::radians(540.0f);   // rad/s root spin cap
 
-    const glm::vec3 curPos = FromJolt(bi.GetPosition(root.id));
+    const glm::vec3 curPos   = FromJolt(bi.GetPosition(root.id));
     const glm::vec3 toTarget = rag.locomotionTargetPos - curPos;
-    const float     dist     = glm::length(toTarget);
-    const float     maxStep  = kMaxDriveSpeed * FIXED_DT;
-    const glm::vec3 stepPos  = (dist > maxStep)
-        ? curPos + toTarget * (maxStep / dist) : rag.locomotionTargetPos;
+    const glm::quat curRot   = FromJolt(bi.GetRotation(root.id));
 
-    const glm::quat curRot  = FromJolt(bi.GetRotation(root.id));
-    const float cosHalf     = glm::clamp(glm::abs(glm::dot(curRot, targetRot)), 0.0f, 1.0f);
-    const float angle       = 2.0f * std::acos(cosHalf);
-    const float maxAngle    = kMaxTurnSpeed * FIXED_DT;
-    const glm::quat stepRot = (angle > maxAngle && angle > 1e-4f)
-        ? glm::slerp(curRot, targetRot, maxAngle / angle) : targetRot;
+    if (!rag.locomotionDynamicRoot) {
+        // --- legacy kinematic hold ---------------------------------------------
+        const float     dist    = glm::length(toTarget);
+        const float     maxStep = kMaxDriveSpeed * FIXED_DT;
+        const glm::vec3 stepPos = (dist > maxStep)
+            ? curPos + toTarget * (maxStep / dist) : rag.locomotionTargetPos;
 
-    bi.MoveKinematic(root.id, ToJolt(stepPos), ToJolt(glm::normalize(stepRot)), FIXED_DT);
+        const float cosHalf  = glm::clamp(glm::abs(glm::dot(curRot, targetRot)), 0.0f, 1.0f);
+        const float angle    = 2.0f * std::acos(cosHalf);
+        const float maxAngle = kMaxTurnSpeed * FIXED_DT;
+        const glm::quat stepRot = (angle > maxAngle && angle > 1e-4f)
+            ? glm::slerp(curRot, targetRot, maxAngle / angle) : targetRot;
+
+        bi.MoveKinematic(root.id, ToJolt(stepPos), ToJolt(glm::normalize(stepRot)), FIXED_DT);
+        return;
+    }
+
+    // --- physical drive: true gravity + grounded one-sided support spring ------
+    // Nothing here cancels gravity; the support spring below only pushes UP, and
+    // only while ground is underfoot — a ledge is pure free-fall from frame one.
+    const glm::vec3 vCur = FromJolt(bi.GetLinearVelocity(root.id));
+
+    glm::vec2 vDesH(toTarget.x / FIXED_DT, toTarget.z / FIXED_DT);
+    if (const float sp = glm::length(vDesH); sp > kMaxDriveSpeed)
+        vDesH *= kMaxDriveSpeed / sp;
+    glm::vec2 dvH = vDesH - glm::vec2(vCur.x, vCur.z);
+    const float maxH = glm::max(rag.locomotionAccel, 0.0f) * FIXED_DT;
+    if (const float h = glm::length(dvH); h > maxH && h > 1e-6f)
+        dvH *= maxH / h;
+
+    // Grounded = ground within ~1.5 leg lengths below the hips. The public Raycast
+    // ignores every body of this entity (all ragdoll limbs) and all sensors.
+    const float groundReach = inst.standHipClearance * 1.5f + 0.3f;
+    const HitResult ground  = Physics::Raycast(curPos, glm::vec3(0, -1, 0), groundReach, inst.entity);
+
+    float dvY = 0.0f;
+    if (ground.hit) {
+        const float w  = glm::two_pi<float>() * glm::max(rag.locomotionSupportFreq, 0.0f);
+        float aY = w * w * toTarget.y      // spring toward the gait height (bob included)
+                 - 2.0f * w * vCur.y;      // critical damping
+        // One-sided: legs push, they don't pull. Gravity alone brings the hips down.
+        aY  = glm::clamp(aY, 0.0f, glm::max(rag.locomotionUpAccel, 0.0f));
+        dvY = aY * FIXED_DT;
+    } else if (rag.locomotionFallLimpSpeed > 0.0f && vCur.y < -rag.locomotionFallLimpSpeed) {
+        // A real fall (not a hop): tumble limp, then settle -> auto-get-up.
+        spdlog::info("Ragdoll {}: locomotion auto-limp — falling {:.1f} m/s (limit {:.1f})",
+                     rag._ragdollId, -vCur.y, rag.locomotionFallLimpSpeed);
+        Physics::SetRagdollMode(rag, RagdollMode::Limp);
+        return;
+    }
+    // else: airborne — gravity owns the vertical axis.
+
+    bi.SetLinearVelocity(root.id, ToJolt(vCur + glm::vec3(dvH.x, dvY, dvH.y)));
+
+    // Rotation error the righting spring acts on: axis*angle of cur -> target,
+    // hemisphere-aligned so the spin takes the short way (yaw included — the
+    // spring also steers the heading).
+    glm::quat delta = glm::normalize(targetRot * glm::conjugate(curRot));
+    if (delta.w < 0.0f) delta = -delta;
+    const float     angle   = 2.0f * std::acos(glm::clamp(delta.w, -1.0f, 1.0f));
+    const glm::vec3 axisRaw = glm::vec3(delta.x, delta.y, delta.z);
+    const glm::vec3 axis    = glm::length(axisRaw) > 1e-6f ? glm::normalize(axisRaw)
+                                                           : glm::vec3(0.0f);
+
+    // Tilt = up-axis vs world up, heading-independent (yaw error is COMMANDED —
+    // engage snap, turns — and must never read as knocked over). Drives both the
+    // tip-over trigger and the balance hardening below.
+    const glm::vec3 upLocal = glm::conjugate(inst.rootBindRot) * glm::vec3(0, 1, 0);
+    const glm::vec3 upNow   = curRot * upLocal;   // hips' upright axis in world, now
+    const float tiltDeg = glm::degrees(std::acos(glm::clamp(upNow.y, -1.0f, 1.0f)));
+
+    // Tip-over -> Limp. The tilt must PERSIST for the grace window — transient
+    // spikes (punch recoil, prop bumps) recover and are forgiven; only a lean the
+    // balance spring can't recover counts.
+    if (rag.locomotionTipLimpDeg > 0.0f) {
+        if (tiltDeg > rag.locomotionTipLimpDeg) {
+            inst.tipTimer += FIXED_DT;
+            if (inst.tipTimer >= rag.locomotionTipLimpTime) {
+                spdlog::info("Ragdoll {}: locomotion auto-limp — tipped {:.0f} deg for {:.2f}s (limit {:.0f} deg / {:.2f}s)",
+                             rag._ragdollId, tiltDeg, inst.tipTimer,
+                             rag.locomotionTipLimpDeg, rag.locomotionTipLimpTime);
+                inst.tipTimer = 0.0f;
+                Physics::SetRagdollMode(rag, RagdollMode::Limp);
+                return;
+            }
+        } else {
+            inst.tipTimer = 0.0f;
+        }
+    }
+
+    const glm::vec3 wCur = FromJolt(bi.GetAngularVelocity(root.id));
+    if (rag.locomotionBalanceTorque > 0.0f) {
+        // Stage C ankle strategy: PD righting torque applied at the planted FEET, so the
+        // ground reaction pivots the body upright about the ankles. Torquing the root
+        // instead just folds the hips and topples. Falls back to the root if no feet.
+        const glm::vec3 drive = axis * (angle * rag.locomotionBalanceTorque);
+        bool anyFoot = false;
+        for (const RagdollBody& b : inst.bodies) {
+            if (!b.isFoot) continue;
+            anyFoot = true;
+            const glm::vec3 wB = FromJolt(bi.GetAngularVelocity(b.id));
+            bi.AddTorque(b.id, ToJolt(drive - wB * rag.locomotionBalanceTorqueDamp));
+        }
+        if (!anyFoot)
+            bi.AddTorque(root.id, ToJolt(drive - wCur * rag.locomotionBalanceTorqueDamp));
+    } else if (rag.locomotionBalanceAccel > 0.0f) {
+        // Implicitly-damped righting spring (the explicit -2w*wCur form blows up past
+        // ~8 Hz at the 60 Hz step); accel caps what can beat it (impacts). See RagdollComponent.
+        const float ws = glm::two_pi<float>() * glm::max(rag.locomotionBalanceFreq, 0.0f);
+        const glm::vec3 wSpring =
+            (wCur + axis * (ws * ws * angle * FIXED_DT)) / (1.0f + 2.0f * ws * FIXED_DT);
+        glm::vec3 dw = wSpring - wCur;
+        const float maxDw = rag.locomotionBalanceAccel * FIXED_DT;
+        if (const float l = glm::length(dw); l > maxDw && l > 1e-6f)
+            dw *= maxDw / l;
+        bi.SetAngularVelocity(root.id, ToJolt(wCur + dw));
+    } else {
+        // Hard lock (accel <= 0): command the closing angular velocity directly.
+        glm::vec3 omega(0.0f);
+        if (angle > 1e-4f)
+            omega = axis * glm::min(angle / FIXED_DT, kMaxTurnSpeed);
+        bi.SetAngularVelocity(root.id, ToJolt(omega));
+    }
 }
 
 // Per sub-step (Powered mode): drive every joint motor toward the live animation
@@ -1575,7 +1723,7 @@ static void SyncRagdollPowered(Scene& scene, PhysicsSystem::Impl& impl)
         const int n = (int)skel.bones.size();
         if ((int)anim->pose.size() != n) continue;   // pose not built yet this frame
 
-        const float strength = rag ? glm::clamp(rag->strength, 0.0f, 1.0f) : 1.0f;
+        const float strength = rag ? glm::clamp(rag->strength, 0.0f, 4.0f) : 1.0f;   // >1 = over-drive muscles
         const bool  toStand  = inst.reaction.targetStand;   // get-up: chase the stand pose
         const float wobble   = inst.reaction.wobble;        // get-up: per-joint torque jitter
 
@@ -1622,39 +1770,6 @@ static void SyncRagdollPowered(Scene& scene, PhysicsSystem::Impl& impl)
                 float nz = std::sin((float)impl.simTime * 9.0f + ph) *
                            std::sin((float)impl.simTime * 3.7f + ph * 1.7f);
                 jt *= glm::max(0.0f, 1.0f + wobble * nz);
-            }
-
-            // TEMP punch diagnostics (~2 Hz): every ARM joint plus two LEG joints as the
-            // known-good control group. tgtOff = how far the pose ASKS the joint to be
-            // from bind; actOff = how far the simulated bodies ACTUALLY are from build;
-            // motor = live Jolt motor state (0=Off 1=Velocity 2=Position — 0 here means
-            // the motor never engaged and the joint is passive).
-            static double s_lastDiagLog = -1.0;
-            const bool diagWindow = impl.simTime - s_lastDiagLog >= 0.5;
-            if (diagWindow && &j == &inst.joints.back()) s_lastDiagLog = impl.simTime;
-            const std::string& cname = skel.bones[cb].name;
-            const bool diagJoint = diagWindow &&
-                (cname.find("arm") != std::string::npos ||
-                 cname == "leg_joint_L_1" || cname == "leg_joint_L_2");
-            if (diagJoint) {
-                auto angDeg = [](const glm::quat& a, const glm::quat& b) {
-                    return glm::degrees(2.0f * std::acos(
-                        glm::clamp(glm::abs(glm::dot(glm::normalize(a), glm::normalize(b))), 0.0f, 1.0f)));
-                };
-                const glm::quat pRot = FromJolt(bi.GetRotation(inst.bodies[j.parentSlot].id));
-                const glm::quat cRot = FromJolt(bi.GetRotation(inst.bodies[j.childSlot].id));
-                const glm::quat actualRel = glm::normalize(glm::conjugate(pRot) * cRot);
-                const char* type = "?"; int motor = -1;
-                if (c->GetSubType() == JPH::EConstraintSubType::SwingTwist) {
-                    type  = "ST";
-                    motor = (int)static_cast<JPH::SwingTwistConstraint*>(c)->GetSwingMotorState();
-                } else if (c->GetSubType() == JPH::EConstraintSubType::Hinge) {
-                    type  = "H";
-                    motor = (int)static_cast<JPH::HingeConstraint*>(c)->GetMotorState();
-                }
-                spdlog::info("[RagMotor] {} {} tgtOff={:.0f} actOff={:.0f} torque={:.0f} motor={} strength={:.2f}",
-                             cname, type, angDeg(target, restRel), angDeg(actualRel, j.buildRel),
-                             jt, motor, strength);
             }
 
             switch (c->GetSubType()) {
@@ -2559,7 +2674,7 @@ void SetRagdollMode(RagdollComponent& rag, RagdollMode mode) {
 // Muscle strength for an active (Powered) ragdoll. Stored on the component and read
 // by SyncRagdollPowered each substep to scale motor torque; takes effect next step.
 void SetRagdollStrength(RagdollComponent& rag, float strength) {
-    rag.strength = glm::clamp(strength, 0.0f, 1.0f);
+    rag.strength = glm::clamp(strength, 0.0f, 4.0f);
 }
 
 // Bind-pose standing hip clearance -- 0 until the ragdoll is built.

@@ -1883,11 +1883,35 @@ void InspectorPanel::OnImGuiRender() {
                                           "toward the stand pose). Also fires automatically once a\n"
                                           "knocked-down rig settles (see Settle Delay).");
                     // Muscle strength for Powered mode — live-tunable mid-play.
-                    if (ImGui::SliderFloat("Strength", &rag.strength, 0.0f, 1.0f, "%.2f"))
+                    if (ImGui::SliderFloat("Strength", &rag.strength, 0.0f, 4.0f, "%.2f"))
                         Physics::SetRagdollStrength(rag, rag.strength);
                     if (ImGui::IsItemHovered())
                         ImGui::SetTooltip("Powered-mode muscle strength: scales every joint motor's\n"
                                           "torque budget. 1 = full strength, 0 = effectively limp.");
+
+                    // Locomotion balance knobs, read live every substep by the root drive.
+                    // Edits here are LIVE (great for tuning) but NOT saved — bake the values
+                    // you settle on into the RagdollComponent defaults once dialed in.
+                    ImGui::SeparatorText("Locomotion Balance (live)");
+                    ImGui::DragFloat("Hip Support", &rag.locomotionUpAccel, 1.0f, 0.0f, 400.0f, "%.0f m/s^2");
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("Upward force cap of the hip support spring. HIGH = the pelvis is\n"
+                                          "held up from above (marionette, feet unloaded); LOW/0 = weight\n"
+                                          "falls onto the legs and the feet carry it (stand on the ground).\n"
+                                          "Drag toward 0 to feel the load shift onto the feet.");
+                    ImGui::DragFloat("Support Freq",  &rag.locomotionSupportFreq,  0.1f,  0.0f, 15.0f,    "%.1f Hz");
+                    ImGui::DragFloat("Move Accel",    &rag.locomotionAccel,        1.0f,  0.0f, 200.0f,   "%.0f m/s^2");
+                    ImGui::DragFloat("Balance Freq",  &rag.locomotionBalanceFreq,  0.5f,  0.0f, 80.0f,    "%.1f Hz");
+                    ImGui::DragFloat("Balance Accel", &rag.locomotionBalanceAccel, 50.0f, 0.0f, 40000.0f, "%.0f rad/s^2");
+                    ImGui::DragFloat("Tip Limp Deg",  &rag.locomotionTipLimpDeg,   1.0f,  0.0f, 180.0f,   "%.0f deg");
+                    ImGui::DragFloat("Balance Torque",&rag.locomotionBalanceTorque, 5.0f, 0.0f, 4000.0f,  "%.0f N*m/rad");
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("Stage C: >0 rights the rig with real TORQUE (pushes through the\n"
+                                          "planted feet) instead of the velocity spring (which ground contact\n"
+                                          "absorbs, so a deep lean can't recover). Ramp up from 0 until it\n"
+                                          "climbs back to upright; too high explodes. 0 = velocity spring.");
+                    ImGui::DragFloat("Balance Trq Damp", &rag.locomotionBalanceTorqueDamp, 1.0f, 0.0f, 400.0f, "%.0f N*m*s");
+
                     ImGui::EndDisabled();
                     if (!playing && ImGui::IsItemHovered())
                         ImGui::SetTooltip("Enter play mode to trigger the ragdoll.");
