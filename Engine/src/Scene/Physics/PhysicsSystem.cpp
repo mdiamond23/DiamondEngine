@@ -152,6 +152,19 @@ static inline JPH::Quat ToJolt(const glm::quat& q) { return JPH::Quat(q.x, q.y, 
 static inline glm::vec3 FromJolt(JPH::Vec3Arg v)   { return { v.GetX(), v.GetY(), v.GetZ() }; }
 static inline glm::quat FromJolt(JPH::QuatArg q)   { return { q.GetW(), q.GetX(), q.GetY(), q.GetZ() }; }
 
+static float QuatAngleDeg(glm::quat q) {
+    q = glm::normalize(q);
+    return glm::degrees(2.0f * std::acos(glm::clamp(std::abs(q.w), 0.0f, 1.0f)));
+}
+
+static float SignedTwistDeg(glm::quat q, glm::vec3 axis) {
+    q = glm::normalize(q);
+    if (q.w < 0.0f) q = -q;
+    axis = glm::normalize(axis);
+    return glm::degrees(2.0f * std::atan2(
+        glm::dot(glm::vec3(q.x, q.y, q.z), axis), q.w));
+}
+
 // ---------------------------------------------------------------------------
 // Contact events + listener
 //
@@ -414,6 +427,7 @@ struct PhysicsSystem::Impl {
     std::unordered_map<uint32_t, RagdollInstance> ragdolls;
     uint32_t                                      nextRagdollId = 0;
     double                                        simTime = 0.0;   // running physics clock (for get-up wobble noise)
+    double                                        locoMotorDebugNext = 0.0;
 
     std::unique_ptr<JPH::TempAllocatorImpl>       tempAllocator;
     std::unique_ptr<JPH::JobSystemThreadPool>      jobSystem;
@@ -1702,6 +1716,9 @@ static void SyncRagdollPowered(Scene& scene, PhysicsSystem::Impl& impl)
         const float strength = rag ? glm::clamp(rag->strength, 0.0f, 4.0f) : 1.0f;   // >1 = over-drive muscles
         const bool  toStand  = inst.reaction.targetStand;   // get-up: chase the stand pose
         const float wobble   = inst.reaction.wobble;        // get-up: per-joint torque jitter
+        const bool logLegMotors = rag && rag->locomotionActive &&
+                                  impl.simTime >= impl.locoMotorDebugNext;
+        bool loggedLegMotor = false;
 
         // Model-space bone rotations for the live (animated) pose and for the bind
         // pose, forward-composed down the skeleton. Rotations only — translation and
@@ -1748,6 +1765,28 @@ static void SyncRagdollPowered(Scene& scene, PhysicsSystem::Impl& impl)
                 jt *= glm::max(0.0f, 1.0f + wobble * nz);
             }
 
+            const std::string& boneName = skel.bones[cb].name;
+            const bool isLegMotor = boneName == "leg_joint_L_1" || boneName == "leg_joint_R_1" ||
+                                    boneName == "leg_joint_L_2" || boneName == "leg_joint_R_2";
+            if (logLegMotors && isLegMotor) {
+                const glm::quat parentRot = FromJolt(bi.GetRotation(inst.bodies[j.parentSlot].id));
+                const glm::quat childRot = FromJolt(bi.GetRotation(inst.bodies[j.childSlot].id));
+                const glm::quat actualRel = glm::normalize(glm::conjugate(parentRot) * childRot);
+                const glm::quat commandDelta = glm::normalize(glm::conjugate(restRel) * target);
+                const glm::quat actualDelta = glm::normalize(glm::conjugate(restRel) * actualRel);
+                const glm::quat errorDelta = glm::normalize(glm::conjugate(actualRel) * target);
+                spdlog::info(
+                    "[LocoMotor] {} type={} command={:.1f} actual={:.1f} error={:.1f} commandTwist={:+.1f} actualTwist={:+.1f} torque={:.0f} limits=({:.0f},{:.0f},{:.0f},{:.0f})",
+                    boneName,
+                    c->GetSubType() == JPH::EConstraintSubType::Hinge ? "hinge" : "swing",
+                    QuatAngleDeg(commandDelta), QuatAngleDeg(actualDelta), QuatAngleDeg(errorDelta),
+                    SignedTwistDeg(commandDelta, j.twistAxisLocal),
+                    SignedTwistDeg(actualDelta, j.twistAxisLocal), jt,
+                    j.cc.swingNormalDeg, j.cc.swingPlaneDeg,
+                    j.cc.twistMinDeg, j.cc.twistMaxDeg);
+                loggedLegMotor = true;
+            }
+
             switch (c->GetSubType()) {
                 case JPH::EConstraintSubType::SwingTwist: {
                     auto* st = static_cast<JPH::SwingTwistConstraint*>(c);
@@ -1780,6 +1819,8 @@ static void SyncRagdollPowered(Scene& scene, PhysicsSystem::Impl& impl)
                 default: break;
             }
         }
+
+        if (loggedLegMotor) impl.locoMotorDebugNext = impl.simTime + 0.25;
 
         // Get-up: the joint motors alone can't lift the root, so directly assist the hips
         // (upright + lift). Runs while heaving and while holding the stand.

@@ -570,7 +570,6 @@
           "gaitBlendTime": 0.20000000298023224,
           "groundRayLength": 1.2000000476837158,
           "ikWriteEnabled": true,
-          "kneePoleDist": 0.5,
           "landingTolerance": 0.10000000149011612,
           "leftFootBone": "leg_joint_L_5",
           "maxReachFraction": 0.949999988079071,
@@ -580,8 +579,9 @@
           "postPoweredGrace": 0.4000000059604645,
           "rightFootBone": "leg_joint_R_5",
           "stanceHalfWidth": 0.10000000149011612,
+          "stancePoseWeight": 0.44999998807907104,
           "stepDuration": 0.4000000059604645,
-          "stepLength": 0.25,
+          "stepLength": 0.35,
           "stepLift": 0.10000000149011612,
           "swingPoseWeight": 1.0,
           "turnRate": 10.0
