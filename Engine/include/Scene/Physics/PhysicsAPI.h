@@ -149,6 +149,14 @@ namespace Physics {
     // and displaces every target by the bone offset.
     int GetRagdollRootBone(const RagdollComponent& rag);
 
+    // Current tilt of the ragdoll's root/hips, in degrees (0 = upright, matching the
+    // SAME up-axis convention DriveRagdollLocomotionRoot uses internally -- i.e. already
+    // composed against the root bone's own bind orientation, which is NOT world-Y for
+    // every rig; CesiumMan's hips are Z-up in bind). A script computing tilt itself with
+    // a raw world-Y comparison will read ~90 degrees constantly on such a rig even while
+    // genuinely upright -- use this instead of re-deriving it. Returns 0 until built.
+    float GetRagdollTiltDeg(const RagdollComponent& rag);
+
     // Instant impulse (N*s, world space) on the ragdoll body mapped to a skeleton
     // bone (exact bone->body match only). The gameplay "launch" primitive for an
     // active ragdoll: position motors can FOLLOW a fast move but can't GENERATE one

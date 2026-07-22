@@ -1,223 +1,196 @@
 #pragma once
+
 #include "Scene/Scripting.h"
 #include "Scene/Scene.h"
 #include "Scene/ComponentRegistry.h"
-#include <imgui.h>
-#include <nlohmann/json.hpp>
-#include <spdlog/spdlog.h>
+#include "Scene/Components.h"
 #include "Core/Input.h"
 #include "Scene/Physics/PhysicsAPI.h"
-#include "Scene/Physics/Rigidbody.h"
 #include "Scene/Physics/RagdollComponent.h"
 #include "Animation/AnimationComponents.h"
-#include "Animation/AnimationSampler.h"
 #include "Animation/IKSolver.h"
 #include "DebugDraw.h"
 #include "CameraDirector.h"
+
+#include <imgui.h>
+#include <nlohmann/json.hpp>
 #include <glm/glm.hpp>
-#include <glm/gtc/quaternion.hpp>
 #include <glm/gtc/constants.hpp>
+#include <glm/gtc/quaternion.hpp>
+#include <spdlog/spdlog.h>
 #include <cmath>
+#include <limits>
+#include <string>
 
-// ---- Data -------------------------------------------------------------------
-// PR1 of Docs/character-locomotion-design.md: root drive + input. Put this on a
-// skinned character that also has a RagdollComponent (a built .ragdoll). The left
-// stick steers the character camera-relative; the system drags the ragdoll's hips
-// along kinematically (RagdollComponent::locomotionTargetPos/Rot -- joint motors
-// alone can't move/support the rootless pelvis) while every other body stays
-// Dynamic and Powered, dangling/reacting off the moving hips.
-//
-// strideLength/stepHeight/dutyFactor/bobAltitude/leanGain are PR2/PR3 fields (gait
-// generator + sloppiness tuning) -- declared here already per the design doc's data
-// table, but not read yet: today the limbs just hang off whatever pose the
-// AnimatorComponent already holds.
-
+// Minimal active-ragdoll gait. The engine owns pelvis support and balance; this
+// controller alternates fixed foot placements and poses the hip-knee-ankle chain.
 struct LocamotionControllerComponent
 {
-    // UNITS: Meters
-    float maxSpeed          = 2.5f;
-    float acceleration      = 10.0f;
-    float deceleration      = 15.0f;
-    float turnRate          = 8.0f;
-    float deadzone          = 0.2f;    // stick magnitude below which input is ignored
-    float strideLength      = 0.55f;
-    float stepHeight        = 0.12f;
-    float dutyFactor        = 0.6f;
-    float hipHeight         = 0.8f;    // fallback; CAPTURED from the .ragdoll bind pose once built
-    float bobAltitude       = 0.03f;
-    float leanGain          = 0.25f;
-    float groundRayLength   = 1.0f;    // must exceed hipHeight or the probe undershoots the ground
-    float facingOffsetDeg   = 0.0f;    // yaw correction if the model walks sideways/backward
-                                       // (rig bind facing vs the controller's -Z convention)
-    float ankleHeight       = 0.08f;   // ankle-bone center above the sole (IKChain convention)
+    float maxSpeed        = 1.0f;
+    float moveRampTime    = 0.75f;
+    float turnRate        = 10.0f;
+    float deadzone        = 0.2f;
+    float facingOffsetDeg = 90.0f;
+    float groundRayLength = 1.2f;
+    float consciousness   = 1.0f;
 
-    // ---- Gait leg chains (bone names; CesiumMan defaults) ----
-    // tip = ankle; knee/hip resolved as its parent/grandparent, same convention as
-    // IKChain. pelvisBone should be the .ragdoll ROOT bone (the body the root drive
-    // moves) -- it anchors the world->model mapping for foot targets.
-    std::string pelvisBone    = "torso_joint_3";
-    std::string leftFootBone  = "leg_joint_L_3";
-    std::string rightFootBone = "leg_joint_R_3";
-    // Bone the accel-lean tips (Phase 3). The spine base above the pelvis root, so
-    // the whole torso/arms/head ride the lean. Its MEDIUM motor torque (see the
-    // .ragdoll preset) is what makes it trail a beat behind -- the code sets a
-    // leaned target, the mushy motor reads as inertial lag.
-    std::string spineBone     = "Skeleton_torso_joint_2";
+    std::string leftFootBone  = "leg_joint_L_5";
+    std::string rightFootBone = "leg_joint_R_5";
 
-    // Per-leg knee-roll correction (degrees, twist about the shin's own long axis).
-    // Some rigs (CesiumMan) have asymmetric left/right leg BIND roll -- not a clean
-    // mirror -- and the swing-only IK preserves it, so one calf reads rolled (inward).
-    // Per-leg because the asymmetry is per-leg; 0 = untouched. Dial the offending
-    // side until the calf/foot untwists.
-    float leftKneeRollDeg  = 0.0f;
-    float rightKneeRollDeg = 0.0f;
-    float footSwingPitchDeg = 22.0f;   // toe-up pitch at swing apex (foot clearance + roll-through)
+    float minWalkSpeed    = 0.15f;
+    float stepLength      = 0.25f;
+    float stanceHalfWidth = 0.10f;
+    float stepDuration    = 0.40f;
+    float stepLift        = 0.10f;
+    float doubleSupportTime = 0.08f;
+    float postPoweredGrace  = 0.4f;
+    float gaitBlendTime     = 0.2f;
+    float kneePoleDist      = 0.5f;
+    float maxReachFraction  = 0.95f;
+    float swingPoseWeight   = 0.35f;
+    float landingTolerance  = 0.10f;
 
-    // Gait diagnostics: ~4 Hz spdlog state dump + viewport markers (drawn into the
-    // same DebugDraw batch as colliders/ragdolls, so the viewport "Debug Draw"
-    // checkbox must also be on). Markers: GREEN sphere = planted foot target,
-    // ORANGE = swing foot target, RED sphere + line = actual simulated foot and its
-    // tracking error to the target, YELLOW = hips drive target.
-    bool gaitDebug = false;
+    bool ikWriteEnabled = true;
+    bool debug = false;
 
-    // ---- Runtime (not serialized) ----
+    enum class LegPhase { Planted, Swinging };
     struct LegState {
-        int       tip = -1, knee = -1, hip = -1;      // resolved bone indices
-        glm::vec3 planted      { 0.0f };  // world point the foot is pinned to
-        glm::vec3 swingStart   { 0.0f };  // world point the foot lifted off from
-        glm::vec3 lastSwingEnd { 0.0f };  // where the current swing will plant
-        glm::vec3 stanceModel  { 0.0f };  // bind foot offset from pelvis (model space)
-        glm::quat plantedRotW    { 1, 0, 0, 0 };  // WORLD foot orientation frozen at plant
-        glm::quat swingStartRotW { 1, 0, 0, 0 };  // WORLD foot orientation at liftoff
-        bool wasPlanted = true, init = false, bindResolved = false;
+        int footIdx  = -1;
+        int ankleIdx = -1;
+        int kneeIdx  = -1;
+        int hipIdx   = -1;
+        glm::vec3 hipTwistAxis  { 0.0f, 1.0f, 0.0f };
+        glm::vec3 kneeHingeAxis { 1.0f, 0.0f, 0.0f };
+        LegPhase phase = LegPhase::Planted;
+        glm::vec3 plantSole       { 0.0f };
+        glm::vec3 swingStartSole  { 0.0f };
+        glm::vec3 swingTargetSole { 0.0f };
+        glm::vec3 soleTarget      { 0.0f };
+        float soleHeight = 0.03f;
+        float swingProgress = 0.0f;
+        float landingWait = 0.0f;
+        bool landingWarning = false;
+        bool init = false;
     };
-    glm::vec3 _velocity     { 0.0f };
-    glm::vec3 _rootPos      { 0.0f };  // integrated root path (see the re-anchoring note in OnUpdate)
-    bool      _rootInit     = false;
-    float     _yaw          = 0.0f;    // radians; world convention: yaw 0 = facing -Z
-    bool      _hipHeightSet = false;
-    float     _gaitPhase    = 0.0f;    // cycles; L leg at phase, R leg at phase+0.5
-    float     _dbgTimer     = 0.0f;    // gaitDebug log throttle
-    int       _pelvisIdx    = -1;
-    int       _spineIdx     = -1;      // resolved spineBone index (accel lean)
-    glm::vec3 _poleWorld    { 0, 0, -1 }; // last movement dir (world); knee-bend hint
-    glm::vec3 _prevVel      { 0.0f };  // last frame's velocity (accel finite-diff)
-    glm::vec3 _accelSmooth  { 0.0f };  // EMA-smoothed accel driving the spine lean
-    LegState  _legL, _legR;
-};
 
-// ---- Inspector UI -----------------------------------------------------------
+    float _yaw = 0.0f;
+    float _timeSincePowered = -1.0f;
+    float _gaitWeight = 0.0f;
+    float _driveWeight = 0.0f;
+    float _timeSinceLanding = 0.0f;
+    bool _grounded = true;
+    bool _wasWalking = false;
+    int _landedStepCount = 0;
+    bool _nextLeft = true;
+    LegState _legL, _legR;
+};
 
 template<>
 inline void DrawComponentInspector<LocamotionControllerComponent>(LocamotionControllerComponent& c)
 {
-    ImGui::DragFloat("Max Speed",         &c.maxSpeed,        0.1f,  0.0f, 20.0f);
-    ImGui::DragFloat("Acceleration",      &c.acceleration,    0.1f,  0.0f, 50.0f);
-    ImGui::DragFloat("Deceleration",      &c.deceleration,    0.1f,  0.0f, 50.0f);
-    ImGui::DragFloat("Turn Rate",         &c.turnRate,        0.1f,  0.0f, 30.0f);
-    ImGui::DragFloat("Deadzone",          &c.deadzone,        0.01f, 0.0f, 0.9f);
-    ImGui::DragFloat("Hip Height",        &c.hipHeight,       0.01f, 0.05f, 3.0f);
-    ImGui::DragFloat("Ground Ray Length", &c.groundRayLength, 0.05f, 0.1f, 10.0f);
-    ImGui::DragFloat("Facing Offset",     &c.facingOffsetDeg, 1.0f, -180.0f, 180.0f, "%.0f deg");
-    ImGui::DragFloat("Ankle Height",      &c.ankleHeight,     0.005f, 0.0f, 0.3f);
-    ImGui::Separator();
-    ImGui::TextDisabled("Gait:");
-    ImGui::DragFloat("Stride Length",     &c.strideLength,    0.01f, 0.05f, 3.0f);
-    ImGui::DragFloat("Step Height",       &c.stepHeight,      0.01f, 0.0f,  1.0f);
-    ImGui::DragFloat("Duty Factor",       &c.dutyFactor,      0.01f, 0.1f,  0.9f);
-    ImGui::DragFloat("Bob Altitude",      &c.bobAltitude,     0.005f,0.0f,  0.5f);   // PR3
-    ImGui::DragFloat("Lean Gain",         &c.leanGain,        0.01f, 0.0f,  2.0f);   // PR3
+    ImGui::DragFloat("Max Speed", &c.maxSpeed, 0.05f, 0.0f, 10.0f);
+    ImGui::DragFloat("Move Ramp Time", &c.moveRampTime, 0.01f, 0.01f, 2.0f);
+    ImGui::DragFloat("Turn Rate", &c.turnRate, 0.1f, 0.0f, 30.0f);
+    ImGui::DragFloat("Deadzone", &c.deadzone, 0.01f, 0.0f, 0.9f);
+    ImGui::DragFloat("Facing Offset", &c.facingOffsetDeg, 1.0f, -180.0f, 180.0f, "%.0f deg");
+    ImGui::DragFloat("Ground Ray", &c.groundRayLength, 0.05f, 0.1f, 10.0f);
+    ImGui::DragFloat("Consciousness", &c.consciousness, 0.01f, 0.0f, 1.0f);
+
     auto boneField = [](const char* label, std::string& name) {
         char buf[128];
         std::snprintf(buf, sizeof(buf), "%s", name.c_str());
         if (ImGui::InputText(label, buf, sizeof(buf))) name = buf;
     };
-    boneField("Pelvis Bone",     c.pelvisBone);
-    boneField("Left Foot Bone",  c.leftFootBone);
-    boneField("Right Foot Bone", c.rightFootBone);
-    boneField("Spine Bone",      c.spineBone);   // accel lean pivot (PR3)
-    ImGui::DragFloat("Left Knee Roll",  &c.leftKneeRollDeg,  1.0f, -180.0f, 180.0f, "%.0f deg");
-    ImGui::DragFloat("Right Knee Roll", &c.rightKneeRollDeg, 1.0f, -180.0f, 180.0f, "%.0f deg");
-    ImGui::DragFloat("Foot Swing Pitch", &c.footSwingPitchDeg, 1.0f, -90.0f, 90.0f, "%.0f deg");
-    ImGui::Checkbox("Gait Debug", &c.gaitDebug);
-    if (c.gaitDebug)
-        ImGui::TextDisabled("needs viewport Debug Draw ON; green/orange=targets,\nred=actual foot, yellow=hips");
     ImGui::Separator();
-    ImGui::TextDisabled("Left stick = move (camera-relative)");
-    ImGui::TextDisabled(c._hipHeightSet ? "Hip height: captured from ragdoll bind pose"
-                                        : "Hip height: fallback (ragdoll not built yet)");
-}
+    boneField("Left Foot Bone", c.leftFootBone);
+    boneField("Right Foot Bone", c.rightFootBone);
 
-// ---- Serialization ----------------------------------------------------------
+    ImGui::Separator();
+    ImGui::DragFloat("Min Walk Speed", &c.minWalkSpeed, 0.01f, 0.0f, 2.0f);
+    ImGui::DragFloat("Step Length", &c.stepLength, 0.01f, 0.05f, 0.6f);
+    ImGui::DragFloat("Stance Half Width", &c.stanceHalfWidth, 0.005f, 0.02f, 0.4f);
+    ImGui::DragFloat("Step Duration", &c.stepDuration, 0.01f, 0.08f, 1.0f);
+    ImGui::DragFloat("Step Lift", &c.stepLift, 0.005f, 0.0f, 0.3f);
+    ImGui::DragFloat("Double Support Time", &c.doubleSupportTime, 0.01f, 0.0f, 0.5f);
+    ImGui::DragFloat("Post-Powered Grace", &c.postPoweredGrace, 0.01f, 0.0f, 2.0f);
+    ImGui::DragFloat("Gait Blend Time", &c.gaitBlendTime, 0.01f, 0.01f, 1.0f);
+    ImGui::DragFloat("Knee Pole Distance", &c.kneePoleDist, 0.01f, 0.0f, 2.0f);
+    ImGui::DragFloat("Max Reach Fraction", &c.maxReachFraction, 0.01f, 0.5f, 0.99f);
+    ImGui::DragFloat("Swing Pose Weight", &c.swingPoseWeight, 0.01f, 0.0f, 1.0f);
+    ImGui::DragFloat("Landing Tolerance", &c.landingTolerance, 0.01f, 0.02f, 0.3f);
+    ImGui::Checkbox("IK Write Enabled", &c.ikWriteEnabled);
+    ImGui::Checkbox("Debug", &c.debug);
+    ImGui::TextDisabled(c._grounded ? "Grounded" : "Airborne");
+}
 
 template<>
 inline std::string SerializeComponent<LocamotionControllerComponent>(const LocamotionControllerComponent& c)
 {
     nlohmann::json j;
-    j["maxSpeed"]        = c.maxSpeed;
-    j["acceleration"]    = c.acceleration;
-    j["deceleration"]    = c.deceleration;
-    j["turnRate"]        = c.turnRate;
-    j["deadzone"]        = c.deadzone;
-    j["strideLength"]    = c.strideLength;
-    j["stepHeight"]      = c.stepHeight;
-    j["dutyFactor"]      = c.dutyFactor;
-    j["hipHeight"]       = c.hipHeight;
-    j["bobAltitude"]     = c.bobAltitude;
-    j["leanGain"]        = c.leanGain;
-    j["groundRayLength"] = c.groundRayLength;
+    j["maxSpeed"] = c.maxSpeed;
+    j["moveRampTime"] = c.moveRampTime;
+    j["turnRate"] = c.turnRate;
+    j["deadzone"] = c.deadzone;
     j["facingOffsetDeg"] = c.facingOffsetDeg;
-    j["pelvisBone"]      = c.pelvisBone;
-    j["leftFootBone"]    = c.leftFootBone;
-    j["rightFootBone"]   = c.rightFootBone;
-    j["spineBone"]       = c.spineBone;
-    j["gaitDebug"]       = c.gaitDebug;
-    j["ankleHeight"]     = c.ankleHeight;
-    j["leftKneeRollDeg"]  = c.leftKneeRollDeg;
-    j["rightKneeRollDeg"] = c.rightKneeRollDeg;
-    j["footSwingPitchDeg"] = c.footSwingPitchDeg;
+    j["groundRayLength"] = c.groundRayLength;
+    j["consciousness"] = c.consciousness;
+    j["leftFootBone"] = c.leftFootBone;
+    j["rightFootBone"] = c.rightFootBone;
+    j["minWalkSpeed"] = c.minWalkSpeed;
+    j["stepLength"] = c.stepLength;
+    j["stanceHalfWidth"] = c.stanceHalfWidth;
+    j["stepDuration"] = c.stepDuration;
+    j["stepLift"] = c.stepLift;
+    j["doubleSupportTime"] = c.doubleSupportTime;
+    j["postPoweredGrace"] = c.postPoweredGrace;
+    j["gaitBlendTime"] = c.gaitBlendTime;
+    j["kneePoleDist"] = c.kneePoleDist;
+    j["maxReachFraction"] = c.maxReachFraction;
+    j["swingPoseWeight"] = c.swingPoseWeight;
+    j["landingTolerance"] = c.landingTolerance;
+    j["ikWriteEnabled"] = c.ikWriteEnabled;
+    j["debug"] = c.debug;
     return j.dump();
 }
 
 template<>
-inline void DeserializeComponent<LocamotionControllerComponent>(LocamotionControllerComponent& c, const std::string& data)
+inline void DeserializeComponent<LocamotionControllerComponent>(LocamotionControllerComponent& c,
+                                                                 const std::string& data)
 {
-    auto j              = nlohmann::json::parse(data);
-    c.maxSpeed          = j.value("maxSpeed",        2.5f);
-    c.acceleration      = j.value("acceleration",    10.0f);
-    c.deceleration      = j.value("deceleration",    15.0f);
-    c.turnRate          = j.value("turnRate",        8.0f);
-    c.deadzone          = j.value("deadzone",        0.2f);
-    c.strideLength      = j.value("strideLength",    0.55f);
-    c.stepHeight        = j.value("stepHeight",      0.12f);
-    c.dutyFactor        = j.value("dutyFactor",      0.6f);
-    c.hipHeight         = j.value("hipHeight",       0.8f);
-    c.bobAltitude       = j.value("bobAltitude",     0.03f);
-    c.leanGain          = j.value("leanGain",        0.25f);
-    c.groundRayLength   = j.value("groundRayLength", 1.0f);
-    c.facingOffsetDeg   = j.value("facingOffsetDeg", 0.0f);
-    c.pelvisBone        = j.value("pelvisBone",      std::string("torso_joint_3"));
-    c.leftFootBone      = j.value("leftFootBone",    std::string("leg_joint_L_3"));
-    c.rightFootBone     = j.value("rightFootBone",   std::string("leg_joint_R_3"));
-    c.spineBone         = j.value("spineBone",       std::string("Skeleton_torso_joint_2"));
-    c.gaitDebug         = j.value("gaitDebug",       false);
-    c.ankleHeight       = j.value("ankleHeight",     0.08f);
-    c.leftKneeRollDeg   = j.value("leftKneeRollDeg",  0.0f);
-    c.rightKneeRollDeg  = j.value("rightKneeRollDeg", 0.0f);
-    c.footSwingPitchDeg = j.value("footSwingPitchDeg", 22.0f);
+    const auto j = nlohmann::json::parse(data);
+    c.maxSpeed = j.value("maxSpeed", 1.0f);
+    c.moveRampTime = j.value("moveRampTime", 0.75f);
+    c.turnRate = j.value("turnRate", 10.0f);
+    c.deadzone = j.value("deadzone", 0.2f);
+    c.facingOffsetDeg = j.value("facingOffsetDeg", 90.0f);
+    c.groundRayLength = j.value("groundRayLength", 1.2f);
+    c.consciousness = j.value("consciousness", 1.0f);
+    c.leftFootBone = j.value("leftFootBone", std::string("leg_joint_L_5"));
+    c.rightFootBone = j.value("rightFootBone", std::string("leg_joint_R_5"));
+    c.minWalkSpeed = j.value("minWalkSpeed", 0.15f);
+    c.stepLength = j.value("stepLength", j.value("strideLength", 0.25f));
+    c.stanceHalfWidth = j.value("stanceHalfWidth", 0.10f);
+    c.stepDuration = j.value("stepDuration", 0.40f);
+    c.stepLift = j.value("stepLift", 0.10f);
+    c.doubleSupportTime = j.value("doubleSupportTime", 0.08f);
+    c.postPoweredGrace = j.value("postPoweredGrace", 0.4f);
+    c.gaitBlendTime = j.value("gaitBlendTime", 0.2f);
+    c.kneePoleDist = j.value("kneePoleDist", 0.5f);
+    c.maxReachFraction = j.value("maxReachFraction", 0.95f);
+    c.swingPoseWeight = j.value("swingPoseWeight", 0.35f);
+    c.landingTolerance = j.value("landingTolerance", 0.10f);
+    c.ikWriteEnabled = j.value("ikWriteEnabled", true);
+    c.debug = j.value("debug", false);
 }
 
-// ---- Registration -----------------------------------------------------------
-
 DECLARE_COMPONENT(LocamotionControllerComponent, "LocamotionController")
-
-// ---- Behavior ---------------------------------------------------------------
 
 class LocamotionControllerSystem : public GameSystem
 {
     DECLARE_SYSTEM(LocamotionControllerSystem, 100)
+
 public:
-    void OnStart(Scene& scene) override
+    void OnStart(Scene&) override
     {
         Input::BindAxis("MoveX", GamepadAxis::LeftX);
         Input::BindAxis("MoveY", GamepadAxis::LeftY);
@@ -225,524 +198,422 @@ public:
 
     void OnUpdate(Scene& scene, float dt) override
     {
-        const float h   = Input::GetAxis("MoveX");
-        const float f   = -Input::GetAxis("MoveY");
-        const float mag = glm::min(glm::length(glm::vec2(h, f)), 1.0f);
+        const float h = Input::GetAxis("MoveX");
+        const float f = -Input::GetAxis("MoveY");
+        const float magnitude = glm::min(glm::length(glm::vec2(h, f)), 1.0f);
 
         glm::vec3 camRight, camForward;
         CameraRelativeBasis(scene, camRight, camForward);
 
-        for (auto [entity, comp] : scene.View<LocamotionControllerComponent>().each())
-        {
+        for (auto [entity, comp] : scene.View<LocamotionControllerComponent>().each()) {
             if (!scene.Has<RagdollComponent>(entity) || !scene.Has<TransformComponent>(entity)) continue;
             auto& rag = scene.Get<RagdollComponent>(entity);
-            auto& xf  = scene.Get<TransformComponent>(entity);
+            auto& xf = scene.Get<TransformComponent>(entity);
 
-            // --- Step 3: Powering Ragdoll (gate) ---
-            // Scenes author the ragdoll as Animated; a player-controlled rig needs to
-            // be an active ragdoll to be driven at all. Flipped HERE, not OnStart:
-            // this system (prio 100) starts before PhysicsSystem (prio 200), so at
-            // OnStart the ragdoll isn't built yet and SetRagdollMode would no-op.
-            // Also how control resumes after a get-up hands the rig back to Animated.
-            if (rag.mode == RagdollMode::Animated)
+            if (rag.mode == RagdollMode::Animated) {
                 Physics::SetRagdollMode(rag, RagdollMode::Powered);
-
-            // Still not Powered = the ragdoll isn't built (no .ragdoll asset?) or a
-            // knockdown owns the rig (Limp; see the design doc's reaction hand-off)
-            // -- stand down cleanly so the engine keeps/releases the hips as needed.
+                comp._timeSincePowered = 0.0f;
+                if (comp.debug) spdlog::info("[Loco] Powered mode engaged");
+            }
             if (rag.mode != RagdollMode::Powered) {
                 rag.locomotionActive = false;
-                comp._velocity = glm::vec3(0.0f);
-                // Feet re-pin and the root path re-seeds from the body when control
-                // resumes (the rig may have been knocked/carried anywhere meanwhile).
-                comp._legL.init = comp._legR.init = false;
-                comp._rootInit  = false;
+                ResetGait(comp);
                 continue;
             }
 
-            // --- Step 1: Root Drive ---
+            comp._timeSincePowered += dt;
+            rag.strength = glm::clamp(comp.consciousness, 0.0f, 1.0f);
 
-            // Deadzone remap, then camera-relative desired velocity.
-            const float speed = (mag > comp.deadzone)
-                ? (mag - comp.deadzone) / (1.0f - comp.deadzone) * comp.maxSpeed : 0.0f;
-            glm::vec3 desiredDir = camRight * h + camForward * f;
-            glm::vec3 desiredVel = glm::length(desiredDir) > 1e-4f
-                ? glm::normalize(desiredDir) * speed : glm::vec3(0.0f);
+            const float speed = magnitude > comp.deadzone
+                ? (magnitude - comp.deadzone) / (1.0f - comp.deadzone) * comp.maxSpeed
+                : 0.0f;
+            glm::vec3 moveDir = camRight * h + camForward * f;
+            moveDir.y = 0.0f;
+            if (glm::length(moveDir) > 1e-4f) moveDir = glm::normalize(moveDir);
+            else moveDir = glm::vec3(0.0f);
+            const glm::vec3 requestedVel = moveDir * speed;
+            const bool wantsToWalk = speed > comp.minWalkSpeed;
 
-            // Ease current velocity toward desired, separate accel/decel rates.
-            glm::vec3 delta = desiredVel - comp._velocity;
-            const float distToTarget = glm::length(delta);
-            const float rate = glm::length(desiredVel) > glm::length(comp._velocity)
-                ? comp.acceleration : comp.deceleration;
-            const float step = rate * dt;
-            comp._velocity += (distToTarget > step && distToTarget > 1e-5f)
-                ? (delta / distToTarget) * step : delta;
-
-            // Face the movement heading (shortest-arc yaw ease), only while moving.
-            // R_y(theta)*(0,0,-1) = (-sin theta, 0, -cos theta), so facing velocity v
-            // needs theta = atan2(-v.x, -v.z). atan2(+v.x, ...) negates theta for
-            // every heading = a MIRRORED facing (the input-vs-facing table reflected
-            // about 45 deg, with 45 as the mirror's fixed point).
-            if (glm::length(comp._velocity) > 0.05f) {
-                const float targetYaw = std::atan2(-comp._velocity.x, -comp._velocity.z);
+            if (wantsToWalk) {
+                const float targetYaw = std::atan2(-moveDir.x, -moveDir.z);
                 float diff = std::fmod(targetYaw - comp._yaw + glm::pi<float>(), glm::two_pi<float>());
                 if (diff < 0.0f) diff += glm::two_pi<float>();
-                diff -= glm::pi<float>();
-                comp._yaw += diff * glm::min(comp.turnRate * dt, 1.0f);
+                comp._yaw += (diff - glm::pi<float>()) * glm::min(comp.turnRate * dt, 1.0f);
             }
 
-            // Hip height comes from the rig itself: the .ragdoll bind pose's standing
-            // clearance (hips above the lowest body -- what the get-up stands up to).
-            // Captured lazily, NOT in OnStart: the ragdoll is built by PhysicsSystem
-            // (prio 200) AFTER this system starts, so the value reads 0 until the
-            // first live frame. Never derived from the entity origin -- its height is
-            // model-specific (often the feet), and on the first frame it hasn't been
-            // re-rooted to the hips yet, which bakes in a crumple-to-the-floor value.
-            if (!comp._hipHeightSet) {
-                const float clearance = Physics::GetRagdollStandHipClearance(rag);
-                if (clearance > 0.0f) {
-                    // Slightly below full bind extension: keeps planted-foot targets
-                    // inside the leg chain's reach (clearance is root-to-lowest-body-
-                    // CENTER, which is ramrod-straight territory for the IK) and the
-                    // permanent knee bend reads nicely drunk anyway. The Hip Height
-                    // slider can be dragged live in play mode to taste.
-                    comp.hipHeight     = clearance * 0.92f;
-                    comp._hipHeightSet = true;
+            comp._grounded = Physics::Raycast(xf.position, glm::vec3(0, -1, 0),
+                                               comp.groundRayLength, entity).hit;
+            rag.locomotionActive = comp._grounded && rag.strength > 0.01f;
+            rag.locomotionTargetRot = glm::angleAxis(
+                comp._yaw + glm::radians(comp.facingOffsetDeg), glm::vec3(0, 1, 0));
+
+            const float tiltDeg = Physics::GetRagdollTiltDeg(rag);
+            const bool canGait = comp._grounded &&
+                                 comp._timeSincePowered >= comp.postPoweredGrace &&
+                                 tiltDeg < rag.locomotionFallenTilt;
+            const bool gaitRequested = wantsToWalk && canGait;
+            const float gaitRate = 1.0f / glm::max(comp.gaitBlendTime, 0.01f);
+            comp._gaitWeight = Approach(comp._gaitWeight, gaitRequested ? 1.0f : 0.0f, gaitRate * dt);
+
+            const bool startedWalking = wantsToWalk && !comp._wasWalking;
+            const bool stoppedWalking = !wantsToWalk && comp._wasWalking;
+            if (startedWalking) {
+                comp._landedStepCount = 0;
+                comp._driveWeight = 0.0f;
+                comp._timeSinceLanding = comp.doubleSupportTime;
+            }
+            if (stoppedWalking) {
+                comp._legL = {};
+                comp._legR = {};
+                comp._nextLeft = true;
+            }
+            if (!wantsToWalk || !canGait) comp._landedStepCount = 0;
+            comp._wasWalking = wantsToWalk;
+
+            const float driveTarget = gaitRequested && comp._landedStepCount >= 2 ? 1.0f : 0.0f;
+            const float driveRate = 1.0f / glm::max(comp.moveRampTime, 0.01f);
+            comp._driveWeight = Approach(comp._driveWeight, driveTarget, driveRate * dt);
+            rag.locomotionTargetVel = requestedVel * comp._driveWeight;
+
+            UpdateGait(scene, entity, comp, rag, moveDir, gaitRequested, dt);
+
+            if (comp.debug) {
+                _debugTimer += dt;
+                if (_debugTimer >= 0.25f) {
+                    _debugTimer = 0.0f;
+                    const glm::vec3 v = rag._locomotionRootVel;
+                    spdlog::info("[Loco] input={:.2f} requested={:.2f} drive={:.2f} actual={:.2f} gait={:.2f} tilt={:.1f} steps={}",
+                                 magnitude, speed, comp._driveWeight,
+                                 glm::length(glm::vec2(v.x, v.z)), comp._gaitWeight,
+                                 tiltDeg, comp._landedStepCount);
                 }
             }
-
-            // STATEFUL root path: integrate our own target position, never re-anchor
-            // to the simulated body each frame. Re-anchoring (`xf.position + v*dt`)
-            // made the drive frame-rate dependent: targets are recomputed per RENDER
-            // frame but consumed per 60 Hz physics tick, so at high fps each tick
-            // advanced the hips by only ONE render-frame's delta (~25% speed at
-            // 240 fps) -- the gait phase then outran the body and both feet rode
-            // perpetually ahead of the pelvis.
-            if (!comp._rootInit) {
-                comp._rootPos  = xf.position;
-                comp._rootInit = true;
-            }
-            comp._rootPos.x += comp._velocity.x * dt;
-            comp._rootPos.z += comp._velocity.z * dt;
-            // Divergence guard: if the body is far off the path (teleported, wedged),
-            // re-seed rather than dragging it across the map.
-            const glm::vec2 pathGap { comp._rootPos.x - xf.position.x,
-                                      comp._rootPos.z - xf.position.z };
-            if (glm::length(pathGap) > 1.0f) {
-                comp._rootPos.x = xf.position.x;
-                comp._rootPos.z = xf.position.z;
-            }
-
-            // Ground probe straight down at the path position -- ignoring the whole
-            // ragdoll (EntityIgnoreFilter covers every body owned by this entity),
-            // so the drive follows gentle slopes/steps.
-            HitResult hit = Physics::Raycast(glm::vec3(comp._rootPos.x, xf.position.y, comp._rootPos.z),
-                                             glm::vec3(0, -1, 0), comp.groundRayLength, entity);
-            const float groundY = hit.hit ? hit.point.y : (xf.position.y - comp.hipHeight);
-
-            // --- Phase 3 sloppiness: hip bob + accel bookkeeping ---
-            // Hip bob: a vertical dip once per STEP (2x the stride cycle), synced to the
-            // same _gaitPhase the feet ride (advanced last frame -- one frame stale, so
-            // invisible). Lowest at foot strike (phase 0 / 0.5, double support), highest
-            // at mid-stance. Faded in with speed so idle -- where the phase freezes --
-            // stands perfectly still instead of holding a frozen offset. The kinematic
-            // hips physically rise/fall; the strong-motored legs flex to keep feet
-            // pinned, so it reads as a real weight-shift, not a slide.
-            const float speedH  = glm::length(glm::vec2(comp._velocity.x, comp._velocity.z));
-            const float bobFade = glm::clamp(speedH / glm::max(comp.maxSpeed * 0.25f, 1e-3f), 0.0f, 1.0f);
-            const float bob     = comp.bobAltitude * bobFade *
-                                  -std::cos(4.0f * glm::pi<float>() * comp._gaitPhase);
-
-            // Horizontal acceleration for the spine lean, EMA-smoothed to kill the
-            // per-frame jitter of a raw finite difference (which swings the full
-            // accel/decel rate frame-to-frame). Consumed in UpdateGait.
-            const glm::vec3 accelRaw = (comp._velocity - comp._prevVel) / glm::max(dt, 1e-4f);
-            comp._accelSmooth = glm::mix(comp._accelSmooth, accelRaw, glm::clamp(dt * 10.0f, 0.0f, 1.0f));
-            comp._prevVel     = comp._velocity;
-
-            // locomotionTargetRot is a WORLD HEADING: the engine composes it on top
-            // of the hips bone's bind orientation (rootBindRot), so identity = upright
-            // -- never build the bone's raw orientation here (model bone frames vary;
-            // driving CesiumMan's Z-up hips to a raw yaw laid the rig down sideways).
-            rag.locomotionActive    = true;
-            rag.locomotionTargetPos = glm::vec3(comp._rootPos.x, groundY + comp.hipHeight + bob, comp._rootPos.z);
-            rag.locomotionTargetRot =
-                glm::angleAxis(comp._yaw + glm::radians(comp.facingOffsetDeg), glm::vec3(0, 1, 0));
-
-            // --- Step 2: Gait Generator ---
-            // Phase-driven plant/swing foot targets -> two-bone IK -> leg rotations
-            // written into anim.pose, which SyncRagdollPowered's motors chase this
-            // frame (we run at prio 100, physics at 200) and UpdateAnimators resets
-            // to bind afterwards (clip -1) -- so the write must happen EVERY frame.
-            if (comp._hipHeightSet &&
-                scene.Has<SkinnedMeshComponent>(entity) && scene.Has<AnimatorComponent>(entity))
-                UpdateGait(scene, entity, comp, rag, xf, dt);
         }
     }
-
-    void OnDestroy(Scene& scene) override {}
 
 private:
-    // Normalized rotation of a (possibly scaled) model-space bone matrix.
-    static glm::quat OrientationOf(const glm::mat4& m)
+    float _debugTimer = 0.0f;
+
+    static float Approach(float value, float target, float amount)
     {
-        glm::mat3 r(m);
-        r[0] = glm::normalize(r[0]);
-        r[1] = glm::normalize(r[1]);
-        r[2] = glm::normalize(r[2]);
-        return glm::normalize(glm::quat_cast(r));
+        if (value < target) return glm::min(value + amount, target);
+        return glm::max(value - amount, target);
     }
 
-    // Lazily resolve tip/knee/hip indices from the ankle bone name (tip's parent
-    // chain), re-validating against the name like IKSystem does.
-    static bool ResolveLeg(const Diamond::Skeleton& skel, const std::string& footBone,
-                           LocamotionControllerComponent::LegState& leg)
+    static void ResetGait(LocamotionControllerComponent& c)
     {
-        const int n = (int)skel.bones.size();
-        if (leg.tip < 0 || leg.tip >= n || skel.bones[leg.tip].name != footBone) {
-            leg.tip = skel.Find(footBone);
-            if (leg.tip < 0) return false;
-            leg.knee = skel.bones[leg.tip].parent;
-            leg.hip  = leg.knee >= 0 ? skel.bones[leg.knee].parent : -1;
-            leg.bindResolved = false;
-        }
-        return leg.hip >= 0;
+        c._gaitWeight = 0.0f;
+        c._driveWeight = 0.0f;
+        c._wasWalking = false;
+        c._landedStepCount = 0;
+        c._legL = {};
+        c._legR = {};
     }
 
-    // Ground height under a world point: ray from hip height straight down, ignoring
-    // every body of the character. Falls back to "hips minus clearance" on a miss.
-    static glm::vec3 GroundAt(Scene& scene, entt::entity self, const glm::vec3& probe,
-                              const LocamotionControllerComponent& comp, const glm::vec3& hipsW)
+    static void CameraRelativeBasis(Scene& scene, glm::vec3& right, glm::vec3& forward)
     {
-        // Targets are for the ANKLE bone, whose center sits above the sole -- lift
-        // the ground hit by ankleHeight (same correction as IKChain::ankleHeight)
-        // or the leg has to overreach by a foot's thickness on every plant.
-        const glm::vec3 lift { 0.0f, comp.ankleHeight, 0.0f };
-        const glm::vec3 origin { probe.x, hipsW.y, probe.z };
-        HitResult hit = Physics::Raycast(origin, glm::vec3(0, -1, 0), comp.groundRayLength, self);
-        return (hit.hit ? hit.point
-                        : glm::vec3(probe.x, hipsW.y - comp.hipHeight, probe.z)) + lift;
-    }
-
-    // The gait generator (design doc step 4/5). Foot targets live in WORLD space so a
-    // planted foot is truly pinned (zero slide) while the hips travel; the solve runs
-    // in MODEL space. The two are related through the HEADING, not the entity
-    // transform alone: the root drive yaws the hips BODY while the entity/model frame
-    // never rotates (the readback re-root only moves position), so the physics chain
-    // realizes world = heading * entityRot * model (anchored at the hips). Foot
-    // targets are therefore un-yawed by conj(heading) on the way into model space --
-    // without this the legs would step in the spawn-facing direction forever.
-    void UpdateGait(Scene& scene, entt::entity entity, LocamotionControllerComponent& comp,
-                    RagdollComponent& rag, TransformComponent& xf, float dt)
-    {
-        auto& smc  = scene.Get<SkinnedMeshComponent>(entity);
-        auto& anim = scene.Get<AnimatorComponent>(entity);
-        const Diamond::Skeleton& skel = smc.skeleton;
-        const int n = (int)skel.bones.size();
-        if (n == 0 || (int)anim.pose.size() != n) return;   // pose not built yet (first frame)
-
-        // Anchor on the bone the ragdoll ROOT BODY is actually bound to -- the
-        // world<->model identity is anchored at the body the root drive moves.
-        // Guessing by name put the anchor mid-torso on CesiumMan (torso_joint_3 is
-        // NOT the root bone): every foot target rode ~0.35 too high and the legs
-        // paddled at shin height. The authored pelvisBone is only the fallback for
-        // the frames before the ragdoll reports its root.
-        const int rootBone = Physics::GetRagdollRootBone(rag);
-        if (rootBone >= 0 && rootBone < n) {
-            comp._pelvisIdx = rootBone;
-        } else if (comp._pelvisIdx < 0 || comp._pelvisIdx >= n ||
-                   skel.bones[comp._pelvisIdx].name != comp.pelvisBone) {
-            comp._pelvisIdx = skel.Find(comp.pelvisBone);
-        }
-        if (comp._pelvisIdx < 0) return;
-        if (!ResolveLeg(skel, comp.leftFootBone,  comp._legL)) return;
-        if (!ResolveLeg(skel, comp.rightFootBone, comp._legR)) return;
-
-        // World <-> gait-model mapping (see comment above): world = heading*entityRot*model*s.
-        const glm::quat heading  = glm::angleAxis(comp._yaw + glm::radians(comp.facingOffsetDeg),
-                                                  glm::vec3(0, 1, 0));
-        const float     s        = glm::max((xf.scale.x + xf.scale.y + xf.scale.z) / 3.0f, 1e-4f);
-        const glm::quat entConj  = glm::conjugate(xf.rotation);
-        const glm::quat headConj = glm::conjugate(heading);
-        auto dirToModel = [&](const glm::vec3& v) { return (entConj * (headConj * v)) / s; };
-        auto dirToWorld = [&](const glm::vec3& v) { return heading * (xf.rotation * v) * s; };
-
-        const glm::vec3 hipsW = rag.locomotionTargetPos;   // where the root drive sends the hips
-        const glm::vec3 velH  { comp._velocity.x, 0.0f, comp._velocity.z };
-        const float     speedH = glm::length(velH);
-        const bool      moving = speedH > 0.15f;
-        if (moving) comp._poleWorld = velH / speedH;       // knees bend along motion
-
-        // Distance-driven phase (one cycle = two steps): stride rate tracks speed, so
-        // planted feet genuinely don't slide. Frozen when idle.
-        comp._gaitPhase += (speedH * dt) / glm::max(2.0f * comp.strideLength, 1e-3f);
-        comp._gaitPhase -= std::floor(comp._gaitPhase);
-
-        // Model-space snapshot of the current (bind) pose.
-        std::vector<glm::mat4> world;
-        Diamond::ComputeWorldTransforms(skel, anim.pose, world);
-        const glm::vec3 pelvisModel = glm::vec3(world[comp._pelvisIdx][3]);
-
-        // ---- Diagnostics (gaitDebug) ----
-        // shouldLog throttles the spdlog dump to ~4 Hz; draws submit every frame.
-        // Actual (simulated) bone positions come from anim.palette -- in Powered mode
-        // SyncRagdollPoses overwrote it from the physics bodies last frame, so
-        // worldMat * palette[i] * inverse(inverseBind) is where the flesh REALLY is,
-        // vs. world[] which is where the gait pose ASKS it to be.
-        comp._dbgTimer += dt;
-        const bool shouldLog = comp.gaitDebug && comp._dbgTimer >= 0.25f;
-        if (shouldLog) comp._dbgTimer = 0.0f;
-        glm::mat4 entityWorldMat { 1.0f };
-        bool      haveActual = false;
-        if (comp.gaitDebug) {
-            entityWorldMat = scene.GetTransformSystem().GetWorldMatrix(entity);
-            haveActual     = (int)anim.palette.size() == n;
-            DebugDraw::Sphere(hipsW, 0.06f, { 1.0f, 1.0f, 0.2f });          // hips drive target
-            DebugDraw::Line(hipsW, hipsW - glm::vec3(0, comp.hipHeight, 0),
-                            { 1.0f, 1.0f, 0.2f });
-        }
-        if (shouldLog)
-            spdlog::info("[Gait] anchor='{}' hipsTgt=({:.2f},{:.2f},{:.2f}) entityY={:.2f} hipH={:.2f} speed={:.2f} phase={:.2f} moving={}",
-                         skel.bones[comp._pelvisIdx].name,
-                         hipsW.x, hipsW.y, hipsW.z, xf.position.y, comp.hipHeight,
-                         speedH, comp._gaitPhase, moving);
-
-        struct LegRun { LocamotionControllerComponent::LegState& leg; float phaseOffset; const char* name; float rollDeg; };
-        LegRun legs[2] = { { comp._legL, 0.0f, "L", comp.leftKneeRollDeg },
-                           { comp._legR, 0.5f, "R", comp.rightKneeRollDeg } };
-
-        for (LegRun& lr : legs) {
-            auto& leg = lr.leg;
-
-            // Bind-pose stance offset from the pelvis (model space), resolved once.
-            if (!leg.bindResolved) {
-                const glm::vec3 bindFoot   = glm::vec3(glm::inverse(skel.bones[leg.tip].inverseBind)[3]);
-                const glm::vec3 bindPelvis = glm::vec3(glm::inverse(skel.bones[comp._pelvisIdx].inverseBind)[3]);
-                leg.stanceModel  = bindFoot - bindPelvis;
-                leg.bindResolved = true;
-            }
-
-            // Stance point: the foot's bind offset swung to the current heading,
-            // horizontally, grounded under the hips.
-            glm::vec3 stanceOff = dirToWorld(leg.stanceModel);
-            stanceOff.y = 0.0f;
-            const glm::vec3 stanceProbe = hipsW + stanceOff;
-
-            float legPhase = comp._gaitPhase + lr.phaseOffset;
-            legPhase -= std::floor(legPhase);
-            const bool planted = !moving || legPhase < comp.dutyFactor;
-
-            // Foot orientation target lives in WORLD (flat, facing the CURRENT heading).
-            // Tracked in world (not model) so a planted foot can be frozen against the
-            // ground while the body turns; the writeback maps it back to the pose.
-            const glm::quat footBindModelR = OrientationOf(glm::inverse(skel.bones[leg.tip].inverseBind));
-            const glm::quat flatFacingNow  = glm::normalize(heading * xf.rotation * footBindModelR);
-            const glm::vec3 rightW = glm::length(comp._poleWorld) > 1e-4f
-                ? glm::normalize(glm::cross(glm::vec3(0, 1, 0), comp._poleWorld)) : glm::vec3(1, 0, 0);
-
-            float swingT = -1.0f;   // >=0 only while swinging (diagnostics)
-            glm::vec3 targetW;
-            glm::quat footDesiredWorld = flatFacingNow;
-            if (!leg.init) {
-                leg.planted      = GroundAt(scene, entity, stanceProbe, comp, hipsW);
-                leg.lastSwingEnd = leg.planted;
-                leg.init         = true;
-                leg.wasPlanted   = true;
-                leg.plantedRotW  = flatFacingNow;
-                targetW          = leg.planted;
-                footDesiredWorld = leg.plantedRotW;
-            } else if (planted) {
-                if (!leg.wasPlanted) {
-                    leg.planted     = leg.lastSwingEnd;   // plant: pin where the swing ended
-                    leg.plantedRotW = flatFacingNow;      // ...and freeze its orientation here
-                }
-                if (!moving) {
-                    // Idle: re-home a foot left far from its stance (e.g. after a stop
-                    // mid-stride) instead of standing twisted forever.
-                    const glm::vec3 home = GroundAt(scene, entity, stanceProbe, comp, hipsW);
-                    if (glm::length(home - leg.planted) > comp.strideLength * 0.75f) {
-                        leg.planted     = home;
-                        leg.plantedRotW = flatFacingNow;
-                    }
-                }
-                targetW = leg.planted;
-                // Frozen in WORLD: a planted foot must NOT swivel to follow the heading
-                // as the body turns (that was the "foot faces the wrong way"). The
-                // writeback maps this fixed world orientation back through the CURRENT
-                // heading, so it holds still on the ground until the foot lifts.
-                footDesiredWorld = leg.plantedRotW;
-            } else {
-                if (leg.wasPlanted) {
-                    leg.swingStart     = leg.planted;       // liftoff
-                    leg.swingStartRotW = leg.plantedRotW;   // ...carry its orientation
-                }
-                const float t = glm::clamp((legPhase - comp.dutyFactor) /
-                                           glm::max(1.0f - comp.dutyFactor, 1e-3f), 0.0f, 1.0f);
-                // Predicted plant point, grounded there (follows slopes/steps). Ahead
-                // by dutyFactor*strideLength so the plant is SYMMETRIC: the hips
-                // travel duty*2*stride while a foot is down, so starting that far
-                // ahead ends equally far behind (0.5*stride ended 40% overextended).
-                const glm::vec3 dir = velH / speedH;
-                const glm::vec3 plantPoint =
-                    GroundAt(scene, entity, stanceProbe + dir * (comp.dutyFactor * comp.strideLength), comp, hipsW);
-                const float ts = t * t * (3.0f - 2.0f * t);   // smoothstep travel
-                targetW = glm::mix(leg.swingStart, plantPoint, ts)
-                        + glm::vec3(0, 1, 0) * (comp.stepHeight * std::sin(glm::pi<float>() * t));
-                leg.lastSwingEnd = plantPoint;
-                swingT = t;
-                // Swing: ease orientation from the liftoff pose toward flat-facing-heading,
-                // plus a toe-up pitch arc (sin, peaks mid-swing) for clearance + roll-through.
-                const float     pitch  = glm::radians(comp.footSwingPitchDeg) * std::sin(glm::pi<float>() * t);
-                const glm::quat pitchQ = glm::angleAxis(pitch, rightW);
-                footDesiredWorld = glm::normalize(pitchQ * glm::slerp(leg.swingStartRotW, flatFacingNow, ts));
-            }
-            leg.wasPlanted = planted;
-
-            // World -> model (un-yaw through the heading, anchored at the hips).
-            const glm::vec3 targetM = pelvisModel + dirToModel(targetW - hipsW);
-
-            const glm::vec3 a     = glm::vec3(world[leg.hip][3]);
-            const glm::vec3 b     = glm::vec3(world[leg.knee][3]);
-            const glm::vec3 c     = glm::vec3(world[leg.tip][3]);
-            const glm::quat rootR = OrientationOf(world[leg.hip]);
-            const glm::quat midR  = OrientationOf(world[leg.knee]);
-            // Pole = a point in front of the HIP along the character's forward. Anchored
-            // at the hip (not the knee) and pointing pure-forward, it never goes parallel
-            // to the always-downward leg, so the solver's bend plane is stable. The old
-            // knee-anchored `b + forward*0.5` went near-parallel to the hip->foot line
-            // when a foot planted in front -> the solver's degenerate `AnyPerp` fallback
-            // picked an arbitrary bend dir -> the knee twisted once per stride.
-            const glm::vec3 pole  = a + dirToModel(comp._poleWorld);
-
-            glm::quat newRootR, newMidR;
-            Diamond::SolveTwoBone(a, b, c, rootR, midR, targetM, pole, newRootR, newMidR);
-
-            // Per-leg knee-roll correction: twist the shin about its OWN long axis to
-            // undo the rig's asymmetric bind roll (see the field comment). The axis is
-            // derived from the bind pose (knee bone -> its child), so it's model-
-            // agnostic; the knee joint POSITION is unaffected (roll about the long axis
-            // moves nothing), only the calf/foot roll. Applied before the write-back so
-            // the foot pin below (built from newMidR) compensates and stays put.
-            if (glm::abs(lr.rollDeg) > 1e-3f) {
-                const glm::mat4 bindKnee   = glm::inverse(skel.bones[leg.knee].inverseBind);
-                const glm::vec3 bindAnkleP = glm::vec3(glm::inverse(skel.bones[leg.tip].inverseBind)[3]);
-                const glm::vec3 shinDir    = glm::normalize(bindAnkleP - glm::vec3(bindKnee[3]));
-                const glm::vec3 shinAxis   = glm::normalize(glm::conjugate(OrientationOf(bindKnee)) * shinDir);
-                newMidR = glm::normalize(newMidR * glm::angleAxis(glm::radians(lr.rollDeg), shinAxis));
-            }
-
-            // Solved MODEL-space rotations -> LOCAL, full weight (IKSystem's pattern).
-            const int       hipParent  = skel.bones[leg.hip].parent;
-            const glm::quat hipParentR = hipParent >= 0 ? OrientationOf(world[hipParent])
-                                                        : glm::quat(1, 0, 0, 0);
-            anim.pose[leg.hip].rotation  = glm::normalize(glm::conjugate(hipParentR) * newRootR);
-            anim.pose[leg.knee].rotation = glm::normalize(glm::conjugate(newRootR)   * newMidR);
-
-            // Foot: SolveTwoBone leaves the tip orientation to us. Map the WORLD target
-            // built above (frozen while planted, eased + toe-pitched while swinging) back
-            // to model space (world = heading*entityRot*model), then to LOCAL under the
-            // shin. Model-agnostic: the "flat" reference is the bind orientation, so no
-            // per-rig foot-axis assumptions. footLocal = conj(shinModelR) * footModel.
-            const glm::quat footModel = glm::normalize(
-                glm::conjugate(xf.rotation) * glm::conjugate(heading) * footDesiredWorld);
-            anim.pose[leg.tip].rotation = glm::normalize(glm::conjugate(newMidR) * footModel);
-
-            // ---- Per-leg diagnostics ----
-            if (comp.gaitDebug) {
-                // Reachability of the commanded target: the solver clamps an
-                // out-of-range target, so need > reach = leg fully extended,
-                // pointing at a target it can never touch.
-                const float reach = glm::length(b - a) + glm::length(c - b);
-                const float need  = glm::length(targetM - a);
-
-                // Where the simulated foot ACTUALLY is (physics readback palette).
-                glm::vec3 actualFootW { 0.0f };
-                if (haveActual) {
-                    const glm::mat4 actualModel =
-                        anim.palette[leg.tip] * glm::inverse(skel.bones[leg.tip].inverseBind);
-                    actualFootW = glm::vec3(entityWorldMat * glm::vec4(glm::vec3(actualModel[3]), 1.0f));
-                }
-
-                const glm::vec3 tgtColor = swingT >= 0.0f ? glm::vec3(1.0f, 0.6f, 0.1f)   // swing
-                                                          : glm::vec3(0.2f, 1.0f, 0.2f);  // planted
-                DebugDraw::Sphere(targetW, 0.05f, tgtColor);
-                if (haveActual) {
-                    DebugDraw::Sphere(actualFootW, 0.04f, { 1.0f, 0.2f, 0.2f });
-                    DebugDraw::Line(actualFootW, targetW, { 1.0f, 0.2f, 0.2f });
-                }
-
-                if (shouldLog) {
-                    const float err = haveActual ? glm::length(actualFootW - targetW) : -1.0f;
-                    spdlog::info("[Gait {}] {} ph={:.2f} tgtW=({:.2f},{:.2f},{:.2f}) need={:.2f} reach={:.2f}{} err={:.2f}",
-                                 lr.name,
-                                 swingT >= 0.0f ? "SWING" : "PLANT",
-                                 legPhase, targetW.x, targetW.y, targetW.z,
-                                 need, reach, need > reach ? " UNREACHABLE" : "", err);
-                }
-            }
-        }
-
-        // ---- Phase 3: acceleration lean on the spine target ----
-        // Tip the spine toward the horizontal acceleration: lean INTO a start, lean
-        // BACK on a stop. Only the target leans here; the spine's MEDIUM motor torque
-        // (the .ragdoll preset) tracks it a beat late, so the whole upper body reads
-        // as lagging from inertia. Applied as a single bend at the spine base, so the
-        // chest/arms/head ride along and trail off their own weak motors.
-        //
-        // Built in WORLD (lean axis = up x accelDir) then mapped to MODEL. The physics
-        // recomposes model rotations from the LOCAL pose (see SyncRagdollPowered), so we
-        // pre-rotate the spine's model orientation and rewrite its local:
-        //   model_new = qLeanM * model_bind  =>  local_new = conj(parentR)*qLeanM*parentR*local
-        // Independent of the leg IK above (the spine branches off the root, not a leg),
-        // so order doesn't matter. Model-agnostic: axis comes through dirToModel.
-        if (comp._spineIdx < 0 || comp._spineIdx >= n ||
-            skel.bones[comp._spineIdx].name != comp.spineBone)
-            comp._spineIdx = skel.Find(comp.spineBone);
-
-        const glm::vec3 accelH { comp._accelSmooth.x, 0.0f, comp._accelSmooth.z };
-        const float     accelMag = glm::length(accelH);
-        if (comp._spineIdx >= 0 && skel.bones[comp._spineIdx].parent >= 0 && accelMag > 1e-3f) {
-            const int sp       = comp._spineIdx;
-            const int spParent = skel.bones[sp].parent;
-            // Clamp so a hard accel/decel spike bends the torso, not folds it over.
-            const float angle  = glm::min(comp.leanGain * accelMag, glm::radians(35.0f));
-            const glm::vec3 dirW  = accelH / accelMag;
-            const glm::vec3 axisW = glm::cross(glm::vec3(0, 1, 0), dirW);   // horizontal dir => non-zero
-            const glm::vec3 axisM = glm::normalize(dirToModel(axisW));
-            const glm::quat qLeanM      = glm::angleAxis(angle, axisM);
-            const glm::quat parentModelR = OrientationOf(world[spParent]);
-            anim.pose[sp].rotation = glm::normalize(
-                glm::conjugate(parentModelR) * qLeanM * parentModelR *
-                glm::normalize(anim.pose[sp].rotation));
-        }
-    }
-
-    // World-space right/forward for the input basis. Prefers the primary camera's
-    // CameraDirectorComponent::yawDeg (a static authored angle) over its live
-    // TransformComponent -- CameraDirectorSystem runs AFTER this system (priority
-    // 450 vs 100), so the live transform would be one frame stale, but the authored
-    // yaw never is. Falls back to the camera's transform (a plain, non-director
-    // camera), then to world axes if there's no camera at all.
-    static void CameraRelativeBasis(Scene& scene, glm::vec3& outRight, glm::vec3& outForward)
-    {
-        outRight   = glm::vec3(1, 0, 0);
-        outForward = glm::vec3(0, 0, -1);
-
-        entt::entity cam = scene.GetPrimaryCamera();
+        right = glm::vec3(1, 0, 0);
+        forward = glm::vec3(0, 0, -1);
+        const entt::entity cam = scene.GetPrimaryCamera();
         if (cam == entt::null) return;
 
         if (scene.Has<CameraDirectorComponent>(cam)) {
-            const float yr = glm::radians(scene.Get<CameraDirectorComponent>(cam).yawDeg);
-            outForward = glm::vec3(std::sin(yr), 0.0f, -std::cos(yr));
-            outRight   = glm::vec3(std::cos(yr), 0.0f,  std::sin(yr));
+            const float yaw = glm::radians(scene.Get<CameraDirectorComponent>(cam).yawDeg);
+            forward = glm::vec3(std::sin(yaw), 0.0f, -std::cos(yaw));
+            right = glm::vec3(std::cos(yaw), 0.0f, std::sin(yaw));
         } else if (scene.Has<TransformComponent>(cam)) {
-            auto& cxf = scene.Get<TransformComponent>(cam);
-            outForward = cxf.rotation * glm::vec3(0, 0, -1);
-            outRight   = cxf.rotation * glm::vec3(1, 0, 0);
-            outForward.y = 0.0f;
-            outForward = glm::length(outForward) > 1e-4f ? glm::normalize(outForward) : glm::vec3(0, 0, -1);
-            outRight.y   = 0.0f;
-            outRight   = glm::length(outRight)   > 1e-4f ? glm::normalize(outRight)   : glm::vec3(1, 0, 0);
+            const auto& transform = scene.Get<TransformComponent>(cam);
+            forward = transform.rotation * glm::vec3(0, 0, -1);
+            right = transform.rotation * glm::vec3(1, 0, 0);
+            forward.y = right.y = 0.0f;
+            if (glm::length(forward) > 1e-4f) forward = glm::normalize(forward);
+            if (glm::length(right) > 1e-4f) right = glm::normalize(right);
         }
+    }
+
+    static glm::mat4 BoneWorldMatrix(const Diamond::Skeleton& skeleton,
+                                     const AnimatorComponent& animator,
+                                     const glm::mat4& entityWorld, int bone)
+    {
+        return entityWorld * animator.palette[bone] *
+               glm::inverse(skeleton.bones[bone].inverseBind);
+    }
+
+    static glm::vec3 BoneWorldPos(const Diamond::Skeleton& skeleton,
+                                  const AnimatorComponent& animator,
+                                  const glm::mat4& entityWorld, int bone)
+    {
+        return glm::vec3(BoneWorldMatrix(skeleton, animator, entityWorld, bone)[3]);
+    }
+
+    static glm::quat OrientationOf(const glm::mat4& matrix)
+    {
+        const glm::vec3 x(matrix[0]), y(matrix[1]), z(matrix[2]);
+        if (glm::dot(x, x) < 1e-12f || glm::dot(y, y) < 1e-12f || glm::dot(z, z) < 1e-12f)
+            return glm::quat(1, 0, 0, 0);
+        return glm::normalize(glm::quat_cast(
+            glm::mat3(glm::normalize(x), glm::normalize(y), glm::normalize(z))));
+    }
+
+    static glm::quat BoneWorldRot(const Diamond::Skeleton& skeleton,
+                                  const AnimatorComponent& animator,
+                                  const glm::mat4& entityWorld, int bone)
+    {
+        return OrientationOf(BoneWorldMatrix(skeleton, animator, entityWorld, bone));
+    }
+
+    static void ResolveLeg(LocamotionControllerComponent::LegState& leg,
+                           const std::string& footName,
+                           const Diamond::Skeleton& skeleton,
+                           const RagdollComponent& rag)
+    {
+        if (leg.footIdx >= 0 && leg.footIdx < static_cast<int>(skeleton.bones.size()) &&
+            skeleton.bones[leg.footIdx].name == footName) return;
+
+        leg.footIdx = skeleton.Find(footName);
+        if (leg.footIdx < 0 || footName.empty() || footName.back() != '5') return;
+        const std::string base = footName.substr(0, footName.size() - 1);
+        leg.hipIdx = skeleton.Find(base + "1");
+        leg.kneeIdx = skeleton.Find(base + "2");
+        leg.ankleIdx = skeleton.Find(base + "3");
+
+        if (!rag.config) return;
+        for (const auto& body : rag.config->bodies) {
+            if (leg.hipIdx >= 0 && body.boneName == skeleton.bones[leg.hipIdx].name)
+                leg.hipTwistAxis = body.twistAxisLocal;
+            if (leg.kneeIdx >= 0 && body.boneName == skeleton.bones[leg.kneeIdx].name)
+                leg.kneeHingeAxis = body.twistAxisLocal;
+        }
+    }
+
+    static glm::vec3 GroundedSoleTarget(Scene& scene, entt::entity entity,
+                                        const glm::vec3& hips, const glm::vec3& horizontal,
+                                        float rayLength, float fallbackY)
+    {
+        const glm::vec3 probe(hips.x + horizontal.x, hips.y, hips.z + horizontal.z);
+        const HitResult hit = Physics::Raycast(probe, glm::vec3(0, -1, 0), rayLength, entity);
+        return hit.hit ? hit.point : glm::vec3(probe.x, fallbackY, probe.z);
+    }
+
+    void UpdateGait(Scene& scene, entt::entity entity, LocamotionControllerComponent& comp,
+                    const RagdollComponent& rag, const glm::vec3& moveDir,
+                    bool walking, float dt)
+    {
+        if (!scene.Has<SkinnedMeshComponent>(entity) || !scene.Has<AnimatorComponent>(entity)) return;
+        auto& mesh = scene.Get<SkinnedMeshComponent>(entity);
+        auto& animator = scene.Get<AnimatorComponent>(entity);
+        const auto& skeleton = mesh.skeleton;
+        const int count = static_cast<int>(skeleton.bones.size());
+        if (count == 0 || static_cast<int>(animator.palette.size()) != count ||
+            static_cast<int>(animator.pose.size()) != count) return;
+
+        const int rootBone = Physics::GetRagdollRootBone(rag);
+        if (rootBone < 0) return;
+        const glm::mat4 entityWorld = scene.GetTransformSystem().GetWorldMatrix(entity);
+
+        ResolveLeg(comp._legL, comp.leftFootBone, skeleton, rag);
+        ResolveLeg(comp._legR, comp.rightFootBone, skeleton, rag);
+        if (!ValidLeg(comp._legL) || !ValidLeg(comp._legR)) return;
+
+        InitializeLeg(scene, entity, comp._legL, skeleton, animator, entityWorld);
+        InitializeLeg(scene, entity, comp._legR, skeleton, animator, entityWorld);
+
+        const glm::vec3 leftFootNow = BoneWorldPos(skeleton, animator, entityWorld, comp._legL.footIdx);
+        const glm::vec3 rightFootNow = BoneWorldPos(skeleton, animator, entityWorld, comp._legR.footIdx);
+        bool landed = AdvanceSwing(entity, comp._legL, comp, leftFootNow, dt, comp.debug, "left");
+        landed |= AdvanceSwing(entity, comp._legR, comp, rightFootNow, dt, comp.debug, "right");
+        if (landed) {
+            ++comp._landedStepCount;
+            comp._timeSinceLanding = 0.0f;
+        } else {
+            comp._timeSinceLanding += dt;
+        }
+
+        const bool anySwing = comp._legL.phase == LocamotionControllerComponent::LegPhase::Swinging ||
+                              comp._legR.phase == LocamotionControllerComponent::LegPhase::Swinging;
+        if (walking && !anySwing && comp._timeSinceLanding >= comp.doubleSupportTime) {
+            auto& leg = comp._nextLeft ? comp._legL : comp._legR;
+            const float side = comp._nextLeft ? -1.0f : 1.0f;
+            const glm::vec3 right = glm::normalize(glm::cross(moveDir, glm::vec3(0, 1, 0)));
+            const glm::vec3 horizontal = moveDir * comp.stepLength + right * (side * comp.stanceHalfWidth);
+            const glm::vec3 footNow = BoneWorldPos(skeleton, animator, entityWorld, leg.footIdx);
+            leg.swingStartSole = footNow - glm::vec3(0, leg.soleHeight, 0);
+            const glm::vec3 rootPosition = BoneWorldPos(skeleton, animator, entityWorld, rootBone);
+            leg.swingTargetSole = GroundedSoleTarget(scene, entity, rootPosition,
+                                                     horizontal, comp.groundRayLength,
+                                                     leg.swingStartSole.y);
+            leg.swingProgress = 0.0f;
+            leg.landingWait = 0.0f;
+            leg.landingWarning = false;
+            leg.phase = LocamotionControllerComponent::LegPhase::Swinging;
+            comp._nextLeft = !comp._nextLeft;
+            if (comp.debug)
+                spdlog::info("[Loco] {} step to ({:+.2f}, {:+.2f}, {:+.2f})",
+                             side < 0.0f ? "left" : "right", leg.swingTargetSole.x,
+                             leg.swingTargetSole.y, leg.swingTargetSole.z);
+        }
+
+        if (comp._gaitWeight > 0.001f &&
+            comp._legL.phase == LocamotionControllerComponent::LegPhase::Swinging) {
+            SolveLeg(comp._legL, skeleton, animator, entityWorld, rootBone, moveDir,
+                     comp.kneePoleDist, comp.maxReachFraction,
+                     comp._gaitWeight * comp.swingPoseWeight,
+                     comp.ikWriteEnabled, comp.debug);
+        }
+        if (comp._gaitWeight > 0.001f &&
+            comp._legR.phase == LocamotionControllerComponent::LegPhase::Swinging) {
+            SolveLeg(comp._legR, skeleton, animator, entityWorld, rootBone, moveDir,
+                     comp.kneePoleDist, comp.maxReachFraction,
+                     comp._gaitWeight * comp.swingPoseWeight,
+                     comp.ikWriteEnabled, comp.debug);
+        }
+
+        if (comp.debug) {
+            DrawLeg(comp._legL);
+            DrawLeg(comp._legR);
+        }
+    }
+
+    static bool ValidLeg(const LocamotionControllerComponent::LegState& leg)
+    {
+        return leg.footIdx >= 0 && leg.ankleIdx >= 0 && leg.kneeIdx >= 0 && leg.hipIdx >= 0;
+    }
+
+    static void InitializeLeg(Scene& scene, entt::entity entity,
+                              LocamotionControllerComponent::LegState& leg,
+                              const Diamond::Skeleton& skeleton,
+                              const AnimatorComponent& animator,
+                              const glm::mat4& entityWorld)
+    {
+        if (leg.init) return;
+        const glm::vec3 foot = BoneWorldPos(skeleton, animator, entityWorld, leg.footIdx);
+        const HitResult hit = Physics::Raycast(foot + glm::vec3(0, 0.2f, 0),
+                                               glm::vec3(0, -1, 0), 0.9f, entity);
+        if (hit.hit) {
+            leg.soleHeight = glm::clamp(foot.y - hit.point.y, 0.01f, 0.45f);
+            leg.plantSole = hit.point;
+        } else {
+            leg.plantSole = foot - glm::vec3(0, leg.soleHeight, 0);
+        }
+        leg.soleTarget = leg.plantSole;
+        leg.init = true;
+    }
+
+    static bool AdvanceSwing(entt::entity entity,
+                             LocamotionControllerComponent::LegState& leg,
+                             const LocamotionControllerComponent& comp,
+                             const glm::vec3& footPosition, float dt,
+                             bool debug, const char* side)
+    {
+        if (leg.phase != LocamotionControllerComponent::LegPhase::Swinging) {
+            leg.soleTarget = leg.plantSole;
+            return false;
+        }
+
+        leg.swingProgress = glm::min(leg.swingProgress + dt / glm::max(comp.stepDuration, 0.01f), 1.0f);
+        const float t = leg.swingProgress;
+        const float smooth = t * t * (3.0f - 2.0f * t);
+        leg.soleTarget = glm::mix(leg.swingStartSole, leg.swingTargetSole, smooth);
+        leg.soleTarget.y += comp.stepLift * std::sin(glm::pi<float>() * t);
+        if (t < 1.0f) return false;
+
+        const glm::vec2 horizontalDelta(footPosition.x - leg.swingTargetSole.x,
+                                        footPosition.z - leg.swingTargetSole.z);
+        const float horizontalError = glm::length(horizontalDelta);
+        const HitResult ground = Physics::Raycast(footPosition + glm::vec3(0, 0.05f, 0),
+                                                  glm::vec3(0, -1, 0),
+                                                  leg.soleHeight + 0.12f, entity);
+        const float groundError = ground.hit
+            ? std::abs(ground.point.y - leg.swingTargetSole.y)
+            : std::numeric_limits<float>::infinity();
+        const bool landed = horizontalError <= comp.landingTolerance && groundError <= 0.08f;
+        if (!landed) {
+            leg.landingWait += dt;
+            if (debug && !leg.landingWarning && leg.landingWait >= 0.25f) {
+                leg.landingWarning = true;
+                spdlog::warn("[Loco] {} foot has not landed: horizontal={:.3f} ground={} groundError={:.3f} clearance={:.3f}",
+                             side, horizontalError, ground.hit, groundError, leg.soleHeight);
+            }
+            return false;
+        }
+
+        leg.plantSole = leg.swingTargetSole;
+        leg.soleTarget = leg.plantSole;
+        leg.phase = LocamotionControllerComponent::LegPhase::Planted;
+        return true;
+    }
+
+    static void SolveLeg(const LocamotionControllerComponent::LegState& leg,
+                         const Diamond::Skeleton& skeleton, AnimatorComponent& animator,
+                         const glm::mat4& entityWorld, int rootBone, const glm::vec3& moveDir,
+                         float poleDistance, float reachFraction, float weight,
+                         bool writePose, bool debug)
+    {
+        const glm::vec3 hipPos = BoneWorldPos(skeleton, animator, entityWorld, leg.hipIdx);
+        const glm::vec3 kneePos = BoneWorldPos(skeleton, animator, entityWorld, leg.kneeIdx);
+        const glm::vec3 anklePos = BoneWorldPos(skeleton, animator, entityWorld, leg.ankleIdx);
+        const glm::vec3 footPos = BoneWorldPos(skeleton, animator, entityWorld, leg.footIdx);
+        const glm::quat hipRot = BoneWorldRot(skeleton, animator, entityWorld, leg.hipIdx);
+        const glm::quat kneeRot = BoneWorldRot(skeleton, animator, entityWorld, leg.kneeIdx);
+
+        const float upperLength = glm::length(skeleton.bones[leg.kneeIdx].localT);
+        const float lowerLength = glm::length(skeleton.bones[leg.ankleIdx].localT);
+        if (upperLength < 1e-4f || lowerLength < 1e-4f) return;
+
+        const glm::vec3 desiredFootCenter = leg.soleTarget + glm::vec3(0, leg.soleHeight, 0);
+        glm::vec3 ankleTarget = desiredFootCenter + (anklePos - footPos);
+        glm::vec3 toTarget = ankleTarget - hipPos;
+        const float maxReach = (upperLength + lowerLength) * glm::clamp(reachFraction, 0.5f, 0.99f);
+        if (const float reach = glm::length(toTarget); reach > maxReach && reach > 1e-4f)
+            ankleTarget = hipPos + toTarget * (maxReach / reach);
+
+        glm::vec3 poleDir = moveDir;
+        if (glm::length(poleDir) < 1e-4f) poleDir = glm::vec3(0, 0, -1);
+        const glm::vec3 pole = kneePos + poleDir * poleDistance;
+
+        glm::quat solvedHip, ignoredKnee;
+        Diamond::SolveTwoBone(hipPos, kneePos, anklePos, hipRot, kneeRot,
+                              ankleTarget, pole, solvedHip, ignoredKnee);
+
+        const glm::quat rootRot = BoneWorldRot(skeleton, animator, entityWorld, rootBone);
+        const glm::quat rawHipLocal = glm::normalize(glm::conjugate(rootRot) * solvedHip);
+        const glm::quat hipBind = skeleton.bones[leg.hipIdx].localR;
+        const glm::quat bindDelta = glm::normalize(glm::conjugate(hipBind) * rawHipLocal);
+        const glm::vec3 twistAxis = glm::normalize(leg.hipTwistAxis);
+        const glm::vec3 projected = twistAxis * glm::dot(glm::vec3(bindDelta.x, bindDelta.y, bindDelta.z), twistAxis);
+        glm::quat twist(bindDelta.w, projected.x, projected.y, projected.z);
+        if (glm::length(twist) < 1e-5f) twist = glm::quat(1, 0, 0, 0);
+        else twist = glm::normalize(twist);
+        const glm::quat hipTarget = glm::normalize(hipBind * bindDelta * glm::conjugate(twist));
+
+        const float distance = glm::clamp(glm::length(ankleTarget - hipPos),
+                                          std::abs(upperLength - lowerLength) + 1e-4f,
+                                          upperLength + lowerLength - 1e-4f);
+        const float includedCos = glm::clamp(
+            (upperLength * upperLength + lowerLength * lowerLength - distance * distance) /
+            (2.0f * upperLength * lowerLength), -1.0f, 1.0f);
+        const float kneeBend = glm::pi<float>() - std::acos(includedCos);
+        const glm::quat kneeTarget = glm::normalize(
+            skeleton.bones[leg.kneeIdx].localR *
+            glm::angleAxis(kneeBend, glm::normalize(leg.kneeHingeAxis)));
+
+        if (writePose) {
+            animator.pose[leg.hipIdx].rotation = glm::normalize(glm::slerp(
+                animator.pose[leg.hipIdx].rotation, hipTarget, weight));
+            animator.pose[leg.kneeIdx].rotation = glm::normalize(glm::slerp(
+                animator.pose[leg.kneeIdx].rotation, kneeTarget, weight));
+        }
+
+        if (debug) {
+            DebugDraw::Sphere(ankleTarget, 0.025f, {0.3f, 0.7f, 1.0f});
+        }
+    }
+
+    static void DrawLeg(const LocamotionControllerComponent::LegState& leg)
+    {
+        DebugDraw::Sphere(leg.plantSole, 0.04f, {0.2f, 1.0f, 0.2f});
+        DebugDraw::Sphere(leg.soleTarget, 0.025f, {1.0f, 1.0f, 1.0f});
+        if (leg.phase == LocamotionControllerComponent::LegPhase::Swinging)
+            DebugDraw::Sphere(leg.swingTargetSole, 0.04f, {1.0f, 0.6f, 0.1f});
     }
 };

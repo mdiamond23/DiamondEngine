@@ -1912,6 +1912,23 @@ void InspectorPanel::OnImGuiRender() {
                                           "climbs back to upright; too high explodes. 0 = velocity spring.");
                     ImGui::DragFloat("Balance Trq Damp", &rag.locomotionBalanceTorqueDamp, 1.0f, 0.0f, 400.0f, "%.0f N*m*s");
 
+                    ImGui::DragFloat("Support Radius", &rag.locomotionSupportRadius, 0.005f, 0.0f, 1.0f, "%.3f m");
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("Padding around each planted foot (and the segment between both\n"
+                                          "feet) forming the base of support. The true COM must project\n"
+                                          "inside this to read as stable. Roughly the foot sole size.");
+                    ImGui::DragFloat("Support Falloff", &rag.locomotionSupportFalloff, 0.005f, 0.0f, 1.0f, "%.3f m");
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("Distance past the support base edge over which Hip Support's cap\n"
+                                          "tapers to 0. Past this the pelvis stops being propped up from\n"
+                                          "above and a real tip/fall takes over. 0 = cuts instantly at the edge.");
+                    ImGui::DragFloat("Lean Leash", &rag.locomotionLeashDistance, 0.005f, 0.0f, 1.0f, "%.3f m");
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("How far the HIP may translate past the support base before Move\n"
+                                          "Force's push is stripped and outward velocity zeroed -- forces an\n"
+                                          "actual step instead of an ever-growing lean over planted feet.\n"
+                                          "Lower = steps sooner/more often; higher = more lean before stepping.");
+
                     ImGui::EndDisabled();
                     if (!playing && ImGui::IsItemHovered())
                         ImGui::SetTooltip("Enter play mode to trigger the ragdoll.");

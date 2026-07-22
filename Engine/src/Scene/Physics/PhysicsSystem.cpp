@@ -1046,6 +1046,7 @@ static JPH::ShapeRefC CreateRagdollShape(const RagdollBodyDef& def, float scale,
 // lying flat on the ground at bind (the ankle motor holds it there in sim). This gives
 // the foot a real contact PATCH instead of a capsule's rolling line contact — the base
 // of support the character balances over.
+// he = half width / thickness / length. Wide + long = a broad base of support.
 static JPH::ShapeRefC CreateFootSole(const glm::vec3& he, const glm::quat& boneRot)
 {
     JPH::BoxShapeSettings bs(ToJolt(he), glm::min(glm::min(he.x, he.y), he.z) * 0.5f);
@@ -1112,7 +1113,7 @@ static void BuildRagdoll(PhysicsSystem::Impl& impl, Scene& scene,
         // world-align into the shape) leaves the body-level transform at identity —
         // CreateRagdollShape overwrites these, but CreateFootSole doesn't touch them.
         glm::vec3 shapeOffset(0.0f); glm::quat shapeRot(1.0f, 0.0f, 0.0f, 0.0f);
-        const glm::vec3 footHE = glm::vec3(0.055f, 0.02f, 0.09f) * scale; // half width / thickness / length
+        const glm::vec3 footHE = glm::vec3(0.09f, 0.025f, 0.14f) * scale; // wide + long sole = broad base
         JPH::ShapeRefC shapeRef = def.isFoot ? CreateFootSole(footHE, rot)
                                              : CreateRagdollShape(def, scale, shapeOffset, shapeRot);
         if (!shapeRef) continue;
@@ -1513,14 +1514,7 @@ static void ReleaseLocomotionRoot(PhysicsSystem::Impl& impl, RagdollInstance& in
     inst._locomotionDriving = false;
 }
 
-// Continuous root drive for locomotion: tracks the live target a controller script
-// sets every frame (joint motors can't move/support the rootless pelvis — see
-// DriveRagdollGetUpRoot above). Yields to reactions, which own the root while they
-// run. Two modes (RagdollComponent::locomotionDynamicRoot): PHYSICAL (default) —
-// dynamic root, real gravity, grounded support spring, capped pursuit/balance, so
-// walls/shoves/falls act on the character; or the LEGACY kinematic MoveKinematic
-// hold (infinite force), kept as a fallback. Knob semantics and sizing notes live
-// on RagdollComponent.
+// Drives the dynamic pelvis toward the locomotion velocity and heading.
 static void DriveRagdollLocomotionRoot(PhysicsSystem::Impl& impl, RagdollInstance& inst,
                                        RagdollComponent& rag)
 {
@@ -1530,162 +1524,144 @@ static void DriveRagdollLocomotionRoot(PhysicsSystem::Impl& impl, RagdollInstanc
     JPH::BodyInterface& bi = impl.joltSystem->GetBodyInterface();
     const RagdollBody& root = inst.bodies[inst.rootBodySlot];
     const bool want = rag.locomotionActive &&
-                      std::isfinite(rag.locomotionTargetPos.x) &&
-                      std::isfinite(rag.locomotionTargetPos.y) &&
-                      std::isfinite(rag.locomotionTargetPos.z);
+                      std::isfinite(rag.locomotionTargetVel.x) &&
+                      std::isfinite(rag.locomotionTargetVel.y) &&
+                      std::isfinite(rag.locomotionTargetVel.z);
 
     if (want != inst._locomotionDriving) {
-        // Only the legacy mode holds the root Kinematic; the physical drive's whole
-        // point is a root the world can act on. (SetMotionType on engage still runs
-        // in physical mode: a legacy hold or blend may have left the root Kinematic.)
-        bi.SetMotionType(root.id,
-                         (want && !rag.locomotionDynamicRoot) ? JPH::EMotionType::Kinematic
-                                                              : JPH::EMotionType::Dynamic,
-                         JPH::EActivation::Activate);
+        bi.SetMotionType(root.id, JPH::EMotionType::Dynamic, JPH::EActivation::Activate);  // forces/contacts act on it
         inst._locomotionDriving = want;
     }
     if (!want) return;
 
-    // The script's target rotation is a WORLD heading (yaw) composed ON TOP OF the
-    // root's bind orientation (rootBindRot = the hips body's world frame at build,
-    // i.e. "standing upright" -- the same reference the get-up heave drives toward).
-    // Driving to the raw script quat instead would ignore the hips BONE's authored
-    // frame (CesiumMan's is Z-up) and lay the whole rig down sideways.
-    const glm::quat targetRot =
-        glm::normalize(glm::normalize(rag.locomotionTargetRot) * inst.rootBindRot);
+    const glm::quat curRot = FromJolt(bi.GetRotation(root.id));
+    const glm::vec3 upNow  = curRot * (glm::conjugate(inst.rootBindRot) * glm::vec3(0, 1, 0));
+    const glm::vec3 leanH(upNow.x, 0.0f, upNow.z);
 
-    // Both modes bound their pursuit: a discontinuous target (the engage frame, a
-    // script teleport) becomes a fast bounded glide instead of an enormous velocity
-    // that whips the dangling limbs into the floor as knockdown-level impacts.
-    constexpr float kMaxDriveSpeed = 6.0f;                   // m/s root glide cap
-    constexpr float kMaxTurnSpeed  = glm::radians(540.0f);   // rad/s root spin cap
-
-    const glm::vec3 curPos   = FromJolt(bi.GetPosition(root.id));
-    const glm::vec3 toTarget = rag.locomotionTargetPos - curPos;
-    const glm::quat curRot   = FromJolt(bi.GetRotation(root.id));
-
-    if (!rag.locomotionDynamicRoot) {
-        // --- legacy kinematic hold ---------------------------------------------
-        const float     dist    = glm::length(toTarget);
-        const float     maxStep = kMaxDriveSpeed * FIXED_DT;
-        const glm::vec3 stepPos = (dist > maxStep)
-            ? curPos + toTarget * (maxStep / dist) : rag.locomotionTargetPos;
-
-        const float cosHalf  = glm::clamp(glm::abs(glm::dot(curRot, targetRot)), 0.0f, 1.0f);
-        const float angle    = 2.0f * std::acos(cosHalf);
-        const float maxAngle = kMaxTurnSpeed * FIXED_DT;
-        const glm::quat stepRot = (angle > maxAngle && angle > 1e-4f)
-            ? glm::slerp(curRot, targetRot, maxAngle / angle) : targetRot;
-
-        bi.MoveKinematic(root.id, ToJolt(stepPos), ToJolt(glm::normalize(stepRot)), FIXED_DT);
-        return;
-    }
-
-    // --- physical drive: true gravity + grounded one-sided support spring ------
-    // Nothing here cancels gravity; the support spring below only pushes UP, and
-    // only while ground is underfoot — a ledge is pure free-fall from frame one.
-    const glm::vec3 vCur = FromJolt(bi.GetLinearVelocity(root.id));
-
-    glm::vec2 vDesH(toTarget.x / FIXED_DT, toTarget.z / FIXED_DT);
-    if (const float sp = glm::length(vDesH); sp > kMaxDriveSpeed)
-        vDesH *= kMaxDriveSpeed / sp;
-    glm::vec2 dvH = vDesH - glm::vec2(vCur.x, vCur.z);
-    const float maxH = glm::max(rag.locomotionAccel, 0.0f) * FIXED_DT;
-    if (const float h = glm::length(dvH); h > maxH && h > 1e-6f)
-        dvH *= maxH / h;
-
-    // Grounded = ground within ~1.5 leg lengths below the hips. The public Raycast
-    // ignores every body of this entity (all ragdoll limbs) and all sensors.
-    const float groundReach = inst.standHipClearance * 1.5f + 0.3f;
-    const HitResult ground  = Physics::Raycast(curPos, glm::vec3(0, -1, 0), groundReach, inst.entity);
-
-    float dvY = 0.0f;
-    if (ground.hit) {
-        const float w  = glm::two_pi<float>() * glm::max(rag.locomotionSupportFreq, 0.0f);
-        float aY = w * w * toTarget.y      // spring toward the gait height (bob included)
-                 - 2.0f * w * vCur.y;      // critical damping
-        // One-sided: legs push, they don't pull. Gravity alone brings the hips down.
-        aY  = glm::clamp(aY, 0.0f, glm::max(rag.locomotionUpAccel, 0.0f));
-        dvY = aY * FIXED_DT;
-    } else if (rag.locomotionFallLimpSpeed > 0.0f && vCur.y < -rag.locomotionFallLimpSpeed) {
-        // A real fall (not a hop): tumble limp, then settle -> auto-get-up.
-        spdlog::info("Ragdoll {}: locomotion auto-limp — falling {:.1f} m/s (limit {:.1f})",
-                     rag._ragdollId, -vCur.y, rag.locomotionFallLimpSpeed);
-        Physics::SetRagdollMode(rag, RagdollMode::Limp);
-        return;
-    }
-    // else: airborne — gravity owns the vertical axis.
-
-    bi.SetLinearVelocity(root.id, ToJolt(vCur + glm::vec3(dvH.x, dvY, dvH.y)));
-
-    // Rotation error the righting spring acts on: axis*angle of cur -> target,
-    // hemisphere-aligned so the spin takes the short way (yaw included — the
-    // spring also steers the heading).
-    glm::quat delta = glm::normalize(targetRot * glm::conjugate(curRot));
-    if (delta.w < 0.0f) delta = -delta;
-    const float     angle   = 2.0f * std::acos(glm::clamp(delta.w, -1.0f, 1.0f));
-    const glm::vec3 axisRaw = glm::vec3(delta.x, delta.y, delta.z);
-    const glm::vec3 axis    = glm::length(axisRaw) > 1e-6f ? glm::normalize(axisRaw)
-                                                           : glm::vec3(0.0f);
-
-    // Tilt = up-axis vs world up, heading-independent (yaw error is COMMANDED —
-    // engage snap, turns — and must never read as knocked over). Drives both the
-    // tip-over trigger and the balance hardening below.
-    const glm::vec3 upLocal = glm::conjugate(inst.rootBindRot) * glm::vec3(0, 1, 0);
-    const glm::vec3 upNow   = curRot * upLocal;   // hips' upright axis in world, now
     const float tiltDeg = glm::degrees(std::acos(glm::clamp(upNow.y, -1.0f, 1.0f)));
+    const glm::vec3 vCur = FromJolt(bi.GetLinearVelocity(root.id));
+    const glm::vec3 wCur = FromJolt(bi.GetAngularVelocity(root.id));
+    rag._locomotionRootVel = vCur;
+    glm::vec3 moveF(0.0f), balF(0.0f);
 
-    // Tip-over -> Limp. The tilt must PERSIST for the grace window — transient
-    // spikes (punch recoil, prop bumps) recover and are forgiven; only a lean the
-    // balance spring can't recover counts.
-    if (rag.locomotionTipLimpDeg > 0.0f) {
-        if (tiltDeg > rag.locomotionTipLimpDeg) {
-            inst.tipTimer += FIXED_DT;
-            if (inst.tipTimer >= rag.locomotionTipLimpTime) {
-                spdlog::info("Ragdoll {}: locomotion auto-limp — tipped {:.0f} deg for {:.2f}s (limit {:.0f} deg / {:.2f}s)",
-                             rag._ragdollId, tiltDeg, inst.tipTimer,
-                             rag.locomotionTipLimpDeg, rag.locomotionTipLimpTime);
-                inst.tipTimer = 0.0f;
-                Physics::SetRagdollMode(rag, RagdollMode::Limp);
-                return;
-            }
-        } else {
-            inst.tipTimer = 0.0f;
+    // Mass-weighted COM and the support segment formed by grounded feet.
+    glm::vec3 com(0.0f); float totalMass = 0.0f;
+    for (const RagdollBody& b : inst.bodies) {
+        com += FromJolt(bi.GetPosition(b.id)) * b.mass;
+        totalMass += b.mass;
+    }
+    if (totalMass > 1e-6f) com /= totalMass;
+
+    glm::vec3 footXZ[2]; int footCount = 0;
+    for (const RagdollBody& b : inst.bodies) {
+        if (!b.isFoot || footCount >= 2) continue;
+        const glm::vec3 fp = FromJolt(bi.GetPosition(b.id));
+        HitResult fg = Physics::Raycast(fp, glm::vec3(0, -1, 0), b.halfExtents.y + 0.05f, inst.entity, false);
+        if (fg.hit) footXZ[footCount++] = glm::vec3(fp.x, 0.0f, fp.z);
+    }
+
+    const glm::vec3 comXZ(com.x, 0.0f, com.z);
+    auto baseSeparation = [&](const glm::vec3& queryXZ) -> glm::vec3 {
+        if (footCount == 0) return glm::vec3(0.0f);
+        glm::vec3 closest = footXZ[0];
+        if (footCount == 2) {
+            const glm::vec3 ab     = footXZ[1] - footXZ[0];
+            const float     abLen2 = glm::dot(ab, ab);
+            const float     t      = abLen2 > 1e-8f
+                ? glm::clamp(glm::dot(queryXZ - footXZ[0], ab) / abLen2, 0.0f, 1.0f) : 0.0f;
+            closest = footXZ[0] + ab * t;
+        }
+        const glm::vec3 toQuery = queryXZ - closest;
+        const float     dist    = glm::length(toQuery);
+        const float     outside = glm::max(0.0f, dist - glm::max(rag.locomotionSupportRadius, 0.0f));
+        return outside > 1e-5f ? (toQuery / dist) * outside : glm::vec3(0.0f);
+    };
+
+    const glm::vec3 baseErr = baseSeparation(comXZ);
+    const float comOutside = glm::length(baseErr);
+
+    const glm::vec3 hipPosNow = FromJolt(bi.GetPosition(root.id));
+    const glm::vec3 hipErr     = baseSeparation(glm::vec3(hipPosNow.x, 0.0f, hipPosNow.z));
+    const float hipOutside = glm::length(hipErr);
+
+    // One-sided vertical spring: it catches a sag but never pulls the hips down.
+    if (rag.locomotionDynamicRoot && tiltDeg < rag.locomotionFallenTilt) {
+        const glm::vec3& hipPos = hipPosNow;
+        HitResult ground = Physics::Raycast(hipPos, glm::vec3(0, -1, 0),
+                                            inst.standHipClearance * 1.5f + 0.3f,
+                                            inst.entity, false);
+        if (ground.hit) {
+            const float supportFactor = 1.0f - glm::clamp(
+                comOutside / glm::max(rag.locomotionSupportFalloff, 1e-4f), 0.0f, 1.0f);
+            const float ws      = glm::two_pi<float>() * glm::max(rag.locomotionSupportFreq, 0.0f);
+            const float targetY = ground.point.y + inst.standHipClearance;
+            const float err     = targetY - hipPos.y;
+            float accel = ws * ws * err - 2.0f * ws * vCur.y;
+            accel = glm::clamp(accel, 0.0f, glm::max(rag.locomotionUpAccel, 0.0f) * supportFactor);
+            bi.SetLinearVelocity(root.id, ToJolt(glm::vec3(vCur.x, vCur.y + accel * FIXED_DT, vCur.z)));
         }
     }
 
-    const glm::vec3 wCur = FromJolt(bi.GetAngularVelocity(root.id));
-    if (rag.locomotionBalanceTorque > 0.0f) {
-        // Stage C ankle strategy: PD righting torque applied at the planted FEET, so the
-        // ground reaction pivots the body upright about the ankles. Torquing the root
-        // instead just folds the hips and topples. Falls back to the root if no feet.
-        const glm::vec3 drive = axis * (angle * rag.locomotionBalanceTorque);
-        bool anyFoot = false;
-        for (const RagdollBody& b : inst.bodies) {
-            if (!b.isFoot) continue;
-            anyFoot = true;
-            const glm::vec3 wB = FromJolt(bi.GetAngularVelocity(b.id));
-            bi.AddTorque(b.id, ToJolt(drive - wB * rag.locomotionBalanceTorqueDamp));
+    // Do not drag or right a prone ragdoll.
+    if (tiltDeg < rag.locomotionFallenTilt) {
+        glm::vec3 velErr = rag.locomotionTargetVel - vCur; velErr.y = 0.0f;
+        glm::vec3 desiredLean = glm::vec3(rag.locomotionTargetVel.x, 0.0f, rag.locomotionTargetVel.z)
+                              * rag.locomotionMoveLean;
+        if (const float l = glm::length(desiredLean); l > 0.45f) desiredLean *= 0.45f / l;
+        const glm::vec3 balanceErr = footCount > 0 ? baseErr : leanH;
+        moveF = velErr * glm::max(rag.locomotionMoveForce, 0.0f);
+        balF  = -(balanceErr - desiredLean) * glm::max(rag.locomotionBalanceForce, 0.0f);
+
+        // Prevent the pelvis from outrunning the planted support base.
+        if (hipOutside > glm::max(rag.locomotionLeashDistance, 0.0f)) {
+            const glm::vec3 leashDir = hipErr / hipOutside;   // outward, away from the base
+            const float     outwardF = glm::dot(moveF, leashDir);
+            if (outwardF > 0.0f) moveF -= leashDir * outwardF;
+            const float     outwardV = glm::dot(vCur, leashDir);
+            if (outwardV > 0.0f)
+                bi.SetLinearVelocity(root.id, ToJolt(vCur - leashDir * outwardV));
         }
-        if (!anyFoot)
-            bi.AddTorque(root.id, ToJolt(drive - wCur * rag.locomotionBalanceTorqueDamp));
-    } else if (rag.locomotionBalanceAccel > 0.0f) {
-        // Implicitly-damped righting spring (the explicit -2w*wCur form blows up past
-        // ~8 Hz at the 60 Hz step); accel caps what can beat it (impacts). See RagdollComponent.
+
+        bi.AddForce(root.id, ToJolt(moveF + balF));
+
+        // Implicitly damped upright spring.
+        const glm::quat targetRot =
+            glm::normalize(glm::normalize(rag.locomotionTargetRot) * inst.rootBindRot);
+        glm::quat delta = glm::normalize(targetRot * glm::conjugate(curRot));
+        if (delta.w < 0.0f) delta = -delta;            // short way
+        const float     angle   = 2.0f * std::acos(glm::clamp(delta.w, -1.0f, 1.0f));
+        const glm::vec3 axisRaw = glm::vec3(delta.x, delta.y, delta.z);
+        const glm::vec3 axis    = glm::length(axisRaw) > 1e-6f ? glm::normalize(axisRaw) : glm::vec3(0.0f);
         const float ws = glm::two_pi<float>() * glm::max(rag.locomotionBalanceFreq, 0.0f);
-        const glm::vec3 wSpring =
-            (wCur + axis * (ws * ws * angle * FIXED_DT)) / (1.0f + 2.0f * ws * FIXED_DT);
-        glm::vec3 dw = wSpring - wCur;
-        const float maxDw = rag.locomotionBalanceAccel * FIXED_DT;
-        if (const float l = glm::length(dw); l > maxDw && l > 1e-6f)
-            dw *= maxDw / l;
+        glm::vec3 dw = (wCur + axis * (ws * ws * angle * FIXED_DT)) / (1.0f + 2.0f * ws * FIXED_DT) - wCur;
+        const float maxDw = glm::max(rag.locomotionBalanceAccel, 0.0f) * FIXED_DT;
+        if (const float l = glm::length(dw); l > maxDw && l > 1e-6f) dw *= maxDw / l;
         bi.SetAngularVelocity(root.id, ToJolt(wCur + dw));
-    } else {
-        // Hard lock (accel <= 0): command the closing angular velocity directly.
-        glm::vec3 omega(0.0f);
-        if (angle > 1e-4f)
-            omega = axis * glm::min(angle / FIXED_DT, kMaxTurnSpeed);
-        bi.SetAngularVelocity(root.id, ToJolt(omega));
+    }
+
+    // Debug: throttled (~10 Hz) tilt / spin / feet dump to diagnose tips + jitter.
+    if (rag.locomotionDebug) {
+        inst.tipTimer += FIXED_DT;
+        if (inst.tipTimer >= 0.1f) {
+            inst.tipTimer = 0.0f;
+            const float spd    = glm::length(glm::vec2(vCur.x, vCur.z));
+            const float tgtSpd = glm::length(glm::vec2(rag.locomotionTargetVel.x, rag.locomotionTargetVel.z));
+            float fyL = 0, fwL = 0, fyR = 0, fwR = 0; int fi = 0;
+            for (const RagdollBody& b : inst.bodies) {
+                if (!b.isFoot) continue;
+                const glm::vec3 fp = FromJolt(bi.GetPosition(b.id));
+                const float fw = glm::length(FromJolt(bi.GetAngularVelocity(b.id)));
+                if (fi == 0) { fyL = fp.y; fwL = fw; } else { fyR = fp.y; fwR = fw; }
+                ++fi;
+            }
+            const glm::vec3 tipR = glm::cross(wCur, upNow);
+            spdlog::info("[Loco] spd={:.2f}/{:.2f} vel=({:+.2f},{:+.2f}) lean=({:+.2f},{:+.2f}) tipRate={:.2f} moveF={:.0f} balF={:.0f} rootW={:.1f} rootY={:.2f} feetY=({:.2f},{:.2f}) feetW=({:.0f},{:.0f}) feetDown={} comOut={:.3f} hipOut={:.3f}",
+                         spd, tgtSpd, vCur.x, vCur.z, upNow.x, upNow.z,
+                         glm::length(glm::vec2(tipR.x, tipR.z)),
+                         glm::length(glm::vec2(moveF.x, moveF.z)), glm::length(glm::vec2(balF.x, balF.z)),
+                         glm::length(wCur), FromJolt(bi.GetPosition(root.id)).y, fyL, fyR, fwL, fwR,
+                         footCount, comOutside, hipOutside);
+        }
     }
 }
 
@@ -2690,6 +2666,25 @@ int GetRagdollRootBone(const RagdollComponent& rag) {
     auto it = s_Impl->ragdolls.find(rag._ragdollId);
     if (it == s_Impl->ragdolls.end() || it->second.rootBodySlot < 0) return -1;
     return it->second.bodies[it->second.rootBodySlot].boneIndex;
+}
+
+// Current tilt of the root/hips, degrees, 0 = upright -- same convention
+// DriveRagdollLocomotionRoot uses internally (composed against rootBindRot, which is
+// NOT world-Y for every rig; e.g. CesiumMan's hips are Z-up in bind). Exposed so a
+// script-side fallen-tilt gate reads the SAME value the engine's own horizontal/
+// upright systems gate on, rather than re-deriving tilt with a raw world-Y comparison
+// that reads ~90 deg constantly on a Z-up-bind rig even while genuinely upright (the
+// 2026-07-21 "fights walking" regression -- a spurious fallen-tilt gate blocking
+// stepping/IK almost all the time). Returns 0 until the ragdoll is built.
+float GetRagdollTiltDeg(const RagdollComponent& rag) {
+    if (!s_Impl || rag._ragdollId == 0xFFFFFFFFu) return 0.0f;
+    auto it = s_Impl->ragdolls.find(rag._ragdollId);
+    if (it == s_Impl->ragdolls.end() || it->second.rootBodySlot < 0) return 0.0f;
+    const RagdollInstance& inst = it->second;
+    JPH::BodyInterface& bi = s_Impl->joltSystem->GetBodyInterface();
+    const glm::quat curRot = FromJolt(bi.GetRotation(inst.bodies[inst.rootBodySlot].id));
+    const glm::vec3 upNow  = curRot * (glm::conjugate(inst.rootBindRot) * glm::vec3(0, 1, 0));
+    return glm::degrees(std::acos(glm::clamp(upNow.y, -1.0f, 1.0f)));
 }
 
 // Instant impulse on the ragdoll body mapped to a skeleton bone. See PhysicsAPI.h —

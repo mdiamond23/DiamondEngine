@@ -1,199 +1,106 @@
-# Character Locomotion Design (Procedural Gait + Powered Ragdoll)
+# Character Locomotion Design
 
-The player controller for **Milestone 5 — Game Layer**: a Gang Beasts–style
-character that walks with a **fully procedural gait** — no authored animation
-clips. The legs are animated by generated foot targets; the upper body is
-deliberately under-powered so it **lags behind the hips and flops from real
-inertia**. Sloppiness is the aesthetic, and it comes from genuine dynamics, not
-faked wobble.
+The controller is an intentionally small active-ragdoll gait. Physics owns the
+pelvis; the script chooses alternating foot placements and supplies leg motor poses.
 
-Home: `Sandbox/src/Scripts/LocamotionController.h`
-(`LocamotionControllerComponent` + `LocamotionControllerSystem`, priority
-**100** — the pre-physics gameplay band, same as `PunchSystem`, so the pose is
-written before the physics step consumes it).
+## Runtime pipeline
 
----
+1. Read camera-relative movement input.
+2. Write a target heading to `RagdollComponent`.
+3. Start one fixed swing step before enabling horizontal pelvis movement.
+4. Alternate left and right steps with a short double-support interval.
+5. Convert the desired sole point into a foot-body point, then an ankle target.
+6. Drive only the swinging hip-knee-ankle chain.
+7. Confirm the real sole reached its target before accepting the landing.
+8. Ramp pelvis target velocity after both feet complete an initial placement.
 
-## The core idea
+`LocamotionControllerSystem` runs at priority 100, before physics consumes the
+pose and root targets.
 
-Everything hangs off one existing hook: **`SyncRagdollPowered` drives every
-ragdoll joint motor toward whatever is in `AnimatorComponent::pose`**
-(PhysicsSystem.cpp). Today that pose comes from sampling a clip. Nothing
-downstream cares where it comes from.
+## Ownership
 
-> **Procedural animation = a system that writes a generated `Pose` instead of a
-> sampled one.** The motor pipeline, per-joint torque budgets, `strength` knob,
-> flinch / knockdown / get-up reactions, and the physics→palette skinning
-> readback all work unchanged.
+- `LocamotionController`: input, heading, step timing, foot targets, leg IK.
+- `DriveRagdollLocomotionRoot`: pelvis support, velocity force, COM balance,
+  upright control and the lean leash.
+- `SyncRagdollPowered`: joint motor targets.
+- `RagReaction`: knockdown, limp and get-up.
+- `Punch`: arms.
 
-Three pieces cooperate each frame:
+There is no second controller-side COM correction.
 
-1. **Root drive** — the hips body is moved *kinematically* (`MoveKinematic`)
-   along the path the controller integrates from stick input. This is the
-   proven mechanism from the get-up heave: joint motors cannot support or
-   balance the pelvis (it is the suspension point for the whole chain), but a
-   kinematic root reliably drags the dynamic body along and looks right.
-2. **Gait generator** — computes per-leg foot targets from a speed-driven phase
-   accumulator, solves them with the existing **two-bone IK** solver, and
-   writes the resulting leg rotations (plus hip bob and an acceleration lean on
-   the spine target) into `AnimatorComponent::pose`.
-3. **Powered ragdoll** — set to `RagdollMode::Powered`; motors chase the pose.
-   The per-joint torque distribution in the `.ragdoll` asset makes legs track
-   crisply while the torso/arms trail: **the floppy upper body is a tuning
-   preset, not code.**
+## CesiumMan leg chain
 
-Balance is **fake by design**: the kinematic root cannot be knocked over by
-contacts — only the reaction system decides to hand control to physics (flinch
-/ knockdown flip the hips dynamic, exactly as today). True self-balancing
-active ragdolls are out of scope; this is also effectively what the genre
-ships.
+```text
+Skeleton_torso_joint_1
+  -> leg_joint_*_1  hip, swing-twist
+  -> leg_joint_*_2  knee, hinge
+  -> leg_joint_*_3  ankle, swing-twist
+  -> leg_joint_*_5  sole/contact body
+```
 
----
+The analytic two-bone chain ends at `_3`, not `_5`. Each leg measures the live
+height between `_5`'s body origin and the ground. A desired sole point is raised by
+that clearance to recover the desired foot-body position, then converted to an
+ankle target. The `_5` foot motor retains its authored pose.
 
-## Goals (v1)
+The solver writes only `_1` and `_2`:
 
-- Left-stick locomotion: **camera-relative** direction, stick **magnitude →
-  speed** past a deadzone, smooth accelerate / decelerate / turn-toward-motion.
-- A complete procedural walk: alternating plant/swing stepping with no foot
-  slide, ground-conforming via raycast, stride rate proportional to speed.
-- The "drunk marionette" look: stiff legs, medium spine, weak arms/shoulders/
-  head — upper body visibly lags on acceleration and swings passively.
-- Idle = standing pose + subtle sway (the weak motors provide most of it free).
-- Clean hand-off to the existing hit-react lifecycle (flinch → knockdown →
-  get-up → back to locomotion).
+- Hip: world-space swing converted to a parent-relative pose, with bind twist held.
+- Knee: positive bend about the ragdoll's authored hinge axis.
 
-### Out of scope for v1
-- Jumping
-- True dynamic balance / stumble recovery from physics alone.
-- Runtime per-*section* strength API (asset-authored per-joint torque covers
-  v1; the runtime knob is a known follow-up in the ragdoll plan).
-- Slopes steeper than "gentle", stairs, moving platforms.
-- Networked / second player (component is per-entity, so nothing blocks it
-  later).
+## Gait
 
----
+Only one leg may swing. A step target is:
 
-## Data model
+```text
+hips + moveDirection * stepLength + right * sideOffset
+```
 
-`LocamotionControllerComponent` (all authored fields serialized + inspector):
+`sideOffset` is negative for the left leg and positive for the right leg, keeping
+a useful support width. The target is raycast onto the ground once when the swing
+starts and is not retargeted in flight.
 
-| Field | Default | Meaning |
-|---|---|---|
-| `maxSpeed` | 2.5 | m/s at full stick deflection |
-| `acceleration` | 10 | m/s² toward desired velocity |
-| `deceleration` | 14 | m/s² when stick released (slightly snappier stop) |
-| `turnRate` | 8 | slerp rate of hips yaw toward movement direction |
-| `deadzone` | 0.2 | stick magnitude below which input is ignored |
-| `strideLength` | 0.55 | meters per step at `maxSpeed` (phase rate = speed / stride) |
-| `stepHeight` | 0.12 | swing-arc apex above ground |
-| `dutyFactor` | 0.55 | fraction of the cycle each foot is planted (>0.5 = walk overlap) |
-| `hipHeight` | — | standing pelvis clearance; **captured from the bind pose at start**, not authored |
-| `bobAmplitude` | 0.03 | vertical hip bob synced to 2× gait phase |
-| `leanGain` | 0.25 | radians of spine-target lean per m/s² of acceleration |
-| `groundRayLength` | 1.0 | downward probe distance for root height + foot placement |
+The sole follows a smooth interpolation plus a sine lift arc. Completing the timer
+only enters the landing hold; the state changes to planted after the real sole is
+within `landingTolerance` of the target. Until then, the other leg and root wait.
 
-Runtime scratch (not serialized): `_velocity`, `_gaitPhase`, per-leg
-`{plantedPos, swingStartPos, phaseOffset}`, `_desiredYaw`, cached bone indices
-for the two leg chains, `_hipsBodyActive` (whether the controller currently
-owns the root — false while a reaction owns it).
+## Movement sequencing
 
-Input bindings (registered in `OnStart`, mirroring `Punch.h`'s
-`Input::BindAxis` pattern): `MoveX` / `MoveY` → `GamepadAxis::LeftX/LeftY`,
-plus a WASD fallback for deskbound testing.
+The first two steps run with zero requested horizontal pelvis velocity. Once both
+feet have established the new support area, pelvis velocity ramps toward the input
+speed over `moveRampTime`. Falling immediately cancels gait IK and root drive.
 
-> **Input conflict (must resolve in Phase 1):** `Punch.h` currently binds the
-> **left stick** to arm steering (`ArmX`/`ArmY`) and the left trigger to grab.
-> Movement takes the left stick; arm control moves to the **right stick**
-> (grab stays on the trigger). This touches `PunchComponent` bindings only —
-> the grab logic itself is unchanged.
+When input stops, gait IK and root velocity blend out. Idle therefore returns to the
+authored standing pose instead of continuously replacing it with procedural IK.
 
----
+## Current tunables
 
-## Per-frame flow (inside `OnUpdate`, priority 100 → before physics 200)
+| Field | Default | Purpose |
+|---|---:|---|
+| `maxSpeed` | 1.0 m/s | Full-input speed |
+| `moveRampTime` | 0.75 s | Root velocity ramp |
+| `stepLength` | 0.25 m | Forward foot placement |
+| `stanceHalfWidth` | 0.10 m | Per-side lateral offset |
+| `stepDuration` | 0.40 s | Swing duration |
+| `stepLift` | 0.10 m | Swing height |
+| `doubleSupportTime` | 0.08 s | Delay between steps |
+| `gaitBlendTime` | 0.20 s | IK blend in/out |
+| `kneePoleDist` | 0.50 m | Forward knee bias |
+| `maxReachFraction` | 0.95 | Prevents full extension |
+| `swingPoseWeight` | 0.35 | Limits swing motor disturbance |
+| `landingTolerance` | 0.10 m | Required real-sole proximity |
 
-1. **Input → desired velocity.** Read stick, apply deadzone, rotate into
-   camera-relative world space using the primary camera's yaw (position-only —
-   the `CameraDirector`'s fixed pitch must not tilt movement into the ground).
-   Desired speed = magnitude × `maxSpeed`.
-2. **Integrate root.** Ease `_velocity` toward desired (accel/decel), slerp
-   `_desiredYaw` toward the velocity heading, raycast down from the hips for
-   ground height (`EntityIgnoreFilter` already excludes the whole ragdoll —
-   the IK foot-ray fix covers this), and compute the new hips transform at
-   `ground + hipHeight + bob`.
-3. **Drive root.** `MoveKinematic` the hips body to that transform (fixed dt,
-   never `SetPosition` — teleporting zeroes velocity and kills the drag on the
-   chain). Skip entirely while `_hipsBodyActive == false`.
-4. **Advance gait.** `_gaitPhase += horizontalSpeed / strideLength * dt`. Legs
-   run at phase and phase + 0.5. Planted foot: target pinned at
-   `plantedPos`. Swinging foot: target follows a raised arc from lift-off
-   point to the next plant point (a step ahead along `_velocity`, raycast to
-   ground); on plant, pin it. Speed ≈ 0 → phase freezes, both feet settle
-   under the hips (idle).
-5. **Write the pose.** Start from the bind/stand pose; solve each leg with the
-   existing two-bone solver (`SolveTwoBone`, pole hints = animated-knee
-   forward) against the foot targets; apply the acceleration lean to the spine
-   target rotations; leave arms/head at bind — their motion comes entirely
-   from weak motors + inertia. Write into `AnimatorComponent::pose`.
-   The `AnimatorComponent` stays clipless (`clip = -1`); `UpdateAnimators`
-   must not overwrite the procedural pose (gate on a flag or on the entity
-   having a `LocamotionControllerComponent`).
-6. Physics steps (priority 200): `SyncRagdollPowered` reads the pose and sets
-   motor targets; the kinematic hips move; the body follows.
+## Deferred recovery features
 
-**Known latency:** IK ordering and the physics-before-animators main-loop
-order mean motors may chase a one-frame-old pose. The existing
-kinematic-follow already tolerates exactly this; at 60 Hz fixed-step it is
-invisible. Do not restructure the main loop for it.
+Capture-point stepping, shove recovery, tilt-triggered steps, hip-outside triggers,
+and mid-swing retargeting are intentionally absent. Reintroduce recovery only after
+ordinary alternating walking is stable and measurable.
 
----
+## Validation order
 
-## The sloppiness preset (`.ragdoll` tuning, not code)
-
-Per-joint `motorMaxTorque` in the asset (editable in the ragdoll inspector,
-"Save .ragdoll"):
-
-- **Hips→legs (hips, knees, ankles): strong** — they must track the gait pose.
-- **Spine: medium** — lags a beat behind hip acceleration, recovers.
-- **Shoulders, elbows, neck: weak** — trail, swing, and settle passively.
-
-Global `RagdollComponent::strength` stays the master drunkenness slider
-(`Physics::SetRagdollStrength`). Lower motor `frequency` = mushier tracking =
-drunker; tune per section. Expect this phase to be almost entirely in-editor
-knob-turning against feel.
-
----
-
-## Reaction hand-off
-
-The existing `RagReaction` machinery stays the owner of hit-react:
-
-- **Flinch / knockdown:** `AutoTriggerRagdollImpacts` fires as today. On any
-  reaction that takes the hips dynamic, the controller sets
-  `_hipsBodyActive = false` (stops `MoveKinematic` + freezes gait) and lets
-  the reaction run.
-- **Resume:** when the rig returns to its rest mode, the controller re-captures
-  the hips transform as the new path origin, re-plants both feet under the
-  pelvis, and resumes. Rest mode for a controlled character is **Powered**
-  (not Animated) — the controller is the pose source, so the old
-  "hand back to Animated" endpoint becomes "hand back to
-  Powered-with-locomotion". The get-up blend's known world-space pop
-  (GH #25) matters less here since the target pose is the stand pose the
-  get-up already drives toward.
-
----
-
-## Build order (PRs)
-
-1. **Root drive + input** — bindings (incl. the Punch right-stick migration),
-   camera-relative velocity integration, kinematic hips follow, ground ray.
-   *Verify:* rig in Powered mode dangles from moving hips and is dragged
-   around the floor. Should already be funny.
-2. **Gait generator** — phase, plant/swing targets, leg IK into the pose, idle
-   settle. *Verify:* no foot slide at any stick deflection; stops cleanly.
-3. **Sloppiness pass** — asset torque distribution, hip bob, accel lean,
-   strength/frequency tuning session in the editor.
-4. **Reaction integration** — `_hipsBodyActive` hand-off, resume-from-get-up,
-   shove-while-walking test with the existing arm-swing rig.
-
-Test scene: `Assets/Scenes/CharacterTest.scene` (CesiumMan + `.ragdoll` already
-authored). CesiumMan's single walk clip is not used — which is the point.
+1. Idle remains stable with gait weight zero.
+2. One swing leg completes a visible 0.25 m step while the stance pose is untouched.
+3. First landing occurs before horizontal drive rises.
+4. Repeated steps retain stance width and advance at 0.4 m/s.
+5. Increase toward 1.0 m/s.
+6. Add capture/tilt recovery behavior if needed.

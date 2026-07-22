@@ -72,7 +72,7 @@
         ],
         "position": [
           0.0,
-          1.4579668045043945,
+          -1.1585330963134766,
           0.0
         ],
         "rotation": [
@@ -106,12 +106,12 @@
       "transform": {
         "eulerDegrees": [
           0.0,
-          0.0,
+          -0.0,
           0.0
         ],
         "position": [
           1.0,
-          3.0,
+          0.383500337600708,
           2.0
         ],
         "rotation": [
@@ -145,12 +145,12 @@
       "transform": {
         "eulerDegrees": [
           0.0,
-          0.0,
+          -0.0,
           0.0
         ],
         "position": [
           -5.0,
-          2.0,
+          -0.616499662399292,
           4.0
         ],
         "rotation": [
@@ -184,12 +184,12 @@
       "transform": {
         "eulerDegrees": [
           0.0,
-          0.0,
+          -0.0,
           0.0
         ],
         "position": [
           8.0,
-          4.0,
+          1.3834991455078125,
           -6.0
         ],
         "rotation": [
@@ -223,12 +223,12 @@
       "transform": {
         "eulerDegrees": [
           0.0,
-          0.0,
+          -0.0,
           0.0
         ],
         "position": [
           -8.0,
-          4.0,
+          1.3834991455078125,
           -6.0
         ],
         "rotation": [
@@ -261,24 +261,24 @@
       "name": "Sun",
       "transform": {
         "eulerDegrees": [
-          15.048063278198242,
-          3.4431450366973877,
-          -25.640003204345703
+          15.048059463500977,
+          3.443140983581543,
+          -25.64000129699707
         ],
         "position": [
           0.0,
-          0.0,
+          -2.6164987087249756,
           0.0
         ],
         "rotation": [
-          0.9653673768043518,
-          0.13422897458076477,
-          0.0,
-          -0.2237149178981781
+          0.9653674364089966,
+          0.13422894477844238,
+          -2.411834287840975e-08,
+          -0.2237149029970169
         ],
         "scale": [
           1.0,
-          1.0,
+          0.9999999403953552,
           1.0
         ]
       },
@@ -317,15 +317,15 @@
           0.0
         ],
         "position": [
-          2.0,
-          8.780609130859375,
-          12.215431213378906
+          -0.7920424342155457,
+          1.6142874956130981,
+          6.834646224975586
         ],
         "rotation": [
-          0.9870824813842773,
-          -0.16021287441253662,
-          0.0,
-          0.0
+          0.9869963526725769,
+          -0.16074256598949432,
+          -0.0,
+          -0.0
         ],
         "scale": [
           1.0,
@@ -356,7 +356,7 @@
           0.0,
           0.0
         ],
-        "meshPath": "",
+        "meshPath": "Assets/Models/cut-fish/source/Fish_LP_combined/Fish_LP_combined.obj",
         "physMatPath": "",
         "radius": 0.5,
         "shapeType": 3
@@ -390,15 +390,15 @@
           0.00012291781604290009
         ],
         "position": [
-          2.2744836807250977,
-          3.4333460330963135,
-          2.7746496200561523
+          2.283353090286255,
+          0.6179054975509644,
+          2.806962013244629
         ],
         "rotation": [
-          0.9950677156448364,
-          -0.09919770807027817,
-          -1.0640339809242505e-07,
-          1.0673697943275329e-06
+          0.9999906420707703,
+          -0.0035754444543272257,
+          -0.0024588413070887327,
+          0.00024541543098166585
         ],
         "scale": [
           0.330000102519989,
@@ -464,7 +464,7 @@
         ],
         "position": [
           3.0152785778045654,
-          2.64572811126709,
+          0.02922844886779785,
           3.5087075233459473
         ],
         "rotation": [
@@ -487,7 +487,7 @@
         "loop": true,
         "playing": true,
         "speed": 1.0,
-        "time": 0.0
+        "time": 5.880279541015625
       },
       "ik": {
         "chains": [
@@ -495,7 +495,7 @@
             "ankleHeight": 0.07999999821186066,
             "boneCount": 2,
             "castOffset": 0.5,
-            "easeTime": 0.15000000596046448,
+            "easeTime": 0.07999999821186066,
             "endEffectorBone": "Skeleton_arm_joint_L__2_",
             "isFootChain": false,
             "maxStepHeight": 0.5,
@@ -512,21 +512,21 @@
               0.0
             ],
             "targetWorldPos": [
-              3.222733497619629,
-              2.7391738891601563,
-              3.191504955291748
+              -0.8591991066932678,
+              0.49130648374557495,
+              -1.5404934883117676
             ],
             "tiltToNormal": true,
             "tiltWeight": 0.800000011920929,
-            "weight": 1.0
+            "weight": 0.0
           },
           {
             "ankleHeight": 0.07999999821186066,
             "boneCount": 2,
             "castOffset": 0.5,
-            "easeTime": 0.15000000596046448,
-            "endEffectorBone": "leg_joint_L_3",
-            "isFootChain": true,
+            "easeTime": 0.07999999821186066,
+            "endEffectorBone": "Skeleton_arm_joint_R__3_",
+            "isFootChain": false,
             "maxStepHeight": 0.5,
             "poleOffset": [
               0.0,
@@ -540,33 +540,14 @@
               0.0,
               0.0
             ],
-            "tiltToNormal": true,
-            "tiltWeight": 0.800000011920929,
-            "weight": 1.0
-          },
-          {
-            "ankleHeight": 0.07999999821186066,
-            "boneCount": 2,
-            "castOffset": 0.5,
-            "easeTime": 0.15000000596046448,
-            "endEffectorBone": "leg_joint_R_3",
-            "isFootChain": true,
-            "maxStepHeight": 0.5,
-            "poleOffset": [
-              0.0,
-              0.0,
-              0.0
-            ],
-            "solver": 0,
-            "swingThreshold": 0.10000000149011612,
-            "targetOffset": [
-              0.0,
-              0.0,
-              0.0
+            "targetWorldPos": [
+              -0.6771978139877319,
+              0.49130624532699585,
+              -1.5404932498931885
             ],
             "tiltToNormal": true,
             "tiltWeight": 0.800000011920929,
-            "weight": 1.0
+            "weight": 0.0
           }
         ],
         "maxPelvisDrop": 0.5,
@@ -576,33 +557,34 @@
       "name": "Rag",
       "ragdoll": {
         "assetPath": "Assets/Models/CesiumMan.ragdoll",
-        "mode": 0
+        "mode": 2
       },
       "scriptComponents": {
         "CameraTarget": {},
         "LocamotionController": {
-          "acceleration": 10.0,
-          "ankleHeight": 0.07999999821186066,
-          "bobAltitude": 0.029999999329447746,
+          "consciousness": 1.0,
           "deadzone": 0.20000000298023224,
-          "deceleration": 15.0,
-          "dutyFactor": 0.6000000238418579,
-          "facingOffsetDeg": 90.0,
-          "footSwingPitchDeg": 22.0,
-          "gaitDebug": false,
-          "groundRayLength": 1.0,
-          "hipHeight": 0.800000011920929,
-          "leanGain": 0.25,
-          "leftFootBone": "leg_joint_L_3",
-          "leftKneeRollDeg": 90.0,
-          "maxSpeed": 3.0,
-          "pelvisBone": "torso_joint_3",
-          "rightFootBone": "leg_joint_R_3",
-          "rightKneeRollDeg": 0.0,
-          "spineBone": "Skeleton_torso_joint_2",
-          "stepHeight": 0.30000001192092896,
-          "strideLength": 1.5,
-          "turnRate": 8.0
+          "debug": true,
+          "doubleSupportTime": 0.07999999821186066,
+          "facingOffsetDeg": 0.0,
+          "gaitBlendTime": 0.20000000298023224,
+          "groundRayLength": 1.2000000476837158,
+          "ikWriteEnabled": true,
+          "kneePoleDist": 0.5,
+          "landingTolerance": 0.10000000149011612,
+          "leftFootBone": "leg_joint_L_5",
+          "maxReachFraction": 0.949999988079071,
+          "maxSpeed": 1.0,
+          "minWalkSpeed": 0.15000000596046448,
+          "moveRampTime": 0.75,
+          "postPoweredGrace": 0.4000000059604645,
+          "rightFootBone": "leg_joint_R_5",
+          "stanceHalfWidth": 0.10000000149011612,
+          "stepDuration": 0.4000000059604645,
+          "stepLength": 0.25,
+          "stepLift": 0.10000000149011612,
+          "swingPoseWeight": 1.0,
+          "turnRate": 10.0
         },
         "Punch": {
           "grabIgnoreHolder": true,
@@ -617,6 +599,7 @@
             0.0
           ],
           "punchEase": 0.07999999821186066,
+          "punchImpulse": 12.0,
           "reach": 5.0,
           "rightHandBone": "Skeleton_arm_joint_R__3_",
           "shoulderHeight": 1.2999999523162842
@@ -645,28 +628,154 @@
       },
       "transform": {
         "eulerDegrees": [
-          -89.99998474121094,
-          -6.513776063671317e-12,
-          0.00012291788880247623
+          -90.0,
+          90.0,
+          0.0
         ],
         "position": [
-          -0.9887168407440186,
-          2.0800576210021973,
-          3.786123275756836
+          -0.7684588432312012,
+          -0.59524005651474,
+          3.4513893127441406
         ],
         "rotation": [
-          0.70710688829422,
-          -0.7071066498756409,
-          -7.584857257825206e-07,
-          7.584858963127772e-07
+          -0.49999958276748657,
+          0.500000536441803,
+          -0.499999463558197,
+          -0.5000004172325134
         ],
         "scale": [
-          1.000000238418579,
-          0.9998363852500916,
-          0.9998226761817932
+          0.9999998211860657,
+          0.9999998211860657,
+          0.9999998211860657
         ]
       },
       "uuid": 6818450401873832087
+    },
+    {
+      "collider": {
+        "collisionGroup": 0,
+        "halfExtents": [
+          0.5,
+          0.5,
+          0.5
+        ],
+        "halfHeight": 0.5,
+        "isTrigger": true,
+        "localOffset": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "localRotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "meshPath": "",
+        "physMatPath": "",
+        "radius": 0.05000000074505806,
+        "shapeType": 1
+      },
+      "name": "HandProxyL",
+      "rigidbody": {
+        "angularDamping": 0.05000000074505806,
+        "bodyType": 2,
+        "continuousCollision": false,
+        "gravityScale": 0.0,
+        "linearDamping": 0.05000000074505806,
+        "lockRotX": false,
+        "lockRotY": false,
+        "lockRotZ": false,
+        "mass": 1.0
+      },
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "position": [
+          -1.1379834413528442,
+          -0.7142776250839233,
+          3.219214916229248
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 10896643669453594888
+    },
+    {
+      "collider": {
+        "collisionGroup": 0,
+        "halfExtents": [
+          0.5,
+          0.5,
+          0.5
+        ],
+        "halfHeight": 0.5,
+        "isTrigger": true,
+        "localOffset": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "localRotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "meshPath": "",
+        "physMatPath": "",
+        "radius": 0.05000000074505806,
+        "shapeType": 1
+      },
+      "name": "HandProxyR",
+      "rigidbody": {
+        "angularDamping": 0.05000000074505806,
+        "bodyType": 2,
+        "continuousCollision": false,
+        "gravityScale": 0.0,
+        "linearDamping": 0.05000000074505806,
+        "lockRotX": false,
+        "lockRotY": false,
+        "lockRotZ": false,
+        "mass": 1.0
+      },
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "position": [
+          -0.3336355984210968,
+          -0.5981395840644836,
+          3.2946863174438477
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 17730673898535930855
     }
   ]
 }
