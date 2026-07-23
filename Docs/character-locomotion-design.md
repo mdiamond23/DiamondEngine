@@ -11,15 +11,17 @@ directional symmetry, overspeed, turning and long-term balance still need work.
 
 1. Read camera-relative movement input and update the requested yaw.
 2. Enter powered-ragdoll mode and blend procedural gait IK in.
-3. Select one swing leg while the other leg remains a driven stance leg.
-4. Place the swing target ahead of the opposite planted foot.
-5. Animate a smooth lifted sole trajectory to that target.
-6. Convert the sole target into an ankle target and solve a hinge-aware hip/knee
+3. Enter `WeightShift` and bias physical COM support toward the future stance foot.
+4. Start the swing only after that foot is grounded and COM remains inside its
+   support region for a short stable interval.
+5. Place the swing target ahead of the opposite planted foot.
+6. Animate a smooth lifted sole trajectory to that target.
+7. Convert the sole target into an ankle target and solve a hinge-aware hip/knee
    pose in world space.
-7. Let powered ragdoll motors chase that pose while physics owns every body.
-8. Verify the physical foot reached the target, or settle it at its actual grounded
+8. Let powered ragdoll motors chase that pose while physics owns every body.
+9. Verify the physical foot reached the target, or settle it at its actual grounded
    position after a timeout, before alternating legs.
-9. Drive the pelvis toward a gait-limited velocity while applying upright and
+10. Drive the pelvis toward a gait-limited velocity while applying upright and
    support-base balance.
 
 `LocamotionControllerSystem` runs at priority 100, before physics consumes the
@@ -74,6 +76,19 @@ generally follows it. This was the change that made visible stepping possible.
 
 ## Gait and foot placement
 
+The gait state machine is:
+
+```text
+Idle -> WeightShift -> Swing -> DoubleSupport -> WeightShift
+```
+
+`Idle` clears any one-foot support bias and is the only entry into a fresh gait.
+During `WeightShift`, both feet remain planted while physics pulls projected COM
+toward a point slightly inboard of the future stance foot. A swing can begin only
+after the stance foot is physically grounded and COM remains inside
+`weightShiftRadius` for `weightShiftStableTime`. A failed transfer times out to
+`DoubleSupport` and retries instead of lifting an unloaded foot.
+
 Only one leg may swing at once. The current forward target is:
 
 ```text
@@ -105,12 +120,14 @@ landings allowed leg reaction forces to scoot the pelvis backward during startup
 The requested root speed is conservatively capped from current gait timing:
 
 ```text
-stepLength / (2 * (stepDuration + doubleSupportTime))
+stepLength / (2 * (stepDuration + weightShiftTime + doubleSupportTime))
 ```
 
-With current values this is about `0.365 m/s`. `moveRampTime` blends into that
-command. Propulsion is smoothly attenuated from 20 degrees of tilt and reaches zero
-at 30 degrees; the normal fallen threshold remains separate.
+With current values this is about `0.257 m/s`. `moveRampTime` blends into that
+command. During weight transfer the velocity command is additionally scaled to
+15 percent so support can move laterally without restoring the old no-propulsion
+startup behavior. Propulsion is smoothly attenuated from 20 degrees of tilt and
+reaches zero at 30 degrees; the normal fallen threshold remains separate.
 
 This cap limits the target, not the physical velocity. Leg and balance impulses can
 still accelerate the character to `0.8-1.1 m/s`, which is one cause of eventual
@@ -130,6 +147,13 @@ falls.
 | `stepDuration` | 0.40 s | Swing duration |
 | `stepLift` | 0.10 m | Swing arc height |
 | `doubleSupportTime` | 0.08 s | Delay between swings |
+| `weightShiftTime` | 0.20 s | Minimum transfer time between ordinary steps |
+| `firstWeightShiftTime` | 0.25 s | Longer startup transfer time |
+| `weightShiftTimeout` | 0.40 s | Return to double support if transfer cannot verify |
+| `weightShiftRadius` | 0.08 m | Maximum projected COM error before lifting |
+| `weightShiftStableTime` | 0.05 s | Required continuous stable support interval |
+| `weightShiftDriveScale` | 0.15 | Forward drive multiplier during transfer |
+| `weightShiftInboard` | 0.20 | Support target inset from stance foot toward midpoint |
 | `gaitBlendTime` | 0.20 s | Procedural pose blend |
 | `maxReachFraction` | 0.95 | Prevents full leg extension |
 | `swingPoseWeight` | 1.0 | Scene override for swing leg IK |
@@ -149,6 +173,8 @@ Current debug markers:
 - orange sphere: final swing target;
 - blue sphere: clamped ankle IK target;
 - red sphere and line: physical ankle and its error from the blue target.
+- cyan sphere: active weight-shift support target;
+- yellow sphere: physical projected COM.
 
 Important log fields:
 
@@ -182,16 +208,17 @@ swing travel. A recent leftward run completed eight verified steps before failin
 
 ## Known problems
 
-### 1. Startup scoot and failed first steps
+### 1. Startup weight-shift tuning
 
-The first swing starts from a symmetric two-foot stance without first transferring
-body weight over the future stance foot. Logs often show the first physical foot
-moving only a few millimeters even though `aheadOfStance=+0.35`, followed by signed
-backward pelvis velocity.
+The explicit `WeightShift` phase is implemented. Physics now exposes mass-weighted
+COM and per-foot grounding, and can blend normal support-base balance toward a
+controller-provided support target. The controller waits for verified, stable
+support before lifting and safely retries after a timeout.
 
-Likely fix: add a short `WeightShift` phase before `Swinging`. Move COM/pelvis support
-toward the stance foot for about 0.15-0.25 seconds and start the swing only when that
-foot is grounded and COM is inside its support region.
+The phase still needs four-direction runtime testing. Watch `comError`, stance-foot
+grounding, timeout frequency, signed startup velocity and whether the first physical
+foot now travels toward its target. Tune the support radius/inset and balance force
+from those measurements rather than shortening the readiness gate blindly.
 
 ### 2. Directional asymmetry
 
@@ -213,9 +240,10 @@ measure swing-hip command error for four controlled cardinal runs.
 
 ### 3. Eventual overspeed and forward fall
 
-During good walking, actual pelvis speed frequently exceeds the `0.365 m/s` target
-and reaches `0.8-1.1 m/s`. Eventually a swing foot misses, support disappears and
-tilt rises rapidly. The current controller fades future propulsion but cannot cancel
+During good walking, actual pelvis speed has frequently reached `0.8-1.1 m/s`,
+well above the previous `0.365 m/s` target and the new weight-shift-aware
+`0.257 m/s` target. Eventually a swing foot misses, support disappears and tilt
+rises rapidly. The current controller fades future propulsion but cannot cancel
 existing momentum or place a recovery step.
 
 Likely fixes after direction/startup work:
@@ -248,7 +276,7 @@ its captured direction or support limited retargeting.
    left and right. Do not turn during a run. Record verified/settled steps and peak
    hip motor error per leg.
 4. Correct the rig axes or make the hip solve cone-aware based on that evidence.
-5. Add the explicit weight-transfer startup phase.
+5. Tune the explicit weight-transfer phase from the four-direction measurements.
 6. Add overspeed braking and velocity-aware foot placement.
 7. Add swing-foot heading only after the four-direction gait is stable.
 8. Reintroduce capture/tilt recovery last.

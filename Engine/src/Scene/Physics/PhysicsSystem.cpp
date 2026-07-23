@@ -1559,19 +1559,35 @@ static void DriveRagdollLocomotionRoot(PhysicsSystem::Impl& impl, RagdollInstanc
     glm::vec3 moveF(0.0f), balF(0.0f);
 
     // Mass-weighted COM and the support segment formed by grounded feet.
-    glm::vec3 com(0.0f); float totalMass = 0.0f;
+    glm::vec3 com(0.0f), comVel(0.0f); float totalMass = 0.0f;
     for (const RagdollBody& b : inst.bodies) {
         com += FromJolt(bi.GetPosition(b.id)) * b.mass;
+        comVel += FromJolt(bi.GetLinearVelocity(b.id)) * b.mass;
         totalMass += b.mass;
     }
-    if (totalMass > 1e-6f) com /= totalMass;
+    rag._locomotionCOMValid = totalMass > 1e-6f;
+    if (rag._locomotionCOMValid) {
+        com /= totalMass;
+        comVel /= totalMass;
+    }
+    rag._locomotionCOM = com;
+    rag._locomotionCOMVel = comVel;
 
     glm::vec3 footXZ[2]; int footCount = 0;
+    int footSlot = 0;
+    rag._locomotionFootBones[0] = rag._locomotionFootBones[1] = -1;
+    rag._locomotionFootGrounded[0] = rag._locomotionFootGrounded[1] = false;
     for (const RagdollBody& b : inst.bodies) {
-        if (!b.isFoot || footCount >= 2) continue;
+        if (!b.isFoot) continue;
         const glm::vec3 fp = FromJolt(bi.GetPosition(b.id));
         HitResult fg = Physics::Raycast(fp, glm::vec3(0, -1, 0), b.halfExtents.y + 0.05f, inst.entity, false);
-        if (fg.hit) footXZ[footCount++] = glm::vec3(fp.x, 0.0f, fp.z);
+        if (footSlot < 2) {
+            rag._locomotionFootBones[footSlot] = b.boneIndex;
+            rag._locomotionFootGrounded[footSlot] = fg.hit;
+            ++footSlot;
+        }
+        if (fg.hit && footCount < 2)
+            footXZ[footCount++] = glm::vec3(fp.x, 0.0f, fp.z);
     }
 
     const glm::vec3 comXZ(com.x, 0.0f, com.z);
@@ -1623,8 +1639,33 @@ static void DriveRagdollLocomotionRoot(PhysicsSystem::Impl& impl, RagdollInstanc
                               * rag.locomotionMoveLean;
         if (const float l = glm::length(desiredLean); l > 0.45f) desiredLean *= 0.45f / l;
         const glm::vec3 balanceErr = footCount > 0 ? baseErr : leanH;
+        const glm::vec3 normalBalanceForce =
+            -(balanceErr - desiredLean) * glm::max(rag.locomotionBalanceForce, 0.0f);
+        const float supportTargetWeight = glm::clamp(rag.locomotionSupportTargetWeight, 0.0f, 1.0f);
+        glm::vec3 supportTargetForce = normalBalanceForce;
+        if (supportTargetWeight > 0.0f &&
+            std::isfinite(rag.locomotionSupportTarget.x) &&
+            std::isfinite(rag.locomotionSupportTarget.z) &&
+            std::isfinite(rag.locomotionSupportTargetVel.x) &&
+            std::isfinite(rag.locomotionSupportTargetVel.z)) {
+            const glm::vec3 targetPos(rag.locomotionSupportTarget.x, 0.0f,
+                                      rag.locomotionSupportTarget.z);
+            const glm::vec3 targetVel(rag.locomotionSupportTargetVel.x, 0.0f,
+                                      rag.locomotionSupportTargetVel.z);
+            const glm::vec3 horizontalCOMVel(comVel.x, 0.0f, comVel.z);
+            const float frequency = glm::max(rag.locomotionCOMSupportFreq, 0.0f);
+            const float damping = glm::max(rag.locomotionCOMSupportDamping, 0.0f);
+            const float omega = glm::two_pi<float>() * frequency;
+            glm::vec3 accel = omega * omega * (targetPos - comXZ)
+                            + 2.0f * damping * omega * (targetVel - horizontalCOMVel);
+            const float maxAccel = glm::max(rag.locomotionCOMSupportMaxAccel, 0.0f);
+            if (const float length = glm::length(accel);
+                length > maxAccel && length > 1e-6f)
+                accel *= maxAccel / length;
+            supportTargetForce = accel * root.mass;
+        }
         moveF = velErr * glm::max(rag.locomotionMoveForce, 0.0f);
-        balF  = -(balanceErr - desiredLean) * glm::max(rag.locomotionBalanceForce, 0.0f);
+        balF = glm::mix(normalBalanceForce, supportTargetForce, supportTargetWeight);
 
         // Prevent the pelvis from outrunning the planted support base.
         if (hipOutside > glm::max(rag.locomotionLeashDistance, 0.0f)) {

@@ -43,6 +43,17 @@ struct LocamotionControllerComponent
     float stepDuration    = 0.40f;
     float stepLift        = 0.10f;
     float doubleSupportTime = 0.08f;
+    float weightShiftTime = 0.20f;
+    float firstWeightShiftTime = 0.25f;
+    float weightShiftTimeout = 0.40f;
+    float weightShiftRadius = 0.08f;
+    float weightShiftStableTime = 0.05f;
+    float weightShiftDriveScale = 0.15f;
+    float weightShiftInboard = 0.20f;
+    float weightShiftTargetTime = 0.15f;
+    float toeOffFraction = 0.20f;
+    float toeOffHeight = 0.03f;
+    float swingSupportFadeEnd = 0.45f;
     float postPoweredGrace  = 0.4f;
     float gaitBlendTime     = 0.2f;
     float maxReachFraction  = 0.95f;
@@ -53,6 +64,7 @@ struct LocamotionControllerComponent
     bool ikWriteEnabled = true;
     bool debug = false;
 
+    enum class GaitPhase { Idle, WeightShift, Swing, DoubleSupport };
     enum class LegPhase { Planted, Swinging };
     struct LegState {
         int footIdx  = -1;
@@ -68,6 +80,7 @@ struct LocamotionControllerComponent
         glm::vec3 soleTarget      { 0.0f };
         float soleHeight = 0.03f;
         float swingProgress = 0.0f;
+        float swingPoseBlend = 0.0f;
         float landingWait = 0.0f;
         bool landingWarning = false;
         bool init = false;
@@ -78,12 +91,31 @@ struct LocamotionControllerComponent
     float _gaitWeight = 0.0f;
     float _driveWeight = 0.0f;
     float _timeSinceLanding = 0.0f;
+    float _phaseTime = 0.0f;
+    float _weightShiftStableTime = 0.0f;
     bool _grounded = true;
     bool _wasWalking = false;
+    bool _firstStep = true;
+    bool _weightShiftTargetCaptured = false;
     int _landedStepCount = 0;
     bool _nextLeft = true;
+    GaitPhase _gaitPhase = GaitPhase::Idle;
+    glm::vec3 _weightShiftStartTarget { 0.0f };
+    glm::vec3 _swingSupportTarget { 0.0f };
     LegState _legL, _legR;
 };
+
+inline const char* LocomotionGaitPhaseName(LocamotionControllerComponent::GaitPhase phase)
+{
+    using Phase = LocamotionControllerComponent::GaitPhase;
+    switch (phase) {
+        case Phase::Idle:          return "Idle";
+        case Phase::WeightShift:   return "Weight Shift";
+        case Phase::Swing:         return "Swing";
+        case Phase::DoubleSupport: return "Double Support";
+    }
+    return "Unknown";
+}
 
 template<>
 inline void DrawComponentInspector<LocamotionControllerComponent>(LocamotionControllerComponent& c)
@@ -112,6 +144,17 @@ inline void DrawComponentInspector<LocamotionControllerComponent>(LocamotionCont
     ImGui::DragFloat("Step Duration", &c.stepDuration, 0.01f, 0.08f, 1.0f);
     ImGui::DragFloat("Step Lift", &c.stepLift, 0.005f, 0.0f, 0.3f);
     ImGui::DragFloat("Double Support Time", &c.doubleSupportTime, 0.01f, 0.0f, 0.5f);
+    ImGui::DragFloat("Weight Shift Time", &c.weightShiftTime, 0.01f, 0.0f, 1.0f);
+    ImGui::DragFloat("First Weight Shift", &c.firstWeightShiftTime, 0.01f, 0.0f, 1.0f);
+    ImGui::DragFloat("Weight Shift Timeout", &c.weightShiftTimeout, 0.01f, 0.01f, 2.0f);
+    ImGui::DragFloat("Weight Shift Radius", &c.weightShiftRadius, 0.005f, 0.01f, 0.5f);
+    ImGui::DragFloat("Weight Shift Stable", &c.weightShiftStableTime, 0.01f, 0.0f, 0.5f);
+    ImGui::DragFloat("Weight Shift Drive", &c.weightShiftDriveScale, 0.01f, 0.0f, 1.0f);
+    ImGui::SliderFloat("Weight Shift Inboard", &c.weightShiftInboard, 0.0f, 0.5f);
+    ImGui::DragFloat("Weight Shift Target Time", &c.weightShiftTargetTime, 0.01f, 0.01f, 1.0f);
+    ImGui::SliderFloat("Toe-Off Fraction", &c.toeOffFraction, 0.05f, 0.45f);
+    ImGui::DragFloat("Toe-Off Height", &c.toeOffHeight, 0.005f, 0.0f, 0.15f);
+    ImGui::SliderFloat("Swing Support Fade End", &c.swingSupportFadeEnd, 0.10f, 0.80f);
     ImGui::DragFloat("Post-Powered Grace", &c.postPoweredGrace, 0.01f, 0.0f, 2.0f);
     ImGui::DragFloat("Gait Blend Time", &c.gaitBlendTime, 0.01f, 0.01f, 1.0f);
     ImGui::DragFloat("Max Reach Fraction", &c.maxReachFraction, 0.01f, 0.5f, 0.99f);
@@ -121,6 +164,7 @@ inline void DrawComponentInspector<LocamotionControllerComponent>(LocamotionCont
     ImGui::Checkbox("IK Write Enabled", &c.ikWriteEnabled);
     ImGui::Checkbox("Debug", &c.debug);
     ImGui::TextDisabled(c._grounded ? "Grounded" : "Airborne");
+    ImGui::TextDisabled("Gait: %s", LocomotionGaitPhaseName(c._gaitPhase));
 }
 
 template<>
@@ -142,6 +186,17 @@ inline std::string SerializeComponent<LocamotionControllerComponent>(const Locam
     j["stepDuration"] = c.stepDuration;
     j["stepLift"] = c.stepLift;
     j["doubleSupportTime"] = c.doubleSupportTime;
+    j["weightShiftTime"] = c.weightShiftTime;
+    j["firstWeightShiftTime"] = c.firstWeightShiftTime;
+    j["weightShiftTimeout"] = c.weightShiftTimeout;
+    j["weightShiftRadius"] = c.weightShiftRadius;
+    j["weightShiftStableTime"] = c.weightShiftStableTime;
+    j["weightShiftDriveScale"] = c.weightShiftDriveScale;
+    j["weightShiftInboard"] = c.weightShiftInboard;
+    j["weightShiftTargetTime"] = c.weightShiftTargetTime;
+    j["toeOffFraction"] = c.toeOffFraction;
+    j["toeOffHeight"] = c.toeOffHeight;
+    j["swingSupportFadeEnd"] = c.swingSupportFadeEnd;
     j["postPoweredGrace"] = c.postPoweredGrace;
     j["gaitBlendTime"] = c.gaitBlendTime;
     j["maxReachFraction"] = c.maxReachFraction;
@@ -173,6 +228,17 @@ inline void DeserializeComponent<LocamotionControllerComponent>(LocamotionContro
     c.stepDuration = j.value("stepDuration", 0.40f);
     c.stepLift = j.value("stepLift", 0.10f);
     c.doubleSupportTime = j.value("doubleSupportTime", 0.08f);
+    c.weightShiftTime = j.value("weightShiftTime", 0.20f);
+    c.firstWeightShiftTime = j.value("firstWeightShiftTime", 0.25f);
+    c.weightShiftTimeout = j.value("weightShiftTimeout", 0.40f);
+    c.weightShiftRadius = j.value("weightShiftRadius", 0.08f);
+    c.weightShiftStableTime = j.value("weightShiftStableTime", 0.05f);
+    c.weightShiftDriveScale = j.value("weightShiftDriveScale", 0.15f);
+    c.weightShiftInboard = j.value("weightShiftInboard", 0.20f);
+    c.weightShiftTargetTime = j.value("weightShiftTargetTime", 0.15f);
+    c.toeOffFraction = j.value("toeOffFraction", 0.20f);
+    c.toeOffHeight = j.value("toeOffHeight", 0.03f);
+    c.swingSupportFadeEnd = j.value("swingSupportFadeEnd", 0.45f);
     c.postPoweredGrace = j.value("postPoweredGrace", 0.4f);
     c.gaitBlendTime = j.value("gaitBlendTime", 0.2f);
     c.maxReachFraction = j.value("maxReachFraction", 0.95f);
@@ -192,8 +258,10 @@ class LocamotionControllerSystem : public GameSystem
 public:
     void OnStart(Scene&) override
     {
-        Input::BindAxis("MoveX", GamepadAxis::LeftX);
-        Input::BindAxis("MoveY", GamepadAxis::LeftY);
+        // Input::BindAxis("MoveX", GamepadAxis::LeftX);
+        // Input::BindAxis("MoveY", GamepadAxis::LeftY);
+        Input::BindAxis("MoveX", Key::D, Key::A);
+        Input::BindAxis("MoveY", Key::S, Key::W);
     }
 
     void OnUpdate(Scene& scene, float dt) override
@@ -209,6 +277,8 @@ public:
             if (!scene.Has<RagdollComponent>(entity) || !scene.Has<TransformComponent>(entity)) continue;
             auto& rag = scene.Get<RagdollComponent>(entity);
             auto& xf = scene.Get<TransformComponent>(entity);
+            rag.locomotionSupportTargetWeight = 0.0f;
+            rag.locomotionSupportTargetVel = glm::vec3(0.0f);
 
             if (rag.mode == RagdollMode::Animated) {
                 Physics::SetRagdollMode(rag, RagdollMode::Powered);
@@ -260,11 +330,21 @@ public:
                 comp._landedStepCount = 0;
                 comp._driveWeight = 0.0f;
                 comp._timeSinceLanding = comp.doubleSupportTime;
+                comp._phaseTime = 0.0f;
+                comp._weightShiftStableTime = 0.0f;
+                comp._firstStep = true;
+                comp._weightShiftTargetCaptured = false;
+                comp._gaitPhase = LocamotionControllerComponent::GaitPhase::Idle;
             }
             if (stoppedWalking) {
                 comp._legL = {};
                 comp._legR = {};
                 comp._nextLeft = true;
+                comp._phaseTime = 0.0f;
+                comp._weightShiftStableTime = 0.0f;
+                comp._firstStep = true;
+                comp._weightShiftTargetCaptured = false;
+                comp._gaitPhase = LocamotionControllerComponent::GaitPhase::Idle;
             }
             if (!wantsToWalk || !canGait) comp._landedStepCount = 0;
             comp._wasWalking = wantsToWalk;
@@ -273,21 +353,29 @@ public:
             const float driveRate = 1.0f / glm::max(comp.moveRampTime, 0.01f);
             comp._driveWeight = Approach(comp._driveWeight, driveTarget, driveRate * dt);
 
-            const float gaitCycle = 2.0f * (comp.stepDuration + comp.doubleSupportTime);
+            const float gaitCycle =
+                2.0f * (comp.stepDuration + comp.doubleSupportTime + comp.weightShiftTime);
             const float gaitSpeedLimit = comp.stepLength / glm::max(gaitCycle, 0.01f);
             const float driveSpeed = glm::min(speed, gaitSpeedLimit);
             const float tiltT = glm::clamp((tiltDeg - 20.0f) / 10.0f, 0.0f, 1.0f);
             const float tiltScale = 1.0f - tiltT * tiltT * (3.0f - 2.0f * tiltT);
-            rag.locomotionTargetVel = moveDir * driveSpeed * comp._driveWeight * tiltScale;
 
             UpdateGait(scene, entity, comp, rag, moveDir, gaitRequested, dt);
+
+            const float phaseDriveScale =
+                comp._gaitPhase == LocamotionControllerComponent::GaitPhase::WeightShift
+                    ? glm::clamp(comp.weightShiftDriveScale, 0.0f, 1.0f)
+                    : 1.0f;
+            rag.locomotionTargetVel =
+                moveDir * driveSpeed * comp._driveWeight * tiltScale * phaseDriveScale;
 
             if (comp.debug) {
                 _debugTimer += dt;
                 if (_debugTimer >= 0.25f) {
                     _debugTimer = 0.0f;
                     const glm::vec3 v = rag._locomotionRootVel;
-                    spdlog::info("[Loco] input={:.2f} requested={:.2f} target={:.2f} drive={:.2f} actual={:.2f} along={:+.2f} gait={:.2f} tilt={:.1f} steps={}",
+                    spdlog::info("[Loco] phase={} input={:.2f} requested={:.2f} target={:.2f} drive={:.2f} actual={:.2f} along={:+.2f} gait={:.2f} tilt={:.1f} steps={}",
+                                 LocomotionGaitPhaseName(comp._gaitPhase),
                                  magnitude, speed,
                                  glm::length(glm::vec2(rag.locomotionTargetVel.x,
                                                        rag.locomotionTargetVel.z)),
@@ -311,12 +399,23 @@ private:
         return glm::max(value - amount, target);
     }
 
+    static float SmootherStep(float t)
+    {
+        t = glm::clamp(t, 0.0f, 1.0f);
+        return t * t * t * (t * (t * 6.0f - 15.0f) + 10.0f);
+    }
+
     static void ResetGait(LocamotionControllerComponent& c)
     {
         c._gaitWeight = 0.0f;
         c._driveWeight = 0.0f;
         c._wasWalking = false;
         c._landedStepCount = 0;
+        c._phaseTime = 0.0f;
+        c._weightShiftStableTime = 0.0f;
+        c._firstStep = true;
+        c._weightShiftTargetCaptured = false;
+        c._gaitPhase = LocamotionControllerComponent::GaitPhase::Idle;
         c._legL = {};
         c._legR = {};
     }
@@ -415,7 +514,7 @@ private:
     }
 
     void UpdateGait(Scene& scene, entt::entity entity, LocamotionControllerComponent& comp,
-                    const RagdollComponent& rag, const glm::vec3& moveDir,
+                    RagdollComponent& rag, const glm::vec3& moveDir,
                     bool walking, float dt)
     {
         if (!scene.Has<SkinnedMeshComponent>(entity) || !scene.Has<AnimatorComponent>(entity)) return;
@@ -456,9 +555,7 @@ private:
             comp._timeSinceLanding += dt;
         }
 
-        const bool anySwing = comp._legL.phase == LocamotionControllerComponent::LegPhase::Swinging ||
-                              comp._legR.phase == LocamotionControllerComponent::LegPhase::Swinging;
-        if (walking && !anySwing && comp._timeSinceLanding >= comp.doubleSupportTime) {
+        auto startSwing = [&]() {
             auto& leg = comp._nextLeft ? comp._legL : comp._legR;
             const auto& stanceLeg = comp._nextLeft ? comp._legR : comp._legL;
             const float side = comp._nextLeft ? -1.0f : 1.0f;
@@ -479,10 +576,15 @@ private:
                                                      glm::vec3(0.0f), comp.groundRayLength,
                                                      leg.swingStartSole.y);
             leg.swingProgress = 0.0f;
+            leg.swingPoseBlend = 0.0f;
             leg.landingWait = 0.0f;
             leg.landingWarning = false;
             leg.phase = LocamotionControllerComponent::LegPhase::Swinging;
             comp._nextLeft = !comp._nextLeft;
+            comp._firstStep = false;
+            comp._phaseTime = 0.0f;
+            comp._weightShiftStableTime = 0.0f;
+            comp._gaitPhase = LocamotionControllerComponent::GaitPhase::Swing;
             if (comp.debug)
                 spdlog::info("[Loco] {} step to ({:+.2f}, {:+.2f}, {:+.2f}) swingTravel={:+.2f} aheadOfStance={:+.2f} move=({:+.2f},{:+.2f})",
                              side < 0.0f ? "left" : "right", leg.swingTargetSole.x,
@@ -490,17 +592,141 @@ private:
                              glm::dot(leg.swingTargetSole - leg.swingStartSole, stepDirection),
                              glm::dot(leg.swingTargetSole - stanceLeg.plantSole, stepDirection),
                              moveDir.x, moveDir.z);
+        };
+
+        const bool anySwing = comp._legL.phase == LocamotionControllerComponent::LegPhase::Swinging ||
+                              comp._legR.phase == LocamotionControllerComponent::LegPhase::Swinging;
+        if (!walking) {
+            comp._phaseTime = 0.0f;
+            comp._weightShiftStableTime = 0.0f;
+            comp._gaitPhase = anySwing
+                ? LocamotionControllerComponent::GaitPhase::Swing
+                : LocamotionControllerComponent::GaitPhase::Idle;
+        } else if (anySwing) {
+            comp._gaitPhase = LocamotionControllerComponent::GaitPhase::Swing;
+            const auto& swingLeg =
+                comp._legL.phase == LocamotionControllerComponent::LegPhase::Swinging
+                    ? comp._legL : comp._legR;
+            const float fadeStart = glm::clamp(comp.toeOffFraction, 0.05f, 0.45f);
+            const float fadeEnd = glm::max(comp.swingSupportFadeEnd, fadeStart + 0.01f);
+            const float fadeT = (swingLeg.swingProgress - fadeStart) / (fadeEnd - fadeStart);
+            rag.locomotionSupportTarget = comp._swingSupportTarget;
+            rag.locomotionSupportTargetVel = glm::vec3(0.0f);
+            rag.locomotionSupportTargetWeight = 1.0f - SmootherStep(fadeT);
+        } else {
+            using GaitPhase = LocamotionControllerComponent::GaitPhase;
+            if (completed) {
+                comp._phaseTime = 0.0f;
+                comp._weightShiftStableTime = 0.0f;
+                comp._gaitPhase = GaitPhase::DoubleSupport;
+            }
+
+            if (comp._gaitPhase == GaitPhase::Idle) {
+                comp._phaseTime = 0.0f;
+                comp._weightShiftStableTime = 0.0f;
+                comp._weightShiftTargetCaptured = false;
+                comp._gaitPhase = GaitPhase::WeightShift;
+                if (comp.debug) spdlog::info("[Loco] weight shift started");
+            } else if (comp._gaitPhase == GaitPhase::DoubleSupport) {
+                comp._phaseTime += dt;
+                if (comp._phaseTime >= comp.doubleSupportTime) {
+                    comp._phaseTime = 0.0f;
+                    comp._weightShiftStableTime = 0.0f;
+                    comp._weightShiftTargetCaptured = false;
+                    comp._gaitPhase = GaitPhase::WeightShift;
+                    if (comp.debug) spdlog::info("[Loco] weight shift started");
+                }
+            }
+
+            if (comp._gaitPhase == GaitPhase::WeightShift) {
+                const auto& stanceLeg = comp._nextLeft ? comp._legR : comp._legL;
+                const glm::vec3 midpoint = (comp._legL.plantSole + comp._legR.plantSole) * 0.5f;
+                const glm::vec3 finalSupportTarget = glm::mix(
+                    stanceLeg.plantSole, midpoint,
+                    glm::clamp(comp.weightShiftInboard, 0.0f, 0.5f));
+                comp._swingSupportTarget = finalSupportTarget;
+                if (!comp._weightShiftTargetCaptured) {
+                    comp._weightShiftStartTarget = rag._locomotionCOMValid
+                        ? glm::vec3(rag._locomotionCOM.x, finalSupportTarget.y,
+                                    rag._locomotionCOM.z)
+                        : midpoint;
+                    comp._weightShiftTargetCaptured = true;
+                }
+
+                const float targetTime = glm::max(comp.weightShiftTargetTime, 0.01f);
+                const float targetT = glm::clamp(comp._phaseTime / targetTime, 0.0f, 1.0f);
+                const float targetBlend = SmootherStep(targetT);
+                const float targetBlendRate =
+                    targetT < 1.0f
+                        ? 30.0f * targetT * targetT *
+                          (targetT - 1.0f) * (targetT - 1.0f) / targetTime
+                        : 0.0f;
+                const glm::vec3 targetTravel =
+                    finalSupportTarget - comp._weightShiftStartTarget;
+                rag.locomotionSupportTarget =
+                    comp._weightShiftStartTarget + targetTravel * targetBlend;
+                rag.locomotionSupportTargetVel = targetTravel * targetBlendRate;
+                rag.locomotionSupportTargetWeight = 1.0f;
+
+                bool stanceGrounded = false;
+                for (int i = 0; i < 2; ++i) {
+                    if (rag._locomotionFootBones[i] == stanceLeg.footIdx) {
+                        stanceGrounded = rag._locomotionFootGrounded[i];
+                        break;
+                    }
+                }
+
+                const glm::vec2 comDelta(
+                    rag._locomotionCOM.x - finalSupportTarget.x,
+                    rag._locomotionCOM.z - finalSupportTarget.z);
+                const float comError = rag._locomotionCOMValid
+                    ? glm::length(comDelta)
+                    : std::numeric_limits<float>::infinity();
+                const bool supportReady =
+                    stanceGrounded && comError <= glm::max(comp.weightShiftRadius, 0.0f);
+                comp._weightShiftStableTime = supportReady
+                    ? comp._weightShiftStableTime + dt
+                    : 0.0f;
+                comp._phaseTime += dt;
+
+                const float minimumTime =
+                    comp._firstStep ? comp.firstWeightShiftTime : comp.weightShiftTime;
+                const bool stable =
+                    comp._weightShiftStableTime >= glm::max(comp.weightShiftStableTime, 0.0f);
+                if (comp._phaseTime >= glm::max(minimumTime, 0.0f) && stable) {
+                    if (comp.debug)
+                        spdlog::info("[Loco] weight shift ready stance={} comError={:.3f} time={:.2f}",
+                                     comp._nextLeft ? "right" : "left",
+                                     comError, comp._phaseTime);
+                    startSwing();
+                } else if (comp._phaseTime >=
+                           glm::max(comp.weightShiftTimeout, minimumTime)) {
+                    if (comp.debug)
+                        spdlog::warn("[Loco] weight shift timed out stance={} grounded={} comError={:.3f}",
+                                     comp._nextLeft ? "right" : "left",
+                                     stanceGrounded, comError);
+                    comp._phaseTime = 0.0f;
+                    comp._weightShiftStableTime = 0.0f;
+                    comp._weightShiftTargetCaptured = false;
+                    comp._gaitPhase = GaitPhase::DoubleSupport;
+                    rag.locomotionSupportTargetWeight = 0.0f;
+                }
+            }
         }
 
         if (comp._gaitWeight > 0.001f) {
             const float leftWeight = comp._legL.phase == LocamotionControllerComponent::LegPhase::Swinging
-                ? comp.swingPoseWeight : comp.stancePoseWeight;
+                ? glm::mix(comp.stancePoseWeight, comp.swingPoseWeight,
+                           comp._legL.swingPoseBlend)
+                : comp.stancePoseWeight;
             SolveLeg(comp._legL, skeleton, animator, entityWorld, moveDir,
                      comp.maxReachFraction,
                      comp._gaitWeight * leftWeight,
                      comp.ikWriteEnabled, comp.debug);
             const float rightWeight = comp._legR.phase == LocamotionControllerComponent::LegPhase::Swinging
-                ? comp.swingPoseWeight : comp.stancePoseWeight;
+                ? glm::mix(comp.stancePoseWeight, comp.swingPoseWeight,
+                           comp._legR.swingPoseBlend)
+                : comp.stancePoseWeight;
             SolveLeg(comp._legR, skeleton, animator, entityWorld, moveDir,
                      comp.maxReachFraction,
                      comp._gaitWeight * rightWeight,
@@ -508,6 +734,15 @@ private:
         }
 
         if (comp.debug) {
+            if (rag._locomotionCOMValid) {
+                const glm::vec3 comMarker(rag._locomotionCOM.x,
+                                          rag.locomotionSupportTarget.y + 0.03f,
+                                          rag._locomotionCOM.z);
+                DebugDraw::Sphere(comMarker, 0.035f, {1.0f, 0.85f, 0.1f});
+            }
+            if (rag.locomotionSupportTargetWeight > 0.0f)
+                DebugDraw::Sphere(rag.locomotionSupportTarget + glm::vec3(0, 0.03f, 0),
+                                  0.04f, {0.1f, 0.9f, 0.9f});
             DrawLeg(comp._legL);
             DrawLeg(comp._legR);
         }
@@ -546,14 +781,29 @@ private:
     {
         if (leg.phase != LocamotionControllerComponent::LegPhase::Swinging) {
             leg.soleTarget = leg.plantSole;
+            leg.swingPoseBlend = 0.0f;
             return SwingResult::None;
         }
 
         leg.swingProgress = glm::min(leg.swingProgress + dt / glm::max(comp.stepDuration, 0.01f), 1.0f);
         const float t = leg.swingProgress;
-        const float smooth = t * t * (3.0f - 2.0f * t);
-        leg.soleTarget = glm::mix(leg.swingStartSole, leg.swingTargetSole, smooth);
-        leg.soleTarget.y += comp.stepLift * std::sin(glm::pi<float>() * t);
+        const float toeEnd = glm::clamp(comp.toeOffFraction, 0.05f, 0.45f);
+        const float toeT = glm::clamp(t / toeEnd, 0.0f, 1.0f);
+        leg.swingPoseBlend = SmootherStep(toeT);
+
+        if (t < toeEnd) {
+            leg.soleTarget = leg.swingStartSole;
+            leg.soleTarget.y += comp.toeOffHeight * SmootherStep(toeT);
+        } else {
+            const float travelT = (t - toeEnd) / (1.0f - toeEnd);
+            const float travelBlend = SmootherStep(travelT);
+            leg.soleTarget = glm::mix(
+                leg.swingStartSole, leg.swingTargetSole, travelBlend);
+            const float liftWave = std::sin(glm::pi<float>() * travelT);
+            leg.soleTarget.y +=
+                comp.toeOffHeight * (1.0f - travelBlend) +
+                comp.stepLift * liftWave * liftWave;
+        }
         if (t < 1.0f) return SwingResult::None;
 
         const glm::vec3 actualSole = footPosition - glm::vec3(0, leg.soleHeight, 0);
@@ -584,6 +834,7 @@ private:
         leg.plantSole = leg.swingTargetSole;
         leg.soleTarget = leg.plantSole;
         leg.phase = LocamotionControllerComponent::LegPhase::Planted;
+        leg.swingPoseBlend = 0.0f;
         if (debug)
             spdlog::info("[Loco] {} {} actualAlongMove={:+.3f}", side,
                          landed ? "landed" : "settled", actualTravel);

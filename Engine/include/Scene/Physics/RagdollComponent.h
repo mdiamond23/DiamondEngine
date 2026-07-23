@@ -27,7 +27,18 @@ struct RagdollComponent {
     glm::vec3 locomotionTargetPos { 0.0f }; // Legacy kinematic drive.
     glm::quat locomotionTargetRot { 1.0f, 0.0f, 0.0f, 0.0f };
     glm::vec3 locomotionTargetVel { 0.0f };
+    glm::vec3 locomotionSupportTarget { 0.0f };
+    glm::vec3 locomotionSupportTargetVel { 0.0f };
+    float locomotionSupportTargetWeight = 0.0f;
+    float locomotionCOMSupportFreq = 4.0f;
+    float locomotionCOMSupportDamping = 1.0f;
+    float locomotionCOMSupportMaxAccel = 10.0f;
     glm::vec3 _locomotionRootVel { 0.0f };
+    glm::vec3 _locomotionCOM { 0.0f };
+    glm::vec3 _locomotionCOMVel { 0.0f };
+    bool _locomotionCOMValid = false;
+    int _locomotionFootBones[2] { -1, -1 };
+    bool _locomotionFootGrounded[2] { false, false };
 
     float locomotionMoveForce = 400.0f;
     float locomotionBalanceForce = 2500.0f;

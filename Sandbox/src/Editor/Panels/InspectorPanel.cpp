@@ -1922,6 +1922,12 @@ void InspectorPanel::OnImGuiRender() {
                         ImGui::SetTooltip("Distance past the support base edge over which Hip Support's cap\n"
                                           "tapers to 0. Past this the pelvis stops being propped up from\n"
                                           "above and a real tip/fall takes over. 0 = cuts instantly at the edge.");
+                    ImGui::DragFloat("COM Shift Freq", &rag.locomotionCOMSupportFreq,
+                                     0.1f, 0.0f, 15.0f, "%.1f Hz");
+                    ImGui::DragFloat("COM Shift Damp", &rag.locomotionCOMSupportDamping,
+                                     0.05f, 0.0f, 3.0f, "%.2f");
+                    ImGui::DragFloat("COM Shift Accel", &rag.locomotionCOMSupportMaxAccel,
+                                     0.5f, 0.0f, 100.0f, "%.1f m/s^2");
                     ImGui::DragFloat("Lean Leash", &rag.locomotionLeashDistance, 0.005f, 0.0f, 1.0f, "%.3f m");
                     if (ImGui::IsItemHovered())
                         ImGui::SetTooltip("How far the HIP may translate past the support base before Move\n"
