@@ -68,8 +68,13 @@ The current solve is compatible with the ragdoll constraints:
 3. Compute knee bend with the law of cosines.
 4. Apply that bend about the authored knee hinge axis.
 5. Build the resulting bent chain in hip-local space.
-6. Orient the hip so the exact chain reaches the ankle target and its bend plane
-   points toward the movement direction.
+6. Generate candidate knee bend planes around the hip-to-ankle axis.
+7. Express each resulting hip target in the authored Jolt swing/twist constraint
+   basis and score its elliptical swing and twist-limit violation.
+8. Apply `hipLimitMarginDeg` to keep the target away from the hard constraint
+   boundary.
+9. Choose the closest movement-facing pole that avoids constraint violation, then
+   orient the hip so the exact chain reaches the ankle target.
 
 Motor logs confirmed that knee `commandTwist` is now nonzero and `actualTwist`
 generally follows it. This was the change that made visible stepping possible.
@@ -100,7 +105,37 @@ twice `stanceHalfWidth`. This is important: the previous target advanced each fo
 from its own old position, causing one foot to lead while the other merely caught
 up. The stance-relative target makes every new footfall lead the other foot.
 
-The sole follows smoothstep interpolation plus a sine lift. The target is grounded
+Before swing begins, the controller samples the complete toe-off, travel and lift
+curve with the same constraint-aware leg solve used at runtime. If no knee pole can
+keep every sample inside the hip's safe swing/twist envelope, the planner walks
+backward along the requested stride and refines the furthest legal point. If the
+vertical arc prevents even a useful shortened stride, it also reduces lift. This
+uses each ragdoll's authored axes and limits rather than character-specific
+distances. The projected foothold and lift are fixed for the entire swing. Debug
+step logs include the retained `projection` and `lift` fractions plus requested and
+projected peak limit violations.
+
+Dynamic reach is planned along with geometric reach. Horizontal swing travel is
+capped as a fraction of the current skeleton's thigh-plus-shin length. The planner
+tests each candidate using one fixed knee pole for the complete trajectory, then
+chooses the legal pole with the lowest required motion time. It estimates minimum
+duration from the physical starting hip/knee orientations, per-sample joint angular
+travel and sole travel. Each swing stores that pole and a duration between the base
+`stepDuration` and `maxStepDuration`; root speed is reduced for longer active
+swings. This prevents a lagging leg from receiving an instantaneous pole change or
+a character-independent catch-up distance. Planning is deliberately bounded: it
+tests 19 poles across nine trajectory samples once, then any constraint projection
+refines only the selected pole. Duration never triggers the expensive geometric
+projection loop; it only changes swing timing.
+
+Live pelvis movement can invalidate a preflighted world-space foot path. As a final
+safety net, the runtime solve clamps an infeasible hip target to the safe elliptical
+swing cone and twist interval before writing the motor pose. The debug status line
+reports `clamped=(left,right)` while retaining the original violation magnitude for
+diagnosis.
+
+The sole begins with a vertical toe-off, then follows quintic horizontal
+interpolation plus a zero-end-velocity sine-squared lift. The target is grounded
 once at swing start and is not retargeted in flight.
 
 At the end of the timer:
@@ -230,13 +265,21 @@ left hip:  ( 0.786,  0.034, -0.617)
 right hip: ( 0.980, -0.034,  0.194)
 ```
 
-The hips also have unequal plane/normal cone limits. A movement direction can
-therefore map into a permissive part of one cone and a restrictive part of the
-other. The observation that angled feet/legs sometimes work better supports this
-constraint-space diagnosis. Passive foot yaw and contact friction may contribute.
+The current hip cone limits are equal and circular at 60 degrees, but their local
+constraint frames differ with the mirrored bone frames. Logs showed the right knee
+following its target while the right hip accumulated roughly 47 degrees of error
+when moving away; the same right leg completed a 0.50 m step moving left. This
+isolated the missing behavior to direction-dependent hip reach rather than foot
+contact or second-step ordering.
 
-Do not blindly mirror the axes. First draw/log the axes in world space at bind and
-measure swing-hip command error for four controlled cardinal runs.
+The leg solver now searches knee-pole candidates in Jolt's actual constraint space,
+preferring the original movement-facing pole whenever it is legal. Debug logs
+include selected pole offsets and predicted hip-limit violation. The step planner
+projects the complete swing trajectory, caps travel by leg length, chooses one pole,
+and budgets duration from joint and foot speed. It shortens stride and then lift as
+needed, while the live solve clamps unexpected violations caused by pelvis motion.
+Four-direction runtime testing is still required to confirm that projected right
+steps land consistently and remain long enough to advance beyond the stance foot.
 
 ### 3. Eventual overspeed and forward fall
 

@@ -344,7 +344,7 @@
                 "motorFrequency": 16.0,
                 "motorMaxTorque": 160.0,
                 "swingNormalDeg": 60.0,
-                "swingPlaneDeg": 45.0,
+                "swingPlaneDeg": 60.0,
                 "twistAxis": [
                     0.7859975695610046,
                     0.034028805792331696,
@@ -376,7 +376,7 @@
                 "motorFrequency": 16.0,
                 "motorMaxTorque": 160.0,
                 "swingNormalDeg": 60.0,
-                "swingPlaneDeg": 45.0,
+                "swingPlaneDeg": 60.0,
                 "twistAxis": [
                     0.9803812503814697,
                     -0.033918265253305435,
