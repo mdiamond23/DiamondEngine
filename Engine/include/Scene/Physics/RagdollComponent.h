@@ -39,6 +39,11 @@ struct RagdollComponent {
     bool _locomotionCOMValid = false;
     int _locomotionFootBones[2] { -1, -1 };
     bool _locomotionFootGrounded[2] { false, false };
+    // Solver contact readback for each foot. Unlike _locomotionFootGrounded (a proximity
+    // ray used to build a broad support base), this is true only when Jolt reports a real
+    // non-sensor contact with an upward-facing support normal during the previous step.
+    bool _locomotionFootContact[2] { false, false };
+    glm::vec3 _locomotionFootContactNormal[2] { glm::vec3(0.0f), glm::vec3(0.0f) };
 
     float locomotionMoveForce = 400.0f;
     float locomotionBalanceForce = 2500.0f;
@@ -66,6 +71,39 @@ struct RagdollComponent {
     // Optional physical torque balance; zero uses the velocity spring.
     float locomotionBalanceTorque = 0.0f;
     float locomotionBalanceTorqueDamp = 40.0f;
+
+    // SIMBICON gait: the legs move the body, so the pelvis velocity force, the leash and
+    // the COM-over-base forces are suppressed (they push the body toward the foot; the
+    // controller instead places the foot under the body). The vertical support spring and
+    // the upright spring stay -- the latter stands in for the paper's virtual torso torque
+    // until tau_A = -tau_torso - tau_B is wired, and fades out via locomotionUprightScale.
+    // Set per-frame: true while stepping, false while standing.
+    // 0 = legacy engine balance, 1 = full SIMBICON. CROSSFADE, never a switch: flipping it
+    // instantly removed every engine assist while the virtual torques were still ramping in,
+    // and the character fell ~15 deg through the gap before the gait did anything.
+    bool locomotionSimbicon = false;
+    float locomotionSimbiconBlend = 0.0f;
+    float locomotionUprightScale = 1.0f;
+
+    // SIMBICON virtual torques (paper 3.2). The controller computes these in WORLD space
+    // each frame; the engine applies them per substep along with their reaction on the root,
+    // so the net torque the pelvis sees is tau_torso. The two hip joint motors are muted
+    // while this is active or they would fight the virtual PDs. [0] = swing, [1] = stance.
+    int locomotionHipBones[2] { -1, -1 };
+    glm::vec3 locomotionHipTorque[2] { glm::vec3(0.0f), glm::vec3(0.0f) };
+    // Scales the vertical hip support. 1 keeps the legacy assist, 0 makes the stance leg
+    // carry the body as the paper intends.
+    float locomotionSupportScale = 1.0f;
+
+    // Assisted gait bring-up: a one-sided vertical world-space spring that unloads the
+    // swing sole. Its equal-and-opposite force is applied to the pelvis, so it is an
+    // internal leg-lift assist rather than a force that launches the whole character.
+    int locomotionLiftBone = -1;
+    float locomotionLiftTargetY = 0.0f;
+    float locomotionLiftFrequency = 3.5f;
+    float locomotionLiftDamping = 1.0f;
+    float locomotionLiftEffectiveMass = 8.0f;
+    float locomotionLiftMaxForce = 325.0f;
 
     // Base-of-support tuning.
     float locomotionSupportRadius = 0.12f;

@@ -167,6 +167,21 @@ namespace Physics {
     // no body.
     bool AddRagdollBoneImpulse(const RagdollComponent& rag, int boneIndex, glm::vec3 impulse);
 
+    // Continuous world-space torque (N*m) on the body mapped to a skeleton bone, applied
+    // for one step like AddForce. SIMBICON's virtual PD controllers (torso attitude, swing
+    // hip) command torque directly rather than through a joint motor; pair each call with
+    // the equal-and-opposite reaction on the parent bone to stay internally consistent.
+    bool AddRagdollBoneTorque(const RagdollComponent& rag, int boneIndex, glm::vec3 torque);
+
+    // World transform / velocity of the body mapped to a skeleton bone. A
+    // world-frame joint target has to be composed against the PHYSICAL parent, not the
+    // animated one -- the two diverge exactly when balance feedback matters. `ok` (when
+    // given) reports whether the bone has a live body; the return is identity/zero if not.
+    glm::quat GetRagdollBoneRotation(const RagdollComponent& rag, int boneIndex, bool* ok = nullptr);
+    glm::vec3 GetRagdollBoneAngularVelocity(const RagdollComponent& rag, int boneIndex, bool* ok = nullptr);
+    glm::vec3 GetRagdollBonePosition(const RagdollComponent& rag, int boneIndex, bool* ok = nullptr);
+    glm::vec3 GetRagdollBoneLinearVelocity(const RagdollComponent& rag, int boneIndex, bool* ok = nullptr);
+
     // Start a procedural get-up: the rig heaves itself upright by driving its motors
     // toward the bind/stand pose (cones opened, strength ramping up with wobble), then
     // hands back to Animated. Works from Limp (the usual trigger) or any built ragdoll.

@@ -8,7 +8,6 @@
 #include "Scene/Physics/PhysicsAPI.h"
 #include "Scene/Physics/RagdollComponent.h"
 #include "Animation/AnimationComponents.h"
-#include "Animation/IKSolver.h"
 #include "DebugDraw.h"
 #include "CameraDirector.h"
 
@@ -19,131 +18,155 @@
 #include <glm/gtc/quaternion.hpp>
 #include <spdlog/spdlog.h>
 #include <cmath>
-#include <limits>
 #include <string>
 
-// Minimal active-ragdoll gait. The engine owns pelvis support and balance; this
-// controller alternates fixed foot placements and poses the hip-knee-ankle chain.
+// SIMBICON (Yin et al. 2007) section 3, on a powered ragdoll. Each FSM state is a target
+// pose; the swing hip and torso track in the WORLD frame while everything else is
+// parent-relative; balance is the feedback law theta_d = theta_d0 + cd*d + cv*v applied to
+// the swing hip in both planes. There is no foothold planner and no IK for the base gait --
+// where the foot lands IS the balance decision. IK returns only as a bounded terrain
+// displacement on top of the target angles (paper section 8), zero on flat ground.
 struct LocamotionControllerComponent
 {
     float maxSpeed        = 1.0f;
-    float moveRampTime    = 0.75f;
     float turnRate        = 10.0f;
     float deadzone        = 0.2f;
-    float facingOffsetDeg = 0.0f;
+    float minWalkSpeed    = 0.15f;
+    float facingOffsetDeg = 90.0f;
     float groundRayLength = 1.2f;
     float consciousness   = 1.0f;
+    float postPoweredGrace = 0.4f;
+    float gaitBlendTime   = 0.6f;
+
+    // Assisted stepping is the bring-up controller: keep the stance joints and engine
+    // balance active, prove an airborne swing and a real landing, then transfer support.
+    // The torque-only SIMBICON path remains below it for later reintroduction.
+    bool  assistedStepping = true;
+    float weightShiftTime = 0.30f;
+    float assistedLiftTime = 0.35f;
+    float assistedLiftHeight = 0.12f;
+    float assistedTakeoffClearance = 0.06f;
+    float assistedLiftFrequency = 3.5f;
+    float assistedLiftMaxForce = 325.0f;
+    float assistedTransferTime = 0.20f;
+    float assistedPlantTimeout = 0.65f;
+    float assistedPlantHipDeg = 18.0f;
+    float airborneConfirmTime = 0.05f;
+    float minPlantForward = 0.04f;
+    float maxPlantVerticalSpeed = 2.0f;
 
     std::string leftFootBone  = "leg_joint_L_5";
     std::string rightFootBone = "leg_joint_R_5";
+    std::string torsoBone     = "torso_joint_3";
 
-    float minWalkSpeed    = 0.15f;
-    float stepLength      = 0.35f;
-    float stanceHalfWidth = 0.10f;
-    float stepDuration    = 0.40f;
-    float stepLift        = 0.10f;
-    float doubleSupportTime = 0.08f;
-    float weightShiftTime = 0.20f;
-    float firstWeightShiftTime = 0.25f;
-    float weightShiftTimeout = 0.40f;
-    float weightShiftRadius = 0.08f;
-    float weightShiftStableTime = 0.05f;
-    float weightShiftDriveScale = 0.15f;
-    float weightShiftInboard = 0.20f;
-    float weightShiftTargetTime = 0.15f;
-    float toeOffFraction = 0.20f;
-    float toeOffHeight = 0.03f;
-    float swingSupportFadeEnd = 0.45f;
-    float postPoweredGrace  = 0.4f;
-    float gaitBlendTime     = 0.2f;
-    float maxReachFraction  = 0.95f;
-    float maxSwingTravelFraction = 0.55f;
-    float maxHipSpeedDeg = 140.0f;
-    float maxKneeSpeedDeg = 220.0f;
-    float maxFootSpeedLegsPerSec = 1.25f;
-    float maxStepDuration = 1.0f;
+    // Table 1, "3D walk". State 0 lifts the swing leg for a fixed time; state 1 drives it
+    // down and exits on contact. Angles in degrees here, radians in the paper.
+    float state0Time     = 0.30f;
+    float minSwingTime   = 0.08f;
+    float maxSwingTime   = 0.60f;
+
+    float s0TorsoDeg       = 0.0f;
+    float s0SwingHipDeg    = 28.6f;   // 0.5 rad
+    float s0SwingKneeDeg   = 63.0f;   // 1.1 rad of flexion
+    float s0SwingAnkleDeg  = 34.4f;   // 0.6 rad
+    float s0StanceKneeDeg  = 2.9f;    // 0.05 rad
+    float s0StanceAnkleDeg = 0.0f;
+
+    float s1TorsoDeg       = 0.0f;
+    float s1SwingHipDeg    = -5.7f;   // -0.1 rad
+    float s1SwingKneeDeg   = 2.9f;
+    float s1SwingAnkleDeg  = 8.6f;    // 0.15 rad
+    float s1StanceKneeDeg  = 5.7f;
+    float s1StanceAnkleDeg = 0.0f;
+
+    // Balance feedback. Paper's stable ranges: sagittal cd [-0.71,1.4] cv [0.03,0.59],
+    // coronal cd [-1.29,1.13] cv [-0.06,0.48]. Nominal 0.5/0.2 in both planes.
+    float cd    = 0.5f;
+    float cv    = 0.2f;
+    float cdLat = 0.5f;
+    float cvLat = 0.2f;
+    float stanceWidthDeg = 6.0f;
+    float stanceHipDeg   = 0.0f;      // stand-in for the free stance-hip torque
+    bool  useHipCOMProxy = true;
+
+    // Virtual PD gains (paper 3.2). tau_torso holds pelvis attitude in the world frame;
+    // tau_B drives the swing femur to its world target; the stance hip takes the residual
+    // tau_A = -tau_torso - tau_B, which is what propels the body using only internal torque.
+    float torsoKp = 100.0f;
+    float torsoKd = 10.0f;
+    float hipKp   = 100.0f;
+    float hipKd   = 10.0f;
+    float maxVirtualTorque = 250.0f;
+    float supportScale = 1.0f;   // engine vertical hip assist; dial toward 0
+
+    float swingHipLimitDeg = 55.0f;
     float hipLimitMarginDeg = 3.0f;
-    float swingPoseWeight   = 0.35f;
-    float stancePoseWeight  = 0.45f;
-    float landingTolerance  = 0.10f;
+    float poseWeight = 1.0f;
+    float uprightScale = 1.0f;        // 1 = engine rights the pelvis, 0 = torso joint alone
+
+    // Terrain displacement layer (paper section 8). Off until the flat-ground limit cycle holds.
+    bool  ikTerrainEnabled = false;
+    float ikMaxOffsetDeg   = 12.0f;
+    float ikGroundProbe    = 0.45f;
 
     bool ikWriteEnabled = true;
     bool debug = false;
 
-    enum class GaitPhase { Idle, WeightShift, Swing, DoubleSupport };
-    enum class LegPhase { Planted, Swinging };
     struct LegState {
-        int footIdx  = -1;
-        int ankleIdx = -1;
-        int kneeIdx  = -1;
-        int hipIdx   = -1;
+        int footIdx = -1, ankleIdx = -1, kneeIdx = -1, hipIdx = -1;
         glm::vec3 kneeHingeAxis { 1.0f, 0.0f, 0.0f };
+        glm::vec3 ankleAxis { 1.0f, 0.0f, 0.0f };
         glm::vec3 hipTwistAxis { 1.0f, 0.0f, 0.0f };
-        float hipSwingNormalDeg = 30.0f;
-        float hipSwingPlaneDeg = 30.0f;
-        float hipTwistMinDeg = -15.0f;
-        float hipTwistMaxDeg = 15.0f;
-        LegPhase phase = LegPhase::Planted;
-        glm::vec3 plantSole       { 0.0f };
-        glm::vec3 swingStartSole  { 0.0f };
-        glm::vec3 swingTargetSole { 0.0f };
-        glm::vec3 swingDirection  { 0.0f };
-        glm::vec3 soleTarget      { 0.0f };
-        float soleHeight = 0.03f;
-        float swingProgress = 0.0f;
-        float swingPoseBlend = 0.0f;
-        float swingLiftScale = 1.0f;
-        float swingPoleDeg = 0.0f;
-        float swingDuration = 0.40f;
-        float selectedPoleDeg = 0.0f;
-        float hipLimitViolationDeg = 0.0f;
-        bool hipTargetClamped = false;
-        float landingWait = 0.0f;
-        bool landingWarning = false;
-        bool init = false;
+        float hipSwingNormalDeg = 60.0f, hipSwingPlaneDeg = 60.0f;
+        float hipTwistMinDeg = -45.0f, hipTwistMaxDeg = 45.0f;
+        float ankleSwingNormalDeg = 60.0f, ankleSwingPlaneDeg = 45.0f;
+        float ankleTwistMinDeg = -45.0f, ankleTwistMaxDeg = 45.0f;
     };
 
     float _yaw = 0.0f;
     float _timeSincePowered = -1.0f;
     float _gaitWeight = 0.0f;
-    float _driveWeight = 0.0f;
-    float _timeSinceLanding = 0.0f;
-    float _phaseTime = 0.0f;
-    float _weightShiftStableTime = 0.0f;
-    bool _grounded = true;
-    bool _wasWalking = false;
-    bool _firstStep = true;
-    bool _weightShiftTargetCaptured = false;
-    int _landedStepCount = 0;
-    bool _nextLeft = true;
-    GaitPhase _gaitPhase = GaitPhase::Idle;
-    glm::vec3 _weightShiftStartTarget { 0.0f };
-    glm::vec3 _swingSupportTarget { 0.0f };
+    float _poseBlend = 0.0f;
+    float _stateTime = 0.0f;
+    int   _stateIndex = 0;
+    bool  _swingIsLeft = true;
+    bool  _grounded = true;
+    bool  _wasWalking = false;
+    bool  _swingWasAirborne = false;
+    float _airborneTime = 0.0f;
+    int   _steps = 0;
+    float _dSag = 0.0f, _dLat = 0.0f, _vSag = 0.0f, _vLat = 0.0f;
+    float _swingHipCmdDeg = 0.0f, _swingHipLatCmdDeg = 0.0f;
+    float _ikOffsetDeg = 0.0f;
+    float _torsoTorque = 0.0f, _swingTorque = 0.0f, _stanceTorque = 0.0f;
+    // Frame diagnostics. _myTiltDeg vs _engineTiltDeg is the falsifiable test of whether
+    // entityRot * BindModelRot(bone) really is the body's bind rotation -- every world-frame
+    // target assumes it does, and nothing has ever checked.
+    float _myTiltDeg = 0.0f, _engineTiltDeg = 0.0f;
+    glm::vec3 _right { 0.0f }, _fwd { 0.0f };
+    glm::vec3 _femurCmd { 0.0f }, _femurActual { 0.0f };
+    float _femurErrDeg = 0.0f, _torsoErrDeg = 0.0f;
+    bool _swingContact = false;
+    float _swingForward = 0.0f, _swingFootY = 0.0f, _swingFootVy = 0.0f;
+    float _swingClearance = 0.0f;
+    float _liftTargetY = 0.0f;
+    float _torsoP = 0.0f, _torsoD = 0.0f, _swingP = 0.0f, _swingD = 0.0f;
+    bool  _saturated = false;
     LegState _legL, _legR;
 };
-
-inline const char* LocomotionGaitPhaseName(LocamotionControllerComponent::GaitPhase phase)
-{
-    using Phase = LocamotionControllerComponent::GaitPhase;
-    switch (phase) {
-        case Phase::Idle:          return "Idle";
-        case Phase::WeightShift:   return "Weight Shift";
-        case Phase::Swing:         return "Swing";
-        case Phase::DoubleSupport: return "Double Support";
-    }
-    return "Unknown";
-}
 
 template<>
 inline void DrawComponentInspector<LocamotionControllerComponent>(LocamotionControllerComponent& c)
 {
     ImGui::DragFloat("Max Speed", &c.maxSpeed, 0.05f, 0.0f, 10.0f);
-    ImGui::DragFloat("Move Ramp Time", &c.moveRampTime, 0.01f, 0.01f, 2.0f);
     ImGui::DragFloat("Turn Rate", &c.turnRate, 0.1f, 0.0f, 30.0f);
     ImGui::DragFloat("Deadzone", &c.deadzone, 0.01f, 0.0f, 0.9f);
+    ImGui::DragFloat("Min Walk Speed", &c.minWalkSpeed, 0.01f, 0.0f, 2.0f);
     ImGui::DragFloat("Facing Offset", &c.facingOffsetDeg, 1.0f, -180.0f, 180.0f, "%.0f deg");
     ImGui::DragFloat("Ground Ray", &c.groundRayLength, 0.05f, 0.1f, 10.0f);
     ImGui::DragFloat("Consciousness", &c.consciousness, 0.01f, 0.0f, 1.0f);
+    ImGui::DragFloat("Post-Powered Grace", &c.postPoweredGrace, 0.01f, 0.0f, 2.0f);
+    ImGui::DragFloat("Gait Blend Time", &c.gaitBlendTime, 0.01f, 0.01f, 1.0f);
 
     auto boneField = [](const char* label, std::string& name) {
         char buf[128];
@@ -153,43 +176,94 @@ inline void DrawComponentInspector<LocamotionControllerComponent>(LocamotionCont
     ImGui::Separator();
     boneField("Left Foot Bone", c.leftFootBone);
     boneField("Right Foot Bone", c.rightFootBone);
+    boneField("Torso Bone", c.torsoBone);
+
+    if (ImGui::CollapsingHeader("Assisted Step Bring-up", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::Checkbox("Assisted Stepping", &c.assistedStepping);
+        ImGui::DragFloat("Weight Shift Time", &c.weightShiftTime, 0.01f, 0.05f, 1.0f);
+        ImGui::DragFloat("Lift / Reach Time", &c.assistedLiftTime, 0.01f, 0.1f, 1.5f);
+        ImGui::DragFloat("Lift Height", &c.assistedLiftHeight, 0.005f, 0.02f, 0.4f, "%.3f m");
+        ImGui::DragFloat("Takeoff Clearance", &c.assistedTakeoffClearance, 0.005f,
+                         0.01f, 0.2f, "%.3f m");
+        ImGui::DragFloat("Lift Frequency", &c.assistedLiftFrequency, 0.25f, 0.0f, 20.0f);
+        ImGui::DragFloat("Lift Max Force", &c.assistedLiftMaxForce, 10.0f, 0.0f, 3000.0f);
+        ImGui::DragFloat("Transfer Time", &c.assistedTransferTime, 0.01f, 0.05f, 1.0f);
+        ImGui::DragFloat("Plant Timeout", &c.assistedPlantTimeout, 0.01f, 0.1f, 2.0f);
+        ImGui::DragFloat("Plant Hip", &c.assistedPlantHipDeg, 0.5f, 0.0f, 45.0f, "%.1f deg");
+        ImGui::DragFloat("Airborne Confirm", &c.airborneConfirmTime, 0.01f, 0.0f, 0.25f);
+        ImGui::DragFloat("Min Plant Forward", &c.minPlantForward, 0.005f, 0.0f, 0.4f, "%.3f m");
+        ImGui::DragFloat("Max Plant Y Speed", &c.maxPlantVerticalSpeed, 0.1f, 0.1f, 10.0f);
+        ImGui::TextDisabled("contact=%s airborne=%s forward=%.3f clear=%.3f y=%.3f/%.3f vy=%+.2f",
+                            c._swingContact ? "yes" : "no",
+                            c._swingWasAirborne ? "yes" : "no",
+                            c._swingForward, c._swingClearance,
+                            c._swingFootY, c._liftTargetY, c._swingFootVy);
+    }
+
+    if (ImGui::CollapsingHeader("FSM", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::DragFloat("State 0 Time", &c.state0Time, 0.01f, 0.05f, 1.0f);
+        ImGui::DragFloat("Min Swing Time", &c.minSwingTime, 0.01f, 0.0f, 0.5f);
+        ImGui::DragFloat("Max Swing Time", &c.maxSwingTime, 0.01f, 0.1f, 2.0f);
+        ImGui::TextDisabled("State 0 - lift");
+        ImGui::DragFloat("S0 Torso", &c.s0TorsoDeg, 0.5f, -45.0f, 45.0f, "%.1f deg");
+        ImGui::DragFloat("S0 Swing Hip", &c.s0SwingHipDeg, 0.5f, -60.0f, 90.0f, "%.1f deg");
+        ImGui::DragFloat("S0 Swing Knee", &c.s0SwingKneeDeg, 0.5f, 0.0f, 140.0f, "%.1f deg");
+        ImGui::DragFloat("S0 Swing Ankle", &c.s0SwingAnkleDeg, 0.5f, -60.0f, 60.0f, "%.1f deg");
+        ImGui::DragFloat("S0 Stance Knee", &c.s0StanceKneeDeg, 0.5f, 0.0f, 140.0f, "%.1f deg");
+        ImGui::DragFloat("S0 Stance Ankle", &c.s0StanceAnkleDeg, 0.5f, -60.0f, 60.0f, "%.1f deg");
+        ImGui::TextDisabled("State 1 - plant, exits on contact");
+        ImGui::DragFloat("S1 Torso", &c.s1TorsoDeg, 0.5f, -45.0f, 45.0f, "%.1f deg");
+        ImGui::DragFloat("S1 Swing Hip", &c.s1SwingHipDeg, 0.5f, -60.0f, 90.0f, "%.1f deg");
+        ImGui::DragFloat("S1 Swing Knee", &c.s1SwingKneeDeg, 0.5f, 0.0f, 140.0f, "%.1f deg");
+        ImGui::DragFloat("S1 Swing Ankle", &c.s1SwingAnkleDeg, 0.5f, -60.0f, 60.0f, "%.1f deg");
+        ImGui::DragFloat("S1 Stance Knee", &c.s1StanceKneeDeg, 0.5f, 0.0f, 140.0f, "%.1f deg");
+        ImGui::DragFloat("S1 Stance Ankle", &c.s1StanceAnkleDeg, 0.5f, -60.0f, 60.0f, "%.1f deg");
+    }
+
+    if (ImGui::CollapsingHeader("Balance Feedback", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::SliderFloat("cd (sagittal)", &c.cd, -0.71f, 1.4f);
+        ImGui::SliderFloat("cv (sagittal)", &c.cv, 0.03f, 0.59f);
+        ImGui::SliderFloat("cd (coronal)", &c.cdLat, -1.29f, 1.13f);
+        ImGui::SliderFloat("cv (coronal)", &c.cvLat, -0.06f, 0.48f);
+        ImGui::DragFloat("Stance Width", &c.stanceWidthDeg, 0.5f, 0.0f, 30.0f, "%.1f deg");
+        ImGui::DragFloat("Stance Hip", &c.stanceHipDeg, 0.5f, -30.0f, 30.0f, "%.1f deg");
+        ImGui::Checkbox("Hip COM Proxy", &c.useHipCOMProxy);
+        ImGui::TextDisabled("Virtual PD (tau_torso / tau_B / tau_A)");
+        ImGui::DragFloat("Torso Kp", &c.torsoKp, 10.0f, 0.0f, 2000.0f);
+        ImGui::DragFloat("Torso Kd", &c.torsoKd, 1.0f, 0.0f, 200.0f);
+        ImGui::DragFloat("Hip Kp", &c.hipKp, 10.0f, 0.0f, 2000.0f);
+        ImGui::DragFloat("Hip Kd", &c.hipKd, 1.0f, 0.0f, 200.0f);
+        ImGui::DragFloat("Max Virtual Torque", &c.maxVirtualTorque, 10.0f, 0.0f, 2000.0f);
+        ImGui::SliderFloat("Support Scale", &c.supportScale, 0.0f, 1.0f);
+        ImGui::TextDisabled("d=(%.3f, %.3f)  v=(%.3f, %.3f)", c._dSag, c._dLat, c._vSag, c._vLat);
+        ImGui::TextDisabled("swing hip cmd = %.1f / %.1f deg",
+                            c._swingHipCmdDeg, c._swingHipLatCmdDeg);
+    }
 
     ImGui::Separator();
-    ImGui::DragFloat("Min Walk Speed", &c.minWalkSpeed, 0.01f, 0.0f, 2.0f);
-    ImGui::DragFloat("Step Length", &c.stepLength, 0.01f, 0.05f, 0.6f);
-    ImGui::DragFloat("Stance Half Width", &c.stanceHalfWidth, 0.005f, 0.02f, 0.4f);
-    ImGui::DragFloat("Step Duration", &c.stepDuration, 0.01f, 0.08f, 1.0f);
-    ImGui::DragFloat("Step Lift", &c.stepLift, 0.005f, 0.0f, 0.3f);
-    ImGui::DragFloat("Double Support Time", &c.doubleSupportTime, 0.01f, 0.0f, 0.5f);
-    ImGui::DragFloat("Weight Shift Time", &c.weightShiftTime, 0.01f, 0.0f, 1.0f);
-    ImGui::DragFloat("First Weight Shift", &c.firstWeightShiftTime, 0.01f, 0.0f, 1.0f);
-    ImGui::DragFloat("Weight Shift Timeout", &c.weightShiftTimeout, 0.01f, 0.01f, 2.0f);
-    ImGui::DragFloat("Weight Shift Radius", &c.weightShiftRadius, 0.005f, 0.01f, 0.5f);
-    ImGui::DragFloat("Weight Shift Stable", &c.weightShiftStableTime, 0.01f, 0.0f, 0.5f);
-    ImGui::DragFloat("Weight Shift Drive", &c.weightShiftDriveScale, 0.01f, 0.0f, 1.0f);
-    ImGui::SliderFloat("Weight Shift Inboard", &c.weightShiftInboard, 0.0f, 0.5f);
-    ImGui::DragFloat("Weight Shift Target Time", &c.weightShiftTargetTime, 0.01f, 0.01f, 1.0f);
-    ImGui::SliderFloat("Toe-Off Fraction", &c.toeOffFraction, 0.05f, 0.45f);
-    ImGui::DragFloat("Toe-Off Height", &c.toeOffHeight, 0.005f, 0.0f, 0.15f);
-    ImGui::SliderFloat("Swing Support Fade End", &c.swingSupportFadeEnd, 0.10f, 0.80f);
-    ImGui::DragFloat("Post-Powered Grace", &c.postPoweredGrace, 0.01f, 0.0f, 2.0f);
-    ImGui::DragFloat("Gait Blend Time", &c.gaitBlendTime, 0.01f, 0.01f, 1.0f);
-    ImGui::DragFloat("Max Reach Fraction", &c.maxReachFraction, 0.01f, 0.5f, 0.99f);
-    ImGui::SliderFloat("Max Swing Travel", &c.maxSwingTravelFraction, 0.20f, 1.0f,
-                       "%.2f leg lengths");
-    ImGui::DragFloat("Max Hip Speed", &c.maxHipSpeedDeg, 5.0f, 30.0f, 720.0f, "%.0f deg/s");
-    ImGui::DragFloat("Max Knee Speed", &c.maxKneeSpeedDeg, 5.0f, 30.0f, 720.0f, "%.0f deg/s");
-    ImGui::DragFloat("Max Foot Speed", &c.maxFootSpeedLegsPerSec, 0.05f, 0.2f, 5.0f,
-                     "%.2f legs/s");
-    ImGui::DragFloat("Max Step Duration", &c.maxStepDuration, 0.05f, 0.1f, 2.0f);
+    ImGui::DragFloat("Swing Hip Limit", &c.swingHipLimitDeg, 1.0f, 10.0f, 90.0f, "%.0f deg");
     ImGui::DragFloat("Hip Limit Margin", &c.hipLimitMarginDeg, 0.5f, 0.0f, 20.0f, "%.1f deg");
-    ImGui::DragFloat("Swing Pose Weight", &c.swingPoseWeight, 0.01f, 0.0f, 1.0f);
-    ImGui::DragFloat("Stance Pose Weight", &c.stancePoseWeight, 0.01f, 0.0f, 1.0f);
-    ImGui::DragFloat("Landing Tolerance", &c.landingTolerance, 0.01f, 0.02f, 0.3f);
+    ImGui::SliderFloat("Pose Weight", &c.poseWeight, 0.0f, 1.0f);
+    ImGui::SliderFloat("Upright Scale", &c.uprightScale, 0.0f, 1.0f);
+    ImGui::Checkbox("IK Terrain Layer", &c.ikTerrainEnabled);
+    ImGui::DragFloat("IK Max Offset", &c.ikMaxOffsetDeg, 0.5f, 0.0f, 45.0f, "%.1f deg");
+    ImGui::DragFloat("IK Ground Probe", &c.ikGroundProbe, 0.01f, 0.05f, 1.0f);
     ImGui::Checkbox("IK Write Enabled", &c.ikWriteEnabled);
     ImGui::Checkbox("Debug", &c.debug);
     ImGui::TextDisabled(c._grounded ? "Grounded" : "Airborne");
-    ImGui::TextDisabled("Gait: %s", LocomotionGaitPhaseName(c._gaitPhase));
+    ImGui::TextDisabled("state %d  swing=%s  steps=%d  gait=%.2f  pose=%.2f", c._stateIndex,
+                        c._swingIsLeft ? "left" : "right", c._steps, c._gaitWeight, c._poseBlend);
+    ImGui::Separator();
+    ImGui::TextDisabled("Frame check");
+    const float tiltDelta = c._myTiltDeg - c._engineTiltDeg;
+    ImGui::TextColored(std::abs(tiltDelta) > 1.0f ? ImVec4(1, 0.4f, 0.3f, 1) : ImVec4(0.4f, 1, 0.5f, 1),
+                       "tilt mine=%.1f engine=%.1f delta=%+.1f%s", c._myTiltDeg, c._engineTiltDeg,
+                       tiltDelta, std::abs(tiltDelta) > 1.0f ? "  <- BIND FRAME WRONG" : "  ok");
+    ImGui::TextDisabled("right   (%+.2f, %+.2f, %+.2f)", c._right.x, c._right.y, c._right.z);
+    ImGui::TextDisabled("fwd     (%+.2f, %+.2f, %+.2f)", c._fwd.x, c._fwd.y, c._fwd.z);
+    ImGui::TextDisabled("femur cmd    (%+.2f, %+.2f, %+.2f)", c._femurCmd.x, c._femurCmd.y, c._femurCmd.z);
+    ImGui::TextDisabled("femur actual (%+.2f, %+.2f, %+.2f)", c._femurActual.x, c._femurActual.y, c._femurActual.z);
+    ImGui::TextDisabled("femur error  %.1f deg", c._femurErrDeg);
 }
 
 template<>
@@ -197,43 +271,65 @@ inline std::string SerializeComponent<LocamotionControllerComponent>(const Locam
 {
     nlohmann::json j;
     j["maxSpeed"] = c.maxSpeed;
-    j["moveRampTime"] = c.moveRampTime;
     j["turnRate"] = c.turnRate;
     j["deadzone"] = c.deadzone;
+    j["minWalkSpeed"] = c.minWalkSpeed;
     j["facingOffsetDeg"] = c.facingOffsetDeg;
     j["groundRayLength"] = c.groundRayLength;
     j["consciousness"] = c.consciousness;
-    j["leftFootBone"] = c.leftFootBone;
-    j["rightFootBone"] = c.rightFootBone;
-    j["minWalkSpeed"] = c.minWalkSpeed;
-    j["stepLength"] = c.stepLength;
-    j["stanceHalfWidth"] = c.stanceHalfWidth;
-    j["stepDuration"] = c.stepDuration;
-    j["stepLift"] = c.stepLift;
-    j["doubleSupportTime"] = c.doubleSupportTime;
-    j["weightShiftTime"] = c.weightShiftTime;
-    j["firstWeightShiftTime"] = c.firstWeightShiftTime;
-    j["weightShiftTimeout"] = c.weightShiftTimeout;
-    j["weightShiftRadius"] = c.weightShiftRadius;
-    j["weightShiftStableTime"] = c.weightShiftStableTime;
-    j["weightShiftDriveScale"] = c.weightShiftDriveScale;
-    j["weightShiftInboard"] = c.weightShiftInboard;
-    j["weightShiftTargetTime"] = c.weightShiftTargetTime;
-    j["toeOffFraction"] = c.toeOffFraction;
-    j["toeOffHeight"] = c.toeOffHeight;
-    j["swingSupportFadeEnd"] = c.swingSupportFadeEnd;
     j["postPoweredGrace"] = c.postPoweredGrace;
     j["gaitBlendTime"] = c.gaitBlendTime;
-    j["maxReachFraction"] = c.maxReachFraction;
-    j["maxSwingTravelFraction"] = c.maxSwingTravelFraction;
-    j["maxHipSpeedDeg"] = c.maxHipSpeedDeg;
-    j["maxKneeSpeedDeg"] = c.maxKneeSpeedDeg;
-    j["maxFootSpeedLegsPerSec"] = c.maxFootSpeedLegsPerSec;
-    j["maxStepDuration"] = c.maxStepDuration;
+    j["assistedStepping"] = c.assistedStepping;
+    j["weightShiftTime"] = c.weightShiftTime;
+    j["assistedLiftTime"] = c.assistedLiftTime;
+    j["assistedLiftHeight"] = c.assistedLiftHeight;
+    j["assistedTakeoffClearance"] = c.assistedTakeoffClearance;
+    j["assistedLiftFrequency"] = c.assistedLiftFrequency;
+    j["assistedLiftMaxForce"] = c.assistedLiftMaxForce;
+    j["assistedTransferTime"] = c.assistedTransferTime;
+    j["assistedPlantTimeout"] = c.assistedPlantTimeout;
+    j["assistedPlantHipDeg"] = c.assistedPlantHipDeg;
+    j["airborneConfirmTime"] = c.airborneConfirmTime;
+    j["minPlantForward"] = c.minPlantForward;
+    j["maxPlantVerticalSpeed"] = c.maxPlantVerticalSpeed;
+    j["leftFootBone"] = c.leftFootBone;
+    j["rightFootBone"] = c.rightFootBone;
+    j["torsoBone"] = c.torsoBone;
+    j["state0Time"] = c.state0Time;
+    j["minSwingTime"] = c.minSwingTime;
+    j["maxSwingTime"] = c.maxSwingTime;
+    j["s0TorsoDeg"] = c.s0TorsoDeg;
+    j["s0SwingHipDeg"] = c.s0SwingHipDeg;
+    j["s0SwingKneeDeg"] = c.s0SwingKneeDeg;
+    j["s0SwingAnkleDeg"] = c.s0SwingAnkleDeg;
+    j["s0StanceKneeDeg"] = c.s0StanceKneeDeg;
+    j["s0StanceAnkleDeg"] = c.s0StanceAnkleDeg;
+    j["s1TorsoDeg"] = c.s1TorsoDeg;
+    j["s1SwingHipDeg"] = c.s1SwingHipDeg;
+    j["s1SwingKneeDeg"] = c.s1SwingKneeDeg;
+    j["s1SwingAnkleDeg"] = c.s1SwingAnkleDeg;
+    j["s1StanceKneeDeg"] = c.s1StanceKneeDeg;
+    j["s1StanceAnkleDeg"] = c.s1StanceAnkleDeg;
+    j["cd"] = c.cd;
+    j["cv"] = c.cv;
+    j["cdLat"] = c.cdLat;
+    j["cvLat"] = c.cvLat;
+    j["stanceWidthDeg"] = c.stanceWidthDeg;
+    j["stanceHipDeg"] = c.stanceHipDeg;
+    j["useHipCOMProxy"] = c.useHipCOMProxy;
+    j["torsoKp"] = c.torsoKp;
+    j["torsoKd"] = c.torsoKd;
+    j["hipKp"] = c.hipKp;
+    j["hipKd"] = c.hipKd;
+    j["maxVirtualTorque"] = c.maxVirtualTorque;
+    j["supportScale"] = c.supportScale;
+    j["swingHipLimitDeg"] = c.swingHipLimitDeg;
     j["hipLimitMarginDeg"] = c.hipLimitMarginDeg;
-    j["swingPoseWeight"] = c.swingPoseWeight;
-    j["stancePoseWeight"] = c.stancePoseWeight;
-    j["landingTolerance"] = c.landingTolerance;
+    j["poseWeight"] = c.poseWeight;
+    j["uprightScale"] = c.uprightScale;
+    j["ikTerrainEnabled"] = c.ikTerrainEnabled;
+    j["ikMaxOffsetDeg"] = c.ikMaxOffsetDeg;
+    j["ikGroundProbe"] = c.ikGroundProbe;
     j["ikWriteEnabled"] = c.ikWriteEnabled;
     j["debug"] = c.debug;
     return j.dump();
@@ -245,43 +341,65 @@ inline void DeserializeComponent<LocamotionControllerComponent>(LocamotionContro
 {
     const auto j = nlohmann::json::parse(data);
     c.maxSpeed = j.value("maxSpeed", 1.0f);
-    c.moveRampTime = j.value("moveRampTime", 0.75f);
     c.turnRate = j.value("turnRate", 10.0f);
     c.deadzone = j.value("deadzone", 0.2f);
-    c.facingOffsetDeg = j.value("facingOffsetDeg", 0.0f);
+    c.minWalkSpeed = j.value("minWalkSpeed", 0.15f);
+    c.facingOffsetDeg = j.value("facingOffsetDeg", 90.0f);
     c.groundRayLength = j.value("groundRayLength", 1.2f);
     c.consciousness = j.value("consciousness", 1.0f);
+    c.postPoweredGrace = j.value("postPoweredGrace", 0.4f);
+    c.gaitBlendTime = j.value("gaitBlendTime", 0.6f);
+    c.assistedStepping = j.value("assistedStepping", true);
+    c.weightShiftTime = j.value("weightShiftTime", 0.30f);
+    c.assistedLiftTime = j.value("assistedLiftTime", 0.35f);
+    c.assistedLiftHeight = j.value("assistedLiftHeight", 0.12f);
+    c.assistedTakeoffClearance = j.value("assistedTakeoffClearance", 0.06f);
+    c.assistedLiftFrequency = j.value("assistedLiftFrequency", 3.5f);
+    c.assistedLiftMaxForce = j.value("assistedLiftMaxForce", 325.0f);
+    c.assistedTransferTime = j.value("assistedTransferTime", 0.20f);
+    c.assistedPlantTimeout = j.value("assistedPlantTimeout", 0.65f);
+    c.assistedPlantHipDeg = j.value("assistedPlantHipDeg", 18.0f);
+    c.airborneConfirmTime = j.value("airborneConfirmTime", 0.05f);
+    c.minPlantForward = j.value("minPlantForward", 0.04f);
+    c.maxPlantVerticalSpeed = j.value("maxPlantVerticalSpeed", 2.0f);
     c.leftFootBone = j.value("leftFootBone", std::string("leg_joint_L_5"));
     c.rightFootBone = j.value("rightFootBone", std::string("leg_joint_R_5"));
-    c.minWalkSpeed = j.value("minWalkSpeed", 0.15f);
-    c.stepLength = j.value("stepLength", j.value("strideLength", 0.35f));
-    c.stanceHalfWidth = j.value("stanceHalfWidth", 0.10f);
-    c.stepDuration = j.value("stepDuration", 0.40f);
-    c.stepLift = j.value("stepLift", 0.10f);
-    c.doubleSupportTime = j.value("doubleSupportTime", 0.08f);
-    c.weightShiftTime = j.value("weightShiftTime", 0.20f);
-    c.firstWeightShiftTime = j.value("firstWeightShiftTime", 0.25f);
-    c.weightShiftTimeout = j.value("weightShiftTimeout", 0.40f);
-    c.weightShiftRadius = j.value("weightShiftRadius", 0.08f);
-    c.weightShiftStableTime = j.value("weightShiftStableTime", 0.05f);
-    c.weightShiftDriveScale = j.value("weightShiftDriveScale", 0.15f);
-    c.weightShiftInboard = j.value("weightShiftInboard", 0.20f);
-    c.weightShiftTargetTime = j.value("weightShiftTargetTime", 0.15f);
-    c.toeOffFraction = j.value("toeOffFraction", 0.20f);
-    c.toeOffHeight = j.value("toeOffHeight", 0.03f);
-    c.swingSupportFadeEnd = j.value("swingSupportFadeEnd", 0.45f);
-    c.postPoweredGrace = j.value("postPoweredGrace", 0.4f);
-    c.gaitBlendTime = j.value("gaitBlendTime", 0.2f);
-    c.maxReachFraction = j.value("maxReachFraction", 0.95f);
-    c.maxSwingTravelFraction = j.value("maxSwingTravelFraction", 0.55f);
-    c.maxHipSpeedDeg = j.value("maxHipSpeedDeg", 140.0f);
-    c.maxKneeSpeedDeg = j.value("maxKneeSpeedDeg", 220.0f);
-    c.maxFootSpeedLegsPerSec = j.value("maxFootSpeedLegsPerSec", 1.25f);
-    c.maxStepDuration = j.value("maxStepDuration", 1.0f);
+    c.torsoBone = j.value("torsoBone", std::string("torso_joint_3"));
+    c.state0Time = j.value("state0Time", 0.30f);
+    c.minSwingTime = j.value("minSwingTime", 0.08f);
+    c.maxSwingTime = j.value("maxSwingTime", 0.60f);
+    c.s0TorsoDeg = j.value("s0TorsoDeg", 0.0f);
+    c.s0SwingHipDeg = j.value("s0SwingHipDeg", 28.6f);
+    c.s0SwingKneeDeg = j.value("s0SwingKneeDeg", 63.0f);
+    c.s0SwingAnkleDeg = j.value("s0SwingAnkleDeg", 34.4f);
+    c.s0StanceKneeDeg = j.value("s0StanceKneeDeg", 2.9f);
+    c.s0StanceAnkleDeg = j.value("s0StanceAnkleDeg", 0.0f);
+    c.s1TorsoDeg = j.value("s1TorsoDeg", 0.0f);
+    c.s1SwingHipDeg = j.value("s1SwingHipDeg", -5.7f);
+    c.s1SwingKneeDeg = j.value("s1SwingKneeDeg", 2.9f);
+    c.s1SwingAnkleDeg = j.value("s1SwingAnkleDeg", 8.6f);
+    c.s1StanceKneeDeg = j.value("s1StanceKneeDeg", 5.7f);
+    c.s1StanceAnkleDeg = j.value("s1StanceAnkleDeg", 0.0f);
+    c.cd = j.value("cd", 0.5f);
+    c.cv = j.value("cv", 0.2f);
+    c.cdLat = j.value("cdLat", 0.5f);
+    c.cvLat = j.value("cvLat", 0.2f);
+    c.stanceWidthDeg = j.value("stanceWidthDeg", 6.0f);
+    c.stanceHipDeg = j.value("stanceHipDeg", 0.0f);
+    c.useHipCOMProxy = j.value("useHipCOMProxy", true);
+    c.torsoKp = j.value("torsoKp", 100.0f);
+    c.torsoKd = j.value("torsoKd", 10.0f);
+    c.hipKp = j.value("hipKp", 100.0f);
+    c.hipKd = j.value("hipKd", 10.0f);
+    c.maxVirtualTorque = j.value("maxVirtualTorque", 250.0f);
+    c.supportScale = j.value("supportScale", 1.0f);
+    c.swingHipLimitDeg = j.value("swingHipLimitDeg", 55.0f);
     c.hipLimitMarginDeg = j.value("hipLimitMarginDeg", 3.0f);
-    c.swingPoseWeight = j.value("swingPoseWeight", 0.35f);
-    c.stancePoseWeight = j.value("stancePoseWeight", 0.45f);
-    c.landingTolerance = j.value("landingTolerance", 0.10f);
+    c.poseWeight = j.value("poseWeight", 1.0f);
+    c.uprightScale = j.value("uprightScale", 1.0f);
+    c.ikTerrainEnabled = j.value("ikTerrainEnabled", false);
+    c.ikMaxOffsetDeg = j.value("ikMaxOffsetDeg", 12.0f);
+    c.ikGroundProbe = j.value("ikGroundProbe", 0.45f);
     c.ikWriteEnabled = j.value("ikWriteEnabled", true);
     c.debug = j.value("debug", false);
 }
@@ -292,11 +410,12 @@ class LocamotionControllerSystem : public GameSystem
 {
     DECLARE_SYSTEM(LocamotionControllerSystem, 100)
 
+    using Comp = LocamotionControllerComponent;
+    using Leg  = LocamotionControllerComponent::LegState;
+
 public:
     void OnStart(Scene&) override
     {
-        // Input::BindAxis("MoveX", GamepadAxis::LeftX);
-        // Input::BindAxis("MoveY", GamepadAxis::LeftY);
         Input::BindAxis("MoveX", Key::D, Key::A);
         Input::BindAxis("MoveY", Key::S, Key::W);
     }
@@ -310,24 +429,29 @@ public:
         glm::vec3 camRight, camForward;
         CameraRelativeBasis(scene, camRight, camForward);
 
-        for (auto [entity, comp] : scene.View<LocamotionControllerComponent>().each()) {
+        for (auto [entity, comp] : scene.View<Comp>().each()) {
             if (!scene.Has<RagdollComponent>(entity) || !scene.Has<TransformComponent>(entity)) continue;
             auto& rag = scene.Get<RagdollComponent>(entity);
             auto& xf = scene.Get<TransformComponent>(entity);
-            rag.locomotionSupportTargetWeight = 0.0f;
-            rag.locomotionSupportTargetVel = glm::vec3(0.0f);
 
             if (rag.mode == RagdollMode::Animated) {
                 Physics::SetRagdollMode(rag, RagdollMode::Powered);
                 comp._timeSincePowered = 0.0f;
-                if (comp.debug) spdlog::info("[Loco] Powered mode engaged");
             }
             if (rag.mode != RagdollMode::Powered) {
                 rag.locomotionActive = false;
+                rag.locomotionSimbicon = false;
+                rag.locomotionSimbiconBlend = 0.0f;
+                rag.locomotionHipTorque[0] = rag.locomotionHipTorque[1] = glm::vec3(0.0f);
+                rag.locomotionHipBones[0] = rag.locomotionHipBones[1] = -1;
+                rag.locomotionLiftBone = -1;
                 ResetGait(comp);
                 continue;
             }
 
+            // A scene can author the ragdoll as Powered, in which case the Animated->Powered
+            // flip never runs and the -1 sentinel would double the grace period.
+            if (comp._timeSincePowered < 0.0f) comp._timeSincePowered = 0.0f;
             comp._timeSincePowered += dt;
             rag.strength = glm::clamp(comp.consciousness, 0.0f, 1.0f);
 
@@ -336,8 +460,7 @@ public:
                 : 0.0f;
             glm::vec3 moveDir = camRight * h + camForward * f;
             moveDir.y = 0.0f;
-            if (glm::length(moveDir) > 1e-4f) moveDir = glm::normalize(moveDir);
-            else moveDir = glm::vec3(0.0f);
+            moveDir = glm::length(moveDir) > 1e-4f ? glm::normalize(moveDir) : glm::vec3(0.0f);
             const bool wantsToWalk = speed > comp.minWalkSpeed;
 
             if (wantsToWalk) {
@@ -352,119 +475,105 @@ public:
             rag.locomotionActive = comp._grounded && rag.strength > 0.01f;
             rag.locomotionTargetRot = glm::angleAxis(
                 comp._yaw + glm::radians(comp.facingOffsetDeg), glm::vec3(0, 1, 0));
+            rag.locomotionUprightScale = comp.uprightScale;
 
             const float tiltDeg = Physics::GetRagdollTiltDeg(rag);
-            const bool canGait = comp._grounded &&
-                                 comp._timeSincePowered >= comp.postPoweredGrace &&
-                                 tiltDeg < rag.locomotionFallenTilt;
-            const bool gaitRequested = wantsToWalk && canGait;
+            const bool ready = comp._grounded && comp._timeSincePowered >= comp.postPoweredGrace;
+            // Deliberately NOT gated on fallen tilt. Freezing the FSM mid-stumble latched a
+            // stale one-legged pose at exactly the moment the balance law wanted its biggest
+            // catch step; the engine's root drive still bails at locomotionFallenTilt.
+            const bool gaitRequested = wantsToWalk && ready;
             const float gaitRate = 1.0f / glm::max(comp.gaitBlendTime, 0.01f);
             comp._gaitWeight = Approach(comp._gaitWeight, gaitRequested ? 1.0f : 0.0f, gaitRate * dt);
 
-            const bool startedWalking = wantsToWalk && !comp._wasWalking;
-            const bool stoppedWalking = !wantsToWalk && comp._wasWalking;
-            if (startedWalking) {
-                comp._landedStepCount = 0;
-                comp._driveWeight = 0.0f;
-                comp._timeSinceLanding = comp.doubleSupportTime;
-                comp._phaseTime = 0.0f;
-                comp._weightShiftStableTime = 0.0f;
-                comp._firstStep = true;
-                comp._weightShiftTargetCaptured = false;
-                comp._gaitPhase = LocamotionControllerComponent::GaitPhase::Idle;
+            // The controller holds a standing pose whenever it is upright, so gait engagement
+            // differs from standing by one leg rather than by the whole body.
+            const float poseTarget = ready && tiltDeg < rag.locomotionFallenTilt ? 1.0f : 0.0f;
+            comp._poseBlend = Approach(comp._poseBlend, poseTarget, gaitRate * dt);
+
+            if (wantsToWalk && !comp._wasWalking) {
+                comp._stateIndex = 0;
+                comp._stateTime = 0.0f;
+                comp._steps = 0;
+                comp._swingWasAirborne = false;
+                comp._airborneTime = 0.0f;
             }
-            if (stoppedWalking) {
-                comp._legL = {};
-                comp._legR = {};
-                comp._nextLeft = true;
-                comp._phaseTime = 0.0f;
-                comp._weightShiftStableTime = 0.0f;
-                comp._firstStep = true;
-                comp._weightShiftTargetCaptured = false;
-                comp._gaitPhase = LocamotionControllerComponent::GaitPhase::Idle;
-            }
-            if (!wantsToWalk || !canGait) comp._landedStepCount = 0;
             comp._wasWalking = wantsToWalk;
 
-            const float driveTarget = gaitRequested ? 1.0f : 0.0f;
-            const float driveRate = 1.0f / glm::max(comp.moveRampTime, 0.01f);
-            comp._driveWeight = Approach(comp._driveWeight, driveTarget, driveRate * dt);
+            // The gait owns balance while stepping; the engine's COM-over-base forces are
+            // only correct when there is no swing leg to place.
+            // Crossfade, matched to the torque ramp: engine assists fade out exactly as the
+            // virtual torques fade in, so total balance authority never dips.
+            const bool torqueGait = gaitRequested && !comp.assistedStepping;
+            rag.locomotionSimbicon = torqueGait;
+            rag.locomotionSimbiconBlend = torqueGait ? comp._gaitWeight : 0.0f;
+            rag.locomotionSupportTargetWeight = 0.0f;
+            rag.locomotionTargetVel = glm::vec3(0.0f);
+            rag.locomotionHipTorque[0] = rag.locomotionHipTorque[1] = glm::vec3(0.0f);
+            rag.locomotionHipBones[0] = rag.locomotionHipBones[1] = -1;
+            rag.locomotionLiftBone = -1;
 
-            float activeStepDuration = comp.stepDuration;
-            if (comp._legL.phase == LocamotionControllerComponent::LegPhase::Swinging)
-                activeStepDuration = comp._legL.swingDuration;
-            else if (comp._legR.phase == LocamotionControllerComponent::LegPhase::Swinging)
-                activeStepDuration = comp._legR.swingDuration;
-            const float gaitCycle =
-                2.0f * (activeStepDuration + comp.doubleSupportTime + comp.weightShiftTime);
-            const float gaitSpeedLimit = comp.stepLength / glm::max(gaitCycle, 0.01f);
-            const float driveSpeed = glm::min(speed, gaitSpeedLimit);
-            const float tiltT = glm::clamp((tiltDeg - 20.0f) / 10.0f, 0.0f, 1.0f);
-            const float tiltScale = 1.0f - tiltT * tiltT * (3.0f - 2.0f * tiltT);
-
-            UpdateGait(scene, entity, comp, rag, moveDir, gaitRequested, dt);
-
-            const float phaseDriveScale =
-                comp._gaitPhase == LocamotionControllerComponent::GaitPhase::WeightShift
-                    ? glm::clamp(comp.weightShiftDriveScale, 0.0f, 1.0f)
-                    : 1.0f;
-            rag.locomotionTargetVel =
-                moveDir * driveSpeed * comp._driveWeight * tiltScale * phaseDriveScale;
+            UpdateGait(scene, entity, comp, rag, gaitRequested, dt);
 
             if (comp.debug) {
                 _debugTimer += dt;
                 if (_debugTimer >= 0.25f) {
                     _debugTimer = 0.0f;
                     const glm::vec3 v = rag._locomotionRootVel;
-                    spdlog::info("[Loco] phase={} input={:.2f} requested={:.2f} target={:.2f} drive={:.2f} actual={:.2f} along={:+.2f} gait={:.2f} tilt={:.1f} steps={} poles=({:+.0f},{:+.0f}) limit=({:.1f},{:.1f}) clamped=({},{})",
-                                 LocomotionGaitPhaseName(comp._gaitPhase),
-                                 magnitude, speed,
-                                 glm::length(glm::vec2(rag.locomotionTargetVel.x,
-                                                       rag.locomotionTargetVel.z)),
-                                 comp._driveWeight,
-                                 glm::length(glm::vec2(v.x, v.z)), glm::dot(v, moveDir),
-                                 comp._gaitWeight,
-                                 tiltDeg, comp._landedStepCount,
-                                 comp._legL.selectedPoleDeg, comp._legR.selectedPoleDeg,
-                                 comp._legL.hipLimitViolationDeg,
-                                 comp._legR.hipLimitViolationDeg,
-                                 comp._legL.hipTargetClamped,
-                                 comp._legR.hipTargetClamped);
+                    spdlog::info("[Loco] s{} swing={} t={:.2f} gait={:.2f} pose={:.2f} d=({:+.3f},{:+.3f}) v=({:+.3f},{:+.3f}) hip=({:+.1f},{:+.1f}) tau=(T{:.0f},B{:.0f},A{:.0f}) spd={:.2f} tilt={:.1f} steps={}",
+                                 comp._stateIndex, comp._swingIsLeft ? "L" : "R",
+                                 comp._stateTime, comp._gaitWeight, comp._poseBlend,
+                                 comp._dSag, comp._dLat, comp._vSag, comp._vLat,
+                                 comp._swingHipCmdDeg, comp._swingHipLatCmdDeg,
+                                 comp._torsoTorque, comp._swingTorque, comp._stanceTorque,
+                                 glm::length(glm::vec2(v.x, v.z)), tiltDeg, comp._steps);
+                    spdlog::info("[LocoFrame] tilt(mine={:.1f} engine={:.1f} delta={:+.1f}) right=({:+.2f},{:+.2f},{:+.2f}) fwd=({:+.2f},{:+.2f},{:+.2f}) femurCmd=({:+.2f},{:+.2f},{:+.2f}) femurActual=({:+.2f},{:+.2f},{:+.2f}) femurErr={:.1f}",
+                                 comp._myTiltDeg, comp._engineTiltDeg,
+                                 comp._myTiltDeg - comp._engineTiltDeg,
+                                 comp._right.x, comp._right.y, comp._right.z,
+                                 comp._fwd.x, comp._fwd.y, comp._fwd.z,
+                                 comp._femurCmd.x, comp._femurCmd.y, comp._femurCmd.z,
+                                 comp._femurActual.x, comp._femurActual.y, comp._femurActual.z,
+                                 comp._femurErrDeg);
+                    spdlog::info("[LocoPD] torso(P={:.0f} D={:.0f}) swing(P={:.0f} D={:.0f}) sat={}",
+                                 comp._torsoP, comp._torsoD, comp._swingP, comp._swingD,
+                                 comp._saturated ? "YES" : "no");
+                    if (comp.assistedStepping)
+                        spdlog::info("[LocoStep] phase={} contact={} airborne={} footForward={:+.3f} clearance={:+.3f} footY={:.3f}/{:.3f} footVy={:+.2f}",
+                                     comp._stateIndex, comp._swingContact ? "yes" : "no",
+                                     comp._swingWasAirborne ? "yes" : "no",
+                                     comp._swingForward, comp._swingClearance, comp._swingFootY,
+                                     comp._liftTargetY, comp._swingFootVy);
                 }
             }
         }
     }
 
 private:
-    enum class SwingResult { None, Target, Settled };
-
     float _debugTimer = 0.0f;
 
     static float Approach(float value, float target, float amount)
     {
-        if (value < target) return glm::min(value + amount, target);
-        return glm::max(value - amount, target);
+        return value < target ? glm::min(value + amount, target)
+                              : glm::max(value - amount, target);
     }
 
-    static float SmootherStep(float t)
-    {
-        t = glm::clamp(t, 0.0f, 1.0f);
-        return t * t * t * (t * (t * 6.0f - 15.0f) + 10.0f);
-    }
-
-    static void ResetGait(LocamotionControllerComponent& c)
+    static void ResetGait(Comp& c)
     {
         c._gaitWeight = 0.0f;
-        c._driveWeight = 0.0f;
+        c._poseBlend = 0.0f;
+        c._stateIndex = 0;
+        c._stateTime = 0.0f;
+        c._steps = 0;
         c._wasWalking = false;
-        c._landedStepCount = 0;
-        c._phaseTime = 0.0f;
-        c._weightShiftStableTime = 0.0f;
-        c._firstStep = true;
-        c._weightShiftTargetCaptured = false;
-        c._gaitPhase = LocamotionControllerComponent::GaitPhase::Idle;
-        c._legL = {};
-        c._legR = {};
+        c._swingWasAirborne = false;
+        c._airborneTime = 0.0f;
+        c._swingContact = false;
+        c._swingForward = c._swingFootY = c._swingFootVy = c._liftTargetY = 0.0f;
+        c._swingClearance = 0.0f;
+        c._torsoTorque = c._swingTorque = c._stanceTorque = 0.0f;
+        c._torsoP = c._torsoD = c._swingP = c._swingD = 0.0f;
+        c._saturated = false;
     }
 
     static void CameraRelativeBasis(Scene& scene, glm::vec3& right, glm::vec3& forward)
@@ -488,6 +597,15 @@ private:
         }
     }
 
+    static glm::quat OrientationOf(const glm::mat4& matrix)
+    {
+        const glm::vec3 x(matrix[0]), y(matrix[1]), z(matrix[2]);
+        if (glm::dot(x, x) < 1e-12f || glm::dot(y, y) < 1e-12f || glm::dot(z, z) < 1e-12f)
+            return glm::quat(1, 0, 0, 0);
+        return glm::normalize(glm::quat_cast(
+            glm::mat3(glm::normalize(x), glm::normalize(y), glm::normalize(z))));
+    }
+
     static glm::mat4 BoneWorldMatrix(const Diamond::Skeleton& skeleton,
                                      const AnimatorComponent& animator,
                                      const glm::mat4& entityWorld, int bone)
@@ -503,42 +621,96 @@ private:
         return glm::vec3(BoneWorldMatrix(skeleton, animator, entityWorld, bone)[3]);
     }
 
-    static glm::quat OrientationOf(const glm::mat4& matrix)
+    static glm::quat BindModelRot(const Diamond::Skeleton& skeleton, int bone)
     {
-        const glm::vec3 x(matrix[0]), y(matrix[1]), z(matrix[2]);
-        if (glm::dot(x, x) < 1e-12f || glm::dot(y, y) < 1e-12f || glm::dot(z, z) < 1e-12f)
-            return glm::quat(1, 0, 0, 0);
-        return glm::normalize(glm::quat_cast(
-            glm::mat3(glm::normalize(x), glm::normalize(y), glm::normalize(z))));
+        return OrientationOf(glm::inverse(skeleton.bones[bone].inverseBind));
     }
 
-    static glm::quat BoneWorldRot(const Diamond::Skeleton& skeleton,
-                                  const AnimatorComponent& animator,
-                                  const glm::mat4& entityWorld, int bone)
+    static glm::quat RotationBetween(const glm::vec3& from, const glm::vec3& to)
     {
-        return OrientationOf(BoneWorldMatrix(skeleton, animator, entityWorld, bone));
+        const glm::vec3 a = glm::normalize(from), b = glm::normalize(to);
+        const float d = glm::clamp(glm::dot(a, b), -1.0f, 1.0f);
+        if (d > 0.99999f) return glm::quat(1, 0, 0, 0);
+        if (d < -0.99999f) {
+            glm::vec3 axis = glm::cross(glm::vec3(1, 0, 0), a);
+            if (glm::dot(axis, axis) < 1e-8f) axis = glm::cross(glm::vec3(0, 1, 0), a);
+            return glm::angleAxis(glm::pi<float>(), glm::normalize(axis));
+        }
+        return glm::angleAxis(std::acos(d), glm::normalize(glm::cross(a, b)));
     }
 
-    static glm::vec3 PerpendicularTo(const glm::vec3& direction)
+    // Physical body rotation when the bone has one, else the animated pose. World-frame
+    // targets must compose against the physical parent -- the two diverge exactly when
+    // balance feedback matters.
+    static glm::quat ParentWorldRot(const RagdollComponent& rag,
+                                    const Diamond::Skeleton& skeleton,
+                                    const AnimatorComponent& animator,
+                                    const glm::mat4& entityWorld, int bone)
     {
-        glm::vec3 perpendicular = glm::cross(direction, glm::vec3(0, 1, 0));
-        if (glm::dot(perpendicular, perpendicular) < 1e-8f)
-            perpendicular = glm::cross(direction, glm::vec3(1, 0, 0));
-        return glm::normalize(perpendicular);
+        const int parent = skeleton.bones[bone].parent;
+        if (parent < 0) return OrientationOf(entityWorld);
+        bool ok = false;
+        const glm::quat physical = Physics::GetRagdollBoneRotation(rag, parent, &ok);
+        if (ok) return physical;
+        return OrientationOf(BoneWorldMatrix(skeleton, animator, entityWorld, parent));
     }
 
-    static glm::vec3 ConstraintPlaneAxis(const glm::vec3& axis)
+    struct Envelope {
+        glm::vec3 twistAxis { 1.0f, 0.0f, 0.0f };
+        float swingNormalDeg = 60.0f, swingPlaneDeg = 60.0f;
+        float twistMinDeg = -45.0f, twistMaxDeg = 45.0f;
+    };
+
+    // Salvaged from the old leg solver: express a local target in Jolt's authored
+    // swing/twist basis and pull it back to the nearest legal orientation. Kept because it
+    // is useful for ANY target source -- Table 1's angles plus a large cd*d term can leave
+    // the authored cone on a rig the paper never saw.
+    static glm::quat ClampToEnvelope(const Envelope& env, const glm::quat& restLocal,
+                                     const glm::quat& target, float marginDeg)
     {
-        const glm::vec3 normalized = glm::normalize(axis);
-        const glm::vec3 reference =
-            std::abs(normalized.y) < 0.99f ? glm::vec3(0, 1, 0) : glm::vec3(1, 0, 0);
-        return glm::normalize(glm::cross(normalized, reference));
+        const glm::vec3 axis = glm::normalize(env.twistAxis);
+        const glm::vec3 reference = std::abs(axis.y) < 0.99f ? glm::vec3(0, 1, 0) : glm::vec3(1, 0, 0);
+        const glm::vec3 planeAxis = glm::normalize(glm::cross(axis, reference));
+        const glm::vec3 normalAxis = glm::normalize(glm::cross(axis, planeAxis));
+        const glm::quat basis = glm::normalize(glm::quat_cast(glm::mat3(axis, planeAxis, normalAxis)));
+
+        const float margin = glm::max(marginDeg, 0.0f);
+        const float planeRadius = glm::max(std::sin(
+            glm::radians(glm::clamp(env.swingPlaneDeg - margin, 1.0f, 179.0f)) * 0.5f), 1e-4f);
+        const float normalRadius = glm::max(std::sin(
+            glm::radians(glm::clamp(env.swingNormalDeg - margin, 1.0f, 179.0f)) * 0.5f), 1e-4f);
+        const float middle = (env.twistMinDeg + env.twistMaxDeg) * 0.5f;
+        const float twistMin = glm::radians(glm::min(env.twistMinDeg + margin, middle));
+        const float twistMax = glm::radians(glm::max(env.twistMaxDeg - margin, middle));
+
+        glm::quat delta = glm::normalize(glm::conjugate(restLocal) * target);
+        glm::quat inBasis = glm::normalize(glm::conjugate(basis) * delta * basis);
+        if (inBasis.w < 0.0f) inBasis = -inBasis;
+
+        glm::quat twist(inBasis.w, inBasis.x, 0.0f, 0.0f);
+        const float twistLength = glm::length(twist);
+        twist = twistLength > 1e-6f ? twist / twistLength : glm::quat(1, 0, 0, 0);
+        glm::quat swing = glm::normalize(inBasis * glm::conjugate(twist));
+        if (swing.w < 0.0f) swing = -swing;
+
+        const float ellipse = std::sqrt(
+            (swing.y * swing.y) / (planeRadius * planeRadius) +
+            (swing.z * swing.z) / (normalRadius * normalRadius));
+        const float twistAngle = 2.0f * std::atan2(twist.x, twist.w);
+        if (ellipse <= 1.0f && twistAngle >= twistMin && twistAngle <= twistMax) return target;
+
+        const float scale = ellipse > 1.0f ? 1.0f / ellipse : 1.0f;
+        const float sy = swing.y * scale, sz = swing.z * scale;
+        const glm::quat clampedSwing(std::sqrt(glm::max(1.0f - sy * sy - sz * sz, 0.0f)), 0.0f, sy, sz);
+        const glm::quat clampedTwist = glm::angleAxis(
+            glm::clamp(twistAngle, twistMin, twistMax), glm::vec3(1, 0, 0));
+        const glm::quat clamped = glm::normalize(
+            basis * glm::normalize(clampedSwing * clampedTwist) * glm::conjugate(basis));
+        return glm::normalize(restLocal * clamped);
     }
 
-    static void ResolveLeg(LocamotionControllerComponent::LegState& leg,
-                           const std::string& footName,
-                           const Diamond::Skeleton& skeleton,
-                           const RagdollComponent& rag)
+    static void ResolveLeg(Leg& leg, const std::string& footName,
+                           const Diamond::Skeleton& skeleton, const RagdollComponent& rag)
     {
         if (leg.footIdx >= 0 && leg.footIdx < static_cast<int>(skeleton.bones.size()) &&
             skeleton.bones[leg.footIdx].name == footName) return;
@@ -549,11 +721,17 @@ private:
         leg.hipIdx = skeleton.Find(base + "1");
         leg.kneeIdx = skeleton.Find(base + "2");
         leg.ankleIdx = skeleton.Find(base + "3");
-
         if (!rag.config || leg.kneeIdx < 0 || leg.hipIdx < 0) return;
+
         for (const auto& body : rag.config->bodies) {
             if (body.boneName == skeleton.bones[leg.kneeIdx].name) {
                 leg.kneeHingeAxis = body.twistAxisLocal;
+            } else if (leg.ankleIdx >= 0 && body.boneName == skeleton.bones[leg.ankleIdx].name) {
+                leg.ankleAxis = body.twistAxisLocal;
+                leg.ankleSwingNormalDeg = body.swingNormalDeg;
+                leg.ankleSwingPlaneDeg = body.swingPlaneDeg;
+                leg.ankleTwistMinDeg = body.twistMinDeg;
+                leg.ankleTwistMaxDeg = body.twistMaxDeg;
             } else if (body.boneName == skeleton.bones[leg.hipIdx].name) {
                 leg.hipTwistAxis = body.twistAxisLocal;
                 leg.hipSwingNormalDeg = body.swingNormalDeg;
@@ -564,243 +742,346 @@ private:
         }
     }
 
-    static glm::vec3 GroundedSoleTarget(Scene& scene, entt::entity entity,
-                                        const glm::vec3& hips, const glm::vec3& horizontal,
-                                        float rayLength, float fallbackY)
+    static bool ValidLeg(const Leg& leg)
     {
-        const glm::vec3 probe(hips.x + horizontal.x, hips.y, hips.z + horizontal.z);
-        const HitResult hit = Physics::Raycast(probe, glm::vec3(0, -1, 0), rayLength, entity);
-        return hit.hit ? hit.point : glm::vec3(probe.x, fallbackY, probe.z);
+        return leg.footIdx >= 0 && leg.ankleIdx >= 0 && leg.kneeIdx >= 0 && leg.hipIdx >= 0;
     }
 
-    struct ReachProjection
+    static bool FootGrounded(const RagdollComponent& rag, int footBone)
     {
-        glm::vec3 target { 0.0f };
-        float fraction = 1.0f;
-        float liftScale = 1.0f;
-        float poleDeg = 0.0f;
-        float duration = 0.40f;
-        float requestedViolationDeg = 0.0f;
-        float projectedViolationDeg = 0.0f;
-        float requestedDuration = 0.40f;
-    };
+        for (int i = 0; i < 2; ++i)
+            if (rag._locomotionFootBones[i] == footBone) return rag._locomotionFootGrounded[i];
+        return false;
+    }
 
-    struct TrajectoryEvaluation
+    static bool FootContact(const RagdollComponent& rag, int footBone, glm::vec3* normal = nullptr)
     {
-        float poleDeg = 0.0f;
-        float violationDeg = std::numeric_limits<float>::infinity();
-        float requiredDuration = 0.0f;
-        float score = std::numeric_limits<float>::infinity();
-    };
-
-    static glm::vec3 SwingSoleTarget(
-        const glm::vec3& start, const glm::vec3& target, float progress,
-        float toeOffFraction, float toeOffHeight, float stepLift, float liftScale)
-    {
-        const float t = glm::clamp(progress, 0.0f, 1.0f);
-        const float toeEnd = glm::clamp(toeOffFraction, 0.05f, 0.45f);
-        const float toeT = glm::clamp(t / toeEnd, 0.0f, 1.0f);
-        if (t < toeEnd) {
-            glm::vec3 result = start;
-            result.y += toeOffHeight * liftScale * SmootherStep(toeT);
-            return result;
+        for (int i = 0; i < 2; ++i) {
+            if (rag._locomotionFootBones[i] != footBone) continue;
+            if (normal) *normal = rag._locomotionFootContactNormal[i];
+            return rag._locomotionFootContact[i];
         }
-
-        const float travelT = (t - toeEnd) / (1.0f - toeEnd);
-        const float travelBlend = SmootherStep(travelT);
-        glm::vec3 result = glm::mix(start, target, travelBlend);
-        const float liftWave = std::sin(glm::pi<float>() * travelT);
-        result.y += liftScale * (
-            toeOffHeight * (1.0f - travelBlend) +
-            stepLift * liftWave * liftWave);
-        return result;
+        if (normal) *normal = glm::vec3(0.0f);
+        return false;
     }
 
-    static ReachProjection ProjectSwingTarget(
-        LocamotionControllerComponent::LegState& leg,
-        const Diamond::Skeleton& skeleton, AnimatorComponent& animator,
-        const glm::mat4& entityWorld, const glm::vec3& moveDir,
-        const glm::vec3& desiredTarget, float reachFraction, float hipLimitMarginDeg,
-        float toeOffFraction, float toeOffHeight, float stepLift,
-        float legLength, float baseDuration, float maximumDuration,
-        float maximumHipSpeedDeg, float maximumKneeSpeedDeg,
-        float maximumFootSpeedLegsPerSec)
+    static void BlendPose(AnimatorComponent& animator, int bone, const glm::quat& target, float weight)
     {
-        ReachProjection result;
-        result.target = desiredTarget;
-        result.duration = baseDuration;
+        animator.pose[bone].rotation = glm::normalize(glm::slerp(
+            glm::normalize(animator.pose[bone].rotation), glm::normalize(target),
+            glm::clamp(weight, 0.0f, 1.0f)));
+    }
 
-        const glm::vec3 savedSoleTarget = leg.soleTarget;
-        const float savedPoleDeg = leg.selectedPoleDeg;
-        const float savedViolationDeg = leg.hipLimitViolationDeg;
-        const bool savedClamped = leg.hipTargetClamped;
-        auto quaternionAngleDeg = [](const glm::quat& from, const glm::quat& to) {
-            const glm::quat delta =
-                glm::normalize(glm::conjugate(from) * to);
-            return glm::degrees(2.0f * std::acos(
-                glm::clamp(std::abs(delta.w), 0.0f, 1.0f)));
+    // Terrain displacement (paper section 8): a difference of two implicit leg solves, so
+    // it is identically zero on flat ground and cannot destabilise the base gait.
+    static float TerrainKneeOffsetDeg(Scene& scene, entt::entity entity, const Comp& comp,
+                                      const Leg& swing, const Leg& stance,
+                                      const Diamond::Skeleton& skeleton,
+                                      const AnimatorComponent& animator,
+                                      const glm::mat4& entityWorld)
+    {
+        const glm::vec3 swingFoot = BoneWorldPos(skeleton, animator, entityWorld, swing.footIdx);
+        const glm::vec3 stanceFoot = BoneWorldPos(skeleton, animator, entityWorld, stance.footIdx);
+        const HitResult under = Physics::Raycast(swingFoot + glm::vec3(0, 0.1f, 0),
+                                                 glm::vec3(0, -1, 0),
+                                                 comp.ikGroundProbe + 0.1f, entity);
+        const HitResult beneathStance = Physics::Raycast(stanceFoot + glm::vec3(0, 0.1f, 0),
+                                                         glm::vec3(0, -1, 0),
+                                                         comp.ikGroundProbe + 0.1f, entity);
+        if (!under.hit || !beneathStance.hit) return 0.0f;
+
+        const float step = under.point.y - beneathStance.point.y;
+        if (std::abs(step) < 1e-3f) return 0.0f;
+
+        const glm::vec3 hip = BoneWorldPos(skeleton, animator, entityWorld, swing.hipIdx);
+        const float upper = glm::length(skeleton.bones[swing.kneeIdx].localT);
+        const float lower = glm::length(skeleton.bones[swing.ankleIdx].localT);
+        if (upper < 1e-4f || lower < 1e-4f) return 0.0f;
+
+        auto kneeFor = [&](float reach) {
+            const float d = glm::clamp(reach, std::abs(upper - lower) + 1e-4f,
+                                       upper + lower - 1e-4f);
+            return std::acos(glm::clamp(
+                (upper * upper + lower * lower - d * d) / (2.0f * upper * lower), -1.0f, 1.0f));
         };
-        auto evaluatePole = [&](float fraction, float liftScale, float poleDeg) {
-            TrajectoryEvaluation evaluation;
-            evaluation.poleDeg = poleDeg;
-            evaluation.violationDeg = 0.0f;
+        const float nominal = glm::length(hip - swingFoot);
+        const float adjusted = glm::max(nominal - step, 0.05f);
+        const float deltaDeg = glm::degrees(kneeFor(adjusted) - kneeFor(nominal));
+        return glm::clamp(deltaDeg, -comp.ikMaxOffsetDeg, comp.ikMaxOffsetDeg);
+    }
 
-            const int hipParent = skeleton.bones[leg.hipIdx].parent;
-            const glm::quat hipParentWorld = hipParent >= 0
-                ? BoneWorldRot(skeleton, animator, entityWorld, hipParent)
-                : OrientationOf(entityWorld);
-            const glm::quat hipWorld =
-                BoneWorldRot(skeleton, animator, entityWorld, leg.hipIdx);
-            const glm::quat kneeWorld =
-                BoneWorldRot(skeleton, animator, entityWorld, leg.kneeIdx);
-            glm::quat previousHip = glm::normalize(
-                glm::conjugate(hipParentWorld) * hipWorld);
-            glm::quat previousKnee = glm::normalize(
-                glm::conjugate(hipWorld) * kneeWorld);
-            glm::vec3 previousSole = leg.swingStartSole;
-            float maximumViolationDeg = 0.0f;
-            const glm::vec3 target =
-                glm::mix(leg.swingStartSole, desiredTarget, fraction);
-            constexpr int trajectorySamples = 8;
-            for (int sample = 0; sample <= trajectorySamples; ++sample) {
-                const float progress =
-                    static_cast<float>(sample) / static_cast<float>(trajectorySamples);
-                leg.soleTarget = SwingSoleTarget(
-                    leg.swingStartSole, target, progress, toeOffFraction,
-                    toeOffHeight, stepLift, liftScale);
-                glm::quat hipTarget, kneeTarget;
-                SolveLeg(leg, skeleton, animator, entityWorld, moveDir, reachFraction,
-                         hipLimitMarginDeg, poleDeg, 0.0f, false, false,
-                         &hipTarget, &kneeTarget);
-                maximumViolationDeg =
-                    glm::max(maximumViolationDeg, leg.hipLimitViolationDeg);
+    void UpdateAssistedGait(Scene& scene, entt::entity entity, Comp& comp,
+                            RagdollComponent& rag, bool walking, float dt)
+    {
+        if (!scene.Has<SkinnedMeshComponent>(entity) || !scene.Has<AnimatorComponent>(entity)) return;
+        auto& mesh = scene.Get<SkinnedMeshComponent>(entity);
+        auto& animator = scene.Get<AnimatorComponent>(entity);
+        const auto& skeleton = mesh.skeleton;
+        const int count = static_cast<int>(skeleton.bones.size());
+        if (count == 0 || static_cast<int>(animator.palette.size()) != count ||
+            static_cast<int>(animator.pose.size()) != count) return;
 
-                const float sampleScale = static_cast<float>(trajectorySamples);
-                evaluation.requiredDuration = glm::max(
-                    evaluation.requiredDuration,
-                    quaternionAngleDeg(previousHip, hipTarget) * sampleScale /
-                        glm::max(maximumHipSpeedDeg, 1.0f));
-                evaluation.requiredDuration = glm::max(
-                    evaluation.requiredDuration,
-                    quaternionAngleDeg(previousKnee, kneeTarget) * sampleScale /
-                        glm::max(maximumKneeSpeedDeg, 1.0f));
-                evaluation.requiredDuration = glm::max(
-                    evaluation.requiredDuration,
-                    glm::length(leg.soleTarget - previousSole) * sampleScale /
-                        glm::max(legLength * maximumFootSpeedLegsPerSec, 0.01f));
-                previousHip = hipTarget;
-                previousKnee = kneeTarget;
-                previousSole = leg.soleTarget;
-            }
-            evaluation.violationDeg = maximumViolationDeg;
-            evaluation.score =
-                maximumViolationDeg * 1000.0f +
-                evaluation.requiredDuration +
-                std::abs(poleDeg) * 0.002f +
-                std::abs(poleDeg - savedPoleDeg) * 0.001f;
-            return evaluation;
-        };
-        auto bestTrajectory = [&](float fraction, float liftScale) {
-            TrajectoryEvaluation best;
-            for (int poleDeg = -90; poleDeg <= 90; poleDeg += 10) {
-                const TrajectoryEvaluation candidate =
-                    evaluatePole(fraction, liftScale, static_cast<float>(poleDeg));
-                if (candidate.score < best.score) best = candidate;
-            }
-            return best;
+        const int rootBone = Physics::GetRagdollRootBone(rag);
+        if (rootBone < 0) return;
+        ResolveLeg(comp._legL, comp.leftFootBone, skeleton, rag);
+        ResolveLeg(comp._legR, comp.rightFootBone, skeleton, rag);
+        if (!ValidLeg(comp._legL) || !ValidLeg(comp._legR)) return;
+
+        const glm::mat4 entityWorld = scene.GetTransformSystem().GetWorldMatrix(entity);
+        const glm::quat entityRot = OrientationOf(entityWorld);
+        const glm::quat heading = glm::normalize(rag.locomotionTargetRot);
+        const glm::vec3 leftHipBind = glm::vec3(
+            (entityWorld * glm::inverse(skeleton.bones[comp._legL.hipIdx].inverseBind))[3]);
+        const glm::vec3 rightHipBind = glm::vec3(
+            (entityWorld * glm::inverse(skeleton.bones[comp._legR.hipIdx].inverseBind))[3]);
+        glm::vec3 right = rightHipBind - leftHipBind;
+        right.y = 0.0f;
+        right = glm::length(right) > 1e-4f ? glm::normalize(right) : glm::vec3(1, 0, 0);
+        right = heading * right;
+        right.y = 0.0f;
+        right = glm::length(right) > 1e-4f ? glm::normalize(right) : glm::vec3(1, 0, 0);
+        const glm::vec3 fwd = glm::normalize(glm::cross(glm::vec3(0, 1, 0), right));
+
+        auto physicalPosition = [&](int bone) {
+            bool ok = false;
+            glm::vec3 p = Physics::GetRagdollBonePosition(rag, bone, &ok);
+            return ok ? p : BoneWorldPos(skeleton, animator, entityWorld, bone);
         };
 
-        constexpr float feasibleToleranceDeg = 0.05f;
-        const float safeMaximumDuration =
-            glm::max(maximumDuration, baseDuration);
-        const TrajectoryEvaluation requested = bestTrajectory(1.0f, 1.0f);
-        result.requestedViolationDeg = requested.violationDeg;
-        result.requestedDuration =
-            glm::max(baseDuration, requested.requiredDuration);
-        auto feasible = [&](const TrajectoryEvaluation& evaluation) {
-            return evaluation.violationDeg <= feasibleToleranceDeg;
-        };
-        auto furthestFeasibleFraction = [&](float liftScale) {
-            // Walk backward along the requested stride until a legal foothold is
-            // found, then refine the boundary. Keep the already selected pole so
-            // refinement is a bounded one-dimensional search.
-            constexpr int coarseSteps = 8;
-            float feasibleFraction = -1.0f;
-            float infeasibleFraction = 1.0f;
-            for (int step = coarseSteps - 1; step >= 0; --step) {
-                const float fraction =
-                    static_cast<float>(step) / static_cast<float>(coarseSteps);
-                if (feasible(evaluatePole(
-                        fraction, liftScale, requested.poleDeg))) {
-                    feasibleFraction = fraction;
-                    infeasibleFraction =
-                        static_cast<float>(step + 1) / static_cast<float>(coarseSteps);
+        Leg* swing = comp._swingIsLeft ? &comp._legL : &comp._legR;
+        Leg* stance = comp._swingIsLeft ? &comp._legR : &comp._legL;
+        glm::vec3 swingFoot = physicalPosition(swing->footIdx);
+        glm::vec3 stanceFoot = physicalPosition(stance->footIdx);
+        glm::vec3 contactNormal(0.0f);
+        bool contact = FootContact(rag, swing->footIdx, &contactNormal);
+        bool velocityOk = false;
+        glm::vec3 swingVelocity = Physics::GetRagdollBoneLinearVelocity(
+            rag, swing->footIdx, &velocityOk);
+        if (!velocityOk) swingVelocity = glm::vec3(0.0f);
+        float swingClearance = swingFoot.y - stanceFoot.y;
+        const float tiltDeg = Physics::GetRagdollTiltDeg(rag);
+        const bool canStep = walking && tiltDeg < rag.locomotionFallenTilt;
+
+        comp._swingContact = contact;
+        comp._swingForward = glm::dot(swingFoot - stanceFoot, fwd);
+        comp._swingFootY = swingFoot.y;
+        comp._swingClearance = swingClearance;
+        comp._liftTargetY = stanceFoot.y + glm::max(comp.assistedLiftHeight, 0.0f);
+        comp._swingFootVy = swingVelocity.y;
+        comp._right = right;
+        comp._fwd = fwd;
+
+        // This bring-up controller intentionally leaves every engine assist and both hip
+        // position motors active. No virtual hip torque is allowed until a planted stance
+        // leg and trustworthy touchdown transitions have been demonstrated.
+        rag.locomotionSimbicon = false;
+        rag.locomotionSimbiconBlend = 0.0f;
+        rag.locomotionHipTorque[0] = rag.locomotionHipTorque[1] = glm::vec3(0.0f);
+        rag.locomotionHipBones[0] = rag.locomotionHipBones[1] = -1;
+        rag.locomotionSupportScale = 1.0f;
+        comp._torsoTorque = comp._swingTorque = comp._stanceTorque = 0.0f;
+        comp._torsoP = comp._torsoD = comp._swingP = comp._swingD = 0.0f;
+        comp._saturated = false;
+
+        if (!canStep) {
+            comp._stateIndex = 0;
+            comp._stateTime = 0.0f;
+            comp._swingWasAirborne = false;
+            comp._airborneTime = 0.0f;
+            rag.locomotionSupportTargetWeight = 0.0f;
+        } else {
+            comp._stateTime += dt;
+            switch (comp._stateIndex) {
+                case 0: // double support: shift COM over the future stance foot
+                    if (comp._stateTime >= glm::max(comp.weightShiftTime, 0.05f)) {
+                        comp._stateIndex = 1;
+                        comp._stateTime = 0.0f;
+                        comp._swingWasAirborne = false;
+                        comp._airborneTime = 0.0f;
+                    }
+                    break;
+                case 1: { // lift + reach
+                    // Contact manifolds can persist while a rotating toe peels away from
+                    // the floor. Accept either a clean solver separation or enough physical
+                    // foot-center clearance as takeoff evidence; require it to persist so a
+                    // single noisy frame cannot advance the gait.
+                    const bool takeoffEvidence = !contact ||
+                        swingClearance >= glm::max(comp.assistedTakeoffClearance, 0.0f);
+                    if (takeoffEvidence) comp._airborneTime += dt;
+                    else if (!comp._swingWasAirborne) comp._airborneTime = 0.0f;
+                    if (comp._airborneTime >= glm::max(comp.airborneConfirmTime, 0.0f))
+                        comp._swingWasAirborne = true;
+                    if (comp._swingWasAirborne &&
+                        comp._stateTime >= glm::max(comp.assistedLiftTime, 0.1f)) {
+                        comp._stateIndex = 2;
+                        comp._stateTime = 0.0f;
+                    }
                     break;
                 }
-            }
-
-            if (feasibleFraction >= 0.0f) {
-                for (int iteration = 0; iteration < 5; ++iteration) {
-                    const float middle = (feasibleFraction + infeasibleFraction) * 0.5f;
-                    if (feasible(evaluatePole(
-                            middle, liftScale, requested.poleDeg)))
-                        feasibleFraction = middle;
-                    else
-                        infeasibleFraction = middle;
-                }
-            }
-            return feasibleFraction;
-        };
-
-        if (!feasible(requested)) {
-            result.fraction = furthestFeasibleFraction(1.0f);
-
-            // Prefer the authored lift when it still permits a useful stride. If
-            // the vertical arc itself blocks the leg, find the highest lift that
-            // maximizes legal forward travel.
-            constexpr float minimumUsefulFraction = 0.35f;
-            if (result.fraction < minimumUsefulFraction) {
-                float bestFraction = glm::max(result.fraction, 0.0f);
-                float bestLiftScale = result.fraction >= 0.0f ? 1.0f : 0.4f;
-                // Preserve enough clearance to avoid replacing a constraint-safe
-                // swing with a foot that simply scrapes along the floor.
-                for (int liftStep = 9; liftStep >= 4; --liftStep) {
-                    const float liftScale = static_cast<float>(liftStep) / 10.0f;
-                    const float fraction = furthestFeasibleFraction(liftScale);
-                    if (fraction > bestFraction + 1e-4f ||
-                        (std::abs(fraction - bestFraction) <= 1e-4f &&
-                         liftScale > bestLiftScale)) {
-                        bestFraction = glm::max(fraction, 0.0f);
-                        bestLiftScale = liftScale;
+                case 2: { // extend down; accept only a NEW, forward, low-speed support contact
+                    const bool planted = comp._swingWasAirborne && contact &&
+                        contactNormal.y >= 0.5f &&
+                        std::abs(swingVelocity.y) <= glm::max(comp.maxPlantVerticalSpeed, 0.1f) &&
+                        comp._swingForward >= glm::max(comp.minPlantForward, 0.0f);
+                    if (planted) {
+                        comp._stateIndex = 3;
+                        comp._stateTime = 0.0f;
+                        ++comp._steps;
+                    } else if (comp._stateTime >= glm::max(comp.assistedPlantTimeout, 0.1f)) {
+                        // The foot did not establish a valid support. Re-lift the same leg;
+                        // never report a step or hand support to the other leg on a timeout.
+                        comp._stateIndex = 1;
+                        comp._stateTime = 0.0f;
+                        comp._swingWasAirborne = false;
+                        comp._airborneTime = 0.0f;
                     }
+                    break;
                 }
-                result.fraction = bestFraction;
-                result.liftScale = bestLiftScale;
+                case 3: // confirmed double support: move COM to the new foot, then alternate
+                    if (comp._stateTime >= glm::max(comp.assistedTransferTime, 0.05f)) {
+                        comp._swingIsLeft = !comp._swingIsLeft;
+                        comp._stateIndex = 0;
+                        comp._stateTime = 0.0f;
+                        comp._swingWasAirborne = false;
+                        comp._airborneTime = 0.0f;
+                    }
+                    break;
+                default:
+                    comp._stateIndex = 0;
+                    comp._stateTime = 0.0f;
+                    break;
             }
-
-            if (result.fraction < 0.0f) result.fraction = 0.0f;
-            result.target = glm::mix(
-                leg.swingStartSole, desiredTarget, result.fraction);
         }
 
-        const TrajectoryEvaluation projected = evaluatePole(
-            result.fraction, result.liftScale, requested.poleDeg);
-        result.poleDeg = projected.poleDeg;
-        result.projectedViolationDeg = projected.violationDeg;
-        result.duration = glm::clamp(
-            glm::max(baseDuration, projected.requiredDuration),
-            baseDuration, safeMaximumDuration);
-        leg.soleTarget = savedSoleTarget;
-        leg.selectedPoleDeg = savedPoleDeg;
-        leg.hipLimitViolationDeg = savedViolationDeg;
-        leg.hipTargetClamped = savedClamped;
-        return result;
+        // A transition may have swapped the leg roles; refresh all physical measurements.
+        swing = comp._swingIsLeft ? &comp._legL : &comp._legR;
+        stance = comp._swingIsLeft ? &comp._legR : &comp._legL;
+        swingFoot = physicalPosition(swing->footIdx);
+        stanceFoot = physicalPosition(stance->footIdx);
+        contact = FootContact(rag, swing->footIdx, &contactNormal);
+        velocityOk = false;
+        swingVelocity = Physics::GetRagdollBoneLinearVelocity(
+            rag, swing->footIdx, &velocityOk);
+        if (!velocityOk) swingVelocity = glm::vec3(0.0f);
+        swingClearance = swingFoot.y - stanceFoot.y;
+        const glm::vec3 rootPos = physicalPosition(rootBone);
+        const glm::vec3 com = rag._locomotionCOMValid ? rag._locomotionCOM : rootPos;
+        const glm::vec3 comVel = rag._locomotionCOMValid ? rag._locomotionCOMVel
+                                                         : rag._locomotionRootVel;
+        const glm::vec3 d = com - stanceFoot;
+        comp._dSag = glm::dot(d, fwd);
+        comp._dLat = glm::dot(d, right);
+        comp._vSag = glm::dot(comVel, fwd);
+        comp._vLat = glm::dot(comVel, right);
+
+        comp._swingFootY = swingFoot.y;
+        comp._swingContact = contact;
+        comp._swingForward = glm::dot(swingFoot - stanceFoot, fwd);
+        comp._swingFootVy = swingVelocity.y;
+        comp._swingClearance = swingClearance;
+        comp._liftTargetY = stanceFoot.y + glm::max(comp.assistedLiftHeight, 0.0f);
+        if (canStep && comp._stateIndex == 1) {
+            rag.locomotionLiftBone = swing->footIdx;
+            rag.locomotionLiftTargetY = comp._liftTargetY;
+            rag.locomotionLiftFrequency = glm::max(comp.assistedLiftFrequency, 0.0f);
+            rag.locomotionLiftMaxForce = glm::max(comp.assistedLiftMaxForce, 0.0f);
+        } else {
+            rag.locomotionLiftBone = -1;
+        }
+
+        if (canStep) {
+            // During transfer, the just-landed swing foot becomes the support target. In all
+            // earlier phases the original stance foot stays authoritative.
+            // Weight shift should be lateral only. Pulling COM to the stance foot in both
+            // horizontal axes pulled the body backward while the swing sole was reaching
+            // forward, which looked exactly like reversed input. Only the confirmed
+            // transfer phase is allowed to advance COM to the newly planted foot.
+            const glm::vec3 support = comp._stateIndex == 3
+                ? swingFoot
+                : com + right * glm::dot(stanceFoot - com, right);
+            rag.locomotionSupportTarget = glm::vec3(support.x, com.y, support.z);
+            rag.locomotionSupportTargetVel = glm::vec3(0.0f);
+            rag.locomotionSupportTargetWeight = 1.0f;
+        }
+
+        if (!comp.ikWriteEnabled) return;
+        const float weight = glm::clamp(comp._poseBlend * comp.poseWeight, 0.0f, 1.0f);
+        auto writeBind = [&](int bone) {
+            BlendPose(animator, bone, skeleton.bones[bone].localR, weight);
+        };
+        auto writeAxis = [&](int bone, const glm::vec3& axis, float degrees) {
+            const glm::quat target = glm::normalize(
+                skeleton.bones[bone].localR *
+                glm::angleAxis(glm::radians(degrees), glm::normalize(axis)));
+            BlendPose(animator, bone, target, weight);
+        };
+        auto worldHipTarget = [&](const Leg& leg, float sagittalDeg) {
+            const glm::quat bindWorld = glm::normalize(
+                heading * entityRot * BindModelRot(skeleton, leg.hipIdx));
+            const glm::vec3 localDirection = glm::normalize(skeleton.bones[leg.kneeIdx].localT);
+            const glm::vec3 bindDirection = bindWorld * localDirection;
+            const glm::vec3 desiredDirection =
+                glm::angleAxis(glm::radians(sagittalDeg), right) * glm::vec3(0, -1, 0);
+            return glm::normalize(RotationBetween(bindDirection, desiredDirection) * bindWorld);
+        };
+        auto writeWorldMotor = [&](int bone, const glm::quat& worldTarget) {
+            const int parent = skeleton.bones[bone].parent;
+            const glm::quat parentWorld = parent >= 0
+                ? glm::normalize(heading * entityRot * BindModelRot(skeleton, parent))
+                : glm::normalize(heading * entityRot);
+            BlendPose(animator, bone, glm::conjugate(parentWorld) * worldTarget, weight);
+        };
+
+        // Always motor-lock the stance chain. Shift holds both legs at bind; Lift flexes and
+        // reaches; Plant/Transfer keep the new foot ahead while the knee extends.
+        writeBind(stance->hipIdx);
+        writeBind(stance->kneeIdx);
+        writeBind(stance->ankleIdx);
+        float swingHipDeg = 0.0f, swingKneeDeg = 0.0f, swingAnkleDeg = 0.0f;
+        if (canStep && comp._stateIndex == 1) {
+            swingHipDeg = comp.s0SwingHipDeg;
+            swingKneeDeg = comp.s0SwingKneeDeg;
+            swingAnkleDeg = comp.s0SwingAnkleDeg;
+        } else if (canStep && (comp._stateIndex == 2 || comp._stateIndex == 3)) {
+            swingHipDeg = comp.assistedPlantHipDeg;
+            swingKneeDeg = comp.s1SwingKneeDeg;
+            swingAnkleDeg = comp.s1SwingAnkleDeg;
+        }
+        if (std::abs(swingHipDeg) < 1e-4f) writeBind(swing->hipIdx);
+        else writeWorldMotor(swing->hipIdx, worldHipTarget(*swing, swingHipDeg));
+        if (std::abs(swingKneeDeg) < 1e-4f) writeBind(swing->kneeIdx);
+        else writeAxis(swing->kneeIdx, swing->kneeHingeAxis, swingKneeDeg);
+        if (std::abs(swingAnkleDeg) < 1e-4f) writeBind(swing->ankleIdx);
+        else writeAxis(swing->ankleIdx, swing->ankleAxis, swingAnkleDeg);
+
+        comp._swingHipCmdDeg = swingHipDeg;
+        comp._swingHipLatCmdDeg = 0.0f;
+        comp._femurCmd = glm::angleAxis(glm::radians(swingHipDeg), right) * glm::vec3(0, -1, 0);
+        bool hipOk = false;
+        const glm::quat hipRotation = Physics::GetRagdollBoneRotation(rag, swing->hipIdx, &hipOk);
+        comp._femurActual = hipOk
+            ? glm::normalize(hipRotation * glm::normalize(skeleton.bones[swing->kneeIdx].localT))
+            : glm::vec3(0, -1, 0);
+        comp._femurErrDeg = glm::degrees(std::acos(glm::clamp(
+            glm::dot(comp._femurActual, glm::normalize(comp._femurCmd)), -1.0f, 1.0f)));
+        comp._engineTiltDeg = Physics::GetRagdollTiltDeg(rag);
+        comp._myTiltDeg = comp._engineTiltDeg;
+
+        if (comp.debug) {
+            DebugDraw::Sphere(stanceFoot, 0.045f, {0.2f, 1.0f, 0.2f});
+            DebugDraw::Sphere(swingFoot, 0.04f, contact ? glm::vec3(0.2f, 0.8f, 1.0f)
+                                                        : glm::vec3(1.0f, 0.5f, 0.1f));
+            DebugDraw::Line(stanceFoot, stanceFoot + fwd * 0.25f, {0.3f, 1.0f, 0.3f});
+        }
     }
 
-    void UpdateGait(Scene& scene, entt::entity entity, LocamotionControllerComponent& comp,
-                    RagdollComponent& rag, const glm::vec3& moveDir,
+    void UpdateGait(Scene& scene, entt::entity entity, Comp& comp, RagdollComponent& rag,
                     bool walking, float dt)
     {
+        if (comp.assistedStepping) {
+            UpdateAssistedGait(scene, entity, comp, rag, walking, dt);
+            return;
+        }
         if (!scene.Has<SkinnedMeshComponent>(entity) || !scene.Has<AnimatorComponent>(entity)) return;
         auto& mesh = scene.Get<SkinnedMeshComponent>(entity);
         auto& animator = scene.Get<AnimatorComponent>(entity);
@@ -817,581 +1098,282 @@ private:
         ResolveLeg(comp._legR, comp.rightFootBone, skeleton, rag);
         if (!ValidLeg(comp._legL) || !ValidLeg(comp._legR)) return;
 
-        InitializeLeg(scene, entity, comp._legL, skeleton, animator, entityWorld);
-        InitializeLeg(scene, entity, comp._legR, skeleton, animator, entityWorld);
+        Leg& swing = comp._swingIsLeft ? comp._legL : comp._legR;
 
-        const glm::vec3 leftFootNow = BoneWorldPos(skeleton, animator, entityWorld, comp._legL.footIdx);
-        const glm::vec3 rightFootNow = BoneWorldPos(skeleton, animator, entityWorld, comp._legR.footIdx);
-        const SwingResult leftResult = AdvanceSwing(
-            entity, comp._legL, comp, leftFootNow, dt, comp.debug, "left");
-        const SwingResult rightResult = AdvanceSwing(
-            entity, comp._legR, comp, rightFootNow, dt, comp.debug, "right");
-        const bool completed = leftResult != SwingResult::None || rightResult != SwingResult::None;
-        const bool reachedTarget = leftResult == SwingResult::Target ||
-                                   rightResult == SwingResult::Target;
-        const bool settled = leftResult == SwingResult::Settled ||
-                             rightResult == SwingResult::Settled;
-        if (completed) {
-            if (settled) comp._landedStepCount = 0;
-            else if (reachedTarget) ++comp._landedStepCount;
-            comp._timeSinceLanding = 0.0f;
+        // --- FSM (paper 3.1): fixed time, then contact. ---
+        if (walking) {
+            comp._stateTime += dt;
+            if (comp._stateIndex == 0) {
+                if (comp._stateTime >= glm::max(comp.state0Time, 0.01f)) {
+                    comp._stateIndex = 1;
+                    comp._stateTime = 0.0f;
+                }
+            } else {
+                const bool contact = comp._stateTime >= comp.minSwingTime &&
+                                     FootGrounded(rag, swing.footIdx);
+                if (contact || comp._stateTime >= comp.maxSwingTime) {
+                    comp._swingIsLeft = !comp._swingIsLeft;
+                    comp._stateIndex = 0;
+                    comp._stateTime = 0.0f;
+                    if (contact) ++comp._steps;
+                }
+            }
         } else {
-            comp._timeSinceLanding += dt;
+            comp._stateIndex = 0;
+            comp._stateTime = 0.0f;
+        }
+        Leg& swingLeg  = comp._swingIsLeft ? comp._legL : comp._legR;
+        Leg& stanceLeg = comp._swingIsLeft ? comp._legR : comp._legL;
+
+        const bool s0 = comp._stateIndex == 0;
+        const float torsoDeg       = s0 ? comp.s0TorsoDeg : comp.s1TorsoDeg;
+        const float swingHipDeg    = s0 ? comp.s0SwingHipDeg : comp.s1SwingHipDeg;
+        const float swingKneeDeg   = s0 ? comp.s0SwingKneeDeg : comp.s1SwingKneeDeg;
+        const float swingAnkleDeg  = s0 ? comp.s0SwingAnkleDeg : comp.s1SwingAnkleDeg;
+        const float stanceKneeDeg  = s0 ? comp.s0StanceKneeDeg : comp.s1StanceKneeDeg;
+        const float stanceAnkleDeg = s0 ? comp.s0StanceAnkleDeg : comp.s1StanceAnkleDeg;
+
+        // Build the control frame from the authored bind hips, then rotate it by the desired
+        // heading. Measuring it from the live hips made the target frame follow pelvis yaw:
+        // once a stumble began, "forward" rotated with the fall and later steps went sideways
+        // or backwards. SIMBICON's torso and swing-hip targets are WORLD-frame targets, so
+        // their sagittal/coronal axes must remain tied to the requested heading.
+        const glm::quat entityRot = OrientationOf(entityWorld);
+        const glm::vec3 leftHipBind = glm::vec3(
+            (entityWorld * glm::inverse(skeleton.bones[comp._legL.hipIdx].inverseBind))[3]);
+        const glm::vec3 rightHipBind = glm::vec3(
+            (entityWorld * glm::inverse(skeleton.bones[comp._legR.hipIdx].inverseBind))[3]);
+        glm::vec3 right = rightHipBind - leftHipBind;
+        right.y = 0.0f;
+        right = glm::length(right) > 1e-4f ? glm::normalize(right) : glm::vec3(1, 0, 0);
+        right = glm::normalize(glm::normalize(rag.locomotionTargetRot) * right);
+        right.y = 0.0f;
+        right = glm::length(right) > 1e-4f ? glm::normalize(right) : glm::vec3(1, 0, 0);
+        const glm::vec3 fwd = glm::normalize(glm::cross(glm::vec3(0, 1, 0), right));
+
+        // --- Balance feedback (paper 3.3): d, v measured from the stance ankle. ---
+
+        const glm::vec3 stanceAnkle = BoneWorldPos(skeleton, animator, entityWorld, stanceLeg.ankleIdx);
+        const bool useHipProxy = comp.useHipCOMProxy || !rag._locomotionCOMValid;
+        const glm::vec3 com = useHipProxy
+            ? BoneWorldPos(skeleton, animator, entityWorld, rootBone)
+            : rag._locomotionCOM;
+        const glm::vec3 comVel = useHipProxy ? rag._locomotionRootVel : rag._locomotionCOMVel;
+        const glm::vec3 d = com - stanceAnkle;
+        comp._dSag = glm::dot(d, fwd);
+        comp._dLat = glm::dot(d, right);
+        comp._vSag = glm::dot(comVel, fwd);
+        comp._vLat = glm::dot(comVel, right);
+
+        const float limit = glm::max(comp.swingHipLimitDeg, 1.0f);
+        const float sagDeg = glm::clamp(
+            swingHipDeg + glm::degrees(comp.cd * comp._dSag + comp.cv * comp._vSag), -limit, limit);
+        const float widthBias = comp._swingIsLeft ? -comp.stanceWidthDeg : comp.stanceWidthDeg;
+        const float latDeg = glm::clamp(
+            widthBias + glm::degrees(comp.cdLat * comp._dLat + comp.cvLat * comp._vLat), -limit, limit);
+        comp._swingHipCmdDeg = sagDeg;
+        comp._swingHipLatCmdDeg = latDeg;
+
+        // --- Frame diagnostics (no behaviour, measurement only) ---
+        {
+            bool ok = false;
+            const glm::quat pelvisNow = Physics::GetRagdollBoneRotation(rag, rootBone, &ok);
+            const glm::quat pelvisBind = entityRot * BindModelRot(skeleton, rootBone);
+            const glm::vec3 myUp = ok
+                ? pelvisNow * (glm::conjugate(pelvisBind) * glm::vec3(0, 1, 0))
+                : glm::vec3(0, 1, 0);
+            comp._myTiltDeg = glm::degrees(std::acos(glm::clamp(myUp.y, -1.0f, 1.0f)));
+            comp._engineTiltDeg = Physics::GetRagdollTiltDeg(rag);
+            comp._torsoErrDeg = glm::degrees(std::acos(glm::clamp(
+                glm::dot(glm::normalize(myUp), glm::vec3(0, 1, 0)), -1.0f, 1.0f)));
+
+            comp._right = right;
+            comp._fwd = fwd;
+            comp._femurCmd = glm::angleAxis(glm::radians(-latDeg), fwd) *
+                             glm::angleAxis(glm::radians(sagDeg), right) * glm::vec3(0, -1, 0);
+            const glm::vec3 hipPos = BoneWorldPos(skeleton, animator, entityWorld, swingLeg.hipIdx);
+            const glm::vec3 kneePos = BoneWorldPos(skeleton, animator, entityWorld, swingLeg.kneeIdx);
+            const glm::vec3 limb = kneePos - hipPos;
+            comp._femurActual = glm::length(limb) > 1e-5f ? glm::normalize(limb) : glm::vec3(0, -1, 0);
+            comp._femurErrDeg = glm::degrees(std::acos(glm::clamp(
+                glm::dot(comp._femurActual, glm::normalize(comp._femurCmd)), -1.0f, 1.0f)));
         }
 
-        auto startSwing = [&]() {
-            auto& leg = comp._nextLeft ? comp._legL : comp._legR;
-            const auto& stanceLeg = comp._nextLeft ? comp._legR : comp._legL;
-            const float side = comp._nextLeft ? -1.0f : 1.0f;
-            const glm::vec3 stepDirection = moveDir;
-            const glm::vec3 right = glm::normalize(glm::cross(moveDir, glm::vec3(0, 1, 0)));
-            const glm::vec3 footNow = BoneWorldPos(skeleton, animator, entityWorld, leg.footIdx);
-            leg.swingStartSole = footNow - glm::vec3(0, leg.soleHeight, 0);
-            leg.swingDirection = stepDirection;
-            const glm::vec3 rootPosition = BoneWorldPos(skeleton, animator, entityWorld, rootBone);
-            glm::vec3 placement = rootPosition;
-            glm::vec3 horizontalTarget = stanceLeg.plantSole + stepDirection * comp.stepLength;
-            const float desiredSide = glm::dot(
-                stanceLeg.plantSole + right * (side * comp.stanceHalfWidth * 2.0f), right);
-            horizontalTarget += right * (desiredSide - glm::dot(horizontalTarget, right));
-            placement.x = horizontalTarget.x;
-            placement.z = horizontalTarget.z;
-            glm::vec3 desiredTarget = GroundedSoleTarget(
-                scene, entity, placement, glm::vec3(0.0f), comp.groundRayLength,
-                leg.swingStartSole.y);
-            const float legLength =
-                glm::length(skeleton.bones[leg.kneeIdx].localT) +
-                glm::length(skeleton.bones[leg.ankleIdx].localT);
-            const glm::vec2 requestedTravel(
-                desiredTarget.x - leg.swingStartSole.x,
-                desiredTarget.z - leg.swingStartSole.z);
-            const float requestedTravelLength = glm::length(requestedTravel);
-            const float maximumTravel =
-                legLength * glm::max(comp.maxSwingTravelFraction, 0.0f);
-            float travelCap = 1.0f;
-            if (requestedTravelLength > maximumTravel &&
-                requestedTravelLength > 1e-4f) {
-                travelCap = maximumTravel / requestedTravelLength;
-                desiredTarget.x =
-                    leg.swingStartSole.x + requestedTravel.x * travelCap;
-                desiredTarget.z =
-                    leg.swingStartSole.z + requestedTravel.y * travelCap;
-            }
-            const ReachProjection projection = ProjectSwingTarget(
-                leg, skeleton, animator, entityWorld, stepDirection, desiredTarget,
-                comp.maxReachFraction, comp.hipLimitMarginDeg, comp.toeOffFraction,
-                comp.toeOffHeight, comp.stepLift, legLength, comp.stepDuration,
-                comp.maxStepDuration, comp.maxHipSpeedDeg, comp.maxKneeSpeedDeg,
-                comp.maxFootSpeedLegsPerSec);
-            leg.swingTargetSole = projection.target;
-            leg.swingLiftScale = projection.liftScale;
-            leg.swingPoleDeg = projection.poleDeg;
-            leg.swingDuration = projection.duration;
-            leg.swingProgress = 0.0f;
-            leg.swingPoseBlend = 0.0f;
-            leg.landingWait = 0.0f;
-            leg.landingWarning = false;
-            leg.phase = LocamotionControllerComponent::LegPhase::Swinging;
-            comp._nextLeft = !comp._nextLeft;
-            comp._firstStep = false;
-            comp._phaseTime = 0.0f;
-            comp._weightShiftStableTime = 0.0f;
-            comp._gaitPhase = LocamotionControllerComponent::GaitPhase::Swing;
-            if (comp.debug)
-                spdlog::info("[Loco] {} step to ({:+.2f}, {:+.2f}, {:+.2f}) swingTravel={:+.2f} aheadOfStance={:+.2f} travelCap={:.2f} projection={:.2f} lift={:.2f} pole={:+.0f} duration={:.2f} requestedDuration={:.2f} requestedLimit={:.1f} projectedLimit={:.1f} move=({:+.2f},{:+.2f})",
-                             side < 0.0f ? "left" : "right", leg.swingTargetSole.x,
-                             leg.swingTargetSole.y, leg.swingTargetSole.z,
-                             glm::dot(leg.swingTargetSole - leg.swingStartSole, stepDirection),
-                             glm::dot(leg.swingTargetSole - stanceLeg.plantSole, stepDirection),
-                             travelCap, projection.fraction, projection.liftScale,
-                             projection.poleDeg, projection.duration,
-                             projection.requestedDuration,
-                             projection.requestedViolationDeg,
-                             projection.projectedViolationDeg,
-                             moveDir.x, moveDir.z);
+        comp._ikOffsetDeg = comp.ikTerrainEnabled && walking && !s0
+            ? TerrainKneeOffsetDeg(scene, entity, comp, swingLeg, stanceLeg, skeleton,
+                                   animator, entityWorld)
+            : 0.0f;
+
+        // _poseBlend only fades the pose motors. The virtual hip torques must keep ownership
+        // while the FSM attempts a catch step; returning here used to re-enable both 250 N-m
+        // bind motors as soon as tilt crossed locomotionFallenTilt.
+        if (!comp.ikWriteEnabled) return;
+
+        // Standing is the BIND pose, which is what held stable for 21 s. Folding the gait
+        // blend into the write weight means g=0 writes nothing and the motors hold bind --
+        // an explicit standing pose here regressed standing into a topple.
+        const float g = glm::clamp(comp._gaitWeight, 0.0f, 1.0f);
+        const float weight = glm::clamp(comp._poseBlend * comp.poseWeight * g, 0.0f, 1.0f);
+        const float stanceSideWidth = comp._swingIsLeft ? comp.stanceWidthDeg : -comp.stanceWidthDeg;
+        const float swingKneeCmd  = swingKneeDeg + comp._ikOffsetDeg;
+        const float swingAnkleCmd = swingAnkleDeg - comp._ikOffsetDeg * 0.5f;
+        const float stanceKneeCmd = stanceKneeDeg;
+        const float stanceAnkleCmd = stanceAnkleDeg;
+
+        // --- Write targets (paper 3.2): swing hip and torso in the world frame, the rest
+        // parent-relative. A world target becomes a joint target by composing against the
+        // PHYSICAL parent, which is what decouples the swing leg from torso pitch. ---
+        auto writeWorld = [&](int bone, const glm::quat& rotation) {
+            const glm::quat parent = ParentWorldRot(rag, skeleton, animator, entityWorld, bone);
+            BlendPose(animator, bone, glm::conjugate(parent) * rotation, weight);
+        };
+        auto writeAxis = [&](int bone, const glm::vec3& axis, float degrees, const Envelope* env) {
+            glm::quat target = glm::normalize(
+                skeleton.bones[bone].localR *
+                glm::angleAxis(glm::radians(degrees), glm::normalize(axis)));
+            if (env)
+                target = ClampToEnvelope(*env, skeleton.bones[bone].localR, target,
+                                         comp.hipLimitMarginDeg);
+            BlendPose(animator, bone, target, weight);
         };
 
-        const bool anySwing = comp._legL.phase == LocamotionControllerComponent::LegPhase::Swinging ||
-                              comp._legR.phase == LocamotionControllerComponent::LegPhase::Swinging;
-        if (!walking) {
-            comp._phaseTime = 0.0f;
-            comp._weightShiftStableTime = 0.0f;
-            comp._gaitPhase = anySwing
-                ? LocamotionControllerComponent::GaitPhase::Swing
-                : LocamotionControllerComponent::GaitPhase::Idle;
-        } else if (anySwing) {
-            comp._gaitPhase = LocamotionControllerComponent::GaitPhase::Swing;
-            const auto& swingLeg =
-                comp._legL.phase == LocamotionControllerComponent::LegPhase::Swinging
-                    ? comp._legL : comp._legR;
-            const float fadeStart = glm::clamp(comp.toeOffFraction, 0.05f, 0.45f);
-            const float fadeEnd = glm::max(comp.swingSupportFadeEnd, fadeStart + 0.01f);
-            const float fadeT = (swingLeg.swingProgress - fadeStart) / (fadeEnd - fadeStart);
-            rag.locomotionSupportTarget = comp._swingSupportTarget;
-            rag.locomotionSupportTargetVel = glm::vec3(0.0f);
-            rag.locomotionSupportTargetWeight = 1.0f - SmootherStep(fadeT);
-        } else {
-            using GaitPhase = LocamotionControllerComponent::GaitPhase;
-            if (completed) {
-                comp._phaseTime = 0.0f;
-                comp._weightShiftStableTime = 0.0f;
-                comp._gaitPhase = GaitPhase::DoubleSupport;
-            }
+        // The gait target is a thigh direction, not a full femur orientation. Keeping that
+        // distinction here is important: a ball-joint femur can twist around its own length,
+        // and spending swing-hip torque correcting that invisible twist starves the forward
+        // step of torque.
+        const glm::vec3 desiredSwingDir = glm::normalize(
+            glm::angleAxis(glm::radians(-latDeg), fwd) *
+            glm::angleAxis(glm::radians(sagDeg), right) * glm::vec3(0, -1, 0));
 
-            if (comp._gaitPhase == GaitPhase::Idle) {
-                comp._phaseTime = 0.0f;
-                comp._weightShiftStableTime = 0.0f;
-                comp._weightShiftTargetCaptured = false;
-                comp._gaitPhase = GaitPhase::WeightShift;
-                if (comp.debug) spdlog::info("[Loco] weight shift started");
-            } else if (comp._gaitPhase == GaitPhase::DoubleSupport) {
-                comp._phaseTime += dt;
-                if (comp._phaseTime >= comp.doubleSupportTime) {
-                    comp._phaseTime = 0.0f;
-                    comp._weightShiftStableTime = 0.0f;
-                    comp._weightShiftTargetCaptured = false;
-                    comp._gaitPhase = GaitPhase::WeightShift;
-                    if (comp.debug) spdlog::info("[Loco] weight shift started");
-                }
-            }
+        // Hips are NOT written as motor targets -- they are driven by the virtual torques
+        // below, and a live motor on the same joint would fight them.
+        writeAxis(swingLeg.kneeIdx, swingLeg.kneeHingeAxis, swingKneeCmd, nullptr);
+        writeAxis(stanceLeg.kneeIdx, stanceLeg.kneeHingeAxis, stanceKneeCmd, nullptr);
 
-            if (comp._gaitPhase == GaitPhase::WeightShift) {
-                const auto& stanceLeg = comp._nextLeft ? comp._legR : comp._legL;
-                const glm::vec3 midpoint = (comp._legL.plantSole + comp._legR.plantSole) * 0.5f;
-                const glm::vec3 finalSupportTarget = glm::mix(
-                    stanceLeg.plantSole, midpoint,
-                    glm::clamp(comp.weightShiftInboard, 0.0f, 0.5f));
-                comp._swingSupportTarget = finalSupportTarget;
-                if (!comp._weightShiftTargetCaptured) {
-                    comp._weightShiftStartTarget = rag._locomotionCOMValid
-                        ? glm::vec3(rag._locomotionCOM.x, finalSupportTarget.y,
-                                    rag._locomotionCOM.z)
-                        : midpoint;
-                    comp._weightShiftTargetCaptured = true;
-                }
+        auto ankleEnvelope = [](const Leg& leg) {
+            Envelope env;
+            env.twistAxis = leg.ankleAxis;
+            env.swingNormalDeg = leg.ankleSwingNormalDeg;
+            env.swingPlaneDeg = leg.ankleSwingPlaneDeg;
+            env.twistMinDeg = leg.ankleTwistMinDeg;
+            env.twistMaxDeg = leg.ankleTwistMaxDeg;
+            return env;
+        };
+        const Envelope swingAnkleEnv = ankleEnvelope(swingLeg);
+        const Envelope stanceAnkleEnv = ankleEnvelope(stanceLeg);
+        writeAxis(swingLeg.ankleIdx, swingLeg.ankleAxis, swingAnkleCmd, &swingAnkleEnv);
+        writeAxis(stanceLeg.ankleIdx, stanceLeg.ankleAxis, stanceAnkleCmd, &stanceAnkleEnv);
 
-                const float targetTime = glm::max(comp.weightShiftTargetTime, 0.01f);
-                const float targetT = glm::clamp(comp._phaseTime / targetTime, 0.0f, 1.0f);
-                const float targetBlend = SmootherStep(targetT);
-                const float targetBlendRate =
-                    targetT < 1.0f
-                        ? 30.0f * targetT * targetT *
-                          (targetT - 1.0f) * (targetT - 1.0f) / targetTime
-                        : 0.0f;
-                const glm::vec3 targetTravel =
-                    finalSupportTarget - comp._weightShiftStartTarget;
-                rag.locomotionSupportTarget =
-                    comp._weightShiftStartTarget + targetTravel * targetBlend;
-                rag.locomotionSupportTargetVel = targetTravel * targetBlendRate;
-                rag.locomotionSupportTargetWeight = 1.0f;
+        // Full world-frame body target: authored bind orientation, desired heading, then the
+        // state's pitch about the desired right axis. Omitting heading left yaw uncontrolled;
+        // the stance-hip residual then spun the pelvis and carried the step frame with it.
+        auto worldBodyTarget = [&](int bone, float pitchDeg) {
+            const glm::quat bind = entityRot * BindModelRot(skeleton, bone);
+            return glm::normalize(glm::angleAxis(glm::radians(pitchDeg), right) *
+                                  glm::normalize(rag.locomotionTargetRot) * bind);
+        };
 
-                bool stanceGrounded = false;
-                for (int i = 0; i < 2; ++i) {
-                    if (rag._locomotionFootBones[i] == stanceLeg.footIdx) {
-                        stanceGrounded = rag._locomotionFootGrounded[i];
-                        break;
-                    }
-                }
+        const int torsoIdx = skeleton.Find(comp.torsoBone);
+        if (torsoIdx >= 0) writeWorld(torsoIdx, worldBodyTarget(torsoIdx, torsoDeg));
 
-                const glm::vec2 comDelta(
-                    rag._locomotionCOM.x - finalSupportTarget.x,
-                    rag._locomotionCOM.z - finalSupportTarget.z);
-                const float comError = rag._locomotionCOMValid
-                    ? glm::length(comDelta)
-                    : std::numeric_limits<float>::infinity();
-                const bool supportReady =
-                    stanceGrounded && comError <= glm::max(comp.weightShiftRadius, 0.0f);
-                comp._weightShiftStableTime = supportReady
-                    ? comp._weightShiftStableTime + dt
-                    : 0.0f;
-                comp._phaseTime += dt;
+        // --- Virtual PD torques (paper 3.2). tau_A = -tau_torso - tau_B is the whole point:
+        // the stance hip is a free variable, so commanding torso attitude and swing-leg
+        // placement leaves a residual that pushes the body forward using internal torque. ---
+        auto orientationPD = [&](int bone, const glm::quat& target, float kp, float kd,
+                                 float* proportionalOut, float* dampingOut) {
+            bool ok = false;
+            const glm::quat current = Physics::GetRagdollBoneRotation(rag, bone, &ok);
+            if (!ok) return glm::vec3(0.0f);
+            const glm::vec3 omega = Physics::GetRagdollBoneAngularVelocity(rag, bone);
+            glm::quat error = glm::normalize(glm::normalize(target) * glm::conjugate(current));
+            if (error.w < 0.0f) error = -error;
+            const glm::vec3 axisRaw(error.x, error.y, error.z);
+            const float length = glm::length(axisRaw);
+            const glm::vec3 axis = length > 1e-6f ? axisRaw / length : glm::vec3(0.0f);
+            const float angle = 2.0f * std::atan2(length, glm::clamp(error.w, -1.0f, 1.0f));
+            const glm::vec3 proportional = axis * (angle * kp);
+            const glm::vec3 damping = -omega * kd;
+            if (proportionalOut) *proportionalOut = glm::length(proportional);
+            if (dampingOut) *dampingOut = glm::length(damping);
+            return proportional + damping;
+        };
 
-                const float minimumTime =
-                    comp._firstStep ? comp.firstWeightShiftTime : comp.weightShiftTime;
-                const bool stable =
-                    comp._weightShiftStableTime >= glm::max(comp.weightShiftStableTime, 0.0f);
-                if (comp._phaseTime >= glm::max(minimumTime, 0.0f) && stable) {
-                    if (comp.debug)
-                        spdlog::info("[Loco] weight shift ready stance={} comError={:.3f} time={:.2f}",
-                                     comp._nextLeft ? "right" : "left",
-                                     comError, comp._phaseTime);
-                    startSwing();
-                } else if (comp._phaseTime >=
-                           glm::max(comp.weightShiftTimeout, minimumTime)) {
-                    if (comp.debug)
-                        spdlog::warn("[Loco] weight shift timed out stance={} grounded={} comError={:.3f}",
-                                     comp._nextLeft ? "right" : "left",
-                                     stanceGrounded, comError);
-                    comp._phaseTime = 0.0f;
-                    comp._weightShiftStableTime = 0.0f;
-                    comp._weightShiftTargetCaptured = false;
-                    comp._gaitPhase = GaitPhase::DoubleSupport;
-                    rag.locomotionSupportTargetWeight = 0.0f;
-                }
+        // Swing-hip PD in direction space. The old full-orientation controller damped the
+        // femur's twist and every other component of its angular velocity. In the failing
+        // run that damping reached 257 Nm while the useful proportional term was only 53 Nm,
+        // so the knee folded correctly but the thigh never came forward. This controller
+        // removes spin around the thigh and applies the shortest rotation that actually moves
+        // the knee toward the commanded direction.
+        auto directionPD = [&](int bone, const glm::vec3& localDirection,
+                               const glm::vec3& targetDirection, float kp, float kd,
+                               float* proportionalOut, float* dampingOut) {
+            bool ok = false;
+            const glm::quat current = Physics::GetRagdollBoneRotation(rag, bone, &ok);
+            if (!ok) return glm::vec3(0.0f);
+
+            const glm::vec3 actual = glm::normalize(current * glm::normalize(localDirection));
+            const glm::vec3 target = glm::normalize(targetDirection);
+            const glm::vec3 cross = glm::cross(actual, target);
+            const float sinAngle = glm::length(cross);
+            const float cosAngle = glm::clamp(glm::dot(actual, target), -1.0f, 1.0f);
+            const glm::vec3 axis = sinAngle > 1e-6f ? cross / sinAngle : glm::vec3(0.0f);
+            const float angle = std::atan2(sinAngle, cosAngle);
+            const glm::vec3 proportional = axis * (angle * kp);
+
+            const glm::vec3 omega = Physics::GetRagdollBoneAngularVelocity(rag, bone);
+            const glm::vec3 directionOmega = omega - actual * glm::dot(omega, actual);
+            const glm::vec3 damping = -directionOmega * kd;
+            if (proportionalOut) *proportionalOut = glm::length(proportional);
+            if (dampingOut) *dampingOut = glm::length(damping);
+            return proportional + damping;
+        };
+
+        const glm::vec3 torsoTorque =
+            orientationPD(rootBone, worldBodyTarget(rootBone, torsoDeg),
+                          comp.torsoKp, comp.torsoKd, &comp._torsoP, &comp._torsoD) * g;
+        const glm::vec3 swingLocalDirection =
+            glm::normalize(skeleton.bones[swingLeg.kneeIdx].localT);
+        const glm::vec3 swingTorque =
+            directionPD(swingLeg.hipIdx, swingLocalDirection, desiredSwingDir,
+                        comp.hipKp, comp.hipKd, &comp._swingP, &comp._swingD) * g;
+        glm::vec3 stanceTorque = -torsoTorque - swingTorque;
+
+        // Scale all three TOGETHER. Clamping them independently breaks
+        // tau_A = -tau_torso - tau_B, so the pelvis stops netting tau_torso and the paper's
+        // central identity silently stops holding -- which it did, ~100% of the time.
+        {
+            const float limit = glm::max(comp.maxVirtualTorque, 0.0f);
+            const float worst = glm::max(glm::length(torsoTorque),
+                                         glm::max(glm::length(swingTorque),
+                                                  glm::length(stanceTorque)));
+            if (worst > limit && worst > 1e-6f) {
+                const float scale = limit / worst;
+                stanceTorque *= scale;
+                comp._torsoTorque = glm::length(torsoTorque) * scale;
+                comp._swingTorque = glm::length(swingTorque) * scale;
+                rag.locomotionHipTorque[0] = swingTorque * scale;
+                comp._saturated = true;
+            } else {
+                comp._torsoTorque = glm::length(torsoTorque);
+                comp._swingTorque = glm::length(swingTorque);
+                rag.locomotionHipTorque[0] = swingTorque;
+                comp._saturated = false;
             }
         }
-
-        if (comp._gaitWeight > 0.001f) {
-            const float leftWeight = comp._legL.phase == LocamotionControllerComponent::LegPhase::Swinging
-                ? glm::mix(comp.stancePoseWeight, comp.swingPoseWeight,
-                           comp._legL.swingPoseBlend)
-                : comp.stancePoseWeight;
-            SolveLeg(comp._legL, skeleton, animator, entityWorld, moveDir,
-                     comp.maxReachFraction, comp.hipLimitMarginDeg,
-                     comp._legL.phase == LocamotionControllerComponent::LegPhase::Swinging
-                         ? comp._legL.swingPoleDeg
-                         : std::numeric_limits<float>::quiet_NaN(),
-                     comp._gaitWeight * leftWeight,
-                     comp.ikWriteEnabled, comp.debug);
-            const float rightWeight = comp._legR.phase == LocamotionControllerComponent::LegPhase::Swinging
-                ? glm::mix(comp.stancePoseWeight, comp.swingPoseWeight,
-                           comp._legR.swingPoseBlend)
-                : comp.stancePoseWeight;
-            SolveLeg(comp._legR, skeleton, animator, entityWorld, moveDir,
-                     comp.maxReachFraction, comp.hipLimitMarginDeg,
-                     comp._legR.phase == LocamotionControllerComponent::LegPhase::Swinging
-                         ? comp._legR.swingPoleDeg
-                         : std::numeric_limits<float>::quiet_NaN(),
-                     comp._gaitWeight * rightWeight,
-                     comp.ikWriteEnabled, comp.debug);
-        }
+        rag.locomotionHipBones[0] = swingLeg.hipIdx;
+        rag.locomotionHipBones[1] = stanceLeg.hipIdx;
+        rag.locomotionHipTorque[1] = stanceTorque;
+        rag.locomotionSupportScale = comp.supportScale;
+        comp._stanceTorque = glm::length(stanceTorque);
 
         if (comp.debug) {
-            if (rag._locomotionCOMValid) {
-                const glm::vec3 comMarker(rag._locomotionCOM.x,
-                                          rag.locomotionSupportTarget.y + 0.03f,
-                                          rag._locomotionCOM.z);
-                DebugDraw::Sphere(comMarker, 0.035f, {1.0f, 0.85f, 0.1f});
-            }
-            if (rag.locomotionSupportTargetWeight > 0.0f)
-                DebugDraw::Sphere(rag.locomotionSupportTarget + glm::vec3(0, 0.03f, 0),
-                                  0.04f, {0.1f, 0.9f, 0.9f});
-            DrawLeg(comp._legL);
-            DrawLeg(comp._legR);
+            DebugDraw::Sphere(stanceAnkle, 0.04f, {0.2f, 1.0f, 0.2f});
+            DebugDraw::Sphere(glm::vec3(com.x, stanceAnkle.y + 0.03f, com.z), 0.035f,
+                              {1.0f, 0.85f, 0.1f});
+            DebugDraw::Line(stanceAnkle, stanceAnkle + fwd * comp._dSag, {1.0f, 0.4f, 0.1f});
+            DebugDraw::Line(stanceAnkle, stanceAnkle + right * comp._dLat, {0.1f, 0.6f, 1.0f});
+            const glm::vec3 hip = BoneWorldPos(skeleton, animator, entityWorld, swingLeg.hipIdx);
+            DebugDraw::Line(hip, hip + desiredSwingDir * 0.35f, {1.0f, 0.2f, 0.8f});
         }
-    }
-
-    static bool ValidLeg(const LocamotionControllerComponent::LegState& leg)
-    {
-        return leg.footIdx >= 0 && leg.ankleIdx >= 0 && leg.kneeIdx >= 0 && leg.hipIdx >= 0;
-    }
-
-    static void InitializeLeg(Scene& scene, entt::entity entity,
-                              LocamotionControllerComponent::LegState& leg,
-                              const Diamond::Skeleton& skeleton,
-                              const AnimatorComponent& animator,
-                              const glm::mat4& entityWorld)
-    {
-        if (leg.init) return;
-        const glm::vec3 foot = BoneWorldPos(skeleton, animator, entityWorld, leg.footIdx);
-        const HitResult hit = Physics::Raycast(foot + glm::vec3(0, 0.2f, 0),
-                                               glm::vec3(0, -1, 0), 0.9f, entity);
-        if (hit.hit) {
-            leg.soleHeight = glm::clamp(foot.y - hit.point.y, 0.01f, 0.45f);
-            leg.plantSole = hit.point;
-        } else {
-            leg.plantSole = foot - glm::vec3(0, leg.soleHeight, 0);
-        }
-        leg.soleTarget = leg.plantSole;
-        leg.init = true;
-    }
-
-    static SwingResult AdvanceSwing(entt::entity entity,
-                                    LocamotionControllerComponent::LegState& leg,
-                                    const LocamotionControllerComponent& comp,
-                                    const glm::vec3& footPosition, float dt,
-                                    bool debug, const char* side)
-    {
-        if (leg.phase != LocamotionControllerComponent::LegPhase::Swinging) {
-            leg.soleTarget = leg.plantSole;
-            leg.swingPoseBlend = 0.0f;
-            return SwingResult::None;
-        }
-
-        leg.swingProgress = glm::min(
-            leg.swingProgress + dt / glm::max(leg.swingDuration, 0.01f), 1.0f);
-        const float t = leg.swingProgress;
-        const float toeEnd = glm::clamp(comp.toeOffFraction, 0.05f, 0.45f);
-        const float toeT = glm::clamp(t / toeEnd, 0.0f, 1.0f);
-        leg.swingPoseBlend = SmootherStep(toeT);
-
-        leg.soleTarget = SwingSoleTarget(
-            leg.swingStartSole, leg.swingTargetSole, t, comp.toeOffFraction,
-            comp.toeOffHeight, comp.stepLift, leg.swingLiftScale);
-        if (t < 1.0f) return SwingResult::None;
-
-        const glm::vec3 actualSole = footPosition - glm::vec3(0, leg.soleHeight, 0);
-        const float actualTravel = glm::dot(actualSole - leg.swingStartSole, leg.swingDirection);
-        const glm::vec2 horizontalDelta(footPosition.x - leg.swingTargetSole.x,
-                                        footPosition.z - leg.swingTargetSole.z);
-        const float horizontalError = glm::length(horizontalDelta);
-        const HitResult ground = Physics::Raycast(footPosition + glm::vec3(0, 0.05f, 0),
-                                                  glm::vec3(0, -1, 0),
-                                                  leg.soleHeight + 0.12f, entity);
-        const float groundError = ground.hit
-            ? std::abs(ground.point.y - leg.swingTargetSole.y)
-            : std::numeric_limits<float>::infinity();
-        const bool landed = horizontalError <= comp.landingTolerance && groundError <= 0.08f;
-        if (!landed) {
-            leg.landingWait += dt;
-            if (debug && !leg.landingWarning && leg.landingWait >= 0.20f) {
-                leg.landingWarning = true;
-                spdlog::warn("[Loco] {} foot has not landed: horizontal={:.3f} actualAlongMove={:+.3f} ground={} groundError={:.3f}",
-                             side, horizontalError, actualTravel, ground.hit, groundError);
-            }
-            if (!ground.hit || groundError > 0.08f || leg.landingWait < 0.35f)
-                return SwingResult::None;
-
-            leg.swingTargetSole = glm::vec3(footPosition.x, ground.point.y, footPosition.z);
-        }
-
-        leg.plantSole = leg.swingTargetSole;
-        leg.soleTarget = leg.plantSole;
-        leg.phase = LocamotionControllerComponent::LegPhase::Planted;
-        leg.swingPoseBlend = 0.0f;
-        if (debug)
-            spdlog::info("[Loco] {} {} actualAlongMove={:+.3f}", side,
-                         landed ? "landed" : "settled", actualTravel);
-        return landed ? SwingResult::Target : SwingResult::Settled;
-    }
-
-    static void SolveLeg(LocamotionControllerComponent::LegState& leg,
-                         const Diamond::Skeleton& skeleton, AnimatorComponent& animator,
-                         const glm::mat4& entityWorld, const glm::vec3& moveDir,
-                         float reachFraction, float hipLimitMarginDeg, float forcedPoleDeg,
-                         float weight, bool writePose, bool debug,
-                         glm::quat* solvedHipTarget = nullptr,
-                         glm::quat* solvedKneeTarget = nullptr)
-    {
-        const glm::vec3 hipPos = BoneWorldPos(skeleton, animator, entityWorld, leg.hipIdx);
-        const glm::vec3 anklePos = BoneWorldPos(skeleton, animator, entityWorld, leg.ankleIdx);
-        const glm::vec3 footPos = BoneWorldPos(skeleton, animator, entityWorld, leg.footIdx);
-
-        const float upperLength = glm::length(skeleton.bones[leg.kneeIdx].localT);
-        const float lowerLength = glm::length(skeleton.bones[leg.ankleIdx].localT);
-        if (upperLength < 1e-4f || lowerLength < 1e-4f) return;
-
-        const glm::vec3 desiredFootCenter = leg.soleTarget + glm::vec3(0, leg.soleHeight, 0);
-        glm::vec3 ankleTarget = desiredFootCenter + (anklePos - footPos);
-        glm::vec3 toTarget = ankleTarget - hipPos;
-        const float maxReach = (upperLength + lowerLength) * glm::clamp(reachFraction, 0.5f, 0.99f);
-        if (const float reach = glm::length(toTarget); reach > maxReach && reach > 1e-4f)
-            ankleTarget = hipPos + toTarget * (maxReach / reach);
-
-        const int hipParent = skeleton.bones[leg.hipIdx].parent;
-        const glm::quat hipParentRot = hipParent >= 0
-            ? BoneWorldRot(skeleton, animator, entityWorld, hipParent)
-            : OrientationOf(entityWorld);
-        const float distance = glm::clamp(glm::length(ankleTarget - hipPos),
-                                          std::abs(upperLength - lowerLength) + 1e-4f,
-                                          upperLength + lowerLength - 1e-4f);
-        const float includedCos = glm::clamp(
-            (upperLength * upperLength + lowerLength * lowerLength - distance * distance) /
-            (2.0f * upperLength * lowerLength), -1.0f, 1.0f);
-        const float kneeBend = glm::pi<float>() - std::acos(includedCos);
-        const glm::quat kneeTarget = glm::normalize(
-            skeleton.bones[leg.kneeIdx].localR *
-            glm::angleAxis(kneeBend, glm::normalize(leg.kneeHingeAxis)));
-
-        const glm::vec3 upperLocal = skeleton.bones[leg.kneeIdx].localT;
-        const glm::vec3 lowerLocal = kneeTarget * skeleton.bones[leg.ankleIdx].localT;
-        const glm::vec3 chainLocal = upperLocal + lowerLocal;
-        const glm::vec3 localForward = glm::normalize(chainLocal);
-        glm::vec3 localBend = upperLocal - localForward * glm::dot(upperLocal, localForward);
-        if (glm::dot(localBend, localBend) < 1e-8f)
-            localBend = PerpendicularTo(localForward);
-        else
-            localBend = glm::normalize(localBend);
-        const glm::vec3 localSide = glm::normalize(glm::cross(localForward, localBend));
-
-        const glm::vec3 worldForward = glm::normalize(ankleTarget - hipPos);
-        glm::vec3 poleDir = moveDir;
-        if (glm::dot(poleDir, poleDir) < 1e-8f) poleDir = glm::vec3(0, 0, -1);
-        glm::vec3 worldBend = poleDir - worldForward * glm::dot(poleDir, worldForward);
-        if (glm::dot(worldBend, worldBend) < 1e-8f)
-            worldBend = PerpendicularTo(worldForward);
-        else
-            worldBend = glm::normalize(worldBend);
-
-        const glm::mat3 localBasis(localForward, localBend, localSide);
-
-        // The ankle target admits many valid knee bend planes around worldForward.
-        // Search those planes and prefer one whose hip rotation stays inside the
-        // authored Jolt swing/twist cone. This matters for mirrored rigs: the same
-        // movement-facing pole can map into a permissive cone region on one hip and
-        // an unreachable region on the other.
-        const glm::vec3 hipAxisLocal = glm::normalize(leg.hipTwistAxis);
-        const glm::mat4 hipBindWorld =
-            entityWorld * glm::inverse(skeleton.bones[leg.hipIdx].inverseBind);
-        const glm::quat hipBindRot = OrientationOf(hipBindWorld);
-        const glm::vec3 hipAxisWorld = hipBindRot * hipAxisLocal;
-        const glm::vec3 planeAxisWorld = ConstraintPlaneAxis(hipAxisWorld);
-        const glm::vec3 planeAxisLocal =
-            glm::normalize(glm::conjugate(hipBindRot) * planeAxisWorld);
-        const glm::vec3 normalAxisLocal =
-            glm::normalize(glm::cross(hipAxisLocal, planeAxisLocal));
-        const glm::quat constraintBasis = glm::normalize(glm::quat_cast(
-            glm::mat3(hipAxisLocal, planeAxisLocal, normalAxisLocal)));
-
-        const float marginDeg = glm::max(hipLimitMarginDeg, 0.0f);
-        const float safePlaneDeg =
-            glm::clamp(leg.hipSwingPlaneDeg - marginDeg, 1.0f, 179.0f);
-        const float safeNormalDeg =
-            glm::clamp(leg.hipSwingNormalDeg - marginDeg, 1.0f, 179.0f);
-        const float twistMiddleDeg =
-            (leg.hipTwistMinDeg + leg.hipTwistMaxDeg) * 0.5f;
-        const float safeTwistMinDeg =
-            glm::min(leg.hipTwistMinDeg + marginDeg, twistMiddleDeg);
-        const float safeTwistMaxDeg =
-            glm::max(leg.hipTwistMaxDeg - marginDeg, twistMiddleDeg);
-        const float planeRadius = glm::max(
-            std::sin(glm::radians(safePlaneDeg) * 0.5f),
-            1e-4f);
-        const float normalRadius = glm::max(
-            std::sin(glm::radians(safeNormalDeg) * 0.5f),
-            1e-4f);
-        const float twistMin = glm::radians(safeTwistMinDeg);
-        const float twistMax = glm::radians(safeTwistMaxDeg);
-
-        glm::quat hipTarget(1, 0, 0, 0);
-        glm::quat bestConstraintDelta(1, 0, 0, 0);
-        glm::vec3 chosenWorldBend = worldBend;
-        float bestScore = std::numeric_limits<float>::infinity();
-        float bestPoleDeg = 0.0f;
-        float bestViolationDeg = 0.0f;
-        const float previousPole = glm::radians(leg.selectedPoleDeg);
-
-        for (int poleDeg = -90; poleDeg <= 90; poleDeg += 5) {
-            if (std::isfinite(forcedPoleDeg) &&
-                poleDeg != static_cast<int>(std::round(forcedPoleDeg)))
-                continue;
-            const float poleAngle = glm::radians(static_cast<float>(poleDeg));
-            const glm::vec3 candidateBend =
-                glm::angleAxis(poleAngle, worldForward) * worldBend;
-            const glm::vec3 candidateSide =
-                glm::normalize(glm::cross(worldForward, candidateBend));
-            const glm::mat3 worldBasis(worldForward, candidateBend, candidateSide);
-            const glm::quat hipWorldTarget = glm::normalize(
-                glm::quat_cast(worldBasis * glm::transpose(localBasis)));
-            const glm::quat candidateHipTarget =
-                glm::normalize(glm::conjugate(hipParentRot) * hipWorldTarget);
-
-            glm::quat delta = glm::normalize(
-                glm::conjugate(skeleton.bones[leg.hipIdx].localR) *
-                candidateHipTarget);
-            glm::quat constraintDelta = glm::normalize(
-                glm::conjugate(constraintBasis) * delta * constraintBasis);
-            if (constraintDelta.w < 0.0f) constraintDelta = -constraintDelta;
-
-            glm::quat twist(
-                constraintDelta.w, constraintDelta.x, 0.0f, 0.0f);
-            const float twistLength = glm::length(twist);
-            twist = twistLength > 1e-6f
-                ? twist / twistLength
-                : glm::quat(1, 0, 0, 0);
-            glm::quat swing = glm::normalize(
-                constraintDelta * glm::conjugate(twist));
-            if (swing.w < 0.0f) swing = -swing;
-
-            const float ellipseDistance = std::sqrt(
-                (swing.y * swing.y) / (planeRadius * planeRadius) +
-                (swing.z * swing.z) / (normalRadius * normalRadius));
-            const float swingViolation = glm::max(ellipseDistance - 1.0f, 0.0f);
-            const float twistAngle = 2.0f * std::atan2(twist.x, twist.w);
-            const float twistViolation =
-                twistAngle < twistMin ? twistMin - twistAngle :
-                twistAngle > twistMax ? twistAngle - twistMax : 0.0f;
-            const float violation =
-                swingViolation + twistViolation / glm::pi<float>();
-            const float hipRotation =
-                2.0f * std::acos(glm::clamp(std::abs(delta.w), 0.0f, 1.0f));
-            const float score =
-                violation * 1000.0f +
-                std::abs(poleAngle) * 0.50f +
-                hipRotation * 0.10f +
-                std::abs(poleAngle - previousPole) * 0.05f;
-            if (score < bestScore) {
-                bestScore = score;
-                bestPoleDeg = static_cast<float>(poleDeg);
-                bestViolationDeg = glm::degrees(
-                    swingViolation * glm::max(
-                        glm::radians(safePlaneDeg),
-                        glm::radians(safeNormalDeg)) +
-                    twistViolation);
-                chosenWorldBend = candidateBend;
-                hipTarget = candidateHipTarget;
-                bestConstraintDelta = constraintDelta;
-            }
-        }
-
-        leg.selectedPoleDeg = bestPoleDeg;
-        leg.hipLimitViolationDeg = bestViolationDeg;
-        leg.hipTargetClamped = bestViolationDeg > 0.05f;
-
-        if (leg.hipTargetClamped) {
-            // The planner preflights the nominal swing, but live pelvis motion can
-            // still move the target outside the safe envelope. Clamp the selected
-            // motor target in constraint space so physics never chases an
-            // impossible orientation.
-            glm::quat twist(
-                bestConstraintDelta.w, bestConstraintDelta.x, 0.0f, 0.0f);
-            const float twistLength = glm::length(twist);
-            twist = twistLength > 1e-6f
-                ? twist / twistLength
-                : glm::quat(1, 0, 0, 0);
-            glm::quat swing = glm::normalize(
-                bestConstraintDelta * glm::conjugate(twist));
-            if (swing.w < 0.0f) swing = -swing;
-
-            const float twistAngle = glm::clamp(
-                2.0f * std::atan2(twist.x, twist.w), twistMin, twistMax);
-            const glm::quat clampedTwist =
-                glm::angleAxis(twistAngle, glm::vec3(1, 0, 0));
-
-            const float ellipseDistance = std::sqrt(
-                (swing.y * swing.y) / (planeRadius * planeRadius) +
-                (swing.z * swing.z) / (normalRadius * normalRadius));
-            const float swingScale =
-                ellipseDistance > 1.0f ? 1.0f / ellipseDistance : 1.0f;
-            const float swingY = swing.y * swingScale;
-            const float swingZ = swing.z * swingScale;
-            const float swingW = std::sqrt(glm::max(
-                1.0f - swingY * swingY - swingZ * swingZ, 0.0f));
-            const glm::quat clampedSwing(swingW, 0.0f, swingY, swingZ);
-
-            const glm::quat clampedConstraintDelta = glm::normalize(
-                clampedSwing * clampedTwist);
-            const glm::quat clampedDelta = glm::normalize(
-                constraintBasis * clampedConstraintDelta *
-                glm::conjugate(constraintBasis));
-            hipTarget = glm::normalize(
-                skeleton.bones[leg.hipIdx].localR * clampedDelta);
-        }
-
-        if (solvedHipTarget) *solvedHipTarget = hipTarget;
-        if (solvedKneeTarget) *solvedKneeTarget = kneeTarget;
-
-        if (writePose) {
-            animator.pose[leg.hipIdx].rotation = glm::normalize(glm::slerp(
-                animator.pose[leg.hipIdx].rotation, hipTarget, weight));
-            animator.pose[leg.kneeIdx].rotation = glm::normalize(glm::slerp(
-                animator.pose[leg.kneeIdx].rotation, kneeTarget, weight));
-        }
-
-        if (debug) {
-            DebugDraw::Sphere(ankleTarget, 0.025f, {0.3f, 0.7f, 1.0f});
-            DebugDraw::Sphere(anklePos, 0.025f, {1.0f, 0.15f, 0.15f});
-            DebugDraw::Line(anklePos, ankleTarget, {1.0f, 0.15f, 0.15f});
-            DebugDraw::Line(hipPos, hipPos + chosenWorldBend * 0.25f,
-                            {0.8f, 0.3f, 1.0f});
-        }
-    }
-
-    static void DrawLeg(const LocamotionControllerComponent::LegState& leg)
-    {
-        DebugDraw::Sphere(leg.plantSole, 0.04f, {0.2f, 1.0f, 0.2f});
-        DebugDraw::Sphere(leg.soleTarget, 0.025f, {1.0f, 1.0f, 1.0f});
-        if (leg.phase == LocamotionControllerComponent::LegPhase::Swinging)
-            DebugDraw::Sphere(leg.swingTargetSole, 0.04f, {1.0f, 0.6f, 0.1f});
     }
 };

@@ -1,334 +1,348 @@
 # Character Locomotion Design
 
-Last updated: 2026-07-22
+Last updated: 2026-07-27
 
-This is the continuation point for the Gang Beasts-inspired active-ragdoll walk.
-The character can now produce convincing alternating steps and travel in the
-requested direction for several seconds. It is not yet game-ready: startup,
-directional symmetry, overspeed, turning and long-term balance still need work.
+The walk is a SIMBICON controller (Yin, Loken, van de Panne, SIGGRAPH 2007) running on
+the powered ragdoll. The previous foothold-planner/IK gait was removed; what replaced it
+is the paper's section 3 in full, plus a bounded IK terrain layer taken from section 8.
+
+## Why the previous approach was replaced
+
+The old controller was architecturally inverted against the paper in three ways:
+
+| SIMBICON | Previous controller |
+|---|---|
+| Fixed-time / contact transitions; balance comes *from* stepping | `WeightShift` blocked stepping *until* balanced |
+| Internal joint torques; the legs move the body | Pelvis velocity force, leash and COM-over-base forces moved the body |
+| Target = joint angles, always reachable | Target = world foothold -> IK -> often unreachable -> pole search, bisection, clamping |
+
+The third row is why the old file was 1400 lines: `ProjectSwingTarget`, the 19-candidate
+pole search and the stride/lift bisection all existed to work around world-space foot
+targets that the hip cone could not reach. Target angles are reachable by construction, so
+that machinery is gone.
+
+The second row is why the pelvis reached 0.8-1.1 m/s against a gait that could only
+support 0.257 m/s. Section 7.3 also predicts the resulting fall directly: "when `cv` is
+below the lower limit, the velocity of the character accumulates until it falls."
 
 ## Runtime pipeline
 
-1. Read camera-relative movement input and update the requested yaw.
-2. Enter powered-ragdoll mode and blend procedural gait IK in.
-3. Enter `WeightShift` and bias physical COM support toward the future stance foot.
-4. Start the swing only after that foot is grounded and COM remains inside its
-   support region for a short stable interval.
-5. Place the swing target ahead of the opposite planted foot.
-6. Animate a smooth lifted sole trajectory to that target.
-7. Convert the sole target into an ankle target and solve a hinge-aware hip/knee
-   pose in world space.
-8. Let powered ragdoll motors chase that pose while physics owns every body.
-9. Verify the physical foot reached the target, or settle it at its actual grounded
-   position after a timeout, before alternating legs.
-10. Drive the pelvis toward a gait-limited velocity while applying upright and
-   support-base balance.
+1. Read camera-relative input, update requested yaw, enter powered-ragdoll mode.
+2. Advance the two-state FSM: state 0 for `state0Time`, state 1 until swing-foot contact.
+3. Measure `d` (stance ankle -> COM) and `v` (COM velocity), split sagittal/coronal.
+4. Swing hip target = state angle + `cd*d + cv*v`, independently in both planes.
+5. Write swing hip and torso as WORLD-frame targets, knees/ankles parent-relative.
+6. Clamp every written target to the authored Jolt swing/twist envelope.
+7. Powered ragdoll motors chase the pose; physics owns every body.
 
-`LocamotionControllerSystem` runs at priority 100, before physics consumes the
-pose and locomotion command.
+`LocamotionControllerSystem` runs at priority 100, before physics consumes the pose.
 
-## Ownership
+## The body frame is MEASURED, not configured
 
-- `LocamotionController`: input, heading, gait phase, foot placement, swing arc,
-  leg IK and safe root-velocity command.
-- `DriveRagdollLocomotionRoot`: pelvis velocity force, vertical support, COM/base
-  balance, upright control and the support leash.
-- `SyncRagdollPowered`: converts animation-pose joints into physical motor targets.
-- `RagReaction`: knockdown, limp and get-up.
-- `Punch`: arms.
-
-Physics is authoritative. Debug targets are intentions, not proof that a physical
-foot reached them.
-
-## CesiumMan leg chain
+`facingOffsetDeg` was guessed three times and was wrong every time. Sagittal/coronal are now
+derived from the rig itself:
 
 ```text
-Skeleton_torso_joint_1
-  -> leg_joint_*_1  hip, swing-twist
-  -> leg_joint_*_2  knee, hinge
-  -> leg_joint_*_3  ankle stub, swing-twist
-  -> leg_joint_*_5  sole/contact body
+right = normalize(horizontal(rightHipPos - leftHipPos))
+fwd   = normalize(cross(worldUp, right))
 ```
 
-The analytic chain ends at `_3`. The controller measures the live `_5`-to-ground
-clearance, converts the desired sole point into a foot-body point, and then offsets
-that point to obtain the desired ankle position.
+The line between the hip joints is an unambiguous lateral axis on any rig. When the offset
+was wrong by 90 deg, `right` was actually the body's FORWARD axis, so the swing rotation
+lifted the leg sideways instead of stepping — "the legs kick up and don't go forward". The
+envelope clamp used to mask this by folding the bad target into the cone; raw virtual torque
+does not, which is why the symptom got louder rather than better when tau_A landed.
 
-The controller currently writes `_1` and `_2` only. The ankle/foot remains passive,
-so foot yaw is not aligned to movement yet.
+Two other places stopped depending on a guessed frame:
 
-## Hinge-aware leg solve
+- **Hip targets are a femur DIRECTION**, not a composed frame. `worldHip` builds the desired
+  thigh direction from the measured axes and swings the bind orientation onto it
+  (`RotationBetween`), so no bind/entity/heading rotation can leak into the target.
+- **Upright targets correct TILT ONLY** — take the body's current orientation and rotate its
+  up-axis back to world up, with no yaw term. A yaw-locked pelvis is something the legs have
+  to push against; there is now nothing to fight.
 
-The original free two-bone IK generated knee rotations that were not rotations
-about the physical hinge. Jolt discarded that component, leaving the leg straight.
-The current solve is compatible with the ragdoll constraints:
+`facingOffsetDeg` still feeds `locomotionTargetRot` for the standing/non-SIMBICON path.
+Turning during gait is unimplemented (paper section 8 does it by modulating desired facing and
+letting the stance hip achieve it).
 
-1. Cache each knee's authored `twistAxisLocal` from the ragdoll configuration.
-2. Clamp the ankle target to `maxReachFraction` of total leg length.
-3. Compute knee bend with the law of cosines.
-4. Apply that bend about the authored knee hinge axis.
-5. Build the resulting bent chain in hip-local space.
-6. Generate candidate knee bend planes around the hip-to-ankle axis.
-7. Express each resulting hip target in the authored Jolt swing/twist constraint
-   basis and score its elliptical swing and twist-limit violation.
-8. Apply `hipLimitMarginDeg` to keep the target away from the hard constraint
-   boundary.
-9. Choose the closest movement-facing pole that avoids constraint violation, then
-   orient the hip so the exact chain reaches the ankle target.
+## Section 3.2 - the virtual torques (the part that was missing)
 
-Motor logs confirmed that knee `commandTwist` is now nonzero and `actualTwist`
-generally follows it. This was the change that made visible stepping possible.
+Three play-test rounds all ended identically: tilt 99-102 deg, `dSag` ~0.61, speed 0. Five
+runs, three numbers. That is a switch flipping, not a control law degrading — and the switch
+was `tiltDeg < locomotionFallenTilt` guarding an external pelvis drive.
 
-## Gait and foot placement
+The root drive was writing `SetAngularVelocity` and `SetLinearVelocity` on the pelvis every
+substep. Those are not forces; they OVERWRITE velocity state. Consequences:
 
-The gait state machine is:
+- Any angular momentum the stance leg imparts to the pelvis was destroyed 60x a second.
+  The stance hip torque rotating the body over the stance foot IS SIMBICON's propulsion
+  mechanism, and it cannot act through a velocity overwrite.
+- The pelvis was yaw-locked to `_yaw + facingOffsetDeg`, so the legs fought a rotational
+  constraint they could not move. (This is also why 0 vs 90 changed the startup state but
+  never the outcome.)
+- All of it inside the 55 deg gate, so the rig went rigid-rigid-rigid then instantly limp.
+
+Now implemented as the paper specifies:
 
 ```text
-Idle -> WeightShift -> Swing -> DoubleSupport -> WeightShift
+tau_torso = worldPD(pelvis -> upright at heading)       virtual, never applied directly
+tau_B     = worldPD(swing femur -> its world target)    applied to the swing hip
+tau_A     = -tau_torso - tau_B                          applied to the stance hip
 ```
 
-`Idle` clears any one-foot support bias and is the only entry into a fresh gait.
-During `WeightShift`, both feet remain planted while physics pulls projected COM
-toward a point slightly inboard of the future stance foot. A swing can begin only
-after the stance foot is physically grounded and COM remains inside
-`weightShiftRadius` for `weightShiftStableTime`. A failed transfer times out to
-`DoubleSupport` and retries instead of lifting an unloaded foot.
+Each hip torque is applied with its equal-and-opposite reaction on the root, so the net
+torque the pelvis sees is exactly `-tau_A - tau_B = tau_torso`. The stance hip is the free
+variable; the residual is what pushes the body forward using only internal torque.
 
-Only one leg may swing at once. The current forward target is:
+Both hip joint MOTORS are muted while this is active (`locomotionHipBones` in
+`SyncRagdollPowered`) — a position motor on the same joint just fights the virtual PD. The
+hips are therefore no longer written as pose targets at all; knees, ankles and torso still
+are. Jolt's constraint cones still bound the joint physically, so `ClampToEnvelope` is no
+longer needed on the hips.
+
+Torques are computed script-side per frame but applied engine-side per SUBSTEP
+(`DriveRagdollLocomotionRoot`), because `AddTorque` is cleared each step — applying from the
+frame loop would land inconsistently at any frame rate other than 60.
+
+The vertical support spring became a FORCE under SIMBICON rather than a velocity write (a
+velocity write destroys the vertical momentum a gait needs) and is scalable to zero via
+`supportScale` once the stance leg genuinely carries the body.
+
+## Standing pose and the two blends
+
+Two weights gate the pose write:
+
+- `_poseBlend` — is the controller driving at all. Ramps up once powered, grounded and past
+  `postPoweredGrace`; drops when tilt exceeds `locomotionFallenTilt`.
+- `_gaitWeight` — 0 = standing, 1 = full FSM pose. Folded into the write weight, so at 0 the
+  controller writes nothing and the motors hold the BIND pose.
+
+An earlier attempt gave standing its own explicit symmetric pose. It made things worse — the
+character toppled while merely standing (`gait=0.00`, tilt 8 -> 14.8 -> 28.3 -> 36.6 in one
+second) where holding bind had been stable for 21 s. Reverted. If a tuned standing posture is
+wanted later, verify it against the 21 s bind baseline before trusting it.
+
+## The fallen-tilt gate is NOT on the FSM
+
+`canGait` used to require `tiltDeg < locomotionFallenTilt`. That froze the FSM mid-stumble,
+latching a stale one-legged pose at exactly the moment the balance law wanted its biggest
+catch step — a recoverable trip became an unrecoverable face-plant. The FSM now keeps running
+regardless of tilt; only `_poseBlend` fades, and the engine's own root drive still bails at
+`locomotionFallenTilt` so a prone rig is never dragged.
+
+`_timeSincePowered` initialises to -1 as a sentinel for the Animated->Powered flip. A scene
+that authors the ragdoll as Powered (`"mode": 2`, which `CharacterTest.scene` does) never
+runs that flip, so the sentinel doubled the grace period to 1.4 s. Clamped to 0 on first use.
+
+## Section 3.1 - Finite state machine
+
+Two states, mirrored by swapping which leg is stance:
 
 ```text
-stanceFootPlant + moveDirection * stepLength
+state 0  lift    fixed duration (state0Time, 0.30 s)
+state 1  plant   exits on swing-foot contact, then legs swap
 ```
 
-Its lateral coordinate is placed on the swing leg's side of the stance foot using
-twice `stanceHalfWidth`. This is important: the previous target advanced each foot
-from its own old position, causing one foot to lead while the other merely caught
-up. The stance-relative target makes every new footfall lead the other foot.
+State 1 has a `minSwingTime` floor so the just-lifted foot cannot immediately re-trigger
+contact, and a `maxSwingTime` ceiling so a missed step cannot hang the gait. Neither
+exists in the paper; both are cheap guards, not balance logic.
 
-Before swing begins, the controller samples the complete toe-off, travel and lift
-curve with the same constraint-aware leg solve used at runtime. If no knee pole can
-keep every sample inside the hip's safe swing/twist envelope, the planner walks
-backward along the requested stride and refines the furthest legal point. If the
-vertical arc prevents even a useful shortened stride, it also reduces lift. This
-uses each ragdoll's authored axes and limits rather than character-specific
-distances. The projected foothold and lift are fixed for the entire swing. Debug
-step logs include the retained `projection` and `lift` fractions plus requested and
-projected peak limit violations.
+Target poses are a **bias, not a goal**. The paper is explicit that they "are typically not
+actually achieved" — in state 1 the swing leg is physically forward while its target is
+backward, and that mismatch is what drives the foot down into contact. There is
+deliberately no landing verification, no landing tolerance and no settled/landed
+distinction; all of that contradicted the method and is gone.
 
-Dynamic reach is planned along with geometric reach. Horizontal swing travel is
-capped as a fraction of the current skeleton's thigh-plus-shin length. The planner
-tests each candidate using one fixed knee pole for the complete trajectory, then
-chooses the legal pole with the lowest required motion time. It estimates minimum
-duration from the physical starting hip/knee orientations, per-sample joint angular
-travel and sole travel. Each swing stores that pole and a duration between the base
-`stepDuration` and `maxStepDuration`; root speed is reduced for longer active
-swings. This prevents a lagging leg from receiving an instantaneous pole change or
-a character-independent catch-up distance. Planning is deliberately bounded: it
-tests 19 poles across nine trajectory samples once, then any constraint projection
-refines only the selected pole. Duration never triggers the expensive geometric
-projection loop; it only changes swing timing.
+## Section 3.2 - Torso and swing-hip control
 
-Live pelvis movement can invalidate a preflighted world-space foot path. As a final
-safety net, the runtime solve clamps an infeasible hip target to the safe elliptical
-swing cone and twist interval before writing the motor pose. The debug status line
-reports `clamped=(left,right)` while retaining the original violation magnitude for
-diagnosis.
+The swing hip and torso track in the world frame; everything else is parent-relative.
 
-The sole begins with a vertical toe-off, then follows quintic horizontal
-interpolation plus a zero-end-velocity sine-squared lift. The target is grounded
-once at swing start and is not retargeted in flight.
-
-At the end of the timer:
-
-- `landed`: the physical foot is within `landingTolerance` and grounded;
-- `settled`: after a short grounded timeout, the commanded plant is moved to the
-  physical foot's actual position so the gait cannot deadlock.
-
-A settled step resets the consecutive verified-landing count, but alternating can
-continue.
-
-## Root drive and balance
-
-Root drive now begins as soon as gait is requested. Waiting for two successful
-landings allowed leg reaction forces to scoot the pelvis backward during startup.
-
-The requested root speed is conservatively capped from current gait timing:
+A world-frame target becomes a joint target by composing against the **physical** parent
+body rather than the animated one:
 
 ```text
-stepLength / (2 * (stepDuration + weightShiftTime + doubleSupportTime))
+pose[bone].rotation = conjugate(physicalParentWorldRot) * desiredWorldRot
 ```
 
-With current values this is about `0.257 m/s`. `moveRampTime` blends into that
-command. During weight transfer the velocity command is additionally scaled to
-15 percent so support can move laterally without restoring the old no-propulsion
-startup behavior. Propulsion is smoothly attenuated from 20 degrees of tilt and
-reaches zero at 30 degrees; the normal fallen threshold remains separate.
+`SyncRagdollPowered` reads `pose[bone].rotation` straight through as the joint's
+child-relative-to-parent motor target, so this lands exactly. Reading the physical parent
+is what `Physics::GetRagdollBoneRotation` was added for — the animated and physical
+parents diverge precisely when balance feedback matters.
 
-This cap limits the target, not the physical velocity. Leg and balance impulses can
-still accelerate the character to `0.8-1.1 m/s`, which is one cause of eventual
-falls.
+`tau_A = -tau_torso - tau_B` is **not yet implemented**. The stance hip is currently driven
+to a near-vertical world target (`stanceHipDeg`) instead of being a free torque variable,
+and the pelvis is still righted by the engine's upright spring. `locomotionUprightScale`
+fades that spring out and `Physics::AddRagdollBoneTorque` is in place, so wiring the real
+free-variable stance hip is the next step once the limit cycle holds. This is the paper's
+one external-torque cheat; it is avoided in the paper for physical realizability on robots,
+not because motion quality requires it.
 
-## Current tuning
-
-`CharacterTest.scene` overrides are the values that matter for the current test.
-
-| Field | Current value | Purpose |
-|---|---:|---|
-| `maxSpeed` | 1.0 m/s | Input request before gait limiting |
-| `moveRampTime` | 0.75 s | Root command ramp |
-| `facingOffsetDeg` | 0 deg | No model-facing correction |
-| `stepLength` | 0.35 m | Distance each footfall leads the stance foot |
-| `stanceHalfWidth` | 0.10 m | Half the desired foot separation |
-| `stepDuration` | 0.40 s | Swing duration |
-| `stepLift` | 0.10 m | Swing arc height |
-| `doubleSupportTime` | 0.08 s | Delay between swings |
-| `weightShiftTime` | 0.20 s | Minimum transfer time between ordinary steps |
-| `firstWeightShiftTime` | 0.25 s | Longer startup transfer time |
-| `weightShiftTimeout` | 0.40 s | Return to double support if transfer cannot verify |
-| `weightShiftRadius` | 0.08 m | Maximum projected COM error before lifting |
-| `weightShiftStableTime` | 0.05 s | Required continuous stable support interval |
-| `weightShiftDriveScale` | 0.15 | Forward drive multiplier during transfer |
-| `weightShiftInboard` | 0.20 | Support target inset from stance foot toward midpoint |
-| `gaitBlendTime` | 0.20 s | Procedural pose blend |
-| `maxReachFraction` | 0.95 | Prevents full leg extension |
-| `swingPoseWeight` | 1.0 | Scene override for swing leg IK |
-| `stancePoseWeight` | 0.45 | Driven support-leg IK weight |
-| `landingTolerance` | 0.10 m | Physical landing radius |
-
-`kneePoleDist`, capture-point triggers, tilt-triggered steps, hip-outside triggers,
-mid-swing retargeting and the experimental stride fields were removed. Do not
-reintroduce them until the base gait is stable and measured.
-
-## Debug visualization and logs
-
-Current debug markers:
-
-- green sphere: planted sole;
-- white sphere: current point on the commanded swing arc;
-- orange sphere: final swing target;
-- blue sphere: clamped ankle IK target;
-- red sphere and line: physical ankle and its error from the blue target.
-- cyan sphere: active weight-shift support target;
-- yellow sphere: physical projected COM.
-
-Important log fields:
-
-- `aheadOfStance`: target lead over the opposite planted foot; should be about
-  `+0.35` for a straight step;
-- `swingTravel`: target distance from that swing foot's physical start; normally
-  larger than `stepLength` once alternating correctly;
-- `actualAlongMove`: physical foot travel along its captured swing direction;
-- `target`: tilt-scaled, gait-capped pelvis speed;
-- `along`: signed physical pelvis velocity along current input; negative is real
-  backward movement;
-- `steps`: consecutive verified landings, reset by a settled step or fall;
-- `[LocoMotor] command/actual/error`: total motor rotation;
-- `[LocoMotor] commandTwist/actualTwist`: rotation usable by a hinge.
-
-## Verified fixes
-
-- Camera-relative targets and body facing now use the same zero-degree convention.
-- Swing targets advance in the requested direction; target direction is not negated.
-- A stance leg remains procedurally driven instead of going passive during swing.
-- Knee motor commands use the physical hinge axis.
-- Hip and knee targets describe the same bent chain.
-- Real physical foot positions, rather than only IK targets, determine landing.
-- A failed landing no longer freezes the gait permanently.
-- Swing targets are stance-relative, producing true alternating lead steps.
-- Root propulsion starts with gait and is capped/tilt-faded.
-- The Debug configuration builds successfully with the current implementation.
-
-Good runs now show repeated alternating landings with roughly `0.5-0.75 m` physical
-swing travel. A recent leftward run completed eight verified steps before failing.
-
-## Known problems
-
-### 1. Startup weight-shift tuning
-
-The explicit `WeightShift` phase is implemented. Physics now exposes mass-weighted
-COM and per-foot grounding, and can blend normal support-base balance toward a
-controller-provided support target. The controller waits for verified, stable
-support before lifting and safely retries after a timeout.
-
-The phase still needs four-direction runtime testing. Watch `comError`, stance-foot
-grounding, timeout frequency, signed startup velocity and whether the first physical
-foot now travels toward its target. Tune the support radius/inset and balance force
-from those measurements rather than shortening the readiness gate blindly.
-
-### 2. Directional asymmetry
-
-Up/left generally works better than down/right. CesiumMan's authored hip twist axes
-are strongly asymmetric:
+## Section 3.3 - Balance feedback
 
 ```text
-left hip:  ( 0.786,  0.034, -0.617)
-right hip: ( 0.980, -0.034,  0.194)
+theta_d = theta_d0 + cd*d + cv*v
 ```
 
-The current hip cone limits are equal and circular at 60 degrees, but their local
-constraint frames differ with the mirrored bone frames. Logs showed the right knee
-following its target while the right hip accumulated roughly 47 degrees of error
-when moving away; the same right leg completed a 0.50 m step moving left. This
-isolated the missing behavior to direction-dependent hip reach rather than foot
-contact or second-step ordering.
+applied to the swing hip in both planes, where `d` is the horizontal stance-ankle-to-COM
+distance and `v` is COM velocity. This is the entire balance mechanism and the only thing
+deciding where the foot lands. There is no foothold planner.
 
-The leg solver now searches knee-pole candidates in Jolt's actual constraint space,
-preferring the original movement-facing pole whenever it is legal. Debug logs
-include selected pole offsets and predicted hip-limit violation. The step planner
-projects the complete swing trajectory, caps travel by leg length, chooses one pole,
-and budgets duration from joint and foot speed. It shortens stride and then lift as
-needed, while the live solve clamps unexpected violations caused by pelvis motion.
-Four-direction runtime testing is still required to confirm that projected right
-steps land consistently and remain long enough to advance beyond the stance foot.
+`d` and `v` come from the engine's mass-weighted `_locomotionCOM` / `_locomotionCOMVel`.
+`useHipCOMProxy` swaps in the hip position instead, which the paper endorses as a proxy in
+both 2D and 3D; it is worth testing because the swing leg still pulls the true COM around.
 
-### 3. Eventual overspeed and forward fall
+Coronal `theta_d0` is `stanceWidthDeg`, applied outward per side. Section 8 notes that
+symmetric lateral hip displacements are exactly how stance width is authored.
 
-During good walking, actual pelvis speed has frequently reached `0.8-1.1 m/s`,
-well above the previous `0.365 m/s` target and the new weight-shift-aware
-`0.257 m/s` target. Eventually a swing foot misses, support disappears and tilt
-rises rapidly. The current controller fades future propulsion but cannot cancel
-existing momentum or place a recovery step.
+Stable ranges from section 7.3, wired into the inspector sliders as their bounds:
 
-Likely fixes after direction/startup work:
+| Gain | Sagittal | Coronal |
+|---|---|---|
+| `cd` | -0.71 .. 1.4 | -1.29 .. 1.13 |
+| `cv` | 0.03 .. 0.59 | -0.06 .. 0.48 |
 
-- brake signed overspeed explicitly;
-- use actual pelvis velocity in foot placement;
-- add capture-point placement or limited mid-swing prediction;
-- inhibit a new swing when stance support or COM position is unsafe;
-- later add tilt-triggered recovery stepping.
+Nominal is 0.5 / 0.2 in both planes.
 
-### 4. Foot heading is uncontrolled
+## The IK layer
 
-The passive ankle/foot does not face the travel direction. Add swing-only ankle/foot
-yaw later, blending to a stable planted orientation before contact. Driving planted
-foot yaw directly would inject unwanted ground torque.
+IK survives, demoted from decision-maker to correction layer. Section 8's extension
+mechanism for terrain is a displacement on the target angles
+(`delta_theta_hip = k * theta_slope`), which is exactly IK-shaped work, and it fills a hole
+the paper admits to: "stairs can cause problems because the controllers cannot see an
+upcoming step."
 
-### 5. Turning during a swing
+`TerrainKneeOffsetDeg` is deliberately **differential**: it solves the leg twice, once for
+the nominal foot position and once for the ground-adjusted one, and contributes the
+difference. On flat ground the two solves are identical and the contribution is exactly
+zero, so the layer cannot destabilise the base gait. It is clamped to `ikMaxOffsetDeg`,
+applies only to the swing leg during state 1, and is **off by default** (`ikTerrainEnabled`)
+until the flat-ground limit cycle holds.
 
-Foot position and `swingDirection` are captured at swing start, while the knee bend
-plane currently follows live input. Large direction changes can make the target,
-solver plane and landing measurement disagree. Decide whether a swing should retain
-its captured direction or support limited retargeting.
+Blending an absolute IK pose against the FSM pose would put two controllers on the same
+joint. Do not do that; keep this layer differential.
 
-## Next-session plan
+## What was salvaged
 
-1. Commit this checkpoint before further experiments.
-2. Add diagnostics only: world hip axes/cones, per-foot grounding, COM/hip distance
-   from the stance foot, forward/lateral pelvis velocity and tipping angular velocity.
-3. From a fresh scene start, hold exactly one direction for each test: up, down,
-   left and right. Do not turn during a run. Record verified/settled steps and peak
-   hip motor error per leg.
-4. Correct the rig axes or make the hip solve cone-aware based on that evidence.
-5. Tune the explicit weight-transfer phase from the four-direction measurements.
-6. Add overspeed braking and velocity-aware foot placement.
-7. Add swing-foot heading only after the four-direction gait is stable.
-8. Reintroduce capture/tilt recovery last.
+`ClampToEnvelope` is the constraint-space projection extracted from the old leg solver: it
+expresses a local target in Jolt's authored swing/twist basis, scores elliptical swing and
+twist violation, and pulls the target back to the nearest legal orientation. It is worth
+keeping regardless of who generates the target — Table 1's angles plus a large `cd*d` term
+can leave a 60-degree cone on a rig the paper never saw. Hinges skip it; Jolt clamps those
+itself.
+
+## Rig changes
+
+The paper's method has physical preconditions the rig was violating. `CesiumMan.ragdoll`
+was changed accordingly:
+
+| Change | Before | After | Why |
+|---|---|---|---|
+| Leg mass share | 52% (37 of 71 kg) | 34% (24.2 of 70.4 kg) | Swing-hip feedback assumes placing the swing leg does not dominate trunk dynamics |
+| Waist torque | 28 N-m | 250 N-m | Balance runs through the torso; the paper uses its highest gain (kp=1000) at the waist. Gravity alone on the trunk at 20 degrees of lean was already 22 N-m |
+| Upper spine torque | 28 N-m | 200 N-m | Same |
+| Hip torque | 160 N-m | 250 N-m | Binding constraint once the hip carries residual torque |
+| Knee torque | 90 N-m | 150 N-m | Paper's 2D walk fails below 90 N-m |
+| Right hip twist axis | `(0.980, -0.034, 0.194)` | `(0.786, -0.034, 0.617)` | Was not a mirror of the left (~48 deg apart in Z) |
+
+The hip axes were the documented directional asymmetry, and it was a data bug rather than
+something the solver should compensate for. The knees mirror as `(x, -y, -z)` and the hips'
+`y` components already matched that convention exactly, so the left axis was mirrored onto
+the right. Left is the side that previously walked better. If right-favouring runs turn out
+worse, mirror the other direction instead — that is the whole fix.
+
+Feet were already fine: `CreateFootSole` overrides the config capsule with an 18 x 5 x 28 cm
+box, which is a real base of support.
+
+## Engine additions
+
+- `Physics::AddRagdollBoneTorque` — actuator for virtual PD controllers.
+- `Physics::GetRagdollBoneRotation` / `GetRagdollBoneAngularVelocity` — world-frame targets
+  must compose against the physical parent.
+- `RagdollComponent::locomotionSimbicon` — set per-frame by the controller. While true,
+  `DriveRagdollLocomotionRoot` suppresses the pelvis velocity force, the leash and the
+  COM-over-base forces. The vertical support spring and upright spring stay.
+- `RagdollComponent::locomotionUprightScale` — fades the upright spring out as the torso
+  joint takes over.
+
+The COM-over-base force was **not** deleted. It is the correct controller when there is no
+swing leg to place — the paper says nothing about balancing in place, and section 7.2 notes
+that non-stepping balance needs a different approach entirely. It stays scoped to standing.
+
+## Verification status
+
+**Standing: PLAY-VERIFIED 2026-07-27.** Held a fixed equilibrium for 21 s (velocity 0.000,
+`dSag` 0.176 -> 0.170) and recovered from a 33 deg tilt excursion back to ~12 deg. The rig
+rebalance did its job.
+
+**Walking: partially verified, still falls.** Best run reached 4 alternating steps with the
+FSM cycling, contact detection firing and knee commands tracking the state table to within
+a few degrees — and tilt briefly dropped to 6.8 deg mid-gait, so the control law does work.
+It has not yet held a limit cycle.
+
+Bugs found and fixed from those runs, in order of how much they mattered:
+
+1. **World-frame rest dropped the entity rotation.** `worldHip` built rest as
+   `headingRot * BindModelRot(bone)`, omitting `entityRot`. CesiumMan is Z-up, so a 33 deg
+   request reached the motor as 70 deg with 42 deg of spurious hip twist, on BOTH hips
+   identically. Motor logs showed command 69.7 / actual 68.7 — the motors were tracking
+   perfectly, the targets were wrong. Cross-check: the engine's own upright target is
+   `locomotionTargetRot * rootBindRot`, and `rootBindRot` is exactly the omitted term.
+2. **No standing pose** — see above.
+3. **`_timeSincePowered` sentinel** — see above.
+4. **Fallen-tilt gate froze the FSM** — see above.
+
+Success is still a limit cycle: step length and period stable over 10+ steps, and the
+character walking 60 s without falling. "Verified landings" is not a SIMBICON metric.
+
+Diagnostic key for the debug line:
+
+| Signal | Meaning |
+|---|---|
+| `t` stuck at 0.00 | FSM not running — `walking` is false, look at the gates, not the gains |
+| `gait` / `pose` | the two blend weights; `gait` 0 with `pose` 1 = holding the stand |
+| `steps` incrementing | contact transitions firing |
+| `t` repeatedly hitting `maxSwingTime` | contact never detected — foot grounding, not balance |
+| `hip` pinned at `swingHipLimitDeg` | feedback saturating; check tilt first, it is usually downstream of a fall |
+| `tilt` past `locomotionFallenTilt` | engine support is off; below this line you are watching a corpse fall |
+| `tau=(T,B,A)` | virtual torque magnitudes. A pinned at `maxVirtualTorque` means the stance hip is saturating — raise the limit or lower `torsoKp` |
+| identical terminal numbers across runs | a gate is firing, not a control law failing |
+
+## Known gaps
+
+`tau_A` is now wired, so the remaining external assists are the vertical support force
+(scalable to 0 via `supportScale`) and the COM-over-base force while standing. Neither acts
+during gait except the vertical one.
+
+## Tuning
+
+Section 4: these controllers were authored interactively against a running sim, and only
+three parameters per state really drive style — `state0Time`, swing hip and swing knee.
+Start there. All FSM angles and both gain pairs are live inspector sliders.
+
+Table 1's numbers were tuned on ODE at 5 ms against the paper's own rigs and will not
+transfer verbatim; section 7.2 notes that even moving between the paper's 2D and 3D models
+needed adjustment. Treat them as a starting point and the section 7.3 ranges as the search
+box.
+
+Sections 5 (mocap-derived controllers) and 6 (feedback error learning) are deliberately
+skipped. FEL exists to reduce stiffness and torso oscillation on a controller that already
+works.
+
+## Known gaps
+
+1. `tau_A = -tau_torso - tau_B` not wired; stance hip is a driven target and the pelvis
+   upright spring is still an external torque.
+2. Foot heading is uncontrolled — the ankle tracks a pitch angle only, not yaw.
+3. Turning mid-swing is untested; the heading frame is sampled live, so a large direction
+   change during state 1 moves the target the swing leg is chasing.
+4. No airborne state.
 
 ## Relevant files
 
 - `Sandbox/src/Scripts/LocamotionController.h`
+- `Engine/src/Scene/Physics/PhysicsSystem.cpp` (`DriveRagdollLocomotionRoot`, `SyncRagdollPowered`)
 - `Engine/include/Scene/Physics/RagdollComponent.h`
-- `Engine/src/Scene/Physics/PhysicsSystem.cpp`
+- `Engine/include/Scene/Physics/PhysicsAPI.h`
 - `Assets/Models/CesiumMan.ragdoll`
 - `Assets/Scenes/CharacterTest.scene`
-- `logs/loco_debug.log`

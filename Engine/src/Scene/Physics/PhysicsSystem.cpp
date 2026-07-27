@@ -255,6 +255,8 @@ public:
         ev.type = isTrigger ? ContactEvent::Type::TriggerStay : ContactEvent::Type::Stay;
         ev.entityA = static_cast<entt::entity>(static_cast<uint32_t>(a.GetUserData()));
         ev.entityB = static_cast<entt::entity>(static_cast<uint32_t>(b.GetUserData()));
+        ev.bodyA   = a.GetID().GetIndexAndSequenceNumber();
+        ev.bodyB   = b.GetID().GetIndexAndSequenceNumber();
         JPH::RVec3 wp = manifold.GetWorldSpaceContactPointOn1(0);
         JPH::Vec3  wn = manifold.mWorldSpaceNormal;
         ev.contactPoint  = { (float)wp.GetX(), (float)wp.GetY(), (float)wp.GetZ() };
@@ -275,6 +277,8 @@ public:
         ev.type    = isTrigger ? ContactEvent::Type::TriggerExit : ContactEvent::Type::Exit;
         ev.entityA = itA->second.entity;
         ev.entityB = itB->second.entity;
+        ev.bodyA   = pair.GetBody1ID().GetIndexAndSequenceNumber();
+        ev.bodyB   = pair.GetBody2ID().GetIndexAndSequenceNumber();
         std::lock_guard lock(m_mutex);
         m_events.push_back(ev);
     }
@@ -1614,7 +1618,51 @@ static void DriveRagdollLocomotionRoot(PhysicsSystem::Impl& impl, RagdollInstanc
     const glm::vec3 hipErr     = baseSeparation(glm::vec3(hipPosNow.x, 0.0f, hipPosNow.z));
     const float hipOutside = glm::length(hipErr);
 
-    // One-sided vertical spring: it catches a sag but never pulls the hips down.
+    // SIMBICON virtual hip torques and their reaction on the root. Applied here (per substep)
+    // rather than script-side so the torque lands on every step regardless of frame rate.
+    if (rag.locomotionSimbiconBlend > 0.001f) {
+        glm::vec3 reaction(0.0f);
+        for (int i = 0; i < 2; ++i) {
+            const int bone = rag.locomotionHipBones[i];
+            const glm::vec3& torque = rag.locomotionHipTorque[i];
+            if (bone < 0 || !std::isfinite(torque.x) || !std::isfinite(torque.y) ||
+                !std::isfinite(torque.z)) continue;
+            for (const RagdollBody& b : inst.bodies) {
+                if (b.boneIndex != bone) continue;
+                bi.AddTorque(b.id, ToJolt(torque));
+                reaction -= torque;
+                break;
+            }
+        }
+        bi.AddTorque(root.id, ToJolt(reaction));   // net on the pelvis = tau_torso
+    }
+
+    // Assisted swing-foot unload. Joint motors can fold the knee correctly while a sticky
+    // sole remains planted; in that case they drag the body backward instead of initiating
+    // swing. This is deliberately a ONE-SIDED spring: once the sole reaches or passes the
+    // target it stops lifting rather than reversing and hammering the foot back into the
+    // floor. The equal-and-opposite pelvis reaction keeps it an internal force.
+    if (rag.locomotionLiftBone >= 0 && std::isfinite(rag.locomotionLiftTargetY)) {
+        for (const RagdollBody& body : inst.bodies) {
+            if (body.boneIndex != rag.locomotionLiftBone) continue;
+            const float y = (float)bi.GetPosition(body.id).GetY();
+            const float vy = bi.GetLinearVelocity(body.id).GetY();
+            const float omega = glm::two_pi<float>() * glm::max(rag.locomotionLiftFrequency, 0.0f);
+            const float accel = omega * omega * (rag.locomotionLiftTargetY - y)
+                              - 2.0f * glm::max(rag.locomotionLiftDamping, 0.0f) * omega * vy;
+            const float force = glm::clamp(
+                accel * glm::max(rag.locomotionLiftEffectiveMass, 0.0f),
+                0.0f, glm::max(rag.locomotionLiftMaxForce, 0.0f));
+            const glm::vec3 lift(0.0f, force, 0.0f);
+            bi.AddForce(body.id, ToJolt(lift));
+            bi.AddForce(root.id, ToJolt(-lift));
+            break;
+        }
+    }
+
+    // One-sided vertical support. A velocity write here destroys the vertical momentum a
+    // gait needs, so under SIMBICON it becomes a force and can be scaled to zero once the
+    // stance leg carries the body.
     if (rag.locomotionDynamicRoot && tiltDeg < rag.locomotionFallenTilt) {
         const glm::vec3& hipPos = hipPosNow;
         HitResult ground = Physics::Raycast(hipPos, glm::vec3(0, -1, 0),
@@ -1628,12 +1676,22 @@ static void DriveRagdollLocomotionRoot(PhysicsSystem::Impl& impl, RagdollInstanc
             const float err     = targetY - hipPos.y;
             float accel = ws * ws * err - 2.0f * ws * vCur.y;
             accel = glm::clamp(accel, 0.0f, glm::max(rag.locomotionUpAccel, 0.0f) * supportFactor);
-            bi.SetLinearVelocity(root.id, ToJolt(glm::vec3(vCur.x, vCur.y + accel * FIXED_DT, vCur.z)));
+            const float blend = glm::clamp(rag.locomotionSimbiconBlend, 0.0f, 1.0f);
+            if (blend > 0.001f)
+                bi.AddForce(root.id, ToJolt(glm::vec3(
+                    0.0f, accel * inst.totalMass * blend *
+                          glm::max(rag.locomotionSupportScale, 0.0f), 0.0f)));
+            if (blend < 0.999f)
+                bi.SetLinearVelocity(root.id, ToJolt(glm::vec3(
+                    vCur.x, vCur.y + accel * FIXED_DT * (1.0f - blend), vCur.z)));
         }
     }
 
     // Do not drag or right a prone ragdoll.
     if (tiltDeg < rag.locomotionFallenTilt) {
+        const float sb = glm::clamp(rag.locomotionSimbiconBlend, 0.0f, 1.0f);
+        const float legacy = 1.0f - sb;
+        const bool simbicon = sb > 0.5f;
         glm::vec3 velErr = rag.locomotionTargetVel - vCur; velErr.y = 0.0f;
         glm::vec3 desiredLean = glm::vec3(rag.locomotionTargetVel.x, 0.0f, rag.locomotionTargetVel.z)
                               * rag.locomotionMoveLean;
@@ -1662,13 +1720,13 @@ static void DriveRagdollLocomotionRoot(PhysicsSystem::Impl& impl, RagdollInstanc
             if (const float length = glm::length(accel);
                 length > maxAccel && length > 1e-6f)
                 accel *= maxAccel / length;
-            supportTargetForce = accel * root.mass;
+            supportTargetForce = accel * inst.totalMass;
         }
-        moveF = velErr * glm::max(rag.locomotionMoveForce, 0.0f);
-        balF = glm::mix(normalBalanceForce, supportTargetForce, supportTargetWeight);
+        moveF = velErr * glm::max(rag.locomotionMoveForce, 0.0f) * legacy;
+        balF = glm::mix(normalBalanceForce, supportTargetForce, supportTargetWeight) * legacy;
 
         // Prevent the pelvis from outrunning the planted support base.
-        if (hipOutside > glm::max(rag.locomotionLeashDistance, 0.0f)) {
+        if (!simbicon && hipOutside > glm::max(rag.locomotionLeashDistance, 0.0f)) {
             const glm::vec3 leashDir = hipErr / hipOutside;   // outward, away from the base
             const float     outwardF = glm::dot(moveF, leashDir);
             if (outwardF > 0.0f) moveF -= leashDir * outwardF;
@@ -1679,19 +1737,24 @@ static void DriveRagdollLocomotionRoot(PhysicsSystem::Impl& impl, RagdollInstanc
 
         bi.AddForce(root.id, ToJolt(moveF + balF));
 
-        // Implicitly damped upright spring.
-        const glm::quat targetRot =
-            glm::normalize(glm::normalize(rag.locomotionTargetRot) * inst.rootBindRot);
-        glm::quat delta = glm::normalize(targetRot * glm::conjugate(curRot));
-        if (delta.w < 0.0f) delta = -delta;            // short way
-        const float     angle   = 2.0f * std::acos(glm::clamp(delta.w, -1.0f, 1.0f));
-        const glm::vec3 axisRaw = glm::vec3(delta.x, delta.y, delta.z);
-        const glm::vec3 axis    = glm::length(axisRaw) > 1e-6f ? glm::normalize(axisRaw) : glm::vec3(0.0f);
-        const float ws = glm::two_pi<float>() * glm::max(rag.locomotionBalanceFreq, 0.0f);
-        glm::vec3 dw = (wCur + axis * (ws * ws * angle * FIXED_DT)) / (1.0f + 2.0f * ws * FIXED_DT) - wCur;
-        const float maxDw = glm::max(rag.locomotionBalanceAccel, 0.0f) * FIXED_DT;
-        if (const float l = glm::length(dw); l > maxDw && l > 1e-6f) dw *= maxDw / l;
-        bi.SetAngularVelocity(root.id, ToJolt(wCur + dw));
+        // Implicitly damped upright spring, faded out as tau_torso takes over. It OVERWRITES
+        // the root's angular velocity, which destroys the angular momentum the stance leg
+        // imparts -- i.e. deletes the paper's propulsion mechanism -- so it must reach zero.
+        if (legacy > 0.001f) {
+            const glm::quat targetRot =
+                glm::normalize(glm::normalize(rag.locomotionTargetRot) * inst.rootBindRot);
+            glm::quat delta = glm::normalize(targetRot * glm::conjugate(curRot));
+            if (delta.w < 0.0f) delta = -delta;            // short way
+            const float     angle   = 2.0f * std::acos(glm::clamp(delta.w, -1.0f, 1.0f));
+            const glm::vec3 axisRaw = glm::vec3(delta.x, delta.y, delta.z);
+            const glm::vec3 axis    = glm::length(axisRaw) > 1e-6f ? glm::normalize(axisRaw) : glm::vec3(0.0f);
+            const float ws = glm::two_pi<float>() * glm::max(rag.locomotionBalanceFreq, 0.0f);
+            glm::vec3 dw = (wCur + axis * (ws * ws * angle * FIXED_DT)) / (1.0f + 2.0f * ws * FIXED_DT) - wCur;
+            const float maxDw = glm::max(rag.locomotionBalanceAccel, 0.0f) * FIXED_DT;
+            if (const float l = glm::length(dw); l > maxDw && l > 1e-6f) dw *= maxDw / l;
+            dw *= glm::clamp(rag.locomotionUprightScale, 0.0f, 1.0f) * legacy;
+            bi.SetAngularVelocity(root.id, ToJolt(wCur + dw));
+        }
     }
 
     // Debug: throttled (~10 Hz) tilt / spin / feet dump to diagnose tips + jitter.
@@ -1799,6 +1862,10 @@ static void SyncRagdollPowered(Scene& scene, PhysicsSystem::Impl& impl)
 
             // Per-joint torque, jittered by the get-up wobble for the drunken flail.
             float jt = j.cc.motorMaxTorque * strength;
+            // SIMBICON drives the hips with explicit virtual torques; a live position motor
+            // on the same joint fights them, so fade it out as the blend comes in.
+            if (rag && (cb == rag->locomotionHipBones[0] || cb == rag->locomotionHipBones[1]))
+                jt *= 1.0f - glm::clamp(rag->locomotionSimbiconBlend, 0.0f, 1.0f);
             if (wobble > 0.0f) {
                 float ph = (float)(j.constraintId % 29) * 0.7f;
                 float nz = std::sin((float)impl.simTime * 9.0f + ph) *
@@ -2323,6 +2390,53 @@ static void TickRagdollReactions(Scene& scene, PhysicsSystem::Impl& impl, float 
     }
 }
 
+// Convert Jolt's body-pair contacts into per-foot support contacts. This deliberately
+// differs from the short foot ray used by the legacy balance base: a step transition needs
+// proof that the sole actually left and then re-contacted a supporting surface, not merely
+// that it remained close to one.
+static void UpdateRagdollFootContacts(PhysicsSystem::Impl& impl, Scene& scene,
+                                      const std::vector<ContactEvent>& events)
+{
+    auto& reg = scene.GetRegistry();
+    for (auto& [rid, inst] : impl.ragdolls) {
+        (void)rid;
+        if (!reg.valid(inst.entity)) continue;
+        auto* rag = reg.try_get<RagdollComponent>(inst.entity);
+        if (!rag) continue;
+        for (int i = 0; i < 2; ++i) {
+            rag->_locomotionFootContact[i] = false;
+            rag->_locomotionFootContactNormal[i] = glm::vec3(0.0f);
+        }
+
+        for (const ContactEvent& ev : events) {
+            if (ev.type != ContactEvent::Type::Enter && ev.type != ContactEvent::Type::Stay)
+                continue;
+            if (ev.entityA == inst.entity && ev.entityB == inst.entity) continue;
+
+            for (const RagdollBody& body : inst.bodies) {
+                if (!body.isFoot) continue;
+                const uint32_t id = body.id.GetIndexAndSequenceNumber();
+                const bool isA = ev.bodyA == id;
+                const bool isB = ev.bodyB == id;
+                if (!isA && !isB) continue;
+
+                // manifold normal points A -> B. The support normal acting on the foot is
+                // opposite it when the foot is A, and along it when the foot is B.
+                const glm::vec3 supportNormal = isA ? -ev.contactNormal : ev.contactNormal;
+                if (supportNormal.y < 0.35f) continue;
+                for (int i = 0; i < 2; ++i) {
+                    if (rag->_locomotionFootBones[i] != body.boneIndex) continue;
+                    if (!rag->_locomotionFootContact[i] ||
+                        supportNormal.y > rag->_locomotionFootContactNormal[i].y) {
+                        rag->_locomotionFootContact[i] = true;
+                        rag->_locomotionFootContactNormal[i] = glm::normalize(supportNormal);
+                    }
+                }
+            }
+        }
+    }
+}
+
 // After each step: scan contacts for hits hard enough to auto-react a ragdoll. A
 // ragdoll is one entity owning many bodies, so we match each contact endpoint's BodyID
 // against the ragdoll's body list. Two tiers, both gated on the rig's config (0 = that
@@ -2469,6 +2583,7 @@ void PhysicsSystem::OnUpdate(Scene& scene, float dt) {
         m_impl->joltSystem->Update(FIXED_DT, 2, m_impl->tempAllocator.get(), m_impl->jobSystem.get());
         SyncTransforms(scene, bi);
         std::vector<ContactEvent> events = m_impl->contactListener->DrainEvents();
+        UpdateRagdollFootContacts(*m_impl, scene, events);
         AutoTriggerRagdollImpacts(*m_impl, scene, events); // hard hits flip an Animated ragdoll to Limp
         DispatchCallbacks(scene, std::move(events));
         m_accumulator -= FIXED_DT;
@@ -2782,6 +2897,57 @@ bool AddRagdollBoneImpulse(const RagdollComponent& rag, int boneIndex, glm::vec3
         return true;
     }
     return false;
+}
+
+// Per-step world torque on a bone's body -- the actuator for SIMBICON's virtual PD
+// controllers, which command torque rather than a joint-motor target.
+bool AddRagdollBoneTorque(const RagdollComponent& rag, int boneIndex, glm::vec3 torque) {
+    if (!s_Impl || rag._ragdollId == 0xFFFFFFFFu || boneIndex < 0) return false;
+    auto it = s_Impl->ragdolls.find(rag._ragdollId);
+    if (it == s_Impl->ragdolls.end()) return false;
+    for (const RagdollBody& b : it->second.bodies) {
+        if (b.boneIndex != boneIndex) continue;
+        s_Impl->joltSystem->GetBodyInterface().AddTorque(b.id, ToJolt(torque));
+        return true;
+    }
+    return false;
+}
+
+static const RagdollBody* FindRagdollBone(const RagdollComponent& rag, int boneIndex) {
+    if (!s_Impl || rag._ragdollId == 0xFFFFFFFFu || boneIndex < 0) return nullptr;
+    auto it = s_Impl->ragdolls.find(rag._ragdollId);
+    if (it == s_Impl->ragdolls.end()) return nullptr;
+    for (const RagdollBody& b : it->second.bodies)
+        if (b.boneIndex == boneIndex) return &b;
+    return nullptr;
+}
+
+glm::quat GetRagdollBoneRotation(const RagdollComponent& rag, int boneIndex, bool* ok) {
+    const RagdollBody* b = FindRagdollBone(rag, boneIndex);
+    if (ok) *ok = b != nullptr;
+    if (!b) return glm::quat(1, 0, 0, 0);
+    return FromJolt(s_Impl->joltSystem->GetBodyInterface().GetRotation(b->id));
+}
+
+glm::vec3 GetRagdollBoneAngularVelocity(const RagdollComponent& rag, int boneIndex, bool* ok) {
+    const RagdollBody* b = FindRagdollBone(rag, boneIndex);
+    if (ok) *ok = b != nullptr;
+    if (!b) return glm::vec3(0.0f);
+    return FromJolt(s_Impl->joltSystem->GetBodyInterface().GetAngularVelocity(b->id));
+}
+
+glm::vec3 GetRagdollBonePosition(const RagdollComponent& rag, int boneIndex, bool* ok) {
+    const RagdollBody* b = FindRagdollBone(rag, boneIndex);
+    if (ok) *ok = b != nullptr;
+    if (!b) return glm::vec3(0.0f);
+    return FromJolt(s_Impl->joltSystem->GetBodyInterface().GetPosition(b->id));
+}
+
+glm::vec3 GetRagdollBoneLinearVelocity(const RagdollComponent& rag, int boneIndex, bool* ok) {
+    const RagdollBody* b = FindRagdollBone(rag, boneIndex);
+    if (ok) *ok = b != nullptr;
+    if (!b) return glm::vec3(0.0f);
+    return FromJolt(s_Impl->joltSystem->GetBodyInterface().GetLinearVelocity(b->id));
 }
 
 // Kick off a procedural get-up (the auto-on-settle path uses the same StartRagdollGetUp).
