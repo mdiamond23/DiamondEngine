@@ -28,10 +28,12 @@ struct RagdollBodyDef {
     float     halfHeight  = 0.10f;            // capsule cylinder half-length (excludes the hemispheres)
     glm::vec3 halfExtents { 0.08f, 0.08f, 0.08f }; // box
 
-    // Foot sole: override the shape with a wide, flat, WORLD-aligned box so the foot
-    // presents a real contact patch to stand/balance on (a capsule only touches the
-    // floor on a line and rolls). Set on the lowest leg body of each leg. See BuildRagdoll.
+    // Foot sole: `isFoot` marks a BOX as a support contact. At bind the box is
+    // world-aligned, and its center is displaced this far along bind-world up from the
+    // foot-bone pivot. Many rigs place that pivot on the sole plane; centering a thick
+    // box there embeds half of it in the floor. Dimensions come from halfExtents.
     bool      isFoot      = false;
+    float     soleCenterHeight = 0.0f;
 
     float     mass        = 1.0f;             // kilograms
 
@@ -40,9 +42,15 @@ struct RagdollBodyDef {
     // the ragdoll workhorse (shoulders/hips/spine); Hinge is for elbows/knees.
     ConstraintType jointType = ConstraintType::SwingTwist;
 
-    // Twist axis along the bone, in the bone's LOCAL frame (auto-gen points it at
-    // the child bone). PhysicsSystem rotates this into world space at build time.
+    // Longitudinal axis along the bone, in the bone's LOCAL frame (auto-gen points
+    // it at the child bone). Capsules use this for their shape direction and
+    // SwingTwist joints use it as their twist axis.
     glm::vec3 twistAxisLocal { 0.0f, 1.0f, 0.0f };
+
+    // A hinge rotates AROUND an axis perpendicular to the limb. This must not reuse
+    // twistAxisLocal: doing so turns a knee/elbow into an axial twist joint and makes
+    // the powered pose appear to detach the adjoining limb.
+    glm::vec3 hingeAxisLocal { 1.0f, 0.0f, 0.0f };
 
     // SwingTwist limits, degrees (elliptical swing cone + twist range).
     float swingNormalDeg = 30.0f;
@@ -56,8 +64,8 @@ struct RagdollBodyDef {
 
     // --- powered/active-ragdoll motor (per bone) -------------------------------
     // The "muscle" driving this joint toward the animation pose in RagdollMode::Powered.
-    // Motors are baked on every ragdoll joint at build (Position mode) and only
-    // engaged in Powered mode; Animated (kinematic) and Limp (motors off) ignore them.
+    // Motors are baked on articulated (hinge/swing-twist) joints at build and only
+    // engaged in Powered mode; fixed/point joints never receive a motor.
     // motorMaxTorque is the budget in N·m — heavier limbs / stronger characters want
     // more. frequency/damping shape the servo spring (Hz / damping ratio).
     float motorMaxTorque = 50.0f;

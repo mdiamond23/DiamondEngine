@@ -378,9 +378,9 @@
                 "swingNormalDeg": 60.0,
                 "swingPlaneDeg": 60.0,
                 "twistAxis": [
-                    0.7859975695610046,
-                    -0.0340288057923317,
-                    0.6172922253608704
+                    0.9803813287113737,
+                    -0.03391829475121855,
+                    0.19417002754104645
                 ],
                 "twistMaxDeg": 45.0,
                 "twistMinDeg": -45.0,
@@ -402,6 +402,11 @@
         {
             "bone": "leg_joint_L_2",
             "joint": {
+                "hingeAxis": [
+                    -0.00401111,
+                    0.99755528,
+                    -0.0697666
+                ],
                 "hingeMaxDeg": 150.0,
                 "hingeMinDeg": 0.0,
                 "motorDamping": 1.0,
@@ -434,6 +439,11 @@
         {
             "bone": "leg_joint_R_2",
             "joint": {
+                "hingeAxis": [
+                    0.00870862,
+                    0.99759153,
+                    0.0688135
+                ],
                 "hingeMaxDeg": 150.0,
                 "hingeMinDeg": 0.0,
                 "motorDamping": 1.0,
@@ -471,15 +481,15 @@
                 "motorDamping": 1.0,
                 "motorFrequency": 16.0,
                 "motorMaxTorque": 90.0,
-                "swingNormalDeg": 60.0,
-                "swingPlaneDeg": 45.0,
+                "swingNormalDeg": 30.0,
+                "swingPlaneDeg": 30.0,
                 "twistAxis": [
                     -0.9129649996757507,
                     0.015182319097220898,
                     0.40775546431541443
                 ],
-                "twistMaxDeg": 45.0,
-                "twistMinDeg": -45.0,
+                "twistMaxDeg": 10.0,
+                "twistMinDeg": -10.0,
                 "type": "swingtwist"
             },
             "mass": 0.6,
@@ -503,15 +513,15 @@
                 "motorDamping": 1.0,
                 "motorFrequency": 16.0,
                 "motorMaxTorque": 90.0,
-                "swingNormalDeg": 60.0,
-                "swingPlaneDeg": 45.0,
+                "swingNormalDeg": 30.0,
+                "swingPlaneDeg": 30.0,
                 "twistAxis": [
                     -0.9301695823669434,
                     -0.014926708303391933,
                     0.36682674288749695
                 ],
-                "twistMaxDeg": 45.0,
-                "twistMinDeg": -45.0,
+                "twistMaxDeg": 10.0,
+                "twistMinDeg": -10.0,
                 "type": "swingtwist"
             },
             "mass": 0.6,
@@ -534,30 +544,31 @@
                 "hingeMaxDeg": 150.0,
                 "hingeMinDeg": 0.0,
                 "motorDamping": 1.0,
-                "motorFrequency": 10.0,
-                "motorMaxTorque": 90.0,
-                "swingNormalDeg": 60.0,
-                "swingPlaneDeg": 45.0,
+                "motorFrequency": 0.0,
+                "motorMaxTorque": 0.0,
+                "swingNormalDeg": 0.0,
+                "swingPlaneDeg": 0.0,
                 "twistAxis": [
                     0.0,
                     1.0,
                     0.0
                 ],
-                "twistMaxDeg": 45.0,
-                "twistMinDeg": -45.0,
-                "type": "swingtwist"
+                "twistMaxDeg": 0.0,
+                "twistMinDeg": 0.0,
+                "type": "fixed"
             },
             "mass": 1.0,
             "parent": "leg_joint_L_3",
+            "soleCenterHeight": 0.027000000700354576,
             "shape": {
                 "halfExtents": [
-                    0.036000002175569534,
-                    0.05999999865889549,
-                    0.036000002175569534
+                    0.06499999761581421,
+                    0.02500000037252903,
+                    0.10999999940395355
                 ],
                 "halfHeight": 0.03839999809861183,
                 "radius": 0.02160000056028366,
-                "type": "capsule"
+                "type": "box"
             }
         },
         {
@@ -567,30 +578,31 @@
                 "hingeMaxDeg": 150.0,
                 "hingeMinDeg": 0.0,
                 "motorDamping": 1.0,
-                "motorFrequency": 10.0,
-                "motorMaxTorque": 90.0,
-                "swingNormalDeg": 60.0,
-                "swingPlaneDeg": 45.0,
+                "motorFrequency": 0.0,
+                "motorMaxTorque": 0.0,
+                "swingNormalDeg": 0.0,
+                "swingPlaneDeg": 0.0,
                 "twistAxis": [
                     0.0,
                     1.0,
                     0.0
                 ],
-                "twistMaxDeg": 45.0,
-                "twistMinDeg": -45.0,
-                "type": "swingtwist"
+                "twistMaxDeg": 0.0,
+                "twistMinDeg": 0.0,
+                "type": "fixed"
             },
             "mass": 1.0,
             "parent": "leg_joint_R_3",
+            "soleCenterHeight": 0.027000000700354576,
             "shape": {
                 "halfExtents": [
-                    0.036000002175569534,
-                    0.05999999865889549,
-                    0.036000002175569534
+                    0.06499999761581421,
+                    0.02500000037252903,
+                    0.10999999940395355
                 ],
                 "halfHeight": 0.03839999809861183,
                 "radius": 0.02160000056028366,
-                "type": "capsule"
+                "type": "box"
             }
         }
     ],

@@ -178,6 +178,7 @@ struct ContactEvent {
     entt::entity entityB     = entt::null;
     glm::vec3    contactPoint  { 0.0f };
     glm::vec3    contactNormal { 0.0f };       // points from body A (1) toward body B (2)
+    float        penetrationDepth = 0.0f;      // positive overlap; negative speculative contact
     // Jolt BodyIDs (index+sequence) of the two bodies — needed to map a contact onto a
     // specific ragdoll bone (a ragdoll is one entity with many bodies). Set on Enter only.
     uint32_t     bodyA = 0xFFFFFFFFu;
@@ -242,6 +243,7 @@ public:
             JPH::Vec3  wn = manifold.mWorldSpaceNormal;
             ev.contactPoint    = { (float)wp.GetX(), (float)wp.GetY(), (float)wp.GetZ() };
             ev.contactNormal   = { wn.GetX(), wn.GetY(), wn.GetZ() };
+            ev.penetrationDepth = manifold.mPenetrationDepth;
             ev.impactMagnitude = ComputeImpactMagnitude(a, b, manifold);
         }
         std::lock_guard lock(m_mutex);
@@ -261,6 +263,7 @@ public:
         JPH::Vec3  wn = manifold.mWorldSpaceNormal;
         ev.contactPoint  = { (float)wp.GetX(), (float)wp.GetY(), (float)wp.GetZ() };
         ev.contactNormal = { wn.GetX(), wn.GetY(), wn.GetZ() };
+        ev.penetrationDepth = manifold.mPenetrationDepth;
         std::lock_guard lock(m_mutex);
         m_events.push_back(ev);
     }
@@ -1059,18 +1062,20 @@ static JPH::ShapeRefC CreateRagdollShape(const RagdollBodyDef& def, float scale,
     return shape;
 }
 
-// A flat, WORLD-aligned box sole for a foot body. The body is created with the foot
-// bone's world orientation, so we un-rotate the box by conjugate(boneRot) to leave it
-// lying flat on the ground at bind (the ankle motor holds it there in sim). This gives
-// the foot a real contact PATCH instead of a capsule's rolling line contact — the base
-// of support the character balances over.
-// he = half width / thickness / length. Wide + long = a broad base of support.
-static JPH::ShapeRefC CreateFootSole(const glm::vec3& he, const glm::quat& boneRot)
+// A flat box sole whose complete transform is shared by Jolt and debug drawing. The
+// body stays anchored at the skeleton's foot-bone pivot. At bind, outRot cancels the
+// bone orientation and outOffset converts an authored bind-world upward displacement
+// into the bone frame. A pivot on the ground plane therefore needs approximately the
+// box half-thickness plus a small contact margin, not the old zero offset.
+static JPH::ShapeRefC CreateFootSole(const glm::vec3& he, const glm::quat& boneRot,
+                                     float centerHeight,
+                                     glm::vec3& outOffset, glm::quat& outRot)
 {
     JPH::BoxShapeSettings bs(ToJolt(he), glm::min(glm::min(he.x, he.y), he.z) * 0.5f);
     auto br = bs.Create(); if (!br.IsValid()) return nullptr;
-    const glm::quat local = glm::conjugate(boneRot);   // world-align the box inside the body frame
-    JPH::RotatedTranslatedShapeSettings rt(JPH::Vec3::sZero(), ToJolt(local), br.Get());
+    outRot = glm::normalize(glm::conjugate(boneRot));
+    outOffset = outRot * glm::vec3(0.0f, centerHeight, 0.0f);
+    JPH::RotatedTranslatedShapeSettings rt(ToJolt(outOffset), ToJolt(outRot), br.Get());
     auto rr = rt.Create(); if (!rr.IsValid()) return nullptr;
     return rr.Get();
 }
@@ -1125,15 +1130,18 @@ static void BuildRagdoll(PhysicsSystem::Impl& impl, Scene& scene,
         glm::vec3 pos       = glm::vec3(bw[3]);
         glm::quat rot       = SafeOrientation(bw);
         anchor[k]    = pos;
-        axisWorld[k] = SafeAxis(glm::mat3(bw) * def.twistAxisLocal, def.twistAxisLocal);
+        const glm::vec3 jointAxisLocal = def.jointType == ConstraintType::Hinge
+            ? def.hingeAxisLocal : def.twistAxisLocal;
+        axisWorld[k] = SafeAxis(glm::mat3(bw) * jointAxisLocal, jointAxisLocal);
 
-        // Default offset/rot so the foot path (CreateFootSole, which bakes its own
-        // world-align into the shape) leaves the body-level transform at identity —
-        // CreateRagdollShape overwrites these, but CreateFootSole doesn't touch them.
+        // Both builders return the exact local wrapper around the primitive.
         glm::vec3 shapeOffset(0.0f); glm::quat shapeRot(1.0f, 0.0f, 0.0f, 0.0f);
-        const glm::vec3 footHE = glm::vec3(0.09f, 0.025f, 0.14f) * scale; // wide + long sole = broad base
-        JPH::ShapeRefC shapeRef = def.isFoot ? CreateFootSole(footHE, rot)
-                                             : CreateRagdollShape(def, scale, shapeOffset, shapeRot);
+        const glm::vec3 footHE = glm::max(def.halfExtents * scale, glm::vec3(0.001f));
+        JPH::ShapeRefC shapeRef = def.isFoot
+            ? CreateFootSole(footHE, rot,
+                             glm::max(def.soleCenterHeight, 0.0f) * scale,
+                             shapeOffset, shapeRot)
+            : CreateRagdollShape(def, scale, shapeOffset, shapeRot);
         if (!shapeRef) continue;
 
         JPH::BodyCreationSettings settings(shapeRef, ToJolt(pos), ToJolt(rot),
@@ -1161,9 +1169,7 @@ static void BuildRagdoll(PhysicsSystem::Impl& impl, Scene& scene,
         RagdollBody rb;
         rb.id            = id;
         rb.boneIndex     = bone;
-        // Feet draw as their real box sole (localRotation stays identity so the readback
-        // is unaffected — the debug box is bone-oriented, but its POSITION is exact, which
-        // is what tells us whether the sole reaches the floor).
+        // Debug drawing uses the exact translated/rotated wrapper used by Jolt.
         rb.shape         = def.isFoot ? RagdollBodyDef::Shape::Box : def.shape;
         rb.radius        = def.radius     * scale;
         rb.halfHeight    = def.halfHeight * scale;
@@ -1211,12 +1217,12 @@ static void BuildRagdoll(PhysicsSystem::Impl& impl, Scene& scene,
         cc.hasLimits      = true;       // hinge: clamp; ignored by the other types
         cc.limitMin       = def.hingeMinDeg;
         cc.limitMax       = def.hingeMaxDeg;
-        // Bake a Position-mode motor on every ragdoll joint so an active (Powered)
-        // ragdoll can drive it toward the animation pose. The motor is inert in
-        // Animated mode (bodies are kinematic) and switched Off in Limp mode
-        // (SetRagdollMode); only Powered engages it. Baking once means switching to
-        // Powered needs no joint rebuild. Target defaults to the rest pose.
-        cc.motorMode      = MotorMode::Position;
+        // Bake a Position-mode motor only on articulated joints. Fixed/point joints
+        // have no rotational target and must never be treated as muscles; in particular,
+        // a fixed terminal foot is a rigid extension of its ankle body.
+        const bool articulated = def.jointType == ConstraintType::Hinge
+                               || def.jointType == ConstraintType::SwingTwist;
+        cc.motorMode      = articulated ? MotorMode::Position : MotorMode::Off;
         cc.motorMaxTorque = def.motorMaxTorque;
         cc.motorFrequency = def.motorFrequency;
         cc.motorDamping   = def.motorDamping;
@@ -1245,7 +1251,8 @@ static void BuildRagdoll(PhysicsSystem::Impl& impl, Scene& scene,
         joint.parentSlot     = itPar->second;
         joint.childSlot      = itSelf->second;
         joint.cc             = cc;
-        joint.twistAxisLocal = def.twistAxisLocal;
+        joint.twistAxisLocal = def.jointType == ConstraintType::Hinge
+            ? def.hingeAxisLocal : def.twistAxisLocal;
         // The constraint's zero = the child-relative-to-parent body orientation now (the
         // bind pose). Get-up hinge targets reference this. (See RagdollJoint::buildRel.)
         joint.buildRel       = glm::normalize(glm::conjugate(FromJolt(parent->GetRotation())) *
@@ -1561,6 +1568,9 @@ static void DriveRagdollLocomotionRoot(PhysicsSystem::Impl& impl, RagdollInstanc
     const glm::vec3 wCur = FromJolt(bi.GetAngularVelocity(root.id));
     rag._locomotionRootVel = vCur;
     glm::vec3 moveF(0.0f), balF(0.0f);
+    rag._locomotionSupportForce = glm::vec3(0.0f);
+    rag._locomotionSupportSaturated = false;
+    rag._locomotionLiftForce = 0.0f;
 
     // Mass-weighted COM and the support segment formed by grounded feet.
     glm::vec3 com(0.0f), comVel(0.0f); float totalMass = 0.0f;
@@ -1592,6 +1602,58 @@ static void DriveRagdollLocomotionRoot(PhysicsSystem::Impl& impl, RagdollInstanc
         }
         if (fg.hit && footCount < 2)
             footXZ[footCount++] = glm::vec3(fp.x, 0.0f, fp.z);
+    }
+
+    // A planted foot must be a physical fact, not merely an IK target. Apply a capped
+    // tangential spring at each commanded plant point. There is intentionally no equal and
+    // opposite body force: this is the static-friction reaction supplied by the world. Y is
+    // untouched so gravity/contact still decide whether the sole actually bears weight.
+    bool footLockActive = false;
+    for (int lockSlot = 0; lockSlot < 2; ++lockSlot) {
+        rag._locomotionFootLockError[lockSlot] = 0.0f;
+        rag._locomotionFootLockForce[lockSlot] = 0.0f;
+        const int lockBone = rag.locomotionFootLockBones[lockSlot];
+        const glm::vec3 target = rag.locomotionFootLockTargets[lockSlot];
+        const float lockWeight = glm::clamp(rag.locomotionFootLockWeights[lockSlot],
+                                            0.0f, 1.0f);
+        if (lockBone < 0 || lockWeight <= 0.001f
+            || !std::isfinite(target.x) || !std::isfinite(target.z)) continue;
+
+        for (const RagdollBody& body : inst.bodies) {
+            if (!body.isFoot || body.boneIndex != lockBone) continue;
+            bool grounded = false;
+            for (int foot = 0; foot < 2; ++foot) {
+                if (rag._locomotionFootBones[foot] == lockBone) {
+                    grounded = rag._locomotionFootGrounded[foot];
+                    break;
+                }
+            }
+
+            const glm::vec3 position = FromJolt(bi.GetPosition(body.id));
+            glm::vec3 error = target - position;
+            error.y = 0.0f;
+            rag._locomotionFootLockError[lockSlot] = glm::length(error);
+            footLockActive = footLockActive || grounded;
+            if (!grounded) break;
+
+            glm::vec3 velocity = FromJolt(bi.GetLinearVelocity(body.id));
+            velocity.y = 0.0f;
+            const float omega = glm::two_pi<float>()
+                              * glm::max(rag.locomotionFootLockFrequency, 0.0f);
+            glm::vec3 force = (omega * omega * error
+                             - 2.0f * glm::max(rag.locomotionFootLockDamping, 0.0f)
+                               * omega * velocity)
+                            * glm::max(rag.locomotionFootLockEffectiveMass, 0.0f)
+                            * lockWeight;
+            const float maxForce = glm::max(rag.locomotionFootLockMaxForce, 0.0f)
+                                 * lockWeight;
+            if (const float magnitude = glm::length(force);
+                magnitude > maxForce && magnitude > 1e-6f)
+                force *= maxForce / magnitude;
+            bi.AddForce(body.id, ToJolt(force));
+            rag._locomotionFootLockForce[lockSlot] = glm::length(force);
+            break;
+        }
     }
 
     const glm::vec3 comXZ(com.x, 0.0f, com.z);
@@ -1656,6 +1718,7 @@ static void DriveRagdollLocomotionRoot(PhysicsSystem::Impl& impl, RagdollInstanc
             const glm::vec3 lift(0.0f, force, 0.0f);
             bi.AddForce(body.id, ToJolt(lift));
             bi.AddForce(root.id, ToJolt(-lift));
+            rag._locomotionLiftForce = force;
             break;
         }
     }
@@ -1672,18 +1735,27 @@ static void DriveRagdollLocomotionRoot(PhysicsSystem::Impl& impl, RagdollInstanc
             const float supportFactor = 1.0f - glm::clamp(
                 comOutside / glm::max(rag.locomotionSupportFalloff, 1e-4f), 0.0f, 1.0f);
             const float ws      = glm::two_pi<float>() * glm::max(rag.locomotionSupportFreq, 0.0f);
-            const float targetY = ground.point.y + inst.standHipClearance;
+            const float targetY = ground.point.y + inst.standHipClearance
+                                + rag.locomotionHeightOffset;
             const float err     = targetY - hipPos.y;
             float accel = ws * ws * err - 2.0f * ws * vCur.y;
             accel = glm::clamp(accel, 0.0f, glm::max(rag.locomotionUpAccel, 0.0f) * supportFactor);
             const float blend = glm::clamp(rag.locomotionSimbiconBlend, 0.0f, 1.0f);
-            if (blend > 0.001f)
+            const float supportScale = glm::max(rag.locomotionSupportScale, 0.0f);
+            if (footLockActive) {
+                // Once a stance foot is physically anchored, keep the pelvis support a
+                // force-limited safety net. A vertical velocity overwrite would erase load
+                // transfer through the leg and produce the sideways "floating" failure.
                 bi.AddForce(root.id, ToJolt(glm::vec3(
-                    0.0f, accel * inst.totalMass * blend *
-                          glm::max(rag.locomotionSupportScale, 0.0f), 0.0f)));
-            if (blend < 0.999f)
+                    0.0f, accel * inst.totalMass * supportScale, 0.0f)));
+            } else if (blend > 0.001f) {
+                bi.AddForce(root.id, ToJolt(glm::vec3(
+                    0.0f, accel * inst.totalMass * blend * supportScale, 0.0f)));
+            }
+            if (!footLockActive && blend < 0.999f)
                 bi.SetLinearVelocity(root.id, ToJolt(glm::vec3(
-                    vCur.x, vCur.y + accel * FIXED_DT * (1.0f - blend), vCur.z)));
+                    vCur.x, vCur.y + accel * FIXED_DT * (1.0f - blend) * supportScale,
+                    vCur.z)));
         }
     }
 
@@ -1718,9 +1790,12 @@ static void DriveRagdollLocomotionRoot(PhysicsSystem::Impl& impl, RagdollInstanc
                             + 2.0f * damping * omega * (targetVel - horizontalCOMVel);
             const float maxAccel = glm::max(rag.locomotionCOMSupportMaxAccel, 0.0f);
             if (const float length = glm::length(accel);
-                length > maxAccel && length > 1e-6f)
+                length > maxAccel && length > 1e-6f) {
                 accel *= maxAccel / length;
+                rag._locomotionSupportSaturated = true;
+            }
             supportTargetForce = accel * inst.totalMass;
+            rag._locomotionSupportForce = supportTargetForce;
         }
         moveF = velErr * glm::max(rag.locomotionMoveForce, 0.0f) * legacy;
         balF = glm::mix(normalBalanceForce, supportTargetForce, supportTargetWeight) * legacy;
@@ -1773,12 +1848,14 @@ static void DriveRagdollLocomotionRoot(PhysicsSystem::Impl& impl, RagdollInstanc
                 ++fi;
             }
             const glm::vec3 tipR = glm::cross(wCur, upNow);
-            spdlog::info("[Loco] spd={:.2f}/{:.2f} vel=({:+.2f},{:+.2f}) lean=({:+.2f},{:+.2f}) tipRate={:.2f} moveF={:.0f} balF={:.0f} rootW={:.1f} rootY={:.2f} feetY=({:.2f},{:.2f}) feetW=({:.0f},{:.0f}) feetDown={} comOut={:.3f} hipOut={:.3f}",
+            spdlog::info("[Loco] spd={:.2f}/{:.2f} vel=({:+.2f},{:+.2f}) lean=({:+.2f},{:+.2f}) tipRate={:.2f} moveF={:.0f} balF={:.0f} rootW={:.1f} rootY={:.2f} feetY=({:.2f},{:.2f}) feetW=({:.0f},{:.0f}) feetDown={} comOut={:.3f} hipOut={:.3f} lockE=({:.3f},{:.3f}) lockF=({:.0f},{:.0f})",
                          spd, tgtSpd, vCur.x, vCur.z, upNow.x, upNow.z,
                          glm::length(glm::vec2(tipR.x, tipR.z)),
                          glm::length(glm::vec2(moveF.x, moveF.z)), glm::length(glm::vec2(balF.x, balF.z)),
                          glm::length(wCur), FromJolt(bi.GetPosition(root.id)).y, fyL, fyR, fwL, fwR,
-                         footCount, comOutside, hipOutside);
+                         footCount, comOutside, hipOutside,
+                         rag._locomotionFootLockError[0], rag._locomotionFootLockError[1],
+                         rag._locomotionFootLockForce[0], rag._locomotionFootLockForce[1]);
         }
     }
 }
@@ -1874,8 +1951,18 @@ static void SyncRagdollPowered(Scene& scene, PhysicsSystem::Impl& impl)
             }
 
             const std::string& boneName = skel.bones[cb].name;
-            const bool isLegMotor = boneName == "leg_joint_L_1" || boneName == "leg_joint_R_1" ||
-                                    boneName == "leg_joint_L_2" || boneName == "leg_joint_R_2";
+            bool motorDisabled = false;
+            if (rag) {
+                for (int disabledBone : rag->locomotionDisabledMotorBones) {
+                    if (disabledBone == cb) { motorDisabled = true; break; }
+                }
+            }
+            const bool hasMotor = c->GetSubType() == JPH::EConstraintSubType::Hinge
+                               || c->GetSubType() == JPH::EConstraintSubType::SwingTwist;
+            const bool isLegMotor = hasMotor && (
+                boneName == "leg_joint_L_1" || boneName == "leg_joint_R_1" ||
+                boneName == "leg_joint_L_2" || boneName == "leg_joint_R_2" ||
+                boneName == "leg_joint_L_3" || boneName == "leg_joint_R_3");
             if (logLegMotors && isLegMotor) {
                 const glm::quat parentRot = FromJolt(bi.GetRotation(inst.bodies[j.parentSlot].id));
                 const glm::quat childRot = FromJolt(bi.GetRotation(inst.bodies[j.childSlot].id));
@@ -1884,9 +1971,10 @@ static void SyncRagdollPowered(Scene& scene, PhysicsSystem::Impl& impl)
                 const glm::quat actualDelta = glm::normalize(glm::conjugate(restRel) * actualRel);
                 const glm::quat errorDelta = glm::normalize(glm::conjugate(actualRel) * target);
                 spdlog::info(
-                    "[LocoMotor] {} type={} command={:.1f} actual={:.1f} error={:.1f} commandTwist={:+.1f} actualTwist={:+.1f} torque={:.0f} limits=({:.0f},{:.0f},{:.0f},{:.0f})",
+                    "[LocoMotor] {} type={} muted={} command={:.1f} actual={:.1f} error={:.1f} commandTwist={:+.1f} actualTwist={:+.1f} torque={:.0f} limits=({:.0f},{:.0f},{:.0f},{:.0f})",
                     boneName,
                     c->GetSubType() == JPH::EConstraintSubType::Hinge ? "hinge" : "swing",
+                    motorDisabled ? "YES" : "no",
                     QuatAngleDeg(commandDelta), QuatAngleDeg(actualDelta), QuatAngleDeg(errorDelta),
                     SignedTwistDeg(commandDelta, j.twistAxisLocal),
                     SignedTwistDeg(actualDelta, j.twistAxisLocal), jt,
@@ -1898,6 +1986,10 @@ static void SyncRagdollPowered(Scene& scene, PhysicsSystem::Impl& impl)
             switch (c->GetSubType()) {
                 case JPH::EConstraintSubType::SwingTwist: {
                     auto* st = static_cast<JPH::SwingTwistConstraint*>(c);
+                    const JPH::EMotorState state = motorDisabled
+                        ? JPH::EMotorState::Off : JPH::EMotorState::Position;
+                    st->SetSwingMotorState(state);
+                    st->SetTwistMotorState(state);
                     st->GetSwingMotorSettings().SetTorqueLimit(jt);
                     st->GetTwistMotorSettings().SetTorqueLimit(jt);
                     st->SetTargetOrientationBS(ToJolt(target));
@@ -1905,6 +1997,8 @@ static void SyncRagdollPowered(Scene& scene, PhysicsSystem::Impl& impl)
                 }
                 case JPH::EConstraintSubType::Hinge: {
                     auto* hinge = static_cast<JPH::HingeConstraint*>(c);
+                    hinge->SetMotorState(motorDisabled
+                        ? JPH::EMotorState::Off : JPH::EMotorState::Position);
                     // Drive the rotation FROM the hinge's zero TO the target, about the
                     // hinge axis. The zero is the relative orientation the joint was built
                     // at: the bind pose normally, but the sprawled pose after a Limp
@@ -2406,6 +2500,29 @@ static void UpdateRagdollFootContacts(PhysicsSystem::Impl& impl, Scene& scene,
         for (int i = 0; i < 2; ++i) {
             rag->_locomotionFootContact[i] = false;
             rag->_locomotionFootContactNormal[i] = glm::vec3(0.0f);
+            rag->_locomotionFootContactPoint[i] = glm::vec3(0.0f);
+            rag->_locomotionFootPenetration[i] = 0.0f;
+            rag->_locomotionFootSoleMinY[i] = 0.0f;
+        }
+
+        // Measure the real live wrapper shape, not the foot-bone pivot. For an oriented
+        // box, projecting its three half-extent axes onto world Y gives the exact AABB
+        // lower face used to compare against the reported contact point.
+        JPH::BodyInterface& bi = impl.joltSystem->GetBodyInterface();
+        for (const RagdollBody& body : inst.bodies) {
+            if (!body.isFoot) continue;
+            const glm::vec3 bodyPos = FromJolt(bi.GetPosition(body.id));
+            const glm::quat bodyRot = FromJolt(bi.GetRotation(body.id));
+            const glm::vec3 center = bodyPos + bodyRot * body.localOffset;
+            const glm::quat rotation = glm::normalize(bodyRot * body.localRotation);
+            const float extentY =
+                std::abs((rotation * glm::vec3(body.halfExtents.x, 0.0f, 0.0f)).y) +
+                std::abs((rotation * glm::vec3(0.0f, body.halfExtents.y, 0.0f)).y) +
+                std::abs((rotation * glm::vec3(0.0f, 0.0f, body.halfExtents.z)).y);
+            for (int i = 0; i < 2; ++i) {
+                if (rag->_locomotionFootBones[i] == body.boneIndex)
+                    rag->_locomotionFootSoleMinY[i] = center.y - extentY;
+            }
         }
 
         for (const ContactEvent& ev : events) {
@@ -2430,6 +2547,8 @@ static void UpdateRagdollFootContacts(PhysicsSystem::Impl& impl, Scene& scene,
                         supportNormal.y > rag->_locomotionFootContactNormal[i].y) {
                         rag->_locomotionFootContact[i] = true;
                         rag->_locomotionFootContactNormal[i] = glm::normalize(supportNormal);
+                        rag->_locomotionFootContactPoint[i] = ev.contactPoint;
+                        rag->_locomotionFootPenetration[i] = ev.penetrationDepth;
                     }
                 }
             }

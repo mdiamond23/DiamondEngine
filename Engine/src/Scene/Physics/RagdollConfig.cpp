@@ -154,6 +154,26 @@ RagdollConfig BuildDefaultRagdoll(const Diamond::Skeleton& skel)
             def.jointType   = ConstraintType::Hinge;
             def.hingeMinDeg  = 0.0f;
             def.hingeMaxDeg  = 150.0f;
+
+            // The capsule axis follows the limb; the hinge axis must be the normal of
+            // its bend plane. Infer that plane from the incoming/outgoing bind-pose
+            // segments. Near-perfectly straight chains fall back to any stable axis
+            // perpendicular to the capsule instead of the old axial-twist mistake.
+            glm::vec3 hingeWorld(0.0f);
+            if (parent >= 0 && child >= 0)
+                hingeWorld = glm::cross(bindPos[i] - bindPos[parent],
+                                        bindPos[child] - bindPos[i]);
+            if (glm::dot(hingeWorld, hingeWorld) > 1e-10f) {
+                const glm::vec3 hingeLocal = glm::mat3(bones[i].inverseBind)
+                                           * glm::normalize(hingeWorld);
+                if (glm::dot(hingeLocal, hingeLocal) > 1e-10f)
+                    def.hingeAxisLocal = glm::normalize(hingeLocal);
+            } else {
+                const glm::vec3 reference = std::abs(dirLocal.y) < 0.9f
+                    ? glm::vec3(0.0f, 1.0f, 0.0f)
+                    : glm::vec3(1.0f, 0.0f, 0.0f);
+                def.hingeAxisLocal = glm::normalize(glm::cross(dirLocal, reference));
+            }
         } else {
             def.jointType    = ConstraintType::SwingTwist;
             // Tighter cones for the spine/neck, wider for shoulders/hips.

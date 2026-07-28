@@ -4,15 +4,15 @@
       "collider": {
         "collisionGroup": 0,
         "halfExtents": [
-          20.0,
-          0.6600000262260437,
-          20.0
+          10.0,
+          0.4000000059604645,
+          10.0
         ],
         "halfHeight": 0.5,
         "isTrigger": false,
         "localOffset": [
           0.0,
-          -0.28999999165534973,
+          0.0,
           0.0
         ],
         "localRotation": [
@@ -39,7 +39,7 @@
         ],
         "castsShadow": true,
         "emissivePath": "Assets/Materials/Lava004_2K-PNG/Lava004_2K-PNG_Emission.png",
-        "emissiveStrength": 2.5,
+        "emissiveStrength": 2.0,
         "materialPath": "",
         "meshPath": "__cube",
         "meshSubIndex": 0,
@@ -49,7 +49,7 @@
         "roughnessPath": "Assets/Materials/Lava004_2K-PNG/Lava004_2K-PNG_Roughness.png",
         "staticShadowCaster": true,
         "transparent": false,
-        "uvScale": 5.0,
+        "uvScale": 10.0,
         "visible": true
       },
       "name": "Floor",
@@ -72,7 +72,7 @@
         ],
         "position": [
           0.0,
-          -1.1585330963134766,
+          -0.6146376132965088,
           0.0
         ],
         "rotation": [
@@ -82,9 +82,9 @@
           0.0
         ],
         "scale": [
-          20.0,
+          10.0,
           0.4000000059604645,
-          20.0
+          10.0
         ]
       },
       "uuid": 10149724428450404255
@@ -489,6 +489,16 @@
       "scriptComponents": {
         "CameraTarget": {},
         "LocamotionController": {
+          "airborneConfirmTime": 0.05000000074505806,
+          "assistedLiftFrequency": 3.5,
+          "assistedLiftHeight": 0.11999999731779099,
+          "assistedLiftMaxForce": 325.0,
+          "assistedLiftTime": 0.3499999940395355,
+          "assistedPlantHipDeg": 18.0,
+          "assistedPlantTimeout": 0.6499999761581421,
+          "assistedStepping": true,
+          "assistedTakeoffClearance": 0.05999999865889549,
+          "assistedTransferTime": 0.20000000298023224,
           "cd": 0.5,
           "cdLat": 0.5,
           "consciousness": 1.0,
@@ -507,13 +517,32 @@
           "ikTerrainEnabled": false,
           "ikWriteEnabled": true,
           "leftFootBone": "leg_joint_L_5",
+          "maxPlantVerticalSpeed": 2.0,
           "maxSpeed": 1.0,
           "maxSwingTime": 0.6000000238418579,
           "maxVirtualTorque": 250.0,
+          "minPlantForward": 0.03999999910593033,
           "minSwingTime": 0.07999999821186066,
           "minWalkSpeed": 0.15000000596046448,
           "poseWeight": 1.0,
           "postPoweredGrace": 0.4000000059604645,
+          "proceduralFootLockEffectiveMass": 12.0,
+          "proceduralFootLockFrequency": 2.5,
+          "proceduralFootLockMaxForce": 600.0,
+          "proceduralFootLockTolerance": 0.03999999910593033,
+          "proceduralMaxReach": 0.9399999976158142,
+          "proceduralPelvisBob": 0.017999999225139618,
+          "proceduralPlantTime": 0.20000000298023224,
+          "proceduralPoseResponse": 0.10000000149011612,
+          "proceduralStanceSupportScale": 0.550000011920929,
+          "proceduralStepLength": 0.30000001192092896,
+          "proceduralStepWidth": 0.18000000715255737,
+          "proceduralSupportFrequency": 2.0,
+          "proceduralSupportMaxAccel": 4.0,
+          "proceduralSupportShift": 0.699999988079071,
+          "proceduralTorsoPitchDeg": 2.0,
+          "proceduralTorsoRollDeg": 3.0,
+          "proceduralWeightShiftTolerance": 0.07000000029802322,
           "rightFootBone": "leg_joint_R_5",
           "s0StanceAnkleDeg": 0.0,
           "s0StanceKneeDeg": 2.9000000953674316,
@@ -532,12 +561,30 @@
           "state0Time": 0.30000001192092896,
           "supportScale": 1.0,
           "swingHipLimitDeg": 55.0,
+          "test1ShoveCooldown": 3.0,
+          "test1ShoveImpulse": 25.0,
+          "test2ShiftFraction": 0.6499999761581421,
+          "test2ShiftTime": 1.5,
+          "test2SupportFrequency": 1.5,
+          "test2SupportMaxAccel": 3.0,
+          "test3ContactSettleTime": 0.30000001192092896,
+          "test3HoldTime": 0.5,
+          "test3LiftHeight": 0.10000000149011612,
+          "test3LiftTime": 0.6499999761581421,
+          "test3LowerTime": 0.6499999761581421,
+          "test3SupportFraction": 0.9200000166893005,
+          "test3TakeoffFrequency": 3.5,
+          "test3TakeoffHeight": 0.05999999865889549,
+          "test3TakeoffMaxForce": 180.0,
+          "test3TakeoffTime": 0.5,
           "torsoBone": "torso_joint_3",
           "torsoKd": 10.0,
           "torsoKp": 100.0,
           "turnRate": 10.0,
           "uprightScale": 1.0,
-          "useHipCOMProxy": true
+          "useHipCOMProxy": true,
+          "validationTest": 3,
+          "weightShiftTime": 0.30000001192092896
         },
         "Punch": {
           "grabIgnoreHolder": true,
@@ -603,258 +650,6 @@
         ]
       },
       "uuid": 6818450401873832087
-    },
-    {
-      "collider": {
-        "collisionGroup": 0,
-        "halfExtents": [
-          0.5,
-          0.5,
-          0.5
-        ],
-        "halfHeight": 0.5,
-        "isTrigger": true,
-        "localOffset": [
-          0.0,
-          0.0,
-          0.0
-        ],
-        "localRotation": [
-          1.0,
-          0.0,
-          0.0,
-          0.0
-        ],
-        "meshPath": "",
-        "physMatPath": "",
-        "radius": 0.05000000074505806,
-        "shapeType": 1
-      },
-      "name": "HandProxyL",
-      "rigidbody": {
-        "angularDamping": 0.05000000074505806,
-        "bodyType": 2,
-        "continuousCollision": false,
-        "gravityScale": 0.0,
-        "linearDamping": 0.05000000074505806,
-        "lockRotX": false,
-        "lockRotY": false,
-        "lockRotZ": false,
-        "mass": 1.0
-      },
-      "transform": {
-        "eulerDegrees": [
-          0.0,
-          0.0,
-          0.0
-        ],
-        "position": [
-          -1.1379834413528442,
-          -0.7142776250839233,
-          3.219214916229248
-        ],
-        "rotation": [
-          1.0,
-          0.0,
-          0.0,
-          0.0
-        ],
-        "scale": [
-          1.0,
-          1.0,
-          1.0
-        ]
-      },
-      "uuid": 10896643669453594888
-    },
-    {
-      "collider": {
-        "collisionGroup": 0,
-        "halfExtents": [
-          0.5,
-          0.5,
-          0.5
-        ],
-        "halfHeight": 0.5,
-        "isTrigger": true,
-        "localOffset": [
-          0.0,
-          0.0,
-          0.0
-        ],
-        "localRotation": [
-          1.0,
-          0.0,
-          0.0,
-          0.0
-        ],
-        "meshPath": "",
-        "physMatPath": "",
-        "radius": 0.05000000074505806,
-        "shapeType": 1
-      },
-      "name": "HandProxyR",
-      "rigidbody": {
-        "angularDamping": 0.05000000074505806,
-        "bodyType": 2,
-        "continuousCollision": false,
-        "gravityScale": 0.0,
-        "linearDamping": 0.05000000074505806,
-        "lockRotX": false,
-        "lockRotY": false,
-        "lockRotZ": false,
-        "mass": 1.0
-      },
-      "transform": {
-        "eulerDegrees": [
-          0.0,
-          0.0,
-          0.0
-        ],
-        "position": [
-          -0.3336355984210968,
-          -0.5981395840644836,
-          3.2946863174438477
-        ],
-        "rotation": [
-          1.0,
-          0.0,
-          0.0,
-          0.0
-        ],
-        "scale": [
-          1.0,
-          1.0,
-          1.0
-        ]
-      },
-      "uuid": 17730673898535930855
-    },
-    {
-      "collider": {
-        "collisionGroup": 0,
-        "halfExtents": [
-          0.5,
-          0.5,
-          0.5
-        ],
-        "halfHeight": 0.5,
-        "isTrigger": true,
-        "localOffset": [
-          0.0,
-          0.0,
-          0.0
-        ],
-        "localRotation": [
-          1.0,
-          0.0,
-          0.0,
-          0.0
-        ],
-        "meshPath": "",
-        "physMatPath": "",
-        "radius": 0.05000000074505806,
-        "shapeType": 1
-      },
-      "name": "HandProxyL",
-      "rigidbody": {
-        "angularDamping": 0.05000000074505806,
-        "bodyType": 2,
-        "continuousCollision": false,
-        "gravityScale": 0.0,
-        "linearDamping": 0.05000000074505806,
-        "lockRotX": false,
-        "lockRotY": false,
-        "lockRotZ": false,
-        "mass": 1.0
-      },
-      "transform": {
-        "eulerDegrees": [
-          0.0,
-          0.0,
-          0.0
-        ],
-        "position": [
-          -1.9230282306671143,
-          -0.18853986263275146,
-          0.32833290100097656
-        ],
-        "rotation": [
-          1.0,
-          0.0,
-          0.0,
-          0.0
-        ],
-        "scale": [
-          1.0,
-          1.0,
-          1.0
-        ]
-      },
-      "uuid": 7730139373928288415
-    },
-    {
-      "collider": {
-        "collisionGroup": 0,
-        "halfExtents": [
-          0.5,
-          0.5,
-          0.5
-        ],
-        "halfHeight": 0.5,
-        "isTrigger": true,
-        "localOffset": [
-          0.0,
-          0.0,
-          0.0
-        ],
-        "localRotation": [
-          1.0,
-          0.0,
-          0.0,
-          0.0
-        ],
-        "meshPath": "",
-        "physMatPath": "",
-        "radius": 0.05000000074505806,
-        "shapeType": 1
-      },
-      "name": "HandProxyR",
-      "rigidbody": {
-        "angularDamping": 0.05000000074505806,
-        "bodyType": 2,
-        "continuousCollision": false,
-        "gravityScale": 0.0,
-        "linearDamping": 0.05000000074505806,
-        "lockRotX": false,
-        "lockRotY": false,
-        "lockRotZ": false,
-        "mass": 1.0
-      },
-      "transform": {
-        "eulerDegrees": [
-          0.0,
-          0.0,
-          0.0
-        ],
-        "position": [
-          -1.3026527166366577,
-          -0.015317809768021107,
-          0.2657378017902374
-        ],
-        "rotation": [
-          1.0,
-          0.0,
-          0.0,
-          0.0
-        ],
-        "scale": [
-          1.0,
-          1.0,
-          1.0
-        ]
-      },
-      "uuid": 18093680915914188636
     }
   ]
 }

@@ -2047,6 +2047,17 @@ void InspectorPanel::OnImGuiRender() {
                                             if (ImGui::DragFloat("Half Height", &d.halfHeight, 0.005f, 0.0f,   10.0f)) dirty = true;
                                             break;
                                     }
+                                    if (d.isFoot) {
+                                        ImGui::TextDisabled("Foot support box (bind-world aligned)");
+                                        if (ImGui::DragFloat("Sole Center Height",
+                                                             &d.soleCenterHeight,
+                                                             0.001f, 0.0f, 0.25f, "%.3f m"))
+                                            dirty = true;
+                                        if (ImGui::IsItemHovered())
+                                            ImGui::SetTooltip("Bind-world upward offset from the foot-bone pivot to the sole-box center.\n"
+                                                              "Use about half the box thickness plus a small margin when the pivot\n"
+                                                              "lies on the ground plane.");
+                                    }
 
                                     if (d.parentBoneName.empty()) {
                                         ImGui::TextDisabled("Root body (no joint)");
@@ -2055,7 +2066,7 @@ void InspectorPanel::OnImGuiRender() {
                                         int jt = (int)d.jointType; // enum order matches jointNames
                                         if (ImGui::Combo("Joint", &jt, jointNames, IM_ARRAYSIZE(jointNames)))
                                             { d.jointType = (ConstraintType)jt; dirty = true; }
-                                        if (ImGui::DragFloat3("Twist Axis", glm::value_ptr(d.twistAxisLocal), 0.01f)) dirty = true;
+                                        if (ImGui::DragFloat3("Bone Axis", glm::value_ptr(d.twistAxisLocal), 0.01f)) dirty = true;
                                         if (d.jointType == ConstraintType::SwingTwist) {
                                             ImGui::TextDisabled("Swing cone (half-angles)");
                                             if (ImGui::DragFloat("Swing Normal", &d.swingNormalDeg, 1.0f, 0.0f, 180.0f, "%.0f deg")) dirty = true;
@@ -2064,6 +2075,7 @@ void InspectorPanel::OnImGuiRender() {
                                             if (ImGui::DragFloat("Twist Min", &d.twistMinDeg, 1.0f, -180.0f, 0.0f, "%.0f deg")) dirty = true;
                                             if (ImGui::DragFloat("Twist Max", &d.twistMaxDeg, 1.0f,    0.0f, 180.0f, "%.0f deg")) dirty = true;
                                         } else if (d.jointType == ConstraintType::Hinge) {
+                                            if (ImGui::DragFloat3("Hinge Axis", glm::value_ptr(d.hingeAxisLocal), 0.01f)) dirty = true;
                                             if (ImGui::DragFloat("Min Angle", &d.hingeMinDeg, 1.0f, -180.0f, 0.0f, "%.0f deg")) dirty = true;
                                             if (ImGui::DragFloat("Max Angle", &d.hingeMaxDeg, 1.0f,    0.0f, 180.0f, "%.0f deg")) dirty = true;
                                         }

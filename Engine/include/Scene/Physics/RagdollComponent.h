@@ -33,6 +33,14 @@ struct RagdollComponent {
     float locomotionCOMSupportFreq = 4.0f;
     float locomotionCOMSupportDamping = 1.0f;
     float locomotionCOMSupportMaxAccel = 10.0f;
+    // Readback from the explicit COM support-target controller. These remain zero/false
+    // when locomotionSupportTargetWeight is zero and let validation distinguish a stable
+    // shift from one held together by a permanently saturated force cap.
+    glm::vec3 _locomotionSupportForce { 0.0f };
+    bool _locomotionSupportSaturated = false;
+    // Small procedural offset from the authored standing hip height. Locomotion uses this
+    // for continuous pelvis bob without moving the entity transform or teleporting bodies.
+    float locomotionHeightOffset = 0.0f;
     glm::vec3 _locomotionRootVel { 0.0f };
     glm::vec3 _locomotionCOM { 0.0f };
     glm::vec3 _locomotionCOMVel { 0.0f };
@@ -44,6 +52,17 @@ struct RagdollComponent {
     // non-sensor contact with an upward-facing support normal during the previous step.
     bool _locomotionFootContact[2] { false, false };
     glm::vec3 _locomotionFootContactNormal[2] { glm::vec3(0.0f), glm::vec3(0.0f) };
+    glm::vec3 _locomotionFootContactPoint[2] { glm::vec3(0.0f), glm::vec3(0.0f) };
+    // Positive means actual overlap. Negative is a Jolt speculative contact whose shapes
+    // have not touched yet. Together with soleMinY this distinguishes collision slop from
+    // a debug-draw/floor-render mismatch.
+    float _locomotionFootPenetration[2] { 0.0f, 0.0f };
+    float _locomotionFootSoleMinY[2] { 0.0f, 0.0f };
+
+    // Validation-only runtime motor mask. Each entry names the CHILD bone whose joint
+    // motor is muted. SyncRagdollPowered reapplies this every substep and restores Position
+    // mode as soon as the entry is cleared, so diagnostics cannot leave a stale limp joint.
+    int locomotionDisabledMotorBones[4] { -1, -1, -1, -1 };
 
     float locomotionMoveForce = 400.0f;
     float locomotionBalanceForce = 2500.0f;
@@ -104,6 +123,21 @@ struct RagdollComponent {
     float locomotionLiftDamping = 1.0f;
     float locomotionLiftEffectiveMass = 8.0f;
     float locomotionLiftMaxForce = 325.0f;
+    float _locomotionLiftForce = 0.0f; // last applied force, diagnostic only
+
+    // Physical stance-foot lock. Each active slot applies a capped horizontal spring to
+    // the named foot body at the stored world-space plant point. This models static ground
+    // friction: translation is resisted, rotation and vertical contact remain solver-owned.
+    // Two slots are active during double support; only the stance slot remains during swing.
+    int locomotionFootLockBones[2] { -1, -1 };
+    glm::vec3 locomotionFootLockTargets[2] { glm::vec3(0.0f), glm::vec3(0.0f) };
+    float locomotionFootLockFrequency = 2.5f;
+    float locomotionFootLockDamping = 1.0f;
+    float locomotionFootLockEffectiveMass = 12.0f;
+    float locomotionFootLockMaxForce = 600.0f;
+    float locomotionFootLockWeights[2] { 0.0f, 0.0f };
+    float _locomotionFootLockError[2] { 0.0f, 0.0f };
+    float _locomotionFootLockForce[2] { 0.0f, 0.0f };
 
     // Base-of-support tuning.
     float locomotionSupportRadius = 0.12f;

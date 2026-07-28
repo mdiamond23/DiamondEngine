@@ -99,11 +99,16 @@ inline bool LoadRagdoll(const std::string& path, RagdollConfig& out)
             d.halfExtents = Vec3FromJson(sj.value("halfExtents", nlohmann::json{}), d.halfExtents);
         }
         d.isFoot = bj.value("isFoot", false);
+        d.soleCenterHeight = bj.value("soleCenterHeight", d.soleCenterHeight);
 
         if (bj.contains("joint") && bj["joint"].is_object()) {
             const auto& jj = bj["joint"];
             d.jointType      = RagdollJointFromStr(jj.value("type", "swingtwist"));
             d.twistAxisLocal = Vec3FromJson(jj.value("twistAxis", nlohmann::json{}), d.twistAxisLocal);
+            // Older assets had only twistAxis and PhysicsSystem reused it for hinges.
+            // Preserve that behavior unless the asset explicitly opts into the separate
+            // hinge axis, so this schema correction cannot silently rotate every legacy rig.
+            d.hingeAxisLocal = Vec3FromJson(jj.value("hingeAxis", nlohmann::json{}), d.twistAxisLocal);
             d.swingNormalDeg = jj.value("swingNormalDeg", d.swingNormalDeg);
             d.swingPlaneDeg  = jj.value("swingPlaneDeg",  d.swingPlaneDeg);
             d.twistMinDeg    = jj.value("twistMinDeg",    d.twistMinDeg);
@@ -153,12 +158,16 @@ inline bool SaveRagdoll(const std::string& path, const RagdollConfig& cfg)
             { "halfHeight",  d.halfHeight },
             { "halfExtents", Vec3ToJson(d.halfExtents) }
         };
-        if (d.isFoot) bj["isFoot"] = true;
+        if (d.isFoot) {
+            bj["isFoot"] = true;
+            bj["soleCenterHeight"] = d.soleCenterHeight;
+        }
         // Root bodies have no joint to a parent.
         if (!d.parentBoneName.empty()) {
             bj["joint"] = {
                 { "type",          RagdollJointToStr(d.jointType) },
                 { "twistAxis",     Vec3ToJson(d.twistAxisLocal) },
+                { "hingeAxis",     Vec3ToJson(d.hingeAxisLocal) },
                 { "swingNormalDeg", d.swingNormalDeg },
                 { "swingPlaneDeg",  d.swingPlaneDeg },
                 { "twistMinDeg",    d.twistMinDeg },
