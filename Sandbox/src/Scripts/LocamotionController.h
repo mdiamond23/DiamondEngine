@@ -39,8 +39,9 @@ struct LocamotionControllerComponent
     float gaitBlendTime   = 0.6f;
 
     // Bring-up validation: 0 = normal locomotion, 1 = standing/shove, 2 = weight shift,
-    // 3 = single-leg lift, 4 = grounded motor isolation. Validation modes retain physical
-    // standing but categorically bypass the gait path.
+    // 3 = single-leg lift, 4 = one forward step, 5 = support transfer,
+    // 6 = grounded motor isolation. Validation
+    // modes retain physical standing but categorically bypass the gait path.
     int   validationTest = 3;
     float test1ShoveImpulse = 25.0f;
     float test1ShoveCooldown = 3.0f;
@@ -58,6 +59,28 @@ struct LocamotionControllerComponent
     float test3HoldTime = 0.50f;
     float test3LowerTime = 0.65f;
     float test3ContactSettleTime = 0.30f;
+    float test4StepLength = 0.225f;
+    float test4SwingHeight = 0.10f;
+    float test4SwingTime = 0.90f;
+    float test4ArrivalHeight = 0.05f;
+    float test4ArrivalTolerance = 0.02f;
+    float test4ArrivalSettleTime = 0.10f;
+    float test4ArrivalTimeout = 0.60f;
+    float test4DescentTime = 0.35f;
+    float test4PlantTimeout = 0.35f;
+    float test4PlantAcquireTime = 0.10f;
+    float test4PlantAcquireMaxSpeed = 0.05f;
+    float test4PlantAcquireTimeout = 0.60f;
+    float test4ContactSettleTime = 0.30f;
+    float test4TouchdownMaxVerticalSpeed = 0.25f;
+    float test4TouchdownMinNormalY = 0.70f;
+    float test4TargetTolerance = 0.04f;
+    float test4SafeReachFraction = 0.99f;
+    float test5TransferTime = 1.00f;
+    float test5SupportFraction = 0.92f;
+    float test5ComTolerance = 0.04f;
+    float test5HoldTime = 0.50f;
+    float test5HoldTimeout = 1.50f;
 
     // Assisted stepping is the bring-up controller: keep the stance joints and engine
     // balance active, prove an airborne swing and a real landing, then transfer support.
@@ -270,6 +293,65 @@ struct LocamotionControllerComponent
     glm::vec3 _test3Right { 1.0f, 0.0f, 0.0f };
     glm::vec3 _test3SupportTarget { 0.0f };
     glm::vec3 _test3SwingStart { 0.0f };
+    bool  _test4BaselineValid = false;
+    bool  _test4ContactL = false, _test4ContactR = false;
+    bool  _test4PrevSwingContact = false;
+    bool  _test4TouchdownAccepted = false;
+    bool  _test4Aborted = false;
+    float _test4Time = 0.0f;
+    float _test4SettleTime = 0.0f;
+    int   _test4Phase = 0;
+    float _test4PhaseTime = 0.0f;
+    int   _test4SupportSide = 0;
+    float _test4ComCommand = 0.0f;
+    float _test4ComLateral = 0.0f, _test4TargetLateral = 0.0f;
+    float _test4AirborneTime = 0.0f;
+    float _test4ArrivalStableTime = 0.0f;
+    float _test4ReachLimit = 0.0f;
+    float _test4PlantAcquireStableTime = 0.0f;
+    float _test4TrajectoryT = 0.0f;
+    float _test4Clearance = 0.0f;
+    float _test4ForwardTravel = 0.0f;
+    float _test4TargetError = 0.0f;
+    float _test4HorizontalTargetError = 0.0f;
+    float _test4ForwardTargetError = 0.0f;
+    float _test4LateralTargetError = 0.0f;
+    float _test4VerticalTargetError = 0.0f;
+    float _test4TouchdownVy = 0.0f;
+    float _test4TouchdownNormalY = 0.0f;
+    float _test4StanceDrift = 0.0f, _test4PlantDrift = 0.0f;
+    float _test4MaxStanceDrift = 0.0f, _test4MaxPlantDrift = 0.0f;
+    float _test4InitialTilt = 0.0f, _test4PeakTilt = 0.0f, _test4FinalTilt = 0.0f;
+    float _test4MaxMotorRatio = 0.0f;
+    bool  _test4MotorSaturated = false;
+    bool  _test4PlantPoseCaptured = false;
+    glm::vec3 _test4FootBaselineL { 0.0f };
+    glm::vec3 _test4FootBaselineR { 0.0f };
+    glm::vec3 _test4ComBaseline { 0.0f };
+    glm::vec3 _test4Right { 1.0f, 0.0f, 0.0f };
+    glm::vec3 _test4Forward { 0.0f, 0.0f, -1.0f };
+    glm::vec3 _test4SupportTarget { 0.0f };
+    glm::vec3 _test4SwingStart { 0.0f };
+    glm::vec3 _test4ArcStart { 0.0f };
+    glm::vec3 _test4Foothold { 0.0f };
+    glm::vec3 _test4DesiredFoot { 0.0f };
+    glm::vec3 _test4TouchdownPlant { 0.0f };
+    glm::vec3 _test4ApiVelocity { 0.0f };
+    glm::vec3 _test4MeasuredVelocity { 0.0f };
+    glm::vec3 _test4PreviousSwingFoot { 0.0f };
+    bool _test4PreviousSwingFootValid = false;
+    float _test4FootUpY = 1.0f;
+    glm::vec3 _test4ContactPoint { 0.0f };
+    glm::vec3 _test4ContactLocal { 0.0f };
+    float _test5TransferT = 0.0f;
+    float _test5HoldStableTime = 0.0f;
+    float _test5ContactLossTime = 0.0f;
+    float _test5ComError = 0.0f;
+    float _test5ComToOldSupport = 0.0f;
+    float _test5ComToNewSupport = 0.0f;
+    float _test5ComHorizontalSpeed = 0.0f;
+    glm::vec3 _test5TransferStartTarget { 0.0f };
+    glm::vec3 _test5TransferEndTarget { 0.0f };
     bool _groundTestBaselineValid = false;
     float _groundTestTime = 0.0f;
     float _groundTestSettleTime = 0.0f;
@@ -314,9 +396,11 @@ inline void DrawComponentInspector<LocamotionControllerComponent>(LocamotionCont
     if (ImGui::CollapsingHeader("Validation", ImGuiTreeNodeFlags_DefaultOpen)) {
         const char* tests[] = { "Off - locomotion", "Test 1 - standing/shove",
                                 "Test 2 - weight shift", "Test 3 - single-leg lift",
+                                "Test 4 - one forward step",
+                                "Test 5 - support transfer",
                                 "Diagnostic - grounded motor isolation" };
         ImGui::Combo("Active Test", &c.validationTest, tests, IM_ARRAYSIZE(tests));
-        c.validationTest = glm::clamp(c.validationTest, 0, 4);
+        c.validationTest = glm::clamp(c.validationTest, 0, 6);
 
         ImGui::TextDisabled("Test 1: F6/F7 = impulse left/right");
         ImGui::DragFloat("Shove Impulse", &c.test1ShoveImpulse,
@@ -387,6 +471,93 @@ inline void DrawComponentInspector<LocamotionControllerComponent>(LocamotionCont
         ImGui::TextDisabled("swingErr=%.3f poleDot=%+.2f stanceDrift=%.3f tilt=%.1f",
                             c._test3TargetError, c._test3KneePoleDot,
                             c._test3MaxStanceDrift, c._test3PeakTilt);
+
+        ImGui::Separator();
+        ImGui::TextDisabled("Test 4: F6=left support/right step, F7=mirror, F8=recapture");
+        ImGui::DragFloat("Test 4 Step Length", &c.test4StepLength,
+                         0.005f, 0.15f, 0.25f, "%.3f m");
+        ImGui::DragFloat("Test 4 Swing Height", &c.test4SwingHeight,
+                         0.005f, 0.06f, 0.20f, "%.3f m");
+        ImGui::DragFloat("Test 4 Swing Time", &c.test4SwingTime,
+                         0.025f, 0.30f, 2.0f, "%.2f s");
+        ImGui::DragFloat("Test 4 Arrival Height", &c.test4ArrivalHeight,
+                         0.0025f, 0.03f, 0.10f, "%.3f m");
+        ImGui::DragFloat("Test 4 Arrival Tolerance", &c.test4ArrivalTolerance,
+                         0.0025f, 0.01f, 0.06f, "%.3f m");
+        ImGui::DragFloat("Test 4 Arrival Settle Time", &c.test4ArrivalSettleTime,
+                         0.025f, 0.05f, 0.50f, "%.2f s");
+        ImGui::DragFloat("Test 4 Arrival Timeout", &c.test4ArrivalTimeout,
+                         0.025f, 0.10f, 0.75f, "%.2f s");
+        ImGui::DragFloat("Test 4 Descent Time", &c.test4DescentTime,
+                         0.025f, 0.15f, 1.0f, "%.2f s");
+        ImGui::DragFloat("Test 4 Plant Timeout", &c.test4PlantTimeout,
+                         0.025f, 0.10f, 1.0f, "%.2f s");
+        ImGui::DragFloat("Test 4 Plant Stable Time", &c.test4PlantAcquireTime,
+                         0.025f, 0.05f, 0.50f, "%.2f s");
+        ImGui::DragFloat("Test 4 Plant Max Speed", &c.test4PlantAcquireMaxSpeed,
+                         0.005f, 0.01f, 0.20f, "%.3f m/s");
+        ImGui::DragFloat("Test 4 Plant Acquire Timeout", &c.test4PlantAcquireTimeout,
+                         0.025f, 0.20f, 1.50f, "%.2f s");
+        ImGui::DragFloat("Test 4 Settle Time", &c.test4ContactSettleTime,
+                         0.025f, 0.30f, 2.0f, "%.2f s");
+        ImGui::DragFloat("Touchdown Max Vy", &c.test4TouchdownMaxVerticalSpeed,
+                         0.01f, 0.05f, 1.0f, "%.2f m/s");
+        ImGui::SliderFloat("Touchdown Min Normal Y", &c.test4TouchdownMinNormalY,
+                           0.35f, 1.0f);
+        ImGui::DragFloat("Test 4 Target Tolerance", &c.test4TargetTolerance,
+                         0.0025f, 0.01f, 0.08f, "%.3f m");
+        ImGui::SliderFloat("Test 4 Safe Reach Fraction", &c.test4SafeReachFraction,
+                           0.94f, 0.995f, "%.3f");
+        static const char* test4Phases[] = {
+            "IDLE", "WEIGHT_SHIFT", "TAKEOFF", "SWING", "ARRIVAL",
+            "DESCENT", "TOUCHDOWN_WAIT", "SETTLE", "TRANSFER", "HOLD",
+            "COMPLETE", "ABORT"
+        };
+        const int test4PhaseIndex = glm::clamp(c._test4Phase, 0, 11);
+        ImGui::TextDisabled("baseline=%s phase=%s side=%d t=%.2f path=%.2f",
+                            c._test4BaselineValid ? "ready" : "waiting",
+                            test4Phases[test4PhaseIndex], c._test4SupportSide,
+                            c._test4PhaseTime, c._test4TrajectoryT);
+        ImGui::TextDisabled("contact=(%s,%s) clear=%.3f forward=%.3f err=%.3f m",
+                            c._test4ContactL ? "L" : "-",
+                            c._test4ContactR ? "R" : "-",
+                            c._test4Clearance, c._test4ForwardTravel,
+                            c._test4TargetError);
+        ImGui::TextDisabled("target h/fwd/lat/y=(%.3f,%+.3f,%+.3f,%.3f) m",
+                            c._test4HorizontalTargetError,
+                            c._test4ForwardTargetError,
+                            c._test4LateralTargetError,
+                            c._test4VerticalTargetError);
+        ImGui::TextDisabled("velocity api/fd y=(%+.3f,%+.3f) upY=%.2f",
+                            c._test4ApiVelocity.y,
+                            c._test4MeasuredVelocity.y, c._test4FootUpY);
+        ImGui::TextDisabled("touchdown=%s vy=%+.3f normalY=%.2f drift=(%.3f,%.3f) m",
+                            c._test4TouchdownAccepted ? "accepted" : "waiting",
+                            c._test4TouchdownVy, c._test4TouchdownNormalY,
+                            c._test4StanceDrift, c._test4PlantDrift);
+        ImGui::TextDisabled("tilt=%.1f/%.1f/%.1f motorRatio=%.2f sat=%s",
+                            c._test4InitialTilt, c._test4PeakTilt, c._test4FinalTilt,
+                            c._test4MaxMotorRatio,
+                            c._test4MotorSaturated ? "YES" : "no");
+
+        ImGui::Separator();
+        ImGui::TextDisabled("Test 5: Test 4 step, then isolated COM transfer and hold");
+        ImGui::DragFloat("Test 5 Transfer Time", &c.test5TransferTime,
+                         0.05f, 0.25f, 3.0f, "%.2f s");
+        ImGui::SliderFloat("Test 5 Support Fraction", &c.test5SupportFraction,
+                           0.70f, 1.0f);
+        ImGui::DragFloat("Test 5 COM Tolerance", &c.test5ComTolerance,
+                         0.0025f, 0.01f, 0.10f, "%.3f m");
+        ImGui::DragFloat("Test 5 Hold Time", &c.test5HoldTime,
+                         0.05f, 0.25f, 2.0f, "%.2f s");
+        ImGui::DragFloat("Test 5 Hold Timeout", &c.test5HoldTimeout,
+                         0.05f, 0.50f, 4.0f, "%.2f s");
+        ImGui::TextDisabled("transfer=%.2f hold=%.2f COM err=%.3f speed=%.3f m/s",
+                            c._test5TransferT, c._test5HoldStableTime,
+                            c._test5ComError, c._test5ComHorizontalSpeed);
+        ImGui::TextDisabled("COM distance old/new=(%.3f,%.3f) m",
+                            c._test5ComToOldSupport,
+                            c._test5ComToNewSupport);
 
         ImGui::Separator();
         ImGui::TextDisabled("Ground diagnostic: F6=next, F7=previous, F8=recapture");
@@ -551,6 +722,28 @@ inline std::string SerializeComponent<LocamotionControllerComponent>(const Locam
     j["test3HoldTime"] = c.test3HoldTime;
     j["test3LowerTime"] = c.test3LowerTime;
     j["test3ContactSettleTime"] = c.test3ContactSettleTime;
+    j["test4StepLength"] = c.test4StepLength;
+    j["test4SwingHeight"] = c.test4SwingHeight;
+    j["test4SwingTime"] = c.test4SwingTime;
+    j["test4ArrivalHeight"] = c.test4ArrivalHeight;
+    j["test4ArrivalTolerance"] = c.test4ArrivalTolerance;
+    j["test4ArrivalSettleTime"] = c.test4ArrivalSettleTime;
+    j["test4ArrivalTimeout"] = c.test4ArrivalTimeout;
+    j["test4DescentTime"] = c.test4DescentTime;
+    j["test4PlantTimeout"] = c.test4PlantTimeout;
+    j["test4PlantAcquireTime"] = c.test4PlantAcquireTime;
+    j["test4PlantAcquireMaxSpeed"] = c.test4PlantAcquireMaxSpeed;
+    j["test4PlantAcquireTimeout"] = c.test4PlantAcquireTimeout;
+    j["test4ContactSettleTime"] = c.test4ContactSettleTime;
+    j["test4TouchdownMaxVerticalSpeed"] = c.test4TouchdownMaxVerticalSpeed;
+    j["test4TouchdownMinNormalY"] = c.test4TouchdownMinNormalY;
+    j["test4TargetTolerance"] = c.test4TargetTolerance;
+    j["test4SafeReachFraction"] = c.test4SafeReachFraction;
+    j["test5TransferTime"] = c.test5TransferTime;
+    j["test5SupportFraction"] = c.test5SupportFraction;
+    j["test5ComTolerance"] = c.test5ComTolerance;
+    j["test5HoldTime"] = c.test5HoldTime;
+    j["test5HoldTimeout"] = c.test5HoldTimeout;
     j["assistedStepping"] = c.assistedStepping;
     j["weightShiftTime"] = c.weightShiftTime;
     j["assistedLiftTime"] = c.assistedLiftTime;
@@ -655,6 +848,29 @@ inline void DeserializeComponent<LocamotionControllerComponent>(LocamotionContro
     c.test3HoldTime = j.value("test3HoldTime", 0.50f);
     c.test3LowerTime = j.value("test3LowerTime", 0.65f);
     c.test3ContactSettleTime = j.value("test3ContactSettleTime", 0.30f);
+    c.test4StepLength = j.value("test4StepLength", 0.225f);
+    c.test4SwingHeight = j.value("test4SwingHeight", 0.10f);
+    c.test4SwingTime = j.value("test4SwingTime", 0.90f);
+    c.test4ArrivalHeight = j.value("test4ArrivalHeight", 0.05f);
+    c.test4ArrivalTolerance = j.value("test4ArrivalTolerance", 0.02f);
+    c.test4ArrivalSettleTime = j.value("test4ArrivalSettleTime", 0.10f);
+    c.test4ArrivalTimeout = j.value("test4ArrivalTimeout", 0.60f);
+    c.test4DescentTime = j.value("test4DescentTime", 0.35f);
+    c.test4PlantTimeout = j.value("test4PlantTimeout", 0.35f);
+    c.test4PlantAcquireTime = j.value("test4PlantAcquireTime", 0.10f);
+    c.test4PlantAcquireMaxSpeed = j.value("test4PlantAcquireMaxSpeed", 0.05f);
+    c.test4PlantAcquireTimeout = j.value("test4PlantAcquireTimeout", 0.60f);
+    c.test4ContactSettleTime = j.value("test4ContactSettleTime", 0.30f);
+    c.test4TouchdownMaxVerticalSpeed = j.value(
+        "test4TouchdownMaxVerticalSpeed", 0.25f);
+    c.test4TouchdownMinNormalY = j.value("test4TouchdownMinNormalY", 0.70f);
+    c.test4TargetTolerance = j.value("test4TargetTolerance", 0.04f);
+    c.test4SafeReachFraction = j.value("test4SafeReachFraction", 0.99f);
+    c.test5TransferTime = j.value("test5TransferTime", 1.00f);
+    c.test5SupportFraction = j.value("test5SupportFraction", 0.92f);
+    c.test5ComTolerance = j.value("test5ComTolerance", 0.04f);
+    c.test5HoldTime = j.value("test5HoldTime", 0.50f);
+    c.test5HoldTimeout = j.value("test5HoldTimeout", 1.50f);
     c.assistedStepping = j.value("assistedStepping", true);
     c.weightShiftTime = j.value("weightShiftTime", 0.30f);
     c.assistedLiftTime = j.value("assistedLiftTime", 0.35f);
@@ -775,6 +991,7 @@ public:
                 ResetTest1(comp);
                 ResetTest2(comp);
                 ResetTest3(comp);
+                ResetTest4(comp);
                 ResetGroundTest(comp);
                 comp._validationActiveTest = -1;
                 continue;
@@ -786,12 +1003,13 @@ public:
             comp._timeSincePowered += dt;
             rag.strength = glm::clamp(comp.consciousness, 0.0f, 1.0f);
 
-            comp.validationTest = glm::clamp(comp.validationTest, 0, 4);
+            comp.validationTest = glm::clamp(comp.validationTest, 0, 6);
             if (comp.validationTest != comp._validationActiveTest) {
                 ResetGait(comp);
                 ResetTest1(comp);
                 ResetTest2(comp);
                 ResetTest3(comp);
+                ResetTest4(comp);
                 ResetGroundTest(comp);
                 comp._validationActiveTest = comp.validationTest;
             }
@@ -844,7 +1062,12 @@ public:
                     comp._timeSincePowered, name, pressed ? "PRESS" : "RELEASE",
                     h, f, moveDir.x, moveDir.z, speed,
                     wantsToWalk ? "yes" : "no", comp.validationTest,
-                    comp._test3Phase, comp._test3BaselineValid ? "ready" : "waiting",
+                    (comp.validationTest == 4 || comp.validationTest == 5)
+                        ? comp._test4Phase : comp._test3Phase,
+                    ((comp.validationTest == 4 || comp.validationTest == 5)
+                        ? comp._test4BaselineValid
+                                              : comp._test3BaselineValid)
+                        ? "ready" : "waiting",
                     comp._grounded ? "yes" : "no", ready ? "yes" : "no");
             };
             logInputEdge(Key::W, "W");
@@ -917,6 +1140,8 @@ public:
                     UpdateTest2(scene, entity, comp, rag, ready, tiltDeg, dt);
                 } else if (comp.validationTest == 3) {
                     UpdateTest3(scene, entity, comp, rag, ready, tiltDeg, dt);
+                } else if (comp.validationTest == 4 || comp.validationTest == 5) {
+                    UpdateTest4(scene, entity, comp, rag, ready, tiltDeg, dt);
                 } else {
                     UpdateGroundTest(scene, entity, comp, rag, ready, tiltDeg, dt);
                 }
@@ -1002,7 +1227,72 @@ public:
                                      rag._locomotionLiftForce,
                                      rag.locomotionLiftMaxForce);
                         LogKneeDiagnostics(scene, entity, comp, rag);
-                    } else if (comp.validationTest == 4) {
+                    } else if (comp.validationTest == 4 || comp.validationTest == 5) {
+                        const int swingBone = comp._test4SupportSide < 0
+                            ? comp._legR.footIdx : comp._legL.footIdx;
+                        bool swingPositionOk = false;
+                        const glm::vec3 swingPosition = Physics::GetRagdollBonePosition(
+                            rag, swingBone, &swingPositionOk);
+                        spdlog::info(
+                            "[LocoTest{}] t={:.2f} baseline={} phase={} phaseT={:.2f} support={} "
+                            "com={:+.3f}/{:+.3f} contact=({},{}) air={:.2f} path={:.2f} "
+                            "clear={:.3f} forward={:.3f} desired=({:+.3f},{:+.3f},{:+.3f}) "
+                            "foot=({:+.3f},{:+.3f},{:+.3f}) target=({:+.3f},{:+.3f},{:+.3f}) "
+                            "err={:.3f} target=(h={:.3f},fwd={:+.3f},lat={:+.3f},y={:.3f}) "
+                            "touchdown={} vy=(api={:+.3f},fd={:+.3f}) normalY={:.2f} upY={:+.2f} "
+                            "contactLocal=({:+.3f},{:+.3f},{:+.3f}) "
+                            "drift=({:.3f}/{:.3f},{:.3f}/{:.3f}) tilt=({:.1f}/{:.1f}/{:.1f}) "
+                            "supportForce={:.0f} supportSat={} lift={:.0f}/{:.0f} "
+                            "locks=({:.2f},{:.2f}) lockF=({:.0f},{:.0f}) motorRatio={:.2f} motorSat={} "
+                            "transfer=(t={:.2f},hold={:.2f},err={:.3f},old={:.3f},new={:.3f},speed={:.3f})",
+                            comp.validationTest,
+                            comp._test4Time,
+                            comp._test4BaselineValid ? "READY" : "wait",
+                            comp._test4Phase, comp._test4PhaseTime,
+                            comp._test4SupportSide,
+                            comp._test4ComLateral, comp._test4TargetLateral,
+                            comp._test4ContactL ? "L" : "-",
+                            comp._test4ContactR ? "R" : "-",
+                            comp._test4AirborneTime, comp._test4TrajectoryT,
+                            comp._test4Clearance, comp._test4ForwardTravel,
+                            comp._test4DesiredFoot.x, comp._test4DesiredFoot.y,
+                            comp._test4DesiredFoot.z,
+                            swingPositionOk ? swingPosition.x : 0.0f,
+                            swingPositionOk ? swingPosition.y : 0.0f,
+                            swingPositionOk ? swingPosition.z : 0.0f,
+                            comp._test4Foothold.x, comp._test4Foothold.y,
+                            comp._test4Foothold.z,
+                            comp._test4TargetError,
+                            comp._test4HorizontalTargetError,
+                            comp._test4ForwardTargetError,
+                            comp._test4LateralTargetError,
+                            comp._test4VerticalTargetError,
+                            comp._test4TouchdownAccepted ? "accepted" : "waiting",
+                            comp._test4ApiVelocity.y,
+                            comp._test4MeasuredVelocity.y,
+                            comp._test4TouchdownNormalY, comp._test4FootUpY,
+                            comp._test4ContactLocal.x,
+                            comp._test4ContactLocal.y,
+                            comp._test4ContactLocal.z,
+                            comp._test4StanceDrift, comp._test4MaxStanceDrift,
+                            comp._test4PlantDrift, comp._test4MaxPlantDrift,
+                            comp._test4InitialTilt, comp._test4PeakTilt,
+                            comp._test4FinalTilt,
+                            glm::length(rag._locomotionSupportForce),
+                            rag._locomotionSupportSaturated ? "YES" : "no",
+                            rag._locomotionLiftForce, rag.locomotionLiftMaxForce,
+                            rag.locomotionFootLockWeights[0],
+                            rag.locomotionFootLockWeights[1],
+                            rag._locomotionFootLockForce[0],
+                            rag._locomotionFootLockForce[1],
+                            comp._test4MaxMotorRatio,
+                            comp._test4MotorSaturated ? "YES" : "no",
+                            comp._test5TransferT, comp._test5HoldStableTime,
+                            comp._test5ComError, comp._test5ComToOldSupport,
+                            comp._test5ComToNewSupport,
+                            comp._test5ComHorizontalSpeed);
+                        LogKneeDiagnostics(scene, entity, comp, rag);
+                    } else if (comp.validationTest == 6) {
                         auto footSlot = [&](int bone) {
                             for (int i = 0; i < 2; ++i)
                                 if (rag._locomotionFootBones[i] == bone) return i;
@@ -1150,6 +1440,68 @@ private:
         c._test3Right = glm::vec3(1.0f, 0.0f, 0.0f);
         c._test3SupportTarget = glm::vec3(0.0f);
         c._test3SwingStart = glm::vec3(0.0f);
+    }
+
+    static void ResetTest4(Comp& c)
+    {
+        c._test4BaselineValid = false;
+        c._test4ContactL = c._test4ContactR = false;
+        c._test4PrevSwingContact = false;
+        c._test4TouchdownAccepted = false;
+        c._test4Aborted = false;
+        c._test4Time = 0.0f;
+        c._test4SettleTime = 0.0f;
+        c._test4Phase = 0;
+        c._test4PhaseTime = 0.0f;
+        c._test4SupportSide = 0;
+        c._test4ComCommand = 0.0f;
+        c._test4ComLateral = c._test4TargetLateral = 0.0f;
+        c._test4AirborneTime = 0.0f;
+        c._test4ArrivalStableTime = 0.0f;
+        c._test4ReachLimit = 0.0f;
+        c._test4PlantAcquireStableTime = 0.0f;
+        c._test4TrajectoryT = 0.0f;
+        c._test4Clearance = 0.0f;
+        c._test4ForwardTravel = 0.0f;
+        c._test4TargetError = 0.0f;
+        c._test4HorizontalTargetError = 0.0f;
+        c._test4ForwardTargetError = 0.0f;
+        c._test4LateralTargetError = 0.0f;
+        c._test4VerticalTargetError = 0.0f;
+        c._test4TouchdownVy = 0.0f;
+        c._test4TouchdownNormalY = 0.0f;
+        c._test4StanceDrift = c._test4PlantDrift = 0.0f;
+        c._test4MaxStanceDrift = c._test4MaxPlantDrift = 0.0f;
+        c._test4InitialTilt = c._test4PeakTilt = c._test4FinalTilt = 0.0f;
+        c._test4MaxMotorRatio = 0.0f;
+        c._test4MotorSaturated = false;
+        c._test4PlantPoseCaptured = false;
+        c._test4FootBaselineL = c._test4FootBaselineR = glm::vec3(0.0f);
+        c._test4ComBaseline = glm::vec3(0.0f);
+        c._test4Right = glm::vec3(1.0f, 0.0f, 0.0f);
+        c._test4Forward = glm::vec3(0.0f, 0.0f, -1.0f);
+        c._test4SupportTarget = glm::vec3(0.0f);
+        c._test4SwingStart = glm::vec3(0.0f);
+        c._test4ArcStart = glm::vec3(0.0f);
+        c._test4Foothold = glm::vec3(0.0f);
+        c._test4DesiredFoot = glm::vec3(0.0f);
+        c._test4TouchdownPlant = glm::vec3(0.0f);
+        c._test4ApiVelocity = glm::vec3(0.0f);
+        c._test4MeasuredVelocity = glm::vec3(0.0f);
+        c._test4PreviousSwingFoot = glm::vec3(0.0f);
+        c._test4PreviousSwingFootValid = false;
+        c._test4FootUpY = 1.0f;
+        c._test4ContactPoint = glm::vec3(0.0f);
+        c._test4ContactLocal = glm::vec3(0.0f);
+        c._test5TransferT = 0.0f;
+        c._test5HoldStableTime = 0.0f;
+        c._test5ContactLossTime = 0.0f;
+        c._test5ComError = 0.0f;
+        c._test5ComToOldSupport = 0.0f;
+        c._test5ComToNewSupport = 0.0f;
+        c._test5ComHorizontalSpeed = 0.0f;
+        c._test5TransferStartTarget = glm::vec3(0.0f);
+        c._test5TransferEndTarget = glm::vec3(0.0f);
     }
 
     static void ResetGroundTest(Comp& c)
@@ -1435,11 +1787,13 @@ private:
         return false;
     }
 
-    static bool FootContact(const RagdollComponent& rag, int footBone, glm::vec3* normal = nullptr)
+    static bool FootContact(const RagdollComponent& rag, int footBone,
+                            glm::vec3* normal = nullptr, glm::vec3* point = nullptr)
     {
         for (int i = 0; i < 2; ++i) {
             if (rag._locomotionFootBones[i] != footBone) continue;
             if (normal) *normal = rag._locomotionFootContactNormal[i];
+            if (point) *point = rag._locomotionFootContactPoint[i];
             return rag._locomotionFootContact[i];
         }
         if (normal) *normal = glm::vec3(0.0f);
@@ -2149,6 +2503,1147 @@ private:
             DebugDraw::Sphere(comp._test3ComBaseline, 0.025f, {0.2f, 0.7f, 1.0f});
             DebugDraw::Sphere(supportTarget, 0.035f, {1.0f, 0.7f, 0.1f});
             DebugDraw::Line(comp._test3ComBaseline, supportTarget, {1.0f, 0.7f, 0.1f});
+        }
+    }
+
+    static void UpdateTest4(Scene& scene, entt::entity entity, Comp& comp,
+                            RagdollComponent& rag, bool ready, float tiltDeg, float dt)
+    {
+        constexpr int kIdle = 0;
+        constexpr int kWeightShift = 1;
+        constexpr int kTakeoff = 2;
+        constexpr int kSwing = 3;
+        constexpr int kArrival = 4;
+        constexpr int kDescent = 5;
+        constexpr int kTouchdownWait = 6;
+        constexpr int kSettle = 7;
+        constexpr int kTransfer = 8;
+        constexpr int kHold = 9;
+        constexpr int kComplete = 10;
+        constexpr int kAbort = 11;
+        const bool transferEnabled = comp.validationTest == 5;
+
+        if (!scene.Has<SkinnedMeshComponent>(entity)
+            || !scene.Has<AnimatorComponent>(entity)
+            || !ValidLeg(comp._legL) || !ValidLeg(comp._legR)
+            || !rag._locomotionCOMValid) return;
+
+        auto& mesh = scene.Get<SkinnedMeshComponent>(entity);
+        auto& animator = scene.Get<AnimatorComponent>(entity);
+        const auto& skeleton = mesh.skeleton;
+        const int count = static_cast<int>(skeleton.bones.size());
+        if (count == 0 || static_cast<int>(animator.pose.size()) != count) return;
+
+        const glm::mat4 entityWorld = scene.GetTransformSystem().GetWorldMatrix(entity);
+        auto physicalPosition = [&](int bone, bool* okOut = nullptr) {
+            bool ok = false;
+            const glm::vec3 position = Physics::GetRagdollBonePosition(rag, bone, &ok);
+            if (okOut) *okOut = ok;
+            return position;
+        };
+        auto smoothstep = [](float t) {
+            t = glm::clamp(t, 0.0f, 1.0f);
+            return t * t * (3.0f - 2.0f * t);
+        };
+
+        bool leftPositionOk = false, rightPositionOk = false;
+        const glm::vec3 leftFoot = physicalPosition(comp._legL.footIdx, &leftPositionOk);
+        const glm::vec3 rightFoot = physicalPosition(comp._legR.footIdx, &rightPositionOk);
+        if (!leftPositionOk || !rightPositionOk) return;
+
+        comp._test4ContactL = FootContact(rag, comp._legL.footIdx);
+        comp._test4ContactR = FootContact(rag, comp._legR.footIdx);
+        if (!ready) {
+            comp._test4Time = 0.0f;
+            comp._test4SettleTime = 0.0f;
+            return;
+        }
+        comp._test4Time += dt;
+
+        const glm::vec3 leftVelocity = Physics::GetRagdollBoneLinearVelocity(
+            rag, comp._legL.footIdx);
+        const glm::vec3 rightVelocity = Physics::GetRagdollBoneLinearVelocity(
+            rag, comp._legR.footIdx);
+        const float horizontalSpeed = glm::length(glm::vec2(
+            rag._locomotionRootVel.x, rag._locomotionRootVel.z));
+        const bool settledStanding = comp._test4ContactL && comp._test4ContactR
+            && glm::length(leftVelocity) < 0.15f
+            && glm::length(rightVelocity) < 0.15f
+            && horizontalSpeed < 0.15f
+            && tiltDeg < 15.0f;
+
+        if (!comp._test4BaselineValid) {
+            comp._test4SettleTime = settledStanding
+                ? comp._test4SettleTime + dt : 0.0f;
+            if (comp._test4SettleTime >= 1.0f) {
+                glm::vec3 right = rightFoot - leftFoot;
+                right.y = 0.0f;
+                if (glm::dot(right, right) < 1e-8f) right = comp._right;
+                if (glm::dot(right, right) < 1e-8f) right = glm::vec3(1, 0, 0);
+                glm::vec3 forward = comp._fwd;
+                forward.y = 0.0f;
+                if (glm::dot(forward, forward) < 1e-8f)
+                    forward = glm::cross(glm::vec3(0, 1, 0), glm::normalize(right));
+
+                comp._test4BaselineValid = true;
+                comp._test4FootBaselineL = leftFoot;
+                comp._test4FootBaselineR = rightFoot;
+                comp._test4ComBaseline = rag._locomotionCOM;
+                comp._test4Right = glm::normalize(right);
+                comp._test4Forward = glm::normalize(forward);
+                comp._test4SupportTarget = comp._test4ComBaseline;
+                comp._test4InitialTilt = tiltDeg;
+                comp._test4PeakTilt = tiltDeg;
+                comp._test4FinalTilt = tiltDeg;
+                spdlog::info(
+                    "[LocoTest4] baseline acquired at t={:.2f} span={:.3f}m "
+                    "forward=({:+.2f},{:+.2f},{:+.2f}) tilt={:.1f}",
+                    comp._test4Time,
+                    glm::dot(rightFoot - leftFoot, comp._test4Right),
+                    comp._test4Forward.x, comp._test4Forward.y,
+                    comp._test4Forward.z, tiltDeg);
+            }
+        }
+        if (!comp._test4BaselineValid) return;
+
+        if (Input::IsKeyPressed(Key::F8)) {
+            spdlog::info("[LocoTest4] baseline recapture requested");
+            ResetTest4(comp);
+            rag.locomotionSupportTargetWeight = 0.0f;
+            rag.locomotionLiftBone = -1;
+            rag.locomotionLiftMaxForce = 0.0f;
+            return;
+        }
+
+        if (comp._test4Phase == kIdle) {
+            const bool startLeftSupport = Input::IsKeyPressed(Key::F6);
+            const bool startRightSupport = Input::IsKeyPressed(Key::F7);
+            if (startLeftSupport || startRightSupport) {
+                glm::vec3 currentRight = rightFoot - leftFoot;
+                currentRight.y = 0.0f;
+                if (glm::dot(currentRight, currentRight) < 1e-8f)
+                    currentRight = comp._test4Right;
+                glm::vec3 currentForward = comp._fwd;
+                currentForward.y = 0.0f;
+                if (glm::dot(currentForward, currentForward) < 1e-8f)
+                    currentForward = glm::cross(glm::vec3(0, 1, 0), currentRight);
+
+                comp._test4FootBaselineL = leftFoot;
+                comp._test4FootBaselineR = rightFoot;
+                comp._test4ComBaseline = rag._locomotionCOM;
+                comp._test4Right = glm::normalize(currentRight);
+                comp._test4Forward = glm::normalize(currentForward);
+                comp._test4SupportTarget = comp._test4ComBaseline;
+                comp._test4SupportSide = startLeftSupport ? -1 : 1;
+                comp._test4Phase = kWeightShift;
+                comp._test4PhaseTime = 0.0f;
+                comp._test4SettleTime = 0.0f;
+                comp._test4AirborneTime = 0.0f;
+                comp._test4ArrivalStableTime = 0.0f;
+                comp._test4ReachLimit = 0.0f;
+                comp._test4PlantAcquireStableTime = 0.0f;
+                comp._test4TrajectoryT = 0.0f;
+                comp._test4TouchdownAccepted = false;
+                comp._test4Aborted = false;
+                comp._test4MaxStanceDrift = 0.0f;
+                comp._test4MaxPlantDrift = 0.0f;
+                comp._test4InitialTilt = tiltDeg;
+                comp._test4PeakTilt = tiltDeg;
+                comp._test4FinalTilt = tiltDeg;
+                comp._test4MaxMotorRatio = 0.0f;
+                comp._test4MotorSaturated = false;
+                comp._test4PlantPoseCaptured = false;
+                comp._test4PreviousSwingFootValid = false;
+                comp._test5TransferT = 0.0f;
+                comp._test5HoldStableTime = 0.0f;
+                comp._test5ContactLossTime = 0.0f;
+                comp._test5ComError = 0.0f;
+                comp._test5ComToOldSupport = 0.0f;
+                comp._test5ComToNewSupport = 0.0f;
+                comp._test5ComHorizontalSpeed = 0.0f;
+                comp._test5TransferStartTarget = comp._test4ComBaseline;
+                comp._test5TransferEndTarget = comp._test4ComBaseline;
+                spdlog::info("[LocoTest{}] sequence start support={} swing={} step={:.3f}m",
+                             comp.validationTest,
+                             startLeftSupport ? "LEFT" : "RIGHT",
+                             startLeftSupport ? "RIGHT" : "LEFT",
+                             comp.test4StepLength);
+            }
+        }
+
+        if (comp._test4Phase > 0) comp._test4PhaseTime += dt;
+        const float desiredComCommand = comp._test4Phase >= kWeightShift
+            && comp._test4Phase <= kComplete
+            ? static_cast<float>(comp._test4SupportSide) : 0.0f;
+        comp._test4ComCommand = Approach(
+            comp._test4ComCommand, desiredComCommand,
+            dt / glm::max(comp.test2ShiftTime, 0.01f));
+
+        const float fraction = glm::clamp(comp.test3SupportFraction, 0.0f, 1.0f);
+        const float leftAvailable = glm::dot(
+            comp._test4FootBaselineL - comp._test4ComBaseline, comp._test4Right);
+        const float rightAvailable = glm::dot(
+            comp._test4FootBaselineR - comp._test4ComBaseline, comp._test4Right);
+        const float lateralOffset = comp._test4ComCommand < 0.0f
+            ? -comp._test4ComCommand * glm::min(leftAvailable, 0.0f) * fraction
+            :  comp._test4ComCommand * glm::max(rightAvailable, 0.0f) * fraction;
+        glm::vec3 supportTarget = comp._test4ComBaseline
+                                + comp._test4Right * lateralOffset;
+        if (transferEnabled && comp._test4Phase >= kTransfer
+            && comp._test4Phase <= kComplete) {
+            const float transferT = comp._test4Phase == kTransfer
+                ? glm::clamp(comp._test4PhaseTime
+                    / glm::max(comp.test5TransferTime, 0.05f), 0.0f, 1.0f)
+                : 1.0f;
+            comp._test5TransferT = transferT;
+            // Unlike the old walking path, transfer is phase-continuous and supplies the
+            // support controller with the target velocity. This avoids an instantaneous
+            // forward pull when the newly planted foot becomes authoritative.
+            supportTarget = glm::mix(comp._test5TransferStartTarget,
+                                     comp._test5TransferEndTarget,
+                                     smoothstep(transferT));
+        }
+        glm::vec3 supportVelocity = dt > 1e-6f
+            ? (supportTarget - comp._test4SupportTarget) / dt : glm::vec3(0.0f);
+        supportVelocity.y = 0.0f;
+        comp._test4SupportTarget = supportTarget;
+
+        rag.locomotionSupportTarget = supportTarget;
+        rag.locomotionSupportTargetVel = supportVelocity;
+        rag.locomotionSupportTargetWeight = 1.0f;
+        rag.locomotionCOMSupportFreq = glm::max(comp.test2SupportFrequency, 0.0f);
+        rag.locomotionCOMSupportMaxAccel = glm::max(comp.test2SupportMaxAccel, 0.0f);
+
+        comp._test4ComLateral = glm::dot(
+            rag._locomotionCOM - comp._test4ComBaseline, comp._test4Right);
+        comp._test4TargetLateral = glm::dot(
+            supportTarget - comp._test4ComBaseline, comp._test4Right);
+        comp._test4PeakTilt = glm::max(comp._test4PeakTilt, tiltDeg);
+        comp._test4FinalTilt = tiltDeg;
+
+        Leg* swing = comp._test4SupportSide < 0 ? &comp._legR : &comp._legL;
+        Leg* stance = comp._test4SupportSide < 0 ? &comp._legL : &comp._legR;
+        const glm::vec3 swingFoot = physicalPosition(swing->footIdx);
+        const glm::vec3 stanceFoot = physicalPosition(stance->footIdx);
+        const glm::vec3 swingVelocity = Physics::GetRagdollBoneLinearVelocity(
+            rag, swing->footIdx);
+        auto horizontalDistance = [](const glm::vec3& a, const glm::vec3& b) {
+            return glm::length(glm::vec2(a.x - b.x, a.z - b.z));
+        };
+        comp._test5ComHorizontalSpeed = glm::length(glm::vec2(
+            rag._locomotionCOMVel.x, rag._locomotionCOMVel.z));
+        if (transferEnabled && comp._test4Phase >= kTransfer
+            && comp._test4Phase <= kComplete) {
+            comp._test5ComError = horizontalDistance(
+                rag._locomotionCOM, comp._test5TransferEndTarget);
+            comp._test5ComToOldSupport = horizontalDistance(
+                rag._locomotionCOM, stanceFoot);
+            comp._test5ComToNewSupport = horizontalDistance(
+                rag._locomotionCOM, swingFoot);
+        }
+        comp._test4ApiVelocity = swingVelocity;
+        glm::vec3 contactNormal(0.0f);
+        glm::vec3 contactPoint(0.0f);
+        const bool swingContactNow = FootContact(
+            rag, swing->footIdx, &contactNormal, &contactPoint);
+        const bool stanceContactNow = FootContact(rag, stance->footIdx);
+        if (comp._test4PreviousSwingFootValid && dt > 1e-6f)
+            comp._test4MeasuredVelocity =
+                (swingFoot - comp._test4PreviousSwingFoot) / dt;
+        else
+            comp._test4MeasuredVelocity = glm::vec3(0.0f);
+        comp._test4PreviousSwingFoot = swingFoot;
+        comp._test4PreviousSwingFootValid = true;
+
+        bool swingRotationOk = false;
+        const glm::quat swingRotation = Physics::GetRagdollBoneRotation(
+            rag, swing->footIdx, &swingRotationOk);
+        comp._test4FootUpY = swingRotationOk
+            ? (swingRotation * glm::vec3(0.0f, 1.0f, 0.0f)).y : 0.0f;
+        comp._test4ContactPoint = contactPoint;
+        comp._test4ContactLocal = swingContactNow && swingRotationOk
+            ? glm::conjugate(swingRotation) * (contactPoint - swingFoot)
+            : glm::vec3(0.0f);
+        const glm::vec3 stanceBaseline = comp._test4SupportSide < 0
+            ? comp._test4FootBaselineL : comp._test4FootBaselineR;
+        comp._test4StanceDrift = glm::length(glm::vec2(
+            stanceFoot.x - stanceBaseline.x, stanceFoot.z - stanceBaseline.z));
+        comp._test4MaxStanceDrift = glm::max(
+            comp._test4MaxStanceDrift, comp._test4StanceDrift);
+        if (comp._test4TouchdownAccepted) {
+            comp._test4PlantDrift = glm::length(glm::vec2(
+                swingFoot.x - comp._test4TouchdownPlant.x,
+                swingFoot.z - comp._test4TouchdownPlant.z));
+            comp._test4MaxPlantDrift = glm::max(
+                comp._test4MaxPlantDrift, comp._test4PlantDrift);
+        } else {
+            comp._test4PlantDrift = 0.0f;
+        }
+        comp._test4Clearance = swingFoot.y - comp._test4SwingStart.y;
+        comp._test4ForwardTravel = glm::dot(
+            swingFoot - comp._test4SwingStart, comp._test4Forward);
+        if (comp._test4Phase >= kTakeoff) {
+            const glm::vec3 targetDelta = swingFoot - comp._test4Foothold;
+            comp._test4ForwardTargetError = glm::dot(
+                comp._test4Foothold - swingFoot, comp._test4Forward);
+            comp._test4LateralTargetError = glm::dot(
+                targetDelta, comp._test4Right);
+            comp._test4HorizontalTargetError = glm::length(glm::vec2(
+                targetDelta.x, targetDelta.z));
+            comp._test4VerticalTargetError = std::abs(targetDelta.y);
+        } else {
+            comp._test4ForwardTargetError = 0.0f;
+            comp._test4LateralTargetError = 0.0f;
+            comp._test4HorizontalTargetError = 0.0f;
+            comp._test4VerticalTargetError = 0.0f;
+        }
+
+        comp._test4MotorSaturated = false;
+        for (int i = 0; i < 6; ++i) {
+            comp._test4MaxMotorRatio = glm::max(
+                comp._test4MaxMotorRatio, rag._locomotionMotorSaturationRatio[i]);
+            comp._test4MotorSaturated = comp._test4MotorSaturated
+                || rag._locomotionMotorSaturated[i];
+        }
+
+        auto captureSwing = [&]() {
+            const glm::vec3 hip = physicalPosition(swing->hipIdx);
+            const glm::vec3 knee = physicalPosition(swing->kneeIdx);
+            const glm::vec3 ankle = physicalPosition(swing->ankleIdx);
+            comp._test4SwingStart = swingFoot;
+            comp._test4ArcStart = swingFoot;
+            comp._test4DesiredFoot = swingFoot;
+            swing->desiredFoot = swingFoot;
+            swing->ankleFromFootWorld = ankle - swingFoot;
+            const glm::vec3 upper = knee - hip;
+            const glm::vec3 lower = ankle - knee;
+            if (glm::dot(upper, upper) > 1e-8f && glm::dot(lower, lower) > 1e-8f) {
+                swing->referenceUpperWorld = glm::normalize(upper);
+                swing->referenceKneeBend = std::acos(glm::clamp(
+                    glm::dot(glm::normalize(upper), glm::normalize(lower)),
+                    -1.0f, 1.0f));
+            }
+            const glm::vec3 chain = ankle - hip;
+            if (glm::dot(chain, chain) > 1e-8f) {
+                const glm::vec3 axis = glm::normalize(chain);
+                glm::vec3 pole = upper - axis * glm::dot(upper, axis);
+                if (glm::dot(pole, pole) > 1e-8f)
+                    swing->kneePoleWorld = glm::normalize(pole);
+            }
+
+            bool hipOk = false, kneeOk = false, ankleOk = false, footOk = false;
+            swing->referenceHipWorld = Physics::GetRagdollBoneRotation(
+                rag, swing->hipIdx, &hipOk);
+            const glm::quat kneeWorld = Physics::GetRagdollBoneRotation(
+                rag, swing->kneeIdx, &kneeOk);
+            const glm::quat ankleWorld = Physics::GetRagdollBoneRotation(
+                rag, swing->ankleIdx, &ankleOk);
+            const glm::quat footWorld = Physics::GetRagdollBoneRotation(
+                rag, swing->footIdx, &footOk);
+            if (hipOk && kneeOk)
+                swing->referenceKneeLocal = glm::normalize(
+                    glm::conjugate(swing->referenceHipWorld) * kneeWorld);
+            else
+                swing->referenceKneeLocal = skeleton.bones[swing->kneeIdx].localR;
+            if (kneeOk && ankleOk)
+                swing->referenceAnkleLocal = glm::normalize(
+                    glm::conjugate(kneeWorld) * ankleWorld);
+            else
+                swing->referenceAnkleLocal = skeleton.bones[swing->ankleIdx].localR;
+            if (ankleOk && footOk)
+                swing->referenceFootLocal = glm::normalize(
+                    glm::conjugate(ankleWorld) * footWorld);
+            else
+                swing->referenceFootLocal = skeleton.bones[swing->footIdx].localR;
+            if (!hipOk)
+                swing->referenceHipWorld = glm::normalize(
+                    ParentWorldRot(rag, skeleton, animator, entityWorld, swing->hipIdx)
+                    * animator.pose[swing->hipIdx].rotation);
+
+            swing->hipCommand = animator.pose[swing->hipIdx].rotation;
+            swing->kneeCommand = swing->referenceKneeLocal;
+            swing->ankleCommand = swing->referenceAnkleLocal;
+            swing->footCommand = swing->referenceFootLocal;
+            swing->commandValid = true;
+        };
+
+        auto capturePhysicalLocalPose = [&]() {
+            bool hipOk = false, kneeOk = false, ankleOk = false, footOk = false;
+            const glm::quat hipWorld = Physics::GetRagdollBoneRotation(
+                rag, swing->hipIdx, &hipOk);
+            const glm::quat kneeWorld = Physics::GetRagdollBoneRotation(
+                rag, swing->kneeIdx, &kneeOk);
+            const glm::quat ankleWorld = Physics::GetRagdollBoneRotation(
+                rag, swing->ankleIdx, &ankleOk);
+            const glm::quat footWorld = Physics::GetRagdollBoneRotation(
+                rag, swing->footIdx, &footOk);
+            if (hipOk)
+                swing->hipCommand = glm::normalize(glm::conjugate(ParentWorldRot(
+                    rag, skeleton, animator, entityWorld, swing->hipIdx)) * hipWorld);
+            if (hipOk && kneeOk)
+                swing->kneeCommand = glm::normalize(glm::conjugate(hipWorld) * kneeWorld);
+            if (kneeOk && ankleOk)
+                swing->ankleCommand = glm::normalize(glm::conjugate(kneeWorld) * ankleWorld);
+            if (ankleOk && footOk)
+                swing->footCommand = glm::normalize(glm::conjugate(ankleWorld) * footWorld);
+            swing->commandValid = true;
+        };
+
+        auto planFoothold = [&]() {
+            const float stepLength = glm::clamp(comp.test4StepLength, 0.15f, 0.25f);
+            glm::vec3 requestedTarget =
+                comp._test4SwingStart + comp._test4Forward * stepLength;
+            const HitResult startGround = Physics::Raycast(
+                comp._test4SwingStart + glm::vec3(0, 0.25f, 0),
+                glm::vec3(0, -1, 0), 0.75f, entity, false);
+            const HitResult targetGround = Physics::Raycast(
+                requestedTarget + glm::vec3(0, 0.35f, 0),
+                glm::vec3(0, -1, 0), 1.0f, entity, false);
+            const float soleCenterOffset = startGround.hit
+                ? comp._test4SwingStart.y - startGround.point.y : 0.0f;
+            requestedTarget.y = targetGround.hit
+                ? targetGround.point.y + soleCenterOffset : comp._test4SwingStart.y;
+
+            const glm::vec3 hip = physicalPosition(swing->hipIdx);
+            const float legLength = glm::length(skeleton.bones[swing->kneeIdx].localT)
+                                  + glm::length(skeleton.bones[swing->ankleIdx].localT);
+            const float configuredReach = legLength
+                * glm::clamp(comp.proceduralMaxReach, 0.70f, 0.99f);
+            const float currentReach = glm::length(
+                comp._test4SwingStart + swing->ankleFromFootWorld - hip);
+            const float safeAnatomicalReach = legLength * glm::clamp(
+                comp.test4SafeReachFraction, 0.94f, 0.995f);
+            const float antiSingularityCeiling = legLength * 0.995f;
+            // The current physical stance is necessarily reachable. Test 4 may begin with
+            // an almost straight knee, so its captured reach can legitimately exceed the
+            // gait controller's conservative anti-singularity fraction. Give the planner
+            // a small, explicit near-full-extension reserve, but never extend beyond 99.5%
+            // of the anatomical chain unless the captured physical pose is already longer.
+            comp._test4ReachLimit = glm::min(
+                glm::max(configuredReach,
+                         glm::max(currentReach, safeAnatomicalReach)),
+                glm::max(currentReach, antiSingularityCeiling));
+
+            auto groundedCandidate = [&](float horizontalScale) {
+                glm::vec3 candidate = glm::mix(
+                    comp._test4SwingStart, requestedTarget,
+                    glm::clamp(horizontalScale, 0.0f, 1.0f));
+                const HitResult ground = Physics::Raycast(
+                    candidate + glm::vec3(0, 0.35f, 0),
+                    glm::vec3(0, -1, 0), 1.0f, entity, false);
+                candidate.y = ground.hit
+                    ? ground.point.y + soleCenterOffset
+                    : glm::mix(comp._test4SwingStart.y, requestedTarget.y,
+                               glm::clamp(horizontalScale, 0.0f, 1.0f));
+                return candidate;
+            };
+            auto targetReach = [&](const glm::vec3& candidate) {
+                return glm::length(candidate + swing->ankleFromFootWorld - hip);
+            };
+
+            glm::vec3 target = requestedTarget;
+            const float requestedReach = targetReach(requestedTarget);
+            bool reachClamped = requestedReach > comp._test4ReachLimit;
+            if (reachClamped) {
+                float reachableScale = 0.0f;
+                float unreachableScale = 1.0f;
+                for (int iteration = 0; iteration < 12; ++iteration) {
+                    const float candidateScale =
+                        0.5f * (reachableScale + unreachableScale);
+                    const glm::vec3 candidate = groundedCandidate(candidateScale);
+                    if (targetReach(candidate) <= comp._test4ReachLimit)
+                        reachableScale = candidateScale;
+                    else
+                        unreachableScale = candidateScale;
+                }
+                target = groundedCandidate(reachableScale);
+            }
+            comp._test4Foothold = target;
+            const float requestedForward = glm::dot(
+                requestedTarget - comp._test4SwingStart, comp._test4Forward);
+            const float plannedForward = glm::dot(
+                target - comp._test4SwingStart, comp._test4Forward);
+            spdlog::info(
+                "[LocoTest4] foothold latched start=({:+.3f},{:+.3f},{:+.3f}) "
+                "requested=({:+.3f},{:+.3f},{:+.3f}) "
+                "target=({:+.3f},{:+.3f},{:+.3f}) forward={:.3f}->{:.3f}m "
+                "reach={:.3f}->{:.3f}/{:.3f}m "
+                "reachBasis=(captured={:.3f},safe={:.3f},anatomy={:.3f}) "
+                "clamp={} ground={}",
+                comp._test4SwingStart.x, comp._test4SwingStart.y,
+                comp._test4SwingStart.z,
+                requestedTarget.x, requestedTarget.y, requestedTarget.z,
+                target.x, target.y, target.z,
+                requestedForward, plannedForward,
+                requestedReach, targetReach(target), comp._test4ReachLimit,
+                currentReach, safeAnatomicalReach, legLength,
+                reachClamped ? "HORIZONTAL" : "none",
+                targetGround.hit ? "hit" : "fallback");
+            return plannedForward >= 0.149f;
+        };
+
+        auto abortSequence = [&](const char* reason) {
+            if (comp._test4Phase == kAbort || comp._test4Phase == kIdle) return;
+            comp._test4Aborted = true;
+            comp._test4Phase = kAbort;
+            comp._test4PhaseTime = 0.0f;
+            comp._test4SettleTime = 0.0f;
+            comp._test4AirborneTime = 0.0f;
+            spdlog::warn(
+                "[LocoTest4] ABORT {} clear={:.3f} forward={:.3f} contact={} "
+                "target=(h={:.3f},fwd={:+.3f},lat={:+.3f},y={:.3f}) "
+                "normalY={:.2f} vy=(api={:+.3f},fd={:+.3f}) upY={:+.2f} "
+                "contactLocal=({:+.3f},{:+.3f},{:+.3f}) "
+                "drift=({:.3f},{:.3f}) tilt={:.1f}",
+                reason, comp._test4Clearance, comp._test4ForwardTravel,
+                swingContactNow ? "yes" : "no",
+                comp._test4HorizontalTargetError,
+                comp._test4ForwardTargetError,
+                comp._test4LateralTargetError,
+                comp._test4VerticalTargetError,
+                contactNormal.y, swingVelocity.y,
+                comp._test4MeasuredVelocity.y, comp._test4FootUpY,
+                comp._test4ContactLocal.x, comp._test4ContactLocal.y,
+                comp._test4ContactLocal.z, comp._test4StanceDrift,
+                comp._test4PlantDrift, tiltDeg);
+        };
+
+        const float comError = comp._test4TargetLateral - comp._test4ComLateral;
+        if (comp._test4Phase == kWeightShift
+            && std::abs(comp._test4ComCommand - comp._test4SupportSide) < 0.01f
+            && std::abs(comError) < 0.01f
+            && comp._test4ContactL && comp._test4ContactR
+            && comp._test4PhaseTime >= glm::max(comp.test2ShiftTime, 0.01f)) {
+            captureSwing();
+            if (planFoothold()) {
+                comp._test4Phase = kTakeoff;
+                comp._test4PhaseTime = 0.0f;
+                comp._test4PrevSwingContact = true;
+                spdlog::info("[LocoTest4] phase=TAKEOFF");
+            } else {
+                abortSequence("latched foothold fell below 15 cm after reach clamp");
+            }
+        }
+
+        const float takeoffHeight = glm::clamp(
+            comp.test3TakeoffHeight, 0.040f,
+            glm::max(comp.test4SwingHeight, 0.041f));
+        glm::vec3 desiredFoot = comp._test4SwingStart;
+        if (comp._test4Phase == kTakeoff) {
+            desiredFoot.y += takeoffHeight;
+            const float releaseClearance = glm::max(0.040f, takeoffHeight * 0.75f);
+            const bool airborneEvidence = !swingContactNow
+                && comp._test4Clearance >= releaseClearance;
+            comp._test4AirborneTime = airborneEvidence
+                ? comp._test4AirborneTime + dt : 0.0f;
+            if (comp._test4AirborneTime >= 0.05f) {
+                comp._test4ArcStart = desiredFoot;
+                comp._test4Phase = kSwing;
+                comp._test4PhaseTime = 0.0f;
+                comp._test4TrajectoryT = 0.0f;
+                spdlog::info(
+                    "[LocoTest4] phase=SWING released clearance={:.3f} airborneFor={:.3f}",
+                    comp._test4Clearance, comp._test4AirborneTime);
+            } else if (comp._test4PhaseTime >= glm::max(comp.test3TakeoffTime, 0.01f)) {
+                abortSequence("takeoff did not open swing contact");
+            }
+        }
+
+        const glm::vec3 hoverTarget = comp._test4Foothold
+            + glm::vec3(0.0f, glm::max(comp.test4ArrivalHeight, 0.03f), 0.0f);
+        auto trajectoryPoint = [&](float t) {
+            t = glm::clamp(t, 0.0f, 1.0f);
+            glm::vec3 point = glm::mix(
+                comp._test4ArcStart, hoverTarget, smoothstep(t));
+            const float apexY = glm::max(comp._test4ArcStart.y, hoverTarget.y)
+                + glm::max(comp.test4SwingHeight - comp.test4ArrivalHeight, 0.02f);
+            point.y = t < 0.5f
+                ? glm::mix(comp._test4ArcStart.y, apexY, smoothstep(t * 2.0f))
+                : glm::mix(apexY, hoverTarget.y,
+                           smoothstep((t - 0.5f) * 2.0f));
+            return point;
+        };
+
+        auto acceptTouchdown = [&]() {
+            comp._test4TouchdownAccepted = true;
+            comp._test4TouchdownPlant = swingFoot;
+            comp._test4TouchdownVy = swingVelocity.y;
+            comp._test4TouchdownNormalY = contactNormal.y;
+            comp._test4PlantDrift = 0.0f;
+            comp._test4MaxPlantDrift = 0.0f;
+            // Retain the final landing IK command briefly while contact settles. Capturing
+            // the first-impact joint pose immediately allowed the sole to rock backward.
+            comp._test4PlantPoseCaptured = false;
+            comp._test4PlantAcquireStableTime = 0.0f;
+            comp._test4Phase = kSettle;
+            comp._test4PhaseTime = 0.0f;
+            comp._test4SettleTime = 0.0f;
+            spdlog::info(
+                "[LocoTest4] TOUCHDOWN accepted foot=({:+.3f},{:+.3f},{:+.3f}) "
+                "target=(h={:.3f},fwd={:+.3f},lat={:+.3f},y={:.3f}) "
+                "vy=(api={:+.3f},fd={:+.3f}) normal=({:+.2f},{:+.2f},{:+.2f}) "
+                "upY={:+.2f} contactWorld=({:+.3f},{:+.3f},{:+.3f}) "
+                "contactLocal=({:+.3f},{:+.3f},{:+.3f})",
+                swingFoot.x, swingFoot.y, swingFoot.z,
+                comp._test4HorizontalTargetError,
+                comp._test4ForwardTargetError,
+                comp._test4LateralTargetError,
+                comp._test4VerticalTargetError,
+                swingVelocity.y, comp._test4MeasuredVelocity.y,
+                contactNormal.x, contactNormal.y, contactNormal.z,
+                comp._test4FootUpY,
+                comp._test4ContactPoint.x, comp._test4ContactPoint.y,
+                comp._test4ContactPoint.z,
+                comp._test4ContactLocal.x, comp._test4ContactLocal.y,
+                comp._test4ContactLocal.z);
+        };
+
+        auto evaluateTouchdown = [&](const char* stage, float descentProgress) {
+            const float minNormalY = glm::clamp(
+                comp.test4TouchdownMinNormalY, 0.35f, 1.0f);
+            const float maxVerticalSpeed = glm::max(
+                comp.test4TouchdownMaxVerticalSpeed, 0.05f);
+            const float horizontalTolerance = glm::max(
+                comp.test4TargetTolerance, 0.01f);
+            const bool progressOk = descentProgress >= 0.70f;
+            const bool normalOk = contactNormal.y >= minNormalY;
+            const bool velocityOk = std::abs(swingVelocity.y) <= maxVerticalSpeed;
+            const bool horizontalOk =
+                comp._test4HorizontalTargetError <= horizontalTolerance;
+            const bool verticalOk = comp._test4VerticalTargetError <= 0.030f;
+            spdlog::info(
+                "[LocoTest4] TOUCHDOWN_CHECK stage={} result={} "
+                "progress={:.2f}/0.70[{}] normalY={:.2f}/{:.2f}[{}] "
+                "absVy={:.3f}/{:.3f}[{}] fdVy={:+.3f} "
+                "horizontal={:.3f}/{:.3f}[{}] fwd={:+.3f} lat={:+.3f} "
+                "vertical={:.3f}/0.030[{}] upY={:+.2f} "
+                "contactLocal=({:+.3f},{:+.3f},{:+.3f})",
+                stage,
+                progressOk && normalOk && velocityOk && horizontalOk && verticalOk
+                    ? "PASS" : "FAIL",
+                descentProgress, progressOk ? "ok" : "FAIL",
+                contactNormal.y, minNormalY, normalOk ? "ok" : "FAIL",
+                std::abs(swingVelocity.y), maxVerticalSpeed,
+                velocityOk ? "ok" : "FAIL", comp._test4MeasuredVelocity.y,
+                comp._test4HorizontalTargetError, horizontalTolerance,
+                horizontalOk ? "ok" : "FAIL",
+                comp._test4ForwardTargetError, comp._test4LateralTargetError,
+                comp._test4VerticalTargetError, verticalOk ? "ok" : "FAIL",
+                comp._test4FootUpY,
+                comp._test4ContactLocal.x, comp._test4ContactLocal.y,
+                comp._test4ContactLocal.z);
+            if (progressOk && normalOk && velocityOk && horizontalOk && verticalOk) {
+                acceptTouchdown();
+            } else if (!progressOk) {
+                abortSequence("touchdown occurred before final 70% of descent");
+            } else if (!normalOk) {
+                abortSequence("touchdown normal was below threshold");
+            } else if (!velocityOk) {
+                abortSequence("touchdown vertical speed exceeded threshold");
+            } else if (!horizontalOk) {
+                abortSequence("touchdown horizontal target error exceeded tolerance");
+            } else {
+                abortSequence("touchdown vertical target error exceeded 3 cm");
+            }
+        };
+
+        const bool touchdownEdge = swingContactNow && !comp._test4PrevSwingContact;
+        if (comp._test4Phase == kSwing) {
+            const float swingProgress = glm::clamp(
+                comp._test4PhaseTime / glm::max(comp.test4SwingTime, 0.05f),
+                0.0f, 1.0f);
+            comp._test4TrajectoryT = 0.70f * swingProgress;
+            desiredFoot = trajectoryPoint(swingProgress);
+            if (swingContactNow && comp._test4PhaseTime >= 0.10f) {
+                abortSequence("swing contacted before hover arrival");
+            } else if (swingProgress >= 1.0f) {
+                comp._test4Phase = kArrival;
+                comp._test4PhaseTime = 0.0f;
+                comp._test4ArrivalStableTime = 0.0f;
+                desiredFoot = hoverTarget;
+                spdlog::info(
+                    "[LocoTest4] phase=ARRIVAL target=({:+.3f},{:+.3f},{:+.3f}) "
+                    "horizontal={:.3f} fwd={:+.3f} lat={:+.3f}",
+                    hoverTarget.x, hoverTarget.y, hoverTarget.z,
+                    comp._test4HorizontalTargetError,
+                    comp._test4ForwardTargetError,
+                    comp._test4LateralTargetError);
+            }
+        } else if (comp._test4Phase == kArrival) {
+            comp._test4TrajectoryT = 0.70f;
+            desiredFoot = hoverTarget;
+            const float arrivalTolerance = glm::max(
+                comp.test4ArrivalTolerance, 0.01f);
+            const float arrivalVerticalError = std::abs(
+                swingFoot.y - hoverTarget.y);
+            const bool arrivalWithinTolerance =
+                comp._test4HorizontalTargetError <= arrivalTolerance
+                && arrivalVerticalError <= 0.025f;
+            comp._test4ArrivalStableTime = arrivalWithinTolerance
+                ? comp._test4ArrivalStableTime + dt : 0.0f;
+            if (swingContactNow) {
+                abortSequence("arrival hold contacted before descent");
+            } else if (comp._test4ArrivalStableTime >= glm::max(
+                           comp.test4ArrivalSettleTime, 0.05f)) {
+                comp._test4Phase = kDescent;
+                comp._test4PhaseTime = 0.0f;
+                spdlog::info(
+                    "[LocoTest4] phase=DESCENT arrival h={:.3f}/{:.3f} "
+                    "fwd={:+.3f} lat={:+.3f} y={:.3f} stable={:.3f}s",
+                    comp._test4HorizontalTargetError, arrivalTolerance,
+                    comp._test4ForwardTargetError,
+                    comp._test4LateralTargetError,
+                    arrivalVerticalError, comp._test4ArrivalStableTime);
+            } else if (comp._test4PhaseTime >= glm::max(
+                           comp.test4ArrivalTimeout, 0.10f)) {
+                spdlog::warn(
+                    "[LocoTest4] ARRIVAL_CHECK result=FAIL horizontal={:.3f}/{:.3f}[{}] "
+                    "hoverY={:.3f}/0.025[{}] stable={:.3f}/{:.3f}s[{}] "
+                    "fwd={:+.3f} lat={:+.3f}",
+                    comp._test4HorizontalTargetError, arrivalTolerance,
+                    comp._test4HorizontalTargetError <= arrivalTolerance ? "ok" : "FAIL",
+                    arrivalVerticalError,
+                    arrivalVerticalError <= 0.025f ? "ok" : "FAIL",
+                    comp._test4ArrivalStableTime,
+                    glm::max(comp.test4ArrivalSettleTime, 0.05f),
+                    comp._test4ArrivalStableTime >= glm::max(
+                        comp.test4ArrivalSettleTime, 0.05f) ? "ok" : "FAIL",
+                    comp._test4ForwardTargetError,
+                    comp._test4LateralTargetError);
+                if (comp._test4HorizontalTargetError > arrivalTolerance)
+                    abortSequence("hover horizontal arrival did not converge before timeout");
+                else if (arrivalVerticalError > 0.025f)
+                    abortSequence("hover vertical arrival did not converge before timeout");
+                else
+                    abortSequence("hover arrival did not remain within tolerance long enough");
+            }
+        } else if (comp._test4Phase == kDescent) {
+            const float descentProgress = glm::clamp(
+                comp._test4PhaseTime / glm::max(comp.test4DescentTime, 0.05f),
+                0.0f, 1.0f);
+            comp._test4TrajectoryT = 0.70f + 0.30f * descentProgress;
+            desiredFoot = glm::mix(
+                hoverTarget, comp._test4Foothold, smoothstep(descentProgress));
+            if (touchdownEdge) {
+                evaluateTouchdown("DESCENT", descentProgress);
+            } else if (descentProgress >= 1.0f) {
+                comp._test4Phase = kTouchdownWait;
+                comp._test4PhaseTime = 0.0f;
+                desiredFoot = comp._test4Foothold;
+                spdlog::info("[LocoTest4] phase=TOUCHDOWN_WAIT");
+            }
+        } else if (comp._test4Phase == kTouchdownWait) {
+            comp._test4TrajectoryT = 1.0f;
+            desiredFoot = comp._test4Foothold;
+            if (touchdownEdge) {
+                evaluateTouchdown("TOUCHDOWN_WAIT", 1.0f);
+            } else if (comp._test4PhaseTime >= glm::max(comp.test4PlantTimeout, 0.10f)) {
+                abortSequence("touchdown contact timed out");
+            }
+        } else if (comp._test4Phase >= kSettle
+                   && comp._test4Phase <= kComplete) {
+            comp._test4TrajectoryT = 1.0f;
+            desiredFoot = comp._test4Foothold;
+        }
+        comp._test4DesiredFoot = desiredFoot;
+        comp._test4TargetError = glm::length(swingFoot - desiredFoot);
+
+        if (transferEnabled && comp._test4Phase >= kTransfer
+            && comp._test4Phase <= kHold) {
+            comp._test5ContactLossTime = swingContactNow && stanceContactNow
+                ? 0.0f : comp._test5ContactLossTime + dt;
+        } else {
+            comp._test5ContactLossTime = 0.0f;
+        }
+
+        if (comp._test4Phase >= kTakeoff && comp._test4Phase <= kSettle
+            && !stanceContactNow) {
+            abortSequence("stance contact was lost");
+        } else if (comp._test4Phase >= kTakeoff && comp._test4Phase <= kSettle
+                   && comp._test4StanceDrift > 0.040f) {
+            abortSequence("stance foot exceeded 4 cm drift");
+        } else if (comp._test4Phase >= kTakeoff && comp._test4Phase <= kSettle
+                   && tiltDeg >= 30.0f) {
+            abortSequence("tilt reached 30 degrees");
+        } else if (comp._test4Phase == kSwing
+                   && comp._test4TrajectoryT < 0.65f
+                   && comp._test4PhaseTime >= 0.10f
+                   && comp._test4Clearance < 0.030f) {
+            abortSequence("airborne swing lost clearance");
+        } else if (comp._test4Phase == kSettle
+                   && comp._test4PlantPoseCaptured
+                   && comp._test4PlantDrift > 0.040f) {
+            abortSequence("new plant exceeded 4 cm drift");
+        } else if (transferEnabled && comp._test4Phase >= kTransfer
+                   && comp._test4Phase <= kHold
+                   && comp._test5ContactLossTime > 0.05f) {
+            abortSequence("foot contact was lost during support transfer");
+        } else if (transferEnabled && comp._test4Phase >= kTransfer
+                   && comp._test4Phase <= kHold
+                   && (comp._test4StanceDrift > 0.040f
+                       || comp._test4PlantDrift > 0.040f)) {
+            abortSequence("plant drift exceeded 4 cm during support transfer");
+        } else if (transferEnabled && comp._test4Phase >= kTransfer
+                   && comp._test4Phase <= kHold && tiltDeg >= 30.0f) {
+            abortSequence("tilt reached 30 degrees during support transfer");
+        }
+
+        const bool liftAssistActive = comp._test4Phase >= kTakeoff
+                                   && comp._test4Phase <= kDescent;
+        if (liftAssistActive) {
+            float liftFade = 1.0f;
+            if (comp._test4Phase == kSwing)
+                liftFade = 1.0f - 0.5f * smoothstep(
+                    (comp._test4TrajectoryT - 0.40f) / 0.30f);
+            else if (comp._test4Phase == kArrival)
+                liftFade = 0.5f;
+            else if (comp._test4Phase == kDescent) {
+                const float descentProgress = glm::clamp(
+                    (comp._test4TrajectoryT - 0.70f) / 0.30f, 0.0f, 1.0f);
+                liftFade = 0.5f * (1.0f - smoothstep(descentProgress / 0.70f));
+            }
+            rag.locomotionLiftBone = swing->footIdx;
+            rag.locomotionLiftTargetY = desiredFoot.y;
+            rag.locomotionLiftFrequency = glm::max(comp.test3TakeoffFrequency, 0.0f);
+            rag.locomotionLiftMaxForce = glm::max(comp.test3TakeoffMaxForce, 0.0f)
+                                       * glm::clamp(liftFade, 0.0f, 1.0f);
+        } else {
+            rag.locomotionLiftBone = -1;
+            rag.locomotionLiftMaxForce = 0.0f;
+        }
+
+        auto solveSwingIK = [&](const glm::vec3& targetFoot) {
+            swing->desiredFoot = targetFoot;
+            const glm::vec3 hipPosition = physicalPosition(swing->hipIdx);
+            glm::vec3 desiredAnkle = targetFoot + swing->ankleFromFootWorld;
+            glm::vec3 toTarget = desiredAnkle - hipPosition;
+            const float upperLength = glm::length(skeleton.bones[swing->kneeIdx].localT);
+            const float lowerLength = glm::length(skeleton.bones[swing->ankleIdx].localT);
+            const float configuredReach = (upperLength + lowerLength)
+                * glm::clamp(comp.proceduralMaxReach, 0.70f, 0.99f);
+            const float maxReach = comp._test4ReachLimit > 1e-4f
+                ? glm::max(configuredReach, comp._test4ReachLimit)
+                : configuredReach;
+            if (const float reach = glm::length(toTarget);
+                reach > maxReach && reach > 1e-5f) {
+                toTarget *= maxReach / reach;
+                desiredAnkle = hipPosition + toTarget;
+            }
+            const float distance = glm::clamp(glm::length(toTarget),
+                std::abs(upperLength - lowerLength) + 1e-4f,
+                upperLength + lowerLength - 1e-4f);
+            if (upperLength <= 1e-4f || lowerLength <= 1e-4f || distance <= 1e-4f)
+                return;
+
+            const float includedCos = glm::clamp(
+                (upperLength * upperLength + lowerLength * lowerLength
+                 - distance * distance) / (2.0f * upperLength * lowerLength),
+                -1.0f, 1.0f);
+            const float kneeBend = glm::pi<float>() - std::acos(includedCos);
+            const float kneeDelta = kneeBend - swing->referenceKneeBend;
+            const glm::quat kneeTarget = glm::normalize(
+                swing->referenceKneeLocal
+                * glm::angleAxis(kneeDelta, glm::normalize(swing->kneeHingeAxis)));
+
+            const glm::vec3 worldForward = glm::normalize(toTarget);
+            glm::vec3 worldBend = swing->kneePoleWorld
+                - worldForward * glm::dot(swing->kneePoleWorld, worldForward);
+            if (glm::dot(worldBend, worldBend) < 1e-8f)
+                worldBend = comp._test4Forward;
+            worldBend -= worldForward * glm::dot(worldBend, worldForward);
+            if (glm::dot(worldBend, worldBend) < 1e-8f)
+                worldBend = comp._test4Right;
+            else
+                worldBend = glm::normalize(worldBend);
+            const float hipCos = glm::clamp(
+                (upperLength * upperLength + distance * distance
+                 - lowerLength * lowerLength)
+                / (2.0f * upperLength * distance), -1.0f, 1.0f);
+            const float hipSin = std::sqrt(glm::max(1.0f - hipCos * hipCos, 0.0f));
+            const glm::vec3 desiredUpper = glm::normalize(
+                worldForward * hipCos + worldBend * hipSin);
+            const glm::quat hipWorld = glm::normalize(
+                RotationBetween(swing->referenceUpperWorld, desiredUpper)
+                * swing->referenceHipWorld);
+            const glm::quat parentWorld = ParentWorldRot(
+                rag, skeleton, animator, entityWorld, swing->hipIdx);
+            glm::quat hipTarget = glm::normalize(glm::conjugate(parentWorld) * hipWorld);
+            Envelope hipEnvelope;
+            hipEnvelope.twistAxis = swing->hipTwistAxis;
+            hipEnvelope.swingNormalDeg = swing->hipSwingNormalDeg;
+            hipEnvelope.swingPlaneDeg = swing->hipSwingPlaneDeg;
+            hipEnvelope.twistMinDeg = swing->hipTwistMinDeg;
+            hipEnvelope.twistMaxDeg = swing->hipTwistMaxDeg;
+            hipTarget = ClampToEnvelope(hipEnvelope,
+                skeleton.bones[swing->hipIdx].localR, hipTarget,
+                comp.hipLimitMarginDeg);
+
+            const float alpha = 1.0f - std::exp(
+                -dt / glm::max(comp.proceduralPoseResponse, 0.01f));
+            swing->hipCommand = glm::normalize(
+                glm::slerp(swing->hipCommand, hipTarget, alpha));
+            swing->kneeCommand = glm::normalize(
+                glm::slerp(swing->kneeCommand, kneeTarget, alpha));
+            swing->ankleCommand = swing->referenceAnkleLocal;
+            swing->footCommand = swing->referenceFootLocal;
+        };
+
+        const bool acquiringPlant = comp._test4Phase == kSettle
+                                 && !comp._test4PlantPoseCaptured;
+        const bool applySwingIK = (comp._test4Phase >= kTakeoff
+                                && comp._test4Phase <= kTouchdownWait)
+                               || acquiringPlant;
+        if (applySwingIK) solveSwingIK(desiredFoot);
+        const bool holdTouchdownPose = comp._test4Phase >= kSettle
+                                    && comp._test4Phase <= kComplete;
+        if (applySwingIK || holdTouchdownPose) {
+            const float poseWeight = glm::clamp(
+                comp._poseBlend * comp.poseWeight, 0.0f, 1.0f);
+            BlendPose(animator, swing->hipIdx, swing->hipCommand, poseWeight);
+            BlendPose(animator, swing->kneeIdx, swing->kneeCommand, poseWeight);
+            BlendPose(animator, swing->ankleIdx, swing->ankleCommand, poseWeight);
+            BlendPose(animator, swing->footIdx, swing->footCommand, poseWeight);
+        }
+
+        if (comp._test4Phase == kSettle) {
+            if (!comp._test4PlantPoseCaptured) {
+                const float plantSpeed = glm::length(swingVelocity);
+                const float maxAcquireSpeed = glm::max(
+                    comp.test4PlantAcquireMaxSpeed, 0.01f);
+                const bool acquisitionStable = swingContactNow && stanceContactNow
+                    && plantSpeed <= maxAcquireSpeed;
+                comp._test4PlantAcquireStableTime = acquisitionStable
+                    ? comp._test4PlantAcquireStableTime + dt : 0.0f;
+                if (comp._test4PlantAcquireStableTime >= glm::max(
+                        comp.test4PlantAcquireTime, 0.05f)) {
+                    capturePhysicalLocalPose();
+                    comp._test4PlantPoseCaptured = true;
+                    comp._test4SettleTime = 0.0f;
+                    spdlog::info(
+                        "[LocoTest4] phase=SETTLE_CAPTURE acquire={:.3f}s "
+                        "stable={:.3f}s forward={:.3f} plantDrift={:.3f} "
+                        "speed={:.3f}/{:.3f}",
+                        comp._test4PhaseTime, comp._test4PlantAcquireStableTime,
+                        comp._test4ForwardTravel, comp._test4PlantDrift,
+                        plantSpeed, maxAcquireSpeed);
+                } else if (comp._test4PhaseTime >= glm::max(
+                               comp.test4PlantAcquireTimeout, 0.20f)) {
+                    spdlog::warn(
+                        "[LocoTest4] PLANT_ACQUIRE result=FAIL contact={} "
+                        "stance={} speed={:.3f}/{:.3f} stable={:.3f}/{:.3f}s "
+                        "forward={:.3f} drift={:.3f}",
+                        swingContactNow ? "yes" : "no",
+                        stanceContactNow ? "yes" : "no",
+                        plantSpeed, maxAcquireSpeed,
+                        comp._test4PlantAcquireStableTime,
+                        glm::max(comp.test4PlantAcquireTime, 0.05f),
+                        comp._test4ForwardTravel, comp._test4PlantDrift);
+                    abortSequence("new plant did not settle before acquisition timeout");
+                }
+            }
+            const bool locksOff = rag.locomotionFootLockWeights[0] <= 0.001f
+                               && rag.locomotionFootLockWeights[1] <= 0.001f
+                               && rag._locomotionFootLockForce[0] <= 0.5f
+                               && rag._locomotionFootLockForce[1] <= 0.5f;
+            const bool stablePlant = comp._test4PlantPoseCaptured
+                && comp._test4ContactL && comp._test4ContactR
+                && glm::length(leftVelocity) < 0.15f
+                && glm::length(rightVelocity) < 0.15f
+                && horizontalSpeed < 0.15f
+                && comp._test4StanceDrift <= 0.040f
+                && comp._test4PlantDrift <= 0.040f
+                && tiltDeg < 30.0f
+                && std::abs(tiltDeg - comp._test4InitialTilt) <= 10.0f
+                && !rag._locomotionSupportSaturated
+                && rag.locomotionLiftBone < 0
+                && rag._locomotionLiftForce <= 0.5f
+                && locksOff
+                && !comp._test4MotorSaturated;
+            const bool stepDistanceValid = comp._test4ForwardTravel >= 0.149f;
+            comp._test4SettleTime = stablePlant
+                ? comp._test4SettleTime + dt : 0.0f;
+            if (comp._test4SettleTime >= glm::max(
+                    comp.test4ContactSettleTime, 0.30f)) {
+                if (!stepDistanceValid) {
+                    abortSequence("settled step finished below 15 cm forward travel");
+                } else if (transferEnabled) {
+                    const float transferFraction = glm::clamp(
+                        comp.test5SupportFraction, 0.70f, 1.0f);
+                    glm::vec3 comStart = rag._locomotionCOM;
+                    glm::vec3 newPlant = swingFoot;
+                    comStart.y = comp._test4SupportTarget.y;
+                    newPlant.y = comp._test4SupportTarget.y;
+                    comp._test5TransferStartTarget = comp._test4SupportTarget;
+                    comp._test5TransferEndTarget = glm::mix(
+                        comStart, newPlant, transferFraction);
+                    comp._test5TransferT = 0.0f;
+                    comp._test5HoldStableTime = 0.0f;
+                    comp._test5ContactLossTime = 0.0f;
+                    comp._test4Phase = kTransfer;
+                    comp._test4PhaseTime = 0.0f;
+                    spdlog::info(
+                        "[LocoTest5] phase=TRANSFER oldSupport={} newSupport={} "
+                        "start=({:+.3f},{:+.3f},{:+.3f}) "
+                        "target=({:+.3f},{:+.3f},{:+.3f}) fraction={:.2f} time={:.2f}s",
+                        comp._test4SupportSide < 0 ? "LEFT" : "RIGHT",
+                        comp._test4SupportSide < 0 ? "RIGHT" : "LEFT",
+                        comp._test5TransferStartTarget.x,
+                        comp._test5TransferStartTarget.y,
+                        comp._test5TransferStartTarget.z,
+                        comp._test5TransferEndTarget.x,
+                        comp._test5TransferEndTarget.y,
+                        comp._test5TransferEndTarget.z,
+                        transferFraction,
+                        glm::max(comp.test5TransferTime, 0.05f));
+                } else {
+                    comp._test4Phase = kComplete;
+                    comp._test4PhaseTime = 0.0f;
+                    spdlog::info(
+                        "[LocoTest4] COMPLETE support={} forward={:.3f} "
+                        "drift=({:.3f},{:.3f}) tilt=({:.1f}->{:.1f}, peak={:.1f}) "
+                        "touchdownVy={:+.3f} normalY={:.2f} maxMotorRatio={:.2f}",
+                        comp._test4SupportSide < 0 ? "LEFT" : "RIGHT",
+                        comp._test4ForwardTravel,
+                        comp._test4MaxStanceDrift, comp._test4MaxPlantDrift,
+                        comp._test4InitialTilt, tiltDeg, comp._test4PeakTilt,
+                        comp._test4TouchdownVy, comp._test4TouchdownNormalY,
+                        comp._test4MaxMotorRatio);
+                }
+            }
+        } else if (comp._test4Phase == kTransfer) {
+            if (comp._test4PhaseTime >= glm::max(comp.test5TransferTime, 0.05f)) {
+                comp._test4Phase = kHold;
+                comp._test4PhaseTime = 0.0f;
+                comp._test5HoldStableTime = 0.0f;
+                spdlog::info(
+                    "[LocoTest5] phase=HOLD transfer=1.00 COMerr={:.3f} "
+                    "distance=(old={:.3f},new={:.3f}) speed={:.3f} "
+                    "contact=({},{}) drift=({:.3f},{:.3f}) tilt={:.1f}",
+                    comp._test5ComError,
+                    comp._test5ComToOldSupport,
+                    comp._test5ComToNewSupport,
+                    comp._test5ComHorizontalSpeed,
+                    comp._test4ContactL ? "L" : "-",
+                    comp._test4ContactR ? "R" : "-",
+                    comp._test4StanceDrift, comp._test4PlantDrift, tiltDeg);
+            }
+        } else if (comp._test4Phase == kHold) {
+            const float comTolerance = glm::max(comp.test5ComTolerance, 0.01f);
+            const float newSupportRadius = glm::max(comTolerance, 0.065f);
+            const bool comAtTarget = comp._test5ComError <= comTolerance;
+            const bool insideNewSupport =
+                comp._test5ComToNewSupport <= newSupportRadius;
+            // We do not yet expose a per-foot normal impulse. Being decisively closer to
+            // the new sole while both contacts remain is the geometric unload predicate;
+            // Test 6 will then prove the old foot can become the next swing foot.
+            const bool oldLegUnloaded = comp._test5ComToNewSupport + 0.020f
+                                      < comp._test5ComToOldSupport;
+            const bool locksOff = rag.locomotionFootLockWeights[0] <= 0.001f
+                               && rag.locomotionFootLockWeights[1] <= 0.001f
+                               && rag._locomotionFootLockForce[0] <= 0.5f
+                               && rag._locomotionFootLockForce[1] <= 0.5f;
+            const bool stableTransfer = comAtTarget && insideNewSupport
+                && oldLegUnloaded
+                && swingContactNow && stanceContactNow
+                && glm::length(leftVelocity) < 0.15f
+                && glm::length(rightVelocity) < 0.15f
+                && comp._test5ComHorizontalSpeed < 0.15f
+                && comp._test4StanceDrift <= 0.040f
+                && comp._test4PlantDrift <= 0.040f
+                && tiltDeg < 30.0f
+                && !rag._locomotionSupportSaturated
+                && rag.locomotionLiftBone < 0
+                && rag._locomotionLiftForce <= 0.5f
+                && locksOff
+                && !comp._test4MotorSaturated;
+            comp._test5HoldStableTime = stableTransfer
+                ? comp._test5HoldStableTime + dt : 0.0f;
+
+            if (comp._test5HoldStableTime >= glm::max(
+                    comp.test5HoldTime, 0.50f)) {
+                comp._test4Phase = kComplete;
+                comp._test4PhaseTime = 0.0f;
+                spdlog::info(
+                    "[LocoTest5] COMPLETE oldSupport={} newSupport={} "
+                    "COMerr={:.3f} distance=(old={:.3f},new={:.3f}) "
+                    "hold={:.3f}s drift=({:.3f},{:.3f}) "
+                    "tilt=({:.1f}->{:.1f},peak={:.1f}) supportForce={:.0f} "
+                    "supportSat={} maxMotorRatio={:.2f}",
+                    comp._test4SupportSide < 0 ? "LEFT" : "RIGHT",
+                    comp._test4SupportSide < 0 ? "RIGHT" : "LEFT",
+                    comp._test5ComError,
+                    comp._test5ComToOldSupport,
+                    comp._test5ComToNewSupport,
+                    comp._test5HoldStableTime,
+                    comp._test4MaxStanceDrift, comp._test4MaxPlantDrift,
+                    comp._test4InitialTilt, tiltDeg, comp._test4PeakTilt,
+                    glm::length(rag._locomotionSupportForce),
+                    rag._locomotionSupportSaturated ? "YES" : "no",
+                    comp._test4MaxMotorRatio);
+            } else if (comp._test4PhaseTime >= glm::max(
+                           comp.test5HoldTimeout,
+                           glm::max(comp.test5HoldTime, 0.50f))) {
+                spdlog::warn(
+                    "[LocoTest5] TRANSFER_CHECK result=FAIL "
+                    "COMerr={:.3f}/{:.3f}[{}] newRegion={:.3f}/{:.3f}[{}] "
+                    "oldUnload=({:.3f}+0.020<{:.3f})[{}] "
+                    "contact=({},{}) speed={:.3f}/0.150 drift=({:.3f},{:.3f}) "
+                    "tilt={:.1f}/30 supportSat={} motorSat={} stable={:.3f}/{:.3f}s",
+                    comp._test5ComError, comTolerance,
+                    comAtTarget ? "ok" : "FAIL",
+                    comp._test5ComToNewSupport, newSupportRadius,
+                    insideNewSupport ? "ok" : "FAIL",
+                    comp._test5ComToNewSupport,
+                    comp._test5ComToOldSupport,
+                    oldLegUnloaded ? "ok" : "FAIL",
+                    comp._test4ContactL ? "L" : "-",
+                    comp._test4ContactR ? "R" : "-",
+                    comp._test5ComHorizontalSpeed,
+                    comp._test4StanceDrift, comp._test4PlantDrift,
+                    tiltDeg,
+                    rag._locomotionSupportSaturated ? "YES" : "no",
+                    comp._test4MotorSaturated ? "YES" : "no",
+                    comp._test5HoldStableTime,
+                    glm::max(comp.test5HoldTime, 0.50f));
+                abortSequence("support transfer did not settle before hold timeout");
+            }
+        } else if (comp._test4Phase == kAbort
+                   && std::abs(comp._test4ComCommand) < 0.01f
+                   && std::abs(comp._test4ComLateral) < 0.01f
+                   && (!transferEnabled || horizontalDistance(
+                           rag._locomotionCOM, comp._test4ComBaseline) < 0.05f)
+                   && comp._test4PhaseTime >= glm::max(comp.test2ShiftTime, 0.01f)) {
+            spdlog::warn(
+                "[LocoTest4] reset after aborted sequence support={} "
+                "maxDrift=({:.3f},{:.3f}) peakTilt={:.1f}",
+                comp._test4SupportSide < 0 ? "LEFT" : "RIGHT",
+                comp._test4MaxStanceDrift, comp._test4MaxPlantDrift,
+                comp._test4PeakTilt);
+            comp._test4Phase = kIdle;
+            comp._test4PhaseTime = 0.0f;
+            comp._test4SupportSide = 0;
+            comp._test4TouchdownAccepted = false;
+        }
+
+        comp._test4PrevSwingContact = swingContactNow;
+
+        if (comp.debug) {
+            DebugDraw::Sphere(comp._test4ComBaseline, 0.025f, {0.2f, 0.7f, 1.0f});
+            DebugDraw::Sphere(supportTarget, 0.035f, {1.0f, 0.7f, 0.1f});
+            DebugDraw::Line(comp._test4ComBaseline, supportTarget, {1.0f, 0.7f, 0.1f});
+            DebugDraw::Sphere(comp._test4Foothold, 0.045f, {0.2f, 1.0f, 0.2f});
+            DebugDraw::Sphere(desiredFoot, 0.035f, {1.0f, 0.4f, 0.1f});
+            DebugDraw::Line(swingFoot, desiredFoot, {1.0f, 0.4f, 0.1f});
+            if (comp._test4Phase >= kSwing && comp._test4Phase <= kComplete) {
+                glm::vec3 previous = trajectoryPoint(0.0f);
+                for (int i = 1; i <= 12; ++i) {
+                    const glm::vec3 next = trajectoryPoint(static_cast<float>(i) / 12.0f);
+                    DebugDraw::Line(previous, next, {0.8f, 0.3f, 1.0f});
+                    previous = next;
+                }
+                DebugDraw::Line(hoverTarget, comp._test4Foothold,
+                                {0.2f, 0.9f, 1.0f});
+            }
         }
     }
 
@@ -2925,15 +4420,21 @@ private:
             BlendPose(animator, leg.footIdx, leg.footCommand, poseWeight);
         };
 
-        // Test 3 owns exactly one swing leg during takeoff/lift/hold/lower/contact. Do not even
-        // update the standing command for that leg here: blending two pose writers was one
-        // of the feedback conflicts this validation ladder is intended to eliminate.
+        // Tests 3-5 own exactly one swing leg while their isolated IK/local touchdown
+        // pose is active. Do not update the standing command for that leg here: blending two
+        // pose writers is precisely the feedback conflict this validation ladder excludes.
         const bool test3OwnsSwing = comp.validationTest == 3
             && comp._test3Phase >= 2 && comp._test3Phase <= 6;
-        const bool test3OwnsLeft = test3OwnsSwing && comp._test3SupportSide > 0;
-        const bool test3OwnsRight = test3OwnsSwing && comp._test3SupportSide < 0;
-        if (!test3OwnsLeft) solveLeg(comp._legL, -1.0f, canStep);
-        if (!test3OwnsRight) solveLeg(comp._legR, 1.0f, canStep);
+        const bool test4OwnsSwing = (comp.validationTest == 4 || comp.validationTest == 5)
+            && comp._test4Phase >= 2 && comp._test4Phase <= 10;
+        const bool validationOwnsLeft =
+            (test3OwnsSwing && comp._test3SupportSide > 0)
+            || (test4OwnsSwing && comp._test4SupportSide > 0);
+        const bool validationOwnsRight =
+            (test3OwnsSwing && comp._test3SupportSide < 0)
+            || (test4OwnsSwing && comp._test4SupportSide < 0);
+        if (!validationOwnsLeft) solveLeg(comp._legL, -1.0f, canStep);
+        if (!validationOwnsRight) solveLeg(comp._legR, 1.0f, canStep);
 
         // Small phase-continuous torso counter-motion supplies life without an authored clip.
         // It is world-referenced like the paper's torso target and converted through the live

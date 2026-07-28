@@ -64,6 +64,17 @@ struct RagdollComponent {
     // mode as soon as the entry is cleared, so diagnostics cannot leave a stale limp joint.
     int locomotionDisabledMotorBones[4] { -1, -1, -1, -1 };
 
+    // Previous-substep powered-leg motor readback. Jolt reports the angular impulse
+    // actually applied by each motor; PhysicsSystem converts it to torque using the fixed
+    // step and compares the strongest axis against that joint's configured torque limit.
+    // Slots are populated by child bone index so validation code does not depend on joint
+    // iteration order. These are diagnostics only and never feed a controller.
+    int _locomotionMotorBones[6] { -1, -1, -1, -1, -1, -1 };
+    float _locomotionMotorAppliedTorque[6] { 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f };
+    float _locomotionMotorTorqueLimit[6] { 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f };
+    float _locomotionMotorSaturationRatio[6] { 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f };
+    bool _locomotionMotorSaturated[6] { false, false, false, false, false, false };
+
     float locomotionMoveForce = 400.0f;
     float locomotionBalanceForce = 2500.0f;
     float locomotionMoveLean = 0.12f;

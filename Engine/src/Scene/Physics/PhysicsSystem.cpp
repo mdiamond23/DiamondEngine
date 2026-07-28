@@ -1890,6 +1890,15 @@ static void SyncRagdollPowered(Scene& scene, PhysicsSystem::Impl& impl)
         auto* anim = reg.try_get<AnimatorComponent>(inst.entity);
         auto* rag  = reg.try_get<RagdollComponent>(inst.entity);
         if (!smc || !anim) continue;
+        if (rag) {
+            for (int i = 0; i < 6; ++i) {
+                rag->_locomotionMotorBones[i] = -1;
+                rag->_locomotionMotorAppliedTorque[i] = 0.0f;
+                rag->_locomotionMotorTorqueLimit[i] = 0.0f;
+                rag->_locomotionMotorSaturationRatio[i] = 0.0f;
+                rag->_locomotionMotorSaturated[i] = false;
+            }
+        }
         const Diamond::Skeleton& skel = smc->skeleton;
         const int n = (int)skel.bones.size();
         if ((int)anim->pose.size() != n) continue;   // pose not built yet this frame
@@ -1963,6 +1972,40 @@ static void SyncRagdollPowered(Scene& scene, PhysicsSystem::Impl& impl)
                 boneName == "leg_joint_L_1" || boneName == "leg_joint_R_1" ||
                 boneName == "leg_joint_L_2" || boneName == "leg_joint_R_2" ||
                 boneName == "leg_joint_L_3" || boneName == "leg_joint_R_3");
+            float appliedMotorTorque = 0.0f;
+            if (c->GetSubType() == JPH::EConstraintSubType::Hinge) {
+                const float impulse = static_cast<JPH::HingeConstraint*>(c)
+                    ->GetTotalLambdaMotor();
+                appliedMotorTorque = std::abs(impulse) / FIXED_DT;
+            } else if (c->GetSubType() == JPH::EConstraintSubType::SwingTwist) {
+                const JPH::Vec3 impulse = static_cast<JPH::SwingTwistConstraint*>(c)
+                    ->GetTotalLambdaMotor();
+                const float maxImpulse = glm::max(std::abs(impulse.GetX()),
+                    glm::max(std::abs(impulse.GetY()), std::abs(impulse.GetZ())));
+                appliedMotorTorque = maxImpulse / FIXED_DT;
+            }
+            const float motorSaturationRatio = jt > 1e-4f
+                ? appliedMotorTorque / jt : 0.0f;
+            const bool motorSaturated = !motorDisabled && jt > 1e-4f
+                && motorSaturationRatio >= 0.98f;
+            if (rag && isLegMotor) {
+                int motorSlot = -1;
+                for (int i = 0; i < 6; ++i) {
+                    if (rag->_locomotionMotorBones[i] == cb) {
+                        motorSlot = i;
+                        break;
+                    }
+                    if (motorSlot < 0 && rag->_locomotionMotorBones[i] < 0)
+                        motorSlot = i;
+                }
+                if (motorSlot >= 0) {
+                    rag->_locomotionMotorBones[motorSlot] = cb;
+                    rag->_locomotionMotorAppliedTorque[motorSlot] = appliedMotorTorque;
+                    rag->_locomotionMotorTorqueLimit[motorSlot] = jt;
+                    rag->_locomotionMotorSaturationRatio[motorSlot] = motorSaturationRatio;
+                    rag->_locomotionMotorSaturated[motorSlot] = motorSaturated;
+                }
+            }
             if (logLegMotors && isLegMotor) {
                 const glm::quat parentRot = FromJolt(bi.GetRotation(inst.bodies[j.parentSlot].id));
                 const glm::quat childRot = FromJolt(bi.GetRotation(inst.bodies[j.childSlot].id));
@@ -1971,13 +2014,15 @@ static void SyncRagdollPowered(Scene& scene, PhysicsSystem::Impl& impl)
                 const glm::quat actualDelta = glm::normalize(glm::conjugate(restRel) * actualRel);
                 const glm::quat errorDelta = glm::normalize(glm::conjugate(actualRel) * target);
                 spdlog::info(
-                    "[LocoMotor] {} type={} muted={} command={:.1f} actual={:.1f} error={:.1f} commandTwist={:+.1f} actualTwist={:+.1f} torque={:.0f} limits=({:.0f},{:.0f},{:.0f},{:.0f})",
+                    "[LocoMotor] {} type={} muted={} command={:.1f} actual={:.1f} error={:.1f} commandTwist={:+.1f} actualTwist={:+.1f} applied={:.1f}/{:.0f} ratio={:.2f} sat={} limits=({:.0f},{:.0f},{:.0f},{:.0f})",
                     boneName,
                     c->GetSubType() == JPH::EConstraintSubType::Hinge ? "hinge" : "swing",
                     motorDisabled ? "YES" : "no",
                     QuatAngleDeg(commandDelta), QuatAngleDeg(actualDelta), QuatAngleDeg(errorDelta),
                     SignedTwistDeg(commandDelta, j.twistAxisLocal),
-                    SignedTwistDeg(actualDelta, j.twistAxisLocal), jt,
+                    SignedTwistDeg(actualDelta, j.twistAxisLocal),
+                    appliedMotorTorque, jt, motorSaturationRatio,
+                    motorSaturated ? "YES" : "no",
                     j.cc.swingNormalDeg, j.cc.swingPlaneDeg,
                     j.cc.twistMinDeg, j.cc.twistMaxDeg);
                 loggedLegMotor = true;

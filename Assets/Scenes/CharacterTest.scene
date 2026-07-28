@@ -317,13 +317,13 @@
           0.0
         ],
         "position": [
-          -1.7043547630310059,
-          2.0026912689208984,
-          3.8198235034942627
+          -1.7214547395706177,
+          2.5783793926239014,
+          3.73818039894104
         ],
         "rotation": [
-          0.9869964122772217,
-          -0.16074256598949432,
+          0.9869963526725769,
+          -0.16074255108833313,
           -0.0,
           -0.0
         ],
@@ -414,7 +414,7 @@
         "loop": true,
         "playing": true,
         "speed": 1.0,
-        "time": 142.3484649658203
+        "time": 202.58544921875
       },
       "ik": {
         "chains": [
@@ -439,9 +439,9 @@
               0.0
             ],
             "targetWorldPos": [
-              -1.8026578426361084,
-              0.934468686580658,
-              -4.592865943908691
+              -1.817501425743103,
+              1.510084629058838,
+              -4.671512603759766
             ],
             "tiltToNormal": true,
             "tiltWeight": 0.800000011920929,
@@ -468,9 +468,9 @@
               0.0
             ],
             "targetWorldPos": [
-              -1.6206564903259277,
-              0.9344684481620789,
-              -4.592865467071533
+              -1.6355000734329224,
+              1.5100843906402588,
+              -4.671512603759766
             ],
             "tiltToNormal": true,
             "tiltWeight": 0.800000011920929,
@@ -577,13 +577,35 @@
           "test3TakeoffHeight": 0.05999999865889549,
           "test3TakeoffMaxForce": 180.0,
           "test3TakeoffTime": 0.5,
+          "test4ArrivalHeight": 0.05000000074505806,
+          "test4ArrivalSettleTime": 0.10000000149011612,
+          "test4ArrivalTimeout": 0.6000000238418579,
+          "test4ArrivalTolerance": 0.019999999552965164,
+          "test4ContactSettleTime": 0.30000001192092896,
+          "test4DescentTime": 0.3499999940395355,
+          "test4PlantAcquireMaxSpeed": 0.05000000074505806,
+          "test4PlantAcquireTime": 0.10000000149011612,
+          "test4PlantAcquireTimeout": 0.6000000238418579,
+          "test4PlantTimeout": 0.3499999940395355,
+          "test4SafeReachFraction": 0.9900000095367432,
+          "test4StepLength": 0.22499999403953552,
+          "test4SwingHeight": 0.10000000149011612,
+          "test4SwingTime": 0.8999999761581421,
+          "test4TargetTolerance": 0.03999999910593033,
+          "test4TouchdownMaxVerticalSpeed": 0.25,
+          "test4TouchdownMinNormalY": 0.699999988079071,
+          "test5ComTolerance": 0.03999999910593033,
+          "test5HoldTime": 0.5,
+          "test5HoldTimeout": 1.5,
+          "test5SupportFraction": 0.9200000166893005,
+          "test5TransferTime": 1.0,
           "torsoBone": "torso_joint_3",
           "torsoKd": 10.0,
           "torsoKp": 100.0,
           "turnRate": 10.0,
           "uprightScale": 1.0,
           "useHipCOMProxy": true,
-          "validationTest": 3,
+          "validationTest": 5,
           "weightShiftTime": 0.30000001192092896
         },
         "Punch": {
@@ -633,9 +655,9 @@
           0.0
         ],
         "position": [
-          -1.7070837020874023,
-          -0.13959965109825134,
-          0.4023429751396179
+          -1.721505045890808,
+          0.436084508895874,
+          0.32423630356788635
         ],
         "rotation": [
           -0.49999958276748657,

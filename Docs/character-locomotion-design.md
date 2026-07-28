@@ -1,6 +1,6 @@
 # Character Locomotion Design
 
-Last updated: 2026-07-27
+Last updated: 2026-07-28
 
 ## Goal
 
@@ -231,6 +231,36 @@ swing-foot trajectory.
 **Procedure:** move one foot 15-25 cm forward, touch down, and hold double support for at
 least 0.3 seconds.
 
+**Runtime controls:** select `Test 4 - one forward step`, wait for `baseline=ready`, then
+press F6 for left support/right step or F7 for the mirrored run. The controller reuses Test
+3's validated weight shift and contact-release phases, latches a 22.5 cm forward foothold once,
+and follows a zero-end-velocity swing arc to a 5 cm hover target. The foot must remain within
+2 cm horizontally for 0.1 seconds during a bounded arrival phase before a separate smooth
+vertical descent. After a valid touchdown it continues solving landing IK until both contacts
+remain present and swing-foot speed stays at or below 0.05 m/s for 0.1 seconds. It then captures
+the achieved local leg pose and holds the original support side; acquisition has a bounded
+0.6-second timeout so a moving plant cannot stall the test indefinitely.
+support transfer, automatic alternation,
+and all world-space foot locks remain disabled. F8 discards the current capture and waits for
+a new settled baseline; it never moves a body, so reload the scene before the mirrored run when
+an identical starting stance is required.
+
+If the requested foothold exceeds the captured swing-leg reach, Test 4 shortens only its
+horizontal displacement and raycasts the shortened location again. The ground-derived foot
+height is never moved toward the hip by the reach clamp. The planner may use up to 99% of the
+measured anatomical thigh-plus-shin length, capped below 99.5% to retain an anti-singularity
+margin; a captured physical pose already beyond that cap remains valid but receives no further
+extension.
+
+`[LocoTest4]` reports the latched foothold, desired and measured foot positions, trajectory
+progress, clearance, forward travel, contact edge, touchdown normal, API and finite-difference
+vertical speeds, forward/lateral/vertical target-error components, sole-up direction, contact
+point in foot-local coordinates, both plant drifts, initial/peak/final tilt, support and lift
+force, lock weights/forces, and direct Jolt motor applied-torque/limit saturation readback.
+`TOUCHDOWN_CHECK` names every passing and failing predicate. The touchdown gate requires an
+upward normal, at most 0.25 m/s vertical speed, and no more than 4 cm horizontal target error;
+completion additionally requires at least 15 cm of retained forward travel.
+
 **Pass:**
 
 - the foot clears the floor, travels forward, and descends without a discontinuity;
@@ -238,6 +268,11 @@ least 0.3 seconds.
 - neither plant drifts more than 4 cm after settling;
 - tilt stays below 30 degrees and finishes within 10 degrees of its pre-step value;
 - no lock force or motor remains saturated after the settling interval.
+
+**Status: PASSED 2026-07-28.** Both mirrored runs completed without an abort. F6 stepped the right foot
+15.1 cm with 0.8 cm final plant drift; F7 stepped the left foot 20.5 cm with 0.2 cm final plant
+drift. Both touchdown gates accepted a real upward contact below the vertical-speed limit, and
+both runs finished within the tilt, drift, lock-force, and motor-saturation limits.
 
 ## Test 5 - Support transfer
 
@@ -250,6 +285,21 @@ next swing or fighting two plant controllers.
 
 **Procedure:** after Test 4 touchdown, transfer support to the new foot and hold for 0.5
 seconds.
+
+**Runtime controls:** select `Test 5 - support transfer`, wait for `baseline=ready`, then
+press F6 for left support/right step and transfer or F7 for the mirror. Test 5 runs the
+validated Test 4 sequence unchanged. After its stable plant capture, the support target follows
+a smooth one-second curve from the old stance-side target to 92% of the measured distance from
+the current COM to the new plant. The target velocity is supplied to the COM controller, both
+foot contacts remain required, and the captured landing pose is held throughout. Opposite-foot
+lift, foot locks, and automatic role alternation remain disabled. F8 recaptures the baseline.
+
+`[LocoTest5]` reports transfer progress, requested and measured COM position error, horizontal
+COM speed, COM distance from the old and new support feet, both contacts, both plant drifts,
+tilt, support force/saturation, and motor saturation. A per-foot normal impulse is not currently
+available, so old-leg unloading is tested geometrically: the COM must enter the new sole's
+support region and be at least 2 cm closer to it than to the old sole. Test 6 will provide the
+stronger functional proof by lifting that old support foot for the mirrored second step.
 
 **Pass:**
 
@@ -297,28 +347,11 @@ Turning, slopes, uneven terrain, and recovery are separate later milestones.
 
 ## Current status
 
-Tests 1 and 2 have passed. Test 3 is the only active target. The first Test 3 run exposed a
-specific closed-chain failure: the high-friction swing sole retained contact while its hip and
-knee motor commands tracked, so the leg folded against the planted foot, dragged the pelvis,
-and made the other foot slide. F6/F7 role selection and COM direction were correct in the log;
-the missing invariant was swing-contact release.
-
-Test 3 now moves the COM 92% of the way toward the stance-foot center, applies a capped internal
-toe-off force between the swing foot and pelvis until both clearance and a sustained contact exit
-are measured, and then disables that force. During takeoff/lift/hold/lower/contact, the normal standing pose writer
-skips the swing leg; the stance leg retains its validated local standing pose. Walking, forward
-foot planning, plant acquisition, support transfer, and foot locks remain disabled. This does
-not pin the foot or add net force to the character: the toe-off force has an equal-and-opposite
-pelvis reaction and exists only to open the sticky floor contact before IK owns the airborne leg.
-
-The next Test 3 inspection exposed a ragdoll construction defect below the controller. Foot
-support boxes were hard-coded to 18 x 5 x 28 cm, centered on terminal foot-bone pivots that lie
-on the ground plane, and drawn with a different transform than the real Jolt shape. The boxes
-therefore straddled the floor and their long rotating edges retained contact during toe-off.
-Foot bodies now take their dimensions and bind-world vertical center offset from the ragdoll
-asset. CesiumMan uses 13 x 5 x 22 cm boxes offset upward 2.7 cm, and debug drawing stores the
-exact Jolt wrapper transform. Test 3 also recaptures both foot positions before every F6/F7 run,
-so a prior landing offset cannot make the mirrored run abort before takeoff.
+Tests 1-4 have passed. Test 5 is implemented and is the active runtime-validation target. It
+reuses the validated Test 4 step and plant pose, then smoothly transfers the COM projection into
+the newly planted foot's support region and requires a stable 0.5-second hold. The former stance
+foot remains planted, foot-lock authority stays zero, and automatic alternation remains disabled
+so the transfer is the only new behavior under test.
 
 ## Relationship to SIMBICON
 
