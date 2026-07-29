@@ -37,11 +37,16 @@ struct RagdollComponent {
     // when locomotionSupportTargetWeight is zero and let validation distinguish a stable
     // shift from one held together by a permanently saturated force cap.
     glm::vec3 _locomotionSupportForce { 0.0f };
+    glm::vec3 _locomotionSupportPositionForce { 0.0f };
+    glm::vec3 _locomotionSupportDampingForce { 0.0f };
     bool _locomotionSupportSaturated = false;
     // Small procedural offset from the authored standing hip height. Locomotion uses this
     // for continuous pelvis bob without moving the entity transform or teleporting bodies.
     float locomotionHeightOffset = 0.0f;
     glm::vec3 _locomotionRootVel { 0.0f };
+    glm::vec3 _locomotionRootAngularVelocity { 0.0f };
+    glm::vec3 _locomotionUprightDeltaAngularVelocity { 0.0f };
+    bool _locomotionUprightSaturated = false;
     glm::vec3 _locomotionCOM { 0.0f };
     glm::vec3 _locomotionCOMVel { 0.0f };
     bool _locomotionCOMValid = false;

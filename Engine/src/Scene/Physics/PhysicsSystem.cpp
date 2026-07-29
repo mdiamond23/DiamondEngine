@@ -1567,9 +1567,14 @@ static void DriveRagdollLocomotionRoot(PhysicsSystem::Impl& impl, RagdollInstanc
     const glm::vec3 vCur = FromJolt(bi.GetLinearVelocity(root.id));
     const glm::vec3 wCur = FromJolt(bi.GetAngularVelocity(root.id));
     rag._locomotionRootVel = vCur;
+    rag._locomotionRootAngularVelocity = wCur;
     glm::vec3 moveF(0.0f), balF(0.0f);
     rag._locomotionSupportForce = glm::vec3(0.0f);
+    rag._locomotionSupportPositionForce = glm::vec3(0.0f);
+    rag._locomotionSupportDampingForce = glm::vec3(0.0f);
     rag._locomotionSupportSaturated = false;
+    rag._locomotionUprightDeltaAngularVelocity = glm::vec3(0.0f);
+    rag._locomotionUprightSaturated = false;
     rag._locomotionLiftForce = 0.0f;
 
     // Mass-weighted COM and the support segment formed by grounded feet.
@@ -1786,16 +1791,23 @@ static void DriveRagdollLocomotionRoot(PhysicsSystem::Impl& impl, RagdollInstanc
             const float frequency = glm::max(rag.locomotionCOMSupportFreq, 0.0f);
             const float damping = glm::max(rag.locomotionCOMSupportDamping, 0.0f);
             const float omega = glm::two_pi<float>() * frequency;
-            glm::vec3 accel = omega * omega * (targetPos - comXZ)
-                            + 2.0f * damping * omega * (targetVel - horizontalCOMVel);
+            glm::vec3 positionAccel = omega * omega * (targetPos - comXZ);
+            glm::vec3 dampingAccel =
+                2.0f * damping * omega * (targetVel - horizontalCOMVel);
+            glm::vec3 accel = positionAccel + dampingAccel;
             const float maxAccel = glm::max(rag.locomotionCOMSupportMaxAccel, 0.0f);
             if (const float length = glm::length(accel);
                 length > maxAccel && length > 1e-6f) {
-                accel *= maxAccel / length;
+                const float scale = maxAccel / length;
+                positionAccel *= scale;
+                dampingAccel *= scale;
+                accel *= scale;
                 rag._locomotionSupportSaturated = true;
             }
             supportTargetForce = accel * inst.totalMass;
             rag._locomotionSupportForce = supportTargetForce;
+            rag._locomotionSupportPositionForce = positionAccel * inst.totalMass;
+            rag._locomotionSupportDampingForce = dampingAccel * inst.totalMass;
         }
         moveF = velErr * glm::max(rag.locomotionMoveForce, 0.0f) * legacy;
         balF = glm::mix(normalBalanceForce, supportTargetForce, supportTargetWeight) * legacy;
@@ -1826,8 +1838,12 @@ static void DriveRagdollLocomotionRoot(PhysicsSystem::Impl& impl, RagdollInstanc
             const float ws = glm::two_pi<float>() * glm::max(rag.locomotionBalanceFreq, 0.0f);
             glm::vec3 dw = (wCur + axis * (ws * ws * angle * FIXED_DT)) / (1.0f + 2.0f * ws * FIXED_DT) - wCur;
             const float maxDw = glm::max(rag.locomotionBalanceAccel, 0.0f) * FIXED_DT;
-            if (const float l = glm::length(dw); l > maxDw && l > 1e-6f) dw *= maxDw / l;
+            if (const float l = glm::length(dw); l > maxDw && l > 1e-6f) {
+                dw *= maxDw / l;
+                rag._locomotionUprightSaturated = true;
+            }
             dw *= glm::clamp(rag.locomotionUprightScale, 0.0f, 1.0f) * legacy;
+            rag._locomotionUprightDeltaAngularVelocity = dw;
             bi.SetAngularVelocity(root.id, ToJolt(wCur + dw));
         }
     }

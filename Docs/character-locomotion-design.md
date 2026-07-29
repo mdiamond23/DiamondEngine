@@ -293,6 +293,9 @@ a smooth one-second curve from the old stance-side target to 92% of the measured
 the current COM to the new plant. The target velocity is supplied to the COM controller, both
 foot contacts remain required, and the captured landing pose is held throughout. Opposite-foot
 lift, foot locks, and automatic role alternation remain disabled. F8 recaptures the baseline.
+Because F8 does not move any body back to the original stance, reload the scene before the
+mirrored run; recapturing after a completed step creates a staggered-foot condition belonging
+to Test 6 rather than an isolated Test 5 baseline.
 
 `[LocoTest5]` reports transfer progress, requested and measured COM position error, horizontal
 COM speed, COM distance from the old and new support feet, both contacts, both plant drifts,
@@ -309,6 +312,13 @@ stronger functional proof by lifting that old support foot for the mirrored seco
 - plant drift stays below 4 cm and tilt below 30 degrees;
 - the final state is stable enough to perform Test 3 with the opposite leg.
 
+**Status: PASSED 2026-07-28.** Fresh-scene runs completed in both directions after adding the
+safe anatomical reach reserve. F6 retained an 18.0 cm step and transferred within 0.5 cm of its
+COM target, with 2.6/3.0 cm maximum plant drift and 15.7 degrees peak tilt. F7 retained 20.4 cm,
+finished within 0.5 cm of its COM target, and held with 2.3/0.2 cm maximum drift and 16.4 degrees
+peak tilt. Both runs held the COM 1.5-1.9 cm from the new support foot for at least 0.5 seconds,
+kept both contacts, and reported no support or motor saturation.
+
 ## Test 6 - Second step
 
 **Purpose:** validate phase handoff and expose accumulated error before continuous walking
@@ -321,6 +331,23 @@ can hide it.
 **Procedure:** complete one step, transfer support, complete the mirrored second step, then
 settle in double support.
 
+**Runtime controls:** select `Test 6 - second step`, wait for `baseline=ready`, then press F6
+for left support/right-first or F7 for the mirrored sequence. One press runs both steps. After
+the first validated Test 5 transfer and 0.5-second hold, the controller requires an additional
+0.25 seconds of both contacts, low foot/COM speed, sub-30-degree tilt, and unsaturated support.
+It then captures both legs' current physical local poses, preserves the original world
+right/forward basis, swaps support roles exactly once, and starts the second weight shift. The
+second step and transfer use the same physical touchdown and support gates as the first. A third
+step is categorically disabled; F8 discards the sequence and recaptures the current pose but does
+not restore the scene.
+
+`[LocoTest6]` reports `STEP1_COMPLETE`, the measured `ROLE_SWAP`, both transfer phases,
+`COMPLETE_CHECK`, and final `COMPLETE`. It records each step's retained forward travel, maximum
+plant drift, peak tilt, and maximum motor-saturation ratio, plus left/right contact-transition
+counts. Completion requires exactly two steps, exactly one airborne/contact cycle per foot,
+final tilt within 10 degrees of the original baseline, no more than 1.5 cm drift growth on the
+second step, and no more than 0.05 motor-ratio growth.
+
 **Pass:**
 
 - exactly two alternating steps complete without state resets or fall-gate chatter;
@@ -328,6 +355,12 @@ settle in double support.
 - no visible jitter, IK branch change, or prolonged saturation occurs;
 - tilt after the second step is within 10 degrees of the initial standing tilt;
 - foot drift and motor tracking error do not grow from the first step to the second.
+
+**Status: PASSED 2026-07-28.** Fresh-scene F6 and F7 runs each completed exactly two alternating
+steps and one measured role swap without an abort. F6 retained 16.4/20.0 cm and F7 retained
+20.2/20.8 cm on the first/second steps. Second-step plant drift stayed at 0.3/0.7 cm, drift and
+motor-ratio growth remained within tolerance, both feet produced exactly one airborne/contact
+cycle, and final tilt remained within 10 degrees of the initial standing tilt.
 
 ## Test 7 - Continuous gait
 
@@ -338,6 +371,68 @@ settle in double support.
 **Procedure:** first complete 10 steps at constant low speed, then walk for 60 seconds.
 Turning, slopes, uneven terrain, and recovery are separate later milestones.
 
+**Runtime controls:** select `Test 7 - continuous gait`, wait for `baseline=ready`, then press
+F6 for left support/right-first or F7 for the mirror. The default run stops automatically after
+10 completed steps. Enable `Test 7 60-Second Run` in the inspector for the endurance run; F8 may
+request an early controlled stop, which finishes the active step before recentering.
+
+Test 7 repeats Test 6's measured role-swap gate without resetting the physical pose. After each
+settled transfer it measures the step period and COM advance, then applies bounded desired-speed
+feedback to the next support-to-support advance. Unlike the isolated Test 4-6 footholds, every
+Test 7 target is placed ahead of the current stance foot while retaining the swing foot's lateral
+lane. This prevents alternating catch-up steps and makes the feedback operate on actual body
+advance. The 10 cm nominal advance is bounded to 6-14 cm, and the default 0.020 m/s speed target
+matches the deliberately slow validation cadence; neither is the eventual gameplay walking
+speed. The reach clamp must retain the minimum advance plus a target-tracking reserve before
+takeoff. Admission subtracts the filtered loss measured from prior physical landings instead of
+using an unrelated fixed margin, and plant acquisition verifies the same retained support advance
+before capturing the contact pose. During the walking sequence the dynamic-root height target
+ramps into a small 1.8 cm reach crouch and the Test 7 planner limits nominal usable leg reach to
+97.5% of the anatomical chain (without shortening an already longer captured pose). This preserves
+knee bend so small radial motor lag is not magnified into centimetres of horizontal landing error.
+The initial settled orientation of each sole is also kept as a separate flat-ground reference.
+Per-step physical state still seeds each new swing trajectory, but settled motor lag is not copied
+back into the support commands at plant acquisition or role swap. Swing blends from the measured
+takeoff orientation to the invariant sole reference over 0.35 seconds. A bounded horizontal
+task-space correction adds 45% of measured sole-position error plus 80 ms of target-velocity lead
+before the analytic ankle solve, capped at 4.5 cm. The correction therefore compensates joint-servo
+latency while converging back to the admitted foothold as the physical sole catches up.
+The velocity estimate is taken from the previous frame's nominal foot target before that history
+is advanced, so the configured 80 ms lead remains active during the moving swing rather than
+collapsing to zero. Late swing also constructs the local ankle target under the measured knee
+orientation and requires the physical sole to come within 10 degrees of its invariant ground
+orientation before descent. A toe/heel recontact at hover raises the desired sole center by 3 cm
+and receives a bounded 0.35 second angular-convergence window; it is never accepted as touchdown.
+After the transfer settles, Test 7 uses the double-support interval to recenter before the next
+role swap. It captures both the current support target and the midpoint of the two physical soles
+once at inter-step entry. A 0.35-second smoothstep then moves between those immutable endpoints,
+and its analytic derivative supplies the support-target velocity. The target is never rebuilt from
+the vibrating feet each frame, so contact noise cannot become a velocity command and feed back
+through the COM damping term. There is no separate posture-recovery torque and no phase-specific
+hip weakening; the existing implicit upright velocity spring remains the sole root-upright
+controller. Handoff cannot occur until recentering is complete, the COM is within 4 cm of the fixed
+midpoint, tilt is inside the 12-15 degree baseline-relative band, and the upright, support, and
+joint-motor controllers are unsaturated. Raw root angular velocity is diagnostic only: because the
+upright spring explicitly writes angular velocity each physics step, its pre-write measurement
+contains the controller's correction cycle and is not a valid handoff gate. These rules prevent a
+new step from starting in the middle of a saturated correction without adding a second controller
+that can fight the original upright spring.
+On stopping, both the support target and crouch return smoothly to standing before support and
+walking-pose ownership are released. Completion requires another 0.5 seconds in the validated Test
+1 standing conditions.
+
+`[LocoTest7]` reports `START`, every `STEP_COMPLETE` and `ROLE_SWAP`, periodic `STATUS` and
+`CONTROL_STATUS`, the
+`STOPPING`/`RETURN_STAND` transition, and a final `COMPLETE_CHECK`. The completion check verifies
+the requested step count or duration, exactly one airborne/contact cycle per step, positive COM
+travel, bounded drift/tilt/motor effort, convergence of the final two support advances and step
+periods, and a stable return to standing.
+`CONTROL_STATUS` decomposes the causal control state into signed root pitch/roll/yaw velocity,
+horizontal tilt rate, the upright spring's applied angular-velocity delta and saturation flag,
+support-target lateral/forward velocity, and the COM support controller's position (P) and damping
+(D) force components. `INTERSTEP_CHECK` reports each handoff gate separately so a timeout identifies
+the branch that failed rather than only its final tilt symptom.
+
 **Pass:**
 
 - 10 alternating steps complete with bounded tilt, plant drift, and tracking error;
@@ -347,11 +442,10 @@ Turning, slopes, uneven terrain, and recovery are separate later milestones.
 
 ## Current status
 
-Tests 1-4 have passed. Test 5 is implemented and is the active runtime-validation target. It
-reuses the validated Test 4 step and plant pose, then smoothly transfers the COM projection into
-the newly planted foot's support region and requires a stable 0.5-second hold. The former stance
-foot remains planted, foot-lock authority stays zero, and automatic alternation remains disabled
-so the transfer is the only new behavior under test.
+Tests 1-6 have passed. Test 7 is implemented and is the active runtime-validation target. It
+extends the validated measured role swap into continuous alternation, applies bounded desired-
+speed foot-placement feedback, and performs a controlled return to Test 1 standing. The next
+gate is a clean 10-step run in both starting directions; the 60-second endurance run follows.
 
 ## Relationship to SIMBICON
 
