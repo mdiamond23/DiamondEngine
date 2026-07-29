@@ -405,6 +405,9 @@ struct RagdollInstance {
     // transition, and so a reaction taking over the root (ReleaseLocomotionRoot)
     // leaves consistent bookkeeping.
     bool        _locomotionDriving = false;
+    // Always-present, normally disabled world-to-root SixDOF spring. Translation stays
+    // free; Test 7 enables pitch/roll upright motors plus a gentler heading motor.
+    uint32_t    locomotionUprightConstraintId = 0xFFFFFFFFu;
 };
 
 // ---------------------------------------------------------------------------
@@ -448,6 +451,28 @@ struct PhysicsSystem::Impl {
 // Signal callbacks and Physics:: API functions use this to reach Jolt.
 // ---------------------------------------------------------------------------
 static PhysicsSystem::Impl* s_Impl = nullptr;
+
+static JPH::SixDOFConstraint* GetLocomotionUprightConstraint(
+    PhysicsSystem::Impl& impl, const RagdollInstance& inst)
+{
+    if (inst.locomotionUprightConstraintId == 0xFFFFFFFFu) return nullptr;
+    auto it = impl.constraintMap.find(inst.locomotionUprightConstraintId);
+    if (it == impl.constraintMap.end()
+        || it->second->GetSubType() != JPH::EConstraintSubType::SixDOF)
+        return nullptr;
+    return static_cast<JPH::SixDOFConstraint*>(it->second.GetPtr());
+}
+
+static void DisableLocomotionUprightConstraint(
+    PhysicsSystem::Impl& impl, const RagdollInstance& inst)
+{
+    JPH::SixDOFConstraint* motor = GetLocomotionUprightConstraint(impl, inst);
+    if (!motor) return;
+    using Axis = JPH::SixDOFConstraint::EAxis;
+    motor->SetMotorState(Axis::RotationX, JPH::EMotorState::Off);
+    motor->SetMotorState(Axis::RotationY, JPH::EMotorState::Off);
+    motor->SetMotorState(Axis::RotationZ, JPH::EMotorState::Off);
+}
 
 static std::unordered_map<std::string, JPH::ShapeRefC> s_convexHullCache;
 static std::unordered_map<std::string, JPH::ShapeRefC> s_triangleMeshCache;
@@ -1261,6 +1286,45 @@ static void BuildRagdoll(PhysicsSystem::Impl& impl, Scene& scene,
     }
 
     if (inst.bodies.empty()) return;
+
+    // Solver-backed orientation spring, disabled until Test 7 requests it. Constraint X
+    // is world up, so RotationX is heading/yaw and RotationY/Z are the two tilt axes. All
+    // translations and rotations are free at the limit level: only force-limited position
+    // motors can act, and the solver sees the planted limb chain.
+    if (inst.rootBodySlot >= 0) {
+        const JPH::BodyID rootId = inst.bodies[inst.rootBodySlot].id;
+        JPH::BodyLockWrite lock(impl.joltSystem->GetBodyLockInterface(), rootId);
+        if (lock.Succeeded()) {
+            JPH::SixDOFConstraintSettings settings;
+            settings.mSpace = JPH::EConstraintSpace::WorldSpace;
+            settings.mPosition1 = settings.mPosition2 =
+                lock.GetBody().GetCenterOfMassPosition();
+            settings.mAxisX1 = settings.mAxisX2 = JPH::Vec3::sAxisY();
+            settings.mAxisY1 = settings.mAxisY2 = JPH::Vec3::sAxisZ();
+            settings.mMotorSettings[JPH::SixDOFConstraintSettings::RotationX]
+                .mSpringSettings = JPH::SpringSettings(
+                    JPH::ESpringMode::StiffnessAndDamping, 180.0f, 50.0f);
+            settings.mMotorSettings[JPH::SixDOFConstraintSettings::RotationX]
+                .SetTorqueLimit(80.0f);
+            for (int axis = JPH::SixDOFConstraintSettings::RotationY;
+                 axis <= JPH::SixDOFConstraintSettings::RotationZ; ++axis) {
+                settings.mMotorSettings[axis].mSpringSettings = JPH::SpringSettings(
+                    JPH::ESpringMode::StiffnessAndDamping, 700.0f, 100.0f);
+                settings.mMotorSettings[axis].SetTorqueLimit(250.0f);
+            }
+            JPH::Ref<JPH::TwoBodyConstraint> upright = settings.Create(
+                JPH::Body::sFixedToWorld, lock.GetBody());
+            if (upright) {
+                auto* motor = static_cast<JPH::SixDOFConstraint*>(upright.GetPtr());
+                motor->SetTargetOrientationCS(JPH::Quat::sIdentity());
+                impl.joltSystem->AddConstraint(upright);
+                const uint32_t cid = impl.nextConstraintId++;
+                impl.constraintMap[cid] = upright;
+                impl.bodyToConstraints[rootId.GetIndexAndSequenceNumber()].push_back(cid);
+                inst.locomotionUprightConstraintId = cid;
+            }
+        }
+    }
     rag._ragdollId = impl.nextRagdollId++;
     rag.mode       = RagdollMode::Animated;
     inst.mode      = RagdollMode::Animated;
@@ -1544,7 +1608,16 @@ static void DriveRagdollLocomotionRoot(PhysicsSystem::Impl& impl, RagdollInstanc
                                        RagdollComponent& rag)
 {
     if (inst.rootBodySlot < 0) return;
-    if (inst.reaction.kind != RagReaction::Kind::None) return;   // a reaction owns the root
+    rag._locomotionUprightDeltaAngularVelocity = glm::vec3(0.0f);
+    rag._locomotionUprightTorque = glm::vec3(0.0f);
+    rag._locomotionUprightTorqueActive = false;
+    rag._locomotionUprightSaturated = false;
+    rag._locomotionHeadingErrorDeg = 0.0f;
+    rag._locomotionHeadingSaturated = false;
+    if (inst.reaction.kind != RagReaction::Kind::None) {
+        DisableLocomotionUprightConstraint(impl, inst);
+        return;   // a reaction owns the root
+    }
 
     JPH::BodyInterface& bi = impl.joltSystem->GetBodyInterface();
     const RagdollBody& root = inst.bodies[inst.rootBodySlot];
@@ -1557,11 +1630,29 @@ static void DriveRagdollLocomotionRoot(PhysicsSystem::Impl& impl, RagdollInstanc
         bi.SetMotionType(root.id, JPH::EMotionType::Dynamic, JPH::EActivation::Activate);  // forces/contacts act on it
         inst._locomotionDriving = want;
     }
-    if (!want) return;
+    if (!want) {
+        DisableLocomotionUprightConstraint(impl, inst);
+        return;
+    }
 
     const glm::quat curRot = FromJolt(bi.GetRotation(root.id));
     const glm::vec3 upNow  = curRot * (glm::conjugate(inst.rootBindRot) * glm::vec3(0, 1, 0));
     const glm::vec3 leanH(upNow.x, 0.0f, upNow.z);
+
+    const glm::quat targetHeading = glm::normalize(rag.locomotionTargetRot);
+    const glm::quat targetRootRot = glm::normalize(targetHeading * inst.rootBindRot);
+    glm::vec3 actualForward = curRot
+        * (glm::conjugate(inst.rootBindRot) * glm::vec3(0.0f, 0.0f, -1.0f));
+    glm::vec3 desiredForward = targetHeading * glm::vec3(0.0f, 0.0f, -1.0f);
+    actualForward.y = desiredForward.y = 0.0f;
+    if (glm::dot(actualForward, actualForward) > 1e-8f
+        && glm::dot(desiredForward, desiredForward) > 1e-8f) {
+        actualForward = glm::normalize(actualForward);
+        desiredForward = glm::normalize(desiredForward);
+        rag._locomotionHeadingErrorDeg = glm::degrees(std::atan2(
+            glm::dot(glm::cross(actualForward, desiredForward), glm::vec3(0, 1, 0)),
+            glm::clamp(glm::dot(actualForward, desiredForward), -1.0f, 1.0f)));
+    }
 
     const float tiltDeg = glm::degrees(std::acos(glm::clamp(upNow.y, -1.0f, 1.0f)));
     const glm::vec3 vCur = FromJolt(bi.GetLinearVelocity(root.id));
@@ -1573,8 +1664,6 @@ static void DriveRagdollLocomotionRoot(PhysicsSystem::Impl& impl, RagdollInstanc
     rag._locomotionSupportPositionForce = glm::vec3(0.0f);
     rag._locomotionSupportDampingForce = glm::vec3(0.0f);
     rag._locomotionSupportSaturated = false;
-    rag._locomotionUprightDeltaAngularVelocity = glm::vec3(0.0f);
-    rag._locomotionUprightSaturated = false;
     rag._locomotionLiftForce = 0.0f;
 
     // Mass-weighted COM and the support segment formed by grounded feet.
@@ -1824,10 +1913,72 @@ static void DriveRagdollLocomotionRoot(PhysicsSystem::Impl& impl, RagdollInstanc
 
         bi.AddForce(root.id, ToJolt(moveF + balF));
 
-        // Implicitly damped upright spring, faded out as tau_torso takes over. It OVERWRITES
-        // the root's angular velocity, which destroys the angular momentum the stance leg
-        // imparts -- i.e. deletes the paper's propulsion mechanism -- so it must reach zero.
-        if (legacy > 0.001f) {
+        const float uprightWeight = glm::clamp(
+            rag.locomotionUprightScale, 0.0f, 1.0f) * legacy;
+        if (uprightWeight > 0.001f && rag.locomotionTorqueUpright) {
+            // One solver-owned spring: translation is free, pitch/roll drive the bind-
+            // upright frame, and a gentler yaw axis preserves the requested heading. Jolt
+            // applies the bounded impulses in the articulated joint/contact solve; there
+            // is no external PD torque and no angular-velocity overwrite here.
+            JPH::SixDOFConstraint* motor =
+                GetLocomotionUprightConstraint(impl, inst);
+            if (motor) {
+                using Axis = JPH::SixDOFConstraint::EAxis;
+                const float stiffness = glm::max(
+                    rag.locomotionTorqueUprightStiffness, 0.0f);
+                const float damping = glm::max(
+                    rag.locomotionTorqueUprightDamping, 0.0f);
+                const float maxTorque = glm::max(
+                    rag.locomotionTorqueUprightMaxTorque, 0.0f) * uprightWeight;
+                for (const Axis axis : { Axis::RotationY, Axis::RotationZ }) {
+                    JPH::MotorSettings& settings = motor->GetMotorSettings(axis);
+                    settings.mSpringSettings = JPH::SpringSettings(
+                        JPH::ESpringMode::StiffnessAndDamping,
+                        stiffness, damping);
+                    settings.SetTorqueLimit(maxTorque);
+                    motor->SetMotorState(axis, JPH::EMotorState::Position);
+                }
+                const float headingStiffness = glm::max(
+                    rag.locomotionTorqueHeadingStiffness, 0.0f);
+                const float headingDamping = glm::max(
+                    rag.locomotionTorqueHeadingDamping, 0.0f);
+                const float headingMaxTorque = glm::max(
+                    rag.locomotionTorqueHeadingMaxTorque, 0.0f) * uprightWeight;
+                JPH::MotorSettings& headingSettings =
+                    motor->GetMotorSettings(Axis::RotationX);
+                headingSettings.mSpringSettings = JPH::SpringSettings(
+                    JPH::ESpringMode::StiffnessAndDamping,
+                    headingStiffness, headingDamping);
+                headingSettings.SetTorqueLimit(headingMaxTorque);
+                motor->SetMotorState(Axis::RotationX, JPH::EMotorState::Position);
+                // Body 1 is Jolt's fixed world body, so body-space orientation is the
+                // absolute desired root rotation. This preserves the F6/F7 heading instead
+                // of recapturing the yaw error produced by each landing.
+                motor->SetTargetOrientationBS(ToJolt(targetRootRot));
+
+                // The lambda is the previous solver step's constraint-space angular
+                // impulse. Rotate it into world space for causal diagnostics.
+                const JPH::Vec3 torqueCS =
+                    motor->GetTotalLambdaMotorRotation() / FIXED_DT;
+                const JPH::Quat constraintFrameWorld =
+                    bi.GetRotation(root.id)
+                    * motor->GetConstraintToBody2Matrix().GetQuaternion();
+                rag._locomotionUprightTorque = FromJolt(
+                    constraintFrameWorld * torqueCS);
+                rag._locomotionUprightTorqueActive = true;
+                const float appliedAxisTorque = glm::max(
+                    std::abs(torqueCS.GetY()), std::abs(torqueCS.GetZ()));
+                const bool tiltSaturated = maxTorque > 1e-4f
+                    && appliedAxisTorque >= maxTorque * 0.98f;
+                rag._locomotionHeadingSaturated = headingMaxTorque > 1e-4f
+                    && std::abs(torqueCS.GetX()) >= headingMaxTorque * 0.98f;
+                rag._locomotionUprightSaturated = tiltSaturated
+                    || rag._locomotionHeadingSaturated;
+            }
+        } else if (uprightWeight > 0.001f) {
+            DisableLocomotionUprightConstraint(impl, inst);
+            // Legacy implicitly damped upright spring. Torque mode bypasses this branch
+            // completely; running both controllers was the source of the recovery shake.
             const glm::quat targetRot =
                 glm::normalize(glm::normalize(rag.locomotionTargetRot) * inst.rootBindRot);
             glm::quat delta = glm::normalize(targetRot * glm::conjugate(curRot));
@@ -1842,9 +1993,11 @@ static void DriveRagdollLocomotionRoot(PhysicsSystem::Impl& impl, RagdollInstanc
                 dw *= maxDw / l;
                 rag._locomotionUprightSaturated = true;
             }
-            dw *= glm::clamp(rag.locomotionUprightScale, 0.0f, 1.0f) * legacy;
+            dw *= uprightWeight;
             rag._locomotionUprightDeltaAngularVelocity = dw;
             bi.SetAngularVelocity(root.id, ToJolt(wCur + dw));
+        } else {
+            DisableLocomotionUprightConstraint(impl, inst);
         }
     }
 
@@ -2995,6 +3148,9 @@ void SetRagdollMode(RagdollComponent& rag, RagdollMode mode) {
     auto it = s_Impl->ragdolls.find(rag._ragdollId);
     if (it == s_Impl->ragdolls.end()) return;
     RagdollInstance& inst = it->second;
+
+    if (mode != RagdollMode::Powered)
+        DisableLocomotionUprightConstraint(*s_Impl, inst);
 
     // An explicit mode set cancels any in-flight reaction (flinch / get-up / stand hold)
     // and restores the authored joint limits a get-up had opened. Reaction starters call

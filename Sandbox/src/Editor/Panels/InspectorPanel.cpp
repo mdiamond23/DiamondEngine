@@ -1904,13 +1904,24 @@ void InspectorPanel::OnImGuiRender() {
                     ImGui::DragFloat("Balance Freq",  &rag.locomotionBalanceFreq,  0.5f,  0.0f, 80.0f,    "%.1f Hz");
                     ImGui::DragFloat("Balance Accel", &rag.locomotionBalanceAccel, 50.0f, 0.0f, 40000.0f, "%.0f rad/s^2");
                     ImGui::DragFloat("Tip Limp Deg",  &rag.locomotionTipLimpDeg,   1.0f,  0.0f, 180.0f,   "%.0f deg");
-                    ImGui::DragFloat("Balance Torque",&rag.locomotionBalanceTorque, 5.0f, 0.0f, 4000.0f,  "%.0f N*m/rad");
+                    ImGui::DragFloat("Upright Motor Stiffness", &rag.locomotionTorqueUprightStiffness,
+                                     25.0f, 0.0f, 2000.0f, "%.0f N*m/rad");
                     if (ImGui::IsItemHovered())
-                        ImGui::SetTooltip("Stage C: >0 rights the rig with real TORQUE (pushes through the\n"
-                                          "planted feet) instead of the velocity spring (which ground contact\n"
-                                          "absorbs, so a deep lean can't recover). Ramp up from 0 until it\n"
-                                          "climbs back to upright; too high explodes. 0 = velocity spring.");
-                    ImGui::DragFloat("Balance Trq Damp", &rag.locomotionBalanceTorqueDamp, 1.0f, 0.0f, 400.0f, "%.0f N*m*s");
+                        ImGui::SetTooltip("Physical stiffness of the solver-backed pitch/roll spring.\n"
+                                          "The motor is used only while solver-upright mode is selected.");
+                    ImGui::DragFloat("Upright Motor Damping", &rag.locomotionTorqueUprightDamping,
+                                     5.0f, 0.0f, 500.0f, "%.0f N*m*s/rad");
+                    ImGui::DragFloat("Upright Motor Max Torque", &rag.locomotionTorqueUprightMaxTorque,
+                                     5.0f, 0.0f, 500.0f, "%.0f N*m/axis");
+                    ImGui::DragFloat("Heading Motor Stiffness", &rag.locomotionTorqueHeadingStiffness,
+                                     10.0f, 0.0f, 1000.0f, "%.0f N*m/rad");
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("Lower-authority yaw stiffness used by the same solver constraint.\n"
+                                          "It holds the requested heading without hard-locking planted feet.");
+                    ImGui::DragFloat("Heading Motor Damping", &rag.locomotionTorqueHeadingDamping,
+                                     2.5f, 0.0f, 250.0f, "%.0f N*m*s/rad");
+                    ImGui::DragFloat("Heading Motor Max Torque", &rag.locomotionTorqueHeadingMaxTorque,
+                                     5.0f, 0.0f, 250.0f, "%.0f N*m");
 
                     ImGui::DragFloat("Support Radius", &rag.locomotionSupportRadius, 0.005f, 0.0f, 1.0f, "%.3f m");
                     if (ImGui::IsItemHovered())

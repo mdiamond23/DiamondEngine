@@ -96,6 +96,14 @@ struct LocamotionControllerComponent
     float test7FootVelocityLeadTime = 0.08f;
     float test7MaxFootCorrection = 0.045f;
     float test7InterStepRecenterTime = 0.35f;
+    float test7UprightStiffness = 700.0f;
+    float test7UprightDamping = 100.0f;
+    float test7UprightMaxTorque = 250.0f;
+    float test7HeadingStiffness = 180.0f;
+    float test7HeadingDamping = 50.0f;
+    float test7HeadingMaxTorque = 80.0f;
+    float test7InterStepTiltLimit = 15.0f;
+    float test7InterStepHeadingLimit = 8.0f;
     int   test7TargetSteps = 10;
     bool  test7EnduranceRun = false;
     float test7EnduranceTime = 60.0f;
@@ -418,6 +426,12 @@ struct LocamotionControllerComponent
     float _test7PeakTilt = 0.0f;
     float _test7MaxMotorRatio = 0.0f;
     float _test7StopStableTime = 0.0f;
+    float _test7StopFootDriftL = 0.0f;
+    float _test7StopFootDriftR = 0.0f;
+    float _test7StopMaxFootDrift = 0.0f;
+    float _test7StopSettleFootDriftL = 0.0f;
+    float _test7StopSettleFootDriftR = 0.0f;
+    float _test7StopMaxSettleFootDrift = 0.0f;
     float _test7CrouchBlend = 0.0f;
     float _test7IkRequestedReach = 0.0f;
     float _test7IkClampedReach = 0.0f;
@@ -443,10 +457,13 @@ struct LocamotionControllerComponent
     float _test7RootRollRate = 0.0f;
     float _test7RootYawRate = 0.0f;
     float _test7RootTiltRate = 0.0f;
+    float _test7HeadingErrorDeg = 0.0f;
+    float _test7PeakHeadingErrorDeg = 0.0f;
     bool _test7TakeoffContactRecoveryActive = false;
     bool _test7IkPlanHipValid = false;
     bool _test7ReachClampedStep = false;
     bool _test7OldSupportDriftAllowanceLogged = false;
+    bool _test7StopSettleReferenceValid = false;
     glm::vec3 _test7StartCom { 0.0f };
     glm::vec3 _test7StepStartCom { 0.0f };
     glm::vec3 _test7IkPlanHip { 0.0f };
@@ -454,6 +471,11 @@ struct LocamotionControllerComponent
     glm::vec3 _test7InterStepRecenterTarget { 0.0f };
     glm::vec3 _test7StopStartTarget { 0.0f };
     glm::vec3 _test7StopEndTarget { 0.0f };
+    glm::vec3 _test7StopFootTargetL { 0.0f };
+    glm::vec3 _test7StopFootTargetR { 0.0f };
+    glm::vec3 _test7StopSettleFootTargetL { 0.0f };
+    glm::vec3 _test7StopSettleFootTargetR { 0.0f };
+    glm::quat _test7HeadingTargetRot { 1.0f, 0.0f, 0.0f, 0.0f };
     bool _groundTestBaselineValid = false;
     float _groundTestTime = 0.0f;
     float _groundTestSettleTime = 0.0f;
@@ -709,6 +731,22 @@ inline void DrawComponentInspector<LocamotionControllerComponent>(LocamotionCont
                          0.0025f, 0.0f, 0.08f, "%.3f m");
         ImGui::DragFloat("Test 7 Inter-Step Recenter", &c.test7InterStepRecenterTime,
                          0.025f, 0.20f, 1.0f, "%.2f s");
+        ImGui::DragFloat("Test 7 Upright Stiffness", &c.test7UprightStiffness,
+                         25.0f, 0.0f, 2000.0f, "%.0f N*m/rad");
+        ImGui::DragFloat("Test 7 Upright Damping", &c.test7UprightDamping,
+                         5.0f, 0.0f, 500.0f, "%.0f N*m*s/rad");
+        ImGui::DragFloat("Test 7 Upright Max Torque", &c.test7UprightMaxTorque,
+                         5.0f, 0.0f, 500.0f, "%.0f N*m/axis");
+        ImGui::DragFloat("Test 7 Heading Stiffness", &c.test7HeadingStiffness,
+                         10.0f, 0.0f, 1000.0f, "%.0f N*m/rad");
+        ImGui::DragFloat("Test 7 Heading Damping", &c.test7HeadingDamping,
+                         2.5f, 0.0f, 250.0f, "%.0f N*m*s/rad");
+        ImGui::DragFloat("Test 7 Heading Max Torque", &c.test7HeadingMaxTorque,
+                         5.0f, 0.0f, 250.0f, "%.0f N*m");
+        ImGui::DragFloat("Test 7 Inter-Step Tilt Gate", &c.test7InterStepTiltLimit,
+                         0.5f, 12.0f, 25.0f, "%.1f deg");
+        ImGui::DragFloat("Test 7 Inter-Step Heading Gate", &c.test7InterStepHeadingLimit,
+                         0.5f, 2.0f, 20.0f, "%.1f deg");
         ImGui::DragInt("Test 7 Target Steps", &c.test7TargetSteps, 1.0f, 2, 100);
         ImGui::Checkbox("Test 7 60-Second Run", &c.test7EnduranceRun);
         ImGui::DragFloat("Test 7 Endurance Time", &c.test7EnduranceTime,
@@ -935,6 +973,14 @@ inline std::string SerializeComponent<LocamotionControllerComponent>(const Locam
     j["test7FootVelocityLeadTime"] = c.test7FootVelocityLeadTime;
     j["test7MaxFootCorrection"] = c.test7MaxFootCorrection;
     j["test7InterStepRecenterTime"] = c.test7InterStepRecenterTime;
+    j["test7UprightStiffness"] = c.test7UprightStiffness;
+    j["test7UprightDamping"] = c.test7UprightDamping;
+    j["test7UprightMaxTorque"] = c.test7UprightMaxTorque;
+    j["test7HeadingStiffness"] = c.test7HeadingStiffness;
+    j["test7HeadingDamping"] = c.test7HeadingDamping;
+    j["test7HeadingMaxTorque"] = c.test7HeadingMaxTorque;
+    j["test7InterStepTiltLimit"] = c.test7InterStepTiltLimit;
+    j["test7InterStepHeadingLimit"] = c.test7InterStepHeadingLimit;
     j["test7TargetSteps"] = c.test7TargetSteps;
     j["test7EnduranceRun"] = c.test7EnduranceRun;
     j["test7EnduranceTime"] = c.test7EnduranceTime;
@@ -1086,6 +1132,22 @@ inline void DeserializeComponent<LocamotionControllerComponent>(LocamotionContro
     c.test7MaxFootCorrection = j.value("test7MaxFootCorrection", 0.045f);
     c.test7InterStepRecenterTime = j.value(
         "test7InterStepRecenterTime", 0.35f);
+    c.test7UprightStiffness = j.value(
+        "test7UprightStiffness", 700.0f);
+    c.test7UprightDamping = j.value(
+        "test7UprightDamping", 100.0f);
+    c.test7UprightMaxTorque = j.value(
+        "test7UprightMaxTorque", 250.0f);
+    c.test7HeadingStiffness = j.value(
+        "test7HeadingStiffness", 180.0f);
+    c.test7HeadingDamping = j.value(
+        "test7HeadingDamping", 50.0f);
+    c.test7HeadingMaxTorque = j.value(
+        "test7HeadingMaxTorque", 80.0f);
+    c.test7InterStepTiltLimit = j.value(
+        "test7InterStepTiltLimit", 15.0f);
+    c.test7InterStepHeadingLimit = j.value(
+        "test7InterStepHeadingLimit", 8.0f);
     c.test7TargetSteps = j.value("test7TargetSteps", 10);
     c.test7EnduranceRun = j.value("test7EnduranceRun", false);
     c.test7EnduranceTime = j.value("test7EnduranceTime", 60.0f);
@@ -1199,6 +1261,7 @@ public:
             }
             if (rag.mode != RagdollMode::Powered) {
                 rag.locomotionActive = false;
+                rag.locomotionTorqueUpright = false;
                 rag.locomotionSimbicon = false;
                 rag.locomotionSimbiconBlend = 0.0f;
                 rag.locomotionHipTorque[0] = rag.locomotionHipTorque[1] = glm::vec3(0.0f);
@@ -1340,6 +1403,21 @@ public:
             rag.locomotionHeightOffset = 0.0f;
             rag.locomotionHipTorque[0] = rag.locomotionHipTorque[1] = glm::vec3(0.0f);
             rag.locomotionHipBones[0] = rag.locomotionHipBones[1] = -1;
+            rag.locomotionTorqueUpright = comp.validationTest == 7;
+            if (rag.locomotionTorqueUpright) {
+                rag.locomotionTorqueUprightStiffness = glm::max(
+                    comp.test7UprightStiffness, 0.0f);
+                rag.locomotionTorqueUprightDamping = glm::max(
+                    comp.test7UprightDamping, 0.0f);
+                rag.locomotionTorqueUprightMaxTorque = glm::max(
+                    comp.test7UprightMaxTorque, 0.0f);
+                rag.locomotionTorqueHeadingStiffness = glm::max(
+                    comp.test7HeadingStiffness, 0.0f);
+                rag.locomotionTorqueHeadingDamping = glm::max(
+                    comp.test7HeadingDamping, 0.0f);
+                rag.locomotionTorqueHeadingMaxTorque = glm::max(
+                    comp.test7HeadingMaxTorque, 0.0f);
+            }
             rag.locomotionLiftBone = -1;
             for (int& bone : rag.locomotionDisabledMotorBones) bone = -1;
             rag.locomotionFootLockBones[0] = rag.locomotionFootLockBones[1] = -1;
@@ -1526,7 +1604,8 @@ public:
                                  "peakTilt={:.1f} maxMotorRatio={:.2f} "
                                  "crouch=(blend={:.2f},height={:+.3f}m) "
                                  "recenter=(t={:.2f},centerErr={:.3f}m) "
-                                 "angular=(tiltRate={:.3f}rad/s)",
+                                 "angular=(tiltRate={:.3f}rad/s,yawRate={:+.3f}rad/s) "
+                                 "heading=(error={:+.1f}deg,peak={:.1f}deg)",
                                 comp._test7Running ? "yes" : "no",
                                 comp._test7StopRequested ? "yes" : "no",
                                 comp._test7RunTime, comp._test6StepsCompleted,
@@ -1542,13 +1621,20 @@ public:
                                  rag.locomotionHeightOffset,
                                  comp._test7InterStepRecenterT,
                                  comp._test7InterStepCenterError,
-                                 comp._test7RootTiltRate);
+                                 comp._test7RootTiltRate,
+                                 comp._test7RootYawRate,
+                                 comp._test7HeadingErrorDeg,
+                                 comp._test7PeakHeadingErrorDeg);
                             spdlog::info(
                                 "[LocoTest7] CONTROL_STATUS phase={} "
                                 "rootW=(pitch={:+.3f},roll={:+.3f},yaw={:+.3f},"
                                 "tilt={:.3f})rad/s "
-                                "uprightDw=(pitch={:+.3f},roll={:+.3f},yaw={:+.3f})rad/s "
-                                "uprightSat={} supportTargetVel=(lat={:+.3f},fwd={:+.3f})m/s "
+                                "upright=(mode={},active={},dw=(pitch={:+.3f},roll={:+.3f},"
+                                "yaw={:+.3f})rad/s,motorTorque=(pitch={:+.1f},"
+                                "roll={:+.1f},yaw={:+.1f},total={:.1f},"
+                                "tiltCap={:.1f},yawCap={:.1f})Nm,sat={}) "
+                                "heading=(error={:+.1f}deg,sat={}) "
+                                "supportTargetVel=(lat={:+.3f},fwd={:+.3f})m/s "
                                 "supportForce=(P=({:+.0f},{:+.0f}),D=({:+.0f},{:+.0f}),"
                                 "total={:.0f})N supportSat={}",
                                 comp._test4Phase,
@@ -1556,12 +1642,25 @@ public:
                                 comp._test7RootRollRate,
                                 comp._test7RootYawRate,
                                 comp._test7RootTiltRate,
+                                rag.locomotionTorqueUpright
+                                    ? "SOLVER_SPRING" : "VELOCITY",
+                                rag._locomotionUprightTorqueActive ? "YES" : "no",
                                 glm::dot(rag._locomotionUprightDeltaAngularVelocity,
                                          comp._test4Right),
                                 glm::dot(rag._locomotionUprightDeltaAngularVelocity,
                                          comp._test4Forward),
                                 rag._locomotionUprightDeltaAngularVelocity.y,
+                                glm::dot(rag._locomotionUprightTorque,
+                                         comp._test4Right),
+                                glm::dot(rag._locomotionUprightTorque,
+                                         comp._test4Forward),
+                                rag._locomotionUprightTorque.y,
+                                glm::length(rag._locomotionUprightTorque),
+                                rag.locomotionTorqueUprightMaxTorque,
+                                rag.locomotionTorqueHeadingMaxTorque,
                                 rag._locomotionUprightSaturated ? "YES" : "no",
+                                rag._locomotionHeadingErrorDeg,
+                                rag._locomotionHeadingSaturated ? "YES" : "no",
                                 glm::dot(rag.locomotionSupportTargetVel,
                                          comp._test4Right),
                                 glm::dot(rag.locomotionSupportTargetVel,
@@ -1874,6 +1973,12 @@ private:
         c._test7PeakTilt = 0.0f;
         c._test7MaxMotorRatio = 0.0f;
         c._test7StopStableTime = 0.0f;
+        c._test7StopFootDriftL = 0.0f;
+        c._test7StopFootDriftR = 0.0f;
+        c._test7StopMaxFootDrift = 0.0f;
+        c._test7StopSettleFootDriftL = 0.0f;
+        c._test7StopSettleFootDriftR = 0.0f;
+        c._test7StopMaxSettleFootDrift = 0.0f;
         c._test7CrouchBlend = 0.0f;
         c._test7IkRequestedReach = 0.0f;
         c._test7IkClampedReach = 0.0f;
@@ -1899,10 +2004,13 @@ private:
         c._test7RootRollRate = 0.0f;
         c._test7RootYawRate = 0.0f;
         c._test7RootTiltRate = 0.0f;
+        c._test7HeadingErrorDeg = 0.0f;
+        c._test7PeakHeadingErrorDeg = 0.0f;
         c._test7TakeoffContactRecoveryActive = false;
         c._test7IkPlanHipValid = false;
         c._test7ReachClampedStep = false;
         c._test7OldSupportDriftAllowanceLogged = false;
+        c._test7StopSettleReferenceValid = false;
         c._test7StartCom = glm::vec3(0.0f);
         c._test7StepStartCom = glm::vec3(0.0f);
         c._test7IkPlanHip = glm::vec3(0.0f);
@@ -1910,6 +2018,11 @@ private:
         c._test7InterStepRecenterTarget = glm::vec3(0.0f);
         c._test7StopStartTarget = glm::vec3(0.0f);
         c._test7StopEndTarget = glm::vec3(0.0f);
+        c._test7StopFootTargetL = glm::vec3(0.0f);
+        c._test7StopFootTargetR = glm::vec3(0.0f);
+        c._test7StopSettleFootTargetL = glm::vec3(0.0f);
+        c._test7StopSettleFootTargetR = glm::vec3(0.0f);
+        c._test7HeadingTargetRot = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
         c._legL.groundReferenceFootRotationValid = false;
         c._legR.groundReferenceFootRotationValid = false;
     }
@@ -3102,6 +3215,8 @@ private:
         if (!comp._test4BaselineValid) return;
 
         if (continuousEnabled) {
+            if (comp._test7Running)
+                rag.locomotionTargetRot = comp._test7HeadingTargetRot;
             const glm::vec3 rootAngularVelocity =
                 rag._locomotionRootAngularVelocity;
             comp._test7RootPitchRate = glm::dot(
@@ -3111,6 +3226,12 @@ private:
             comp._test7RootYawRate = rootAngularVelocity.y;
             comp._test7RootTiltRate = glm::length(glm::vec2(
                 rootAngularVelocity.x, rootAngularVelocity.z));
+            comp._test7HeadingErrorDeg = rag._locomotionHeadingErrorDeg;
+            if (comp._test7Running) {
+                comp._test7PeakHeadingErrorDeg = glm::max(
+                    comp._test7PeakHeadingErrorDeg,
+                    std::abs(comp._test7HeadingErrorDeg));
+            }
         }
 
         if (Input::IsKeyPressed(Key::F8) && continuousEnabled
@@ -3195,6 +3316,11 @@ private:
                 comp._test7ContactChangeTimeL = 0.0f;
                 comp._test7ContactChangeTimeR = 0.0f;
                 if (continuousEnabled) {
+                    const float targetYaw = std::atan2(
+                        -comp._test4Forward.x, -comp._test4Forward.z);
+                    comp._test7HeadingTargetRot = glm::angleAxis(
+                        targetYaw, glm::vec3(0.0f, 1.0f, 0.0f));
+                    rag.locomotionTargetRot = comp._test7HeadingTargetRot;
                     auto captureGroundFootReference = [&](auto& leg) {
                         bool rotationOk = false;
                         const glm::quat footWorld = Physics::GetRagdollBoneRotation(
@@ -3242,8 +3368,18 @@ private:
                     comp._test7StepMaxRelevantDrift = 0.0f;
                     comp._test7MaxDrift = 0.0f;
                     comp._test7PeakTilt = tiltDeg;
+                    comp._test7HeadingErrorDeg = rag._locomotionHeadingErrorDeg;
+                    comp._test7PeakHeadingErrorDeg = std::abs(
+                        comp._test7HeadingErrorDeg);
                     comp._test7MaxMotorRatio = 0.0f;
                     comp._test7StopStableTime = 0.0f;
+                    comp._test7StopFootDriftL = 0.0f;
+                    comp._test7StopFootDriftR = 0.0f;
+                    comp._test7StopMaxFootDrift = 0.0f;
+                    comp._test7StopSettleFootDriftL = 0.0f;
+                    comp._test7StopSettleFootDriftR = 0.0f;
+                    comp._test7StopMaxSettleFootDrift = 0.0f;
+                    comp._test7StopSettleReferenceValid = false;
                     comp._test7CrouchBlend = 0.0f;
                     comp._test7FootCorrection = 0.0f;
                     comp._test7FootCorrectionForward = 0.0f;
@@ -3259,7 +3395,12 @@ private:
                         "[LocoTest7] START mode={} target={} desiredSpeed={:.3f}m/s "
                         "supportAdvanceBounds=({:.3f},{:.3f})m "
                         "initialAdvance={:.3f}m crouch={:.3f}m usableReach={:.3f} "
-                        "footControl=(kp={:.2f},lead={:.3f}s,max={:.3f}m,level={:.2f}s)",
+                        "footControl=(kp={:.2f},lead={:.3f}s,max={:.3f}m,level={:.2f}s) "
+                        "upright=(mode=SOLVER_SPRING,stiffness={:.0f}Nm/rad,"
+                        "damping={:.0f}Nm*s/rad,"
+                        "maxTorque={:.0f}Nm/axis) "
+                        "heading=(stiffness={:.0f}Nm/rad,damping={:.0f}Nm*s/rad,"
+                        "maxTorque={:.0f}Nm) gates=(tilt={:.1f}deg,heading={:.1f}deg)",
                         comp.test7EnduranceRun ? "ENDURANCE" : "TEN_STEP",
                         comp.test7EnduranceRun
                             ? glm::max(comp.test7EnduranceTime, 10.0f)
@@ -3273,7 +3414,15 @@ private:
                         glm::clamp(comp.test7FootPositionGain, 0.0f, 1.0f),
                         glm::max(comp.test7FootVelocityLeadTime, 0.0f),
                         glm::max(comp.test7MaxFootCorrection, 0.0f),
-                        glm::max(comp.test7SoleLevelTime, 0.10f));
+                        glm::max(comp.test7SoleLevelTime, 0.10f),
+                        glm::max(comp.test7UprightStiffness, 0.0f),
+                        glm::max(comp.test7UprightDamping, 0.0f),
+                        glm::max(comp.test7UprightMaxTorque, 0.0f),
+                        glm::max(comp.test7HeadingStiffness, 0.0f),
+                        glm::max(comp.test7HeadingDamping, 0.0f),
+                        glm::max(comp.test7HeadingMaxTorque, 0.0f),
+                        glm::clamp(comp.test7InterStepTiltLimit, 12.0f, 25.0f),
+                        glm::clamp(comp.test7InterStepHeadingLimit, 2.0f, 20.0f));
                 }
                 spdlog::info("[LocoTest{}] sequence start support={} swing={} step={:.3f}m",
                              comp.validationTest,
@@ -3379,12 +3528,13 @@ private:
             comp._test7InterStepCenterError = 0.0f;
         }
         if (continuousEnabled && comp._test4Phase == kStopping) {
-            const float stopT = glm::clamp(
-                comp._test4PhaseTime / glm::max(comp.test7StopTime, 0.25f),
-                0.0f, 1.0f);
-            supportTarget = glm::mix(comp._test7StopStartTarget,
-                                     comp._test7StopEndTarget,
-                                     smoothstep(stopT));
+            // The last completed transfer already produced a stable support point. Hold it
+            // throughout shutdown instead of pulling the COM toward the sole midpoint while
+            // the legs are changing pose. A fixed target also makes the feed-forward term
+            // exactly zero rather than deriving a velocity from numerical differencing.
+            supportTarget = comp._test7StopStartTarget;
+            supportVelocity = glm::vec3(0.0f);
+            supportVelocityExplicit = true;
         }
         if (!supportVelocityExplicit) {
             supportVelocity = dt > 1e-6f
@@ -3402,6 +3552,39 @@ private:
                 ? 0.0f : 1.0f;
         rag.locomotionCOMSupportFreq = glm::max(comp.test2SupportFrequency, 0.0f);
         rag.locomotionCOMSupportMaxAccel = glm::max(comp.test2SupportMaxAccel, 0.0f);
+
+        // Shutdown sole captures are diagnostic references only. The per-frame controller
+        // reset above leaves both lock bones disabled and both weights at zero; do not add a
+        // second world-space controller while support and joint motors settle the character.
+        if (continuousEnabled && comp._test4Phase == kStopping
+            && !comp._test7StopSettleReferenceValid) {
+            // This is commanded displacement while the captured walking pose becomes the
+            // standing pose. Keep it visible, but do not treat it as continued plant slide.
+            comp._test7StopFootDriftL = glm::length(glm::vec2(
+                leftFoot.x - comp._test7StopFootTargetL.x,
+                leftFoot.z - comp._test7StopFootTargetL.z));
+            comp._test7StopFootDriftR = glm::length(glm::vec2(
+                rightFoot.x - comp._test7StopFootTargetR.x,
+                rightFoot.z - comp._test7StopFootTargetR.z));
+            comp._test7StopMaxFootDrift = glm::max(
+                comp._test7StopMaxFootDrift,
+                glm::max(comp._test7StopFootDriftL,
+                         comp._test7StopFootDriftR));
+        }
+        if (continuousEnabled && comp._test7StopSettleReferenceValid
+            && (comp._test4Phase == kStopping
+                || comp._test4Phase == kReturnStand)) {
+            comp._test7StopSettleFootDriftL = glm::length(glm::vec2(
+                leftFoot.x - comp._test7StopSettleFootTargetL.x,
+                leftFoot.z - comp._test7StopSettleFootTargetL.z));
+            comp._test7StopSettleFootDriftR = glm::length(glm::vec2(
+                rightFoot.x - comp._test7StopSettleFootTargetR.x,
+                rightFoot.z - comp._test7StopSettleFootTargetR.z));
+            comp._test7StopMaxSettleFootDrift = glm::max(
+                comp._test7StopMaxSettleFootDrift,
+                glm::max(comp._test7StopSettleFootDriftL,
+                         comp._test7StopSettleFootDriftR));
+        }
 
         comp._test4ComLateral = glm::dot(
             rag._locomotionCOM - comp._test4ComBaseline, comp._test4Right);
@@ -3502,15 +3685,22 @@ private:
                 || rag._locomotionMotorSaturated[i];
         }
         if (continuousEnabled && comp._test7Running) {
-            // Once transfer has unloaded the old support, its small release slide is
-            // preparation for the next swing rather than loss of the loaded plant.
-            const float relevantDrift = test7OldSupportUnloaded
-                ? comp._test4PlantDrift
-                : glm::max(comp._test4StanceDrift, comp._test4PlantDrift);
-            comp._test7StepMaxRelevantDrift = glm::max(
-                comp._test7StepMaxRelevantDrift, relevantDrift);
-            comp._test7MaxDrift = glm::max(
-                comp._test7MaxDrift, relevantDrift);
+            const bool activeGaitPhase = comp._test4Phase >= kWeightShift
+                                      && comp._test4Phase <= kInterStep;
+            if (activeGaitPhase) {
+                // Once transfer has unloaded the old support, its small release slide is
+                // preparation for the next swing rather than loss of the loaded plant.
+                // STOPPING / RETURN_STAND own separate immutable foot anchors and drift
+                // metrics, so their deliberate posture transition cannot contaminate the
+                // active-gait measurement.
+                const float relevantDrift = test7OldSupportUnloaded
+                    ? comp._test4PlantDrift
+                    : glm::max(comp._test4StanceDrift, comp._test4PlantDrift);
+                comp._test7StepMaxRelevantDrift = glm::max(
+                    comp._test7StepMaxRelevantDrift, relevantDrift);
+                comp._test7MaxDrift = glm::max(
+                    comp._test7MaxDrift, relevantDrift);
+            }
             comp._test7PeakTilt = glm::max(comp._test7PeakTilt, tiltDeg);
             comp._test7MaxMotorRatio = glm::max(
                 comp._test7MaxMotorRatio, comp._test4MaxMotorRatio);
@@ -3886,12 +4076,36 @@ private:
         const float forwardComError = glm::dot(
             comp._test4SupportTarget - rag._locomotionCOM,
             comp._test4Forward);
+        const float forwardComSpeed = glm::dot(
+            rag._locomotionCOMVel, comp._test4Forward);
+        constexpr float kTest7WeightShiftForwardTolerance = 0.015f;
+        constexpr float kTest7WeightShiftForwardSpeedTolerance = 0.010f;
+        const float weightShiftMinimumTime = glm::max(
+            comp.test2ShiftTime, 0.01f);
+        // Valid shifts in the current 1.5 Hz setup can need a little over three
+        // seconds to settle. Leave margin above that observed range, but never wait
+        // forever on an unreachable predicate again.
+        const float test7WeightShiftTimeout = glm::max(
+            weightShiftMinimumTime * 3.0f, weightShiftMinimumTime + 3.0f);
+        const bool weightShiftCommandReady =
+            std::abs(comp._test4ComCommand - comp._test4SupportSide) < 0.01f;
+        const bool weightShiftLateralReady = std::abs(comError) < 0.01f;
+        const bool weightShiftForwardReady = !continuousEnabled
+            || std::abs(forwardComError) < kTest7WeightShiftForwardTolerance;
+        const bool weightShiftForwardSpeedReady = !continuousEnabled
+            || std::abs(forwardComSpeed)
+                < kTest7WeightShiftForwardSpeedTolerance;
+        const bool weightShiftContactsReady =
+            comp._test4ContactL && comp._test4ContactR;
+        const bool weightShiftTimeReady =
+            comp._test4PhaseTime >= weightShiftMinimumTime;
         if (comp._test4Phase == kWeightShift
-            && std::abs(comp._test4ComCommand - comp._test4SupportSide) < 0.01f
-            && std::abs(comError) < 0.01f
-            && (!continuousEnabled || std::abs(forwardComError) < 0.010f)
-            && comp._test4ContactL && comp._test4ContactR
-            && comp._test4PhaseTime >= glm::max(comp.test2ShiftTime, 0.01f)) {
+            && weightShiftCommandReady
+            && weightShiftLateralReady
+            && weightShiftForwardReady
+            && weightShiftForwardSpeedReady
+            && weightShiftContactsReady
+            && weightShiftTimeReady) {
             captureSwing();
             if (planFoothold()) {
                 comp._test4Phase = kTakeoff;
@@ -3904,11 +4118,12 @@ private:
                     spdlog::info(
                         "[LocoTest7] STANCE_COM_ALIGNMENT target={:+.3f}m "
                         "achieved={:+.3f}m error={:+.3f}m "
-                        "trackingLoss={:.3f}m",
+                        "forwardSpeed={:+.3f}m/s trackingLoss={:.3f}m",
                         test7StanceForwardTarget,
                         glm::dot(rag._locomotionCOM - comp._test4ComBaseline,
                                  comp._test4Forward),
                         forwardComError,
+                        forwardComSpeed,
                         comp._test7SettledTrackingLoss);
                 }
             } else {
@@ -3916,6 +4131,31 @@ private:
                     ? "latched foothold lacked support-advance tracking reserve"
                     : "latched foothold fell below 15 cm after reach clamp");
             }
+        } else if (continuousEnabled
+                   && comp._test4Phase == kWeightShift
+                   && comp._test4PhaseTime >= test7WeightShiftTimeout) {
+            spdlog::warn(
+                "[LocoTest7] WEIGHT_SHIFT_TIMEOUT step={} time={:.2f}/{:.2f}s "
+                "predicates=(command={} error={:+.3f}/0.010,"
+                "lateral={} error={:+.3f}/0.010m,"
+                "forward={} error={:+.3f}/0.015m,"
+                "forwardSpeed={} speed={:+.3f}/0.010m/s,"
+                "contacts={} leftContact={} rightContact={},"
+                "minimumTime={} elapsed={:.2f}/{:.2f}s)",
+                comp._test6StepIndex,
+                comp._test4PhaseTime, test7WeightShiftTimeout,
+                weightShiftCommandReady ? "PASS" : "FAIL",
+                comp._test4ComCommand - comp._test4SupportSide,
+                weightShiftLateralReady ? "PASS" : "FAIL", comError,
+                weightShiftForwardReady ? "PASS" : "FAIL", forwardComError,
+                weightShiftForwardSpeedReady ? "PASS" : "FAIL",
+                forwardComSpeed,
+                weightShiftContactsReady ? "PASS" : "FAIL",
+                comp._test4ContactL ? "PASS" : "FAIL",
+                comp._test4ContactR ? "PASS" : "FAIL",
+                weightShiftTimeReady ? "PASS" : "FAIL",
+                comp._test4PhaseTime, weightShiftMinimumTime);
+            abortSequence("weight-shift readiness timed out");
         }
 
         const float takeoffHeight = glm::clamp(
@@ -4575,11 +4815,26 @@ private:
             && comp._test6StepIndex >= 2 && comp._test4Phase == kWeightShift;
         const float poseWeight = glm::clamp(
             comp._poseBlend * comp.poseWeight, 0.0f, 1.0f);
+        const float shutdownPoseBlend = continuousEnabled
+            && comp._test4Phase == kStopping
+            ? 1.0f - smoothstep(comp._test4PhaseTime
+                / glm::max(comp.test7StopTime, 0.25f))
+            : 1.0f;
         auto writeLegPose = [&](const Leg& leg) {
-            BlendPose(animator, leg.hipIdx, leg.hipCommand, poseWeight);
-            BlendPose(animator, leg.kneeIdx, leg.kneeCommand, poseWeight);
-            BlendPose(animator, leg.ankleIdx, leg.ankleCommand, poseWeight);
-            BlendPose(animator, leg.footIdx, leg.footCommand, poseWeight);
+            auto shutdownTarget = [&](int bone, const glm::quat& walkingTarget) {
+                if (shutdownPoseBlend >= 1.0f) return walkingTarget;
+                return glm::normalize(glm::slerp(
+                    skeleton.bones[bone].localR, walkingTarget,
+                    shutdownPoseBlend));
+            };
+            BlendPose(animator, leg.hipIdx,
+                      shutdownTarget(leg.hipIdx, leg.hipCommand), poseWeight);
+            BlendPose(animator, leg.kneeIdx,
+                      shutdownTarget(leg.kneeIdx, leg.kneeCommand), poseWeight);
+            BlendPose(animator, leg.ankleIdx,
+                      shutdownTarget(leg.ankleIdx, leg.ankleCommand), poseWeight);
+            BlendPose(animator, leg.footIdx,
+                      shutdownTarget(leg.footIdx, leg.footCommand), poseWeight);
         };
         if (applySwingIK || holdTouchdownPose || holdMultiStepBaseline)
             writeLegPose(*swing);
@@ -4915,7 +5170,8 @@ private:
                             "footTravel={:.3f}m supportAdvance={:.3f}m "
                             "COMadvance={:+.3f}m "
                             "period={:.3f}s speed={:.3f}/{:.3f}m/s "
-                            "drift={:.3f} tilt={:.1f} motorRatio={:.2f} "
+                            "drift={:.3f} tilt={:.1f} "
+                            "heading=(error={:+.1f},peak={:.1f})deg motorRatio={:.2f} "
                             "edges=({},{}) next={}",
                             comp._test6StepsCompleted,
                             comp._test4SupportSide < 0 ? "RIGHT" : "LEFT",
@@ -4924,6 +5180,8 @@ private:
                             comp._test7LastStepPeriod,
                             comp._test7MeasuredSpeed, comp.test7DesiredSpeed,
                             stepDrift, comp._test4PeakTilt,
+                            comp._test7HeadingErrorDeg,
+                            comp._test7PeakHeadingErrorDeg,
                             comp._test4MaxMotorRatio,
                             comp._test6ContactTransitionsL,
                             comp._test6ContactTransitionsR,
@@ -4933,22 +5191,37 @@ private:
                             capturePhysicalLocalPose(*swing);
                             capturePhysicalLocalPose(*stance);
                             comp._test7StopStartTarget = comp._test4SupportTarget;
-                            comp._test7StopEndTarget = 0.5f * (leftFoot + rightFoot);
-                            comp._test7StopEndTarget.y = comp._test4SupportTarget.y;
+                            comp._test7StopEndTarget = comp._test7StopStartTarget;
+                            // Capture immutable sole references for shutdown drift reporting.
+                            // They are measurements only and never become force targets.
+                            comp._test7StopFootTargetL = leftFoot;
+                            comp._test7StopFootTargetR = rightFoot;
+                            comp._test7StopFootDriftL = 0.0f;
+                            comp._test7StopFootDriftR = 0.0f;
+                            comp._test7StopMaxFootDrift = 0.0f;
+                            comp._test7StopSettleFootDriftL = 0.0f;
+                            comp._test7StopSettleFootDriftR = 0.0f;
+                            comp._test7StopMaxSettleFootDrift = 0.0f;
+                            comp._test7StopSettleReferenceValid = false;
                             comp._test7StopStableTime = 0.0f;
                             comp._test4Phase = kStopping;
                             comp._test4PhaseTime = 0.0f;
                             spdlog::info(
                                 "[LocoTest7] phase=STOPPING reason={} "
-                                "start=({:+.3f},{:+.3f},{:+.3f}) "
-                                "center=({:+.3f},{:+.3f},{:+.3f}) time={:.2f}s",
+                                "supportHold=({:+.3f},{:+.3f},{:+.3f}) "
+                                "footReferences=(L=({:+.3f},{:+.3f},{:+.3f}),"
+                                "R=({:+.3f},{:+.3f},{:+.3f})) "
+                                "poseRelease={:.2f}s locks=DISABLED",
                                 targetReached ? "target-reached" : "requested",
                                 comp._test7StopStartTarget.x,
                                 comp._test7StopStartTarget.y,
                                 comp._test7StopStartTarget.z,
-                                comp._test7StopEndTarget.x,
-                                comp._test7StopEndTarget.y,
-                                comp._test7StopEndTarget.z,
+                                comp._test7StopFootTargetL.x,
+                                comp._test7StopFootTargetL.y,
+                                comp._test7StopFootTargetL.z,
+                                comp._test7StopFootTargetR.x,
+                                comp._test7StopFootTargetR.y,
+                                comp._test7StopFootTargetR.z,
                                 glm::max(comp.test7StopTime, 0.25f));
                         } else {
                             comp._test4Phase = kInterStep;
@@ -4969,7 +5242,8 @@ private:
                                 "[LocoTest7] phase=INTERSTEP recenter=ARMED "
                                 "supportStart=({:+.3f},{:+.3f},{:+.3f}) "
                                 "fixedCenter=({:+.3f},{:+.3f},{:+.3f}) "
-                                "time={:.2f}s centerErr={:.3f}m",
+                                "time={:.2f}s centerErr={:.3f}m "
+                                "gates=(tilt={:.1f}deg,heading={:.1f}deg)",
                                 comp._test7InterStepRecenterStart.x,
                                 comp._test7InterStepRecenterStart.y,
                                 comp._test7InterStepRecenterStart.z,
@@ -4977,7 +5251,11 @@ private:
                                 comp._test7InterStepRecenterTarget.y,
                                 comp._test7InterStepRecenterTarget.z,
                                 glm::max(comp.test7InterStepRecenterTime, 0.20f),
-                                comp._test7InterStepCenterError);
+                                comp._test7InterStepCenterError,
+                                glm::clamp(comp.test7InterStepTiltLimit,
+                                           12.0f, 25.0f),
+                                glm::clamp(comp.test7InterStepHeadingLimit,
+                                           2.0f, 20.0f));
                         }
                     } else {
                     const int stepSlot = glm::clamp(comp._test6StepIndex - 1, 0, 1);
@@ -5112,19 +5390,25 @@ private:
             }
         } else if (comp._test4Phase == kInterStep) {
             const float interStepTiltLimit = continuousEnabled
-                ? glm::clamp(comp._test6InitialTilt + 10.0f, 12.0f, 15.0f)
+                ? glm::clamp(comp.test7InterStepTiltLimit, 12.0f, 25.0f)
                 : 30.0f;
+            const float interStepHeadingLimit = continuousEnabled
+                ? glm::clamp(comp.test7InterStepHeadingLimit, 2.0f, 20.0f)
+                : 180.0f;
             const bool recenterReady = !continuousEnabled
                 || (comp._test7InterStepRecenterT >= 0.999f
                     && comp._test7InterStepCenterError
                         <= glm::max(comp.test5ComTolerance, 0.04f));
             const bool uprightReady = !continuousEnabled
                 || !rag._locomotionUprightSaturated;
+            const bool headingReady = !continuousEnabled
+                || std::abs(comp._test7HeadingErrorDeg) <= interStepHeadingLimit;
             const bool interStepReady = swingContactNow && stanceContactNow
                 && glm::length(leftVelocity) < 0.15f
                 && glm::length(rightVelocity) < 0.15f
                 && comp._test5ComHorizontalSpeed < 0.15f
                 && tiltDeg <= interStepTiltLimit
+                && headingReady
                 && recenterReady
                 && uprightReady
                 && !rag._locomotionSupportSaturated
@@ -5270,6 +5554,7 @@ private:
                         "oldSupport={} newSupport={} nextSwing={} "
                         "speed={:.3f}/{:.3f}m/s advanceCommand={:.3f}m "
                         "stable={:.3f}s contact=({},{}) tilt={:.1f}/{:.1f} "
+                        "heading={:+.1f}/{:.1f}deg "
                         "recenter=(t={:.2f},centerErr={:.3f}m) "
                         "angular=(tiltRate={:.3f}rad/s,uprightSat={}) "
                         "edges=({},{})",
@@ -5283,6 +5568,7 @@ private:
                         comp._test4ContactL ? "L" : "-",
                         comp._test4ContactR ? "R" : "-",
                         tiltDeg, interStepTiltLimit,
+                        comp._test7HeadingErrorDeg, interStepHeadingLimit,
                         comp._test7InterStepRecenterT,
                         comp._test7InterStepCenterError,
                         comp._test7RootTiltRate,
@@ -5313,7 +5599,8 @@ private:
                         "[LocoTest7] INTERSTEP_CHECK result=FAIL "
                         "contact=({},{}) speed=(L={:.3f},R={:.3f},COM={:.3f}) "
                         "tilt={:.1f}/{:.1f} tiltRate={:.3f}rad/s "
-                        "saturation=(support={},upright={},motor={}) "
+                        "heading={:+.1f}/{:.1f}deg ready={} "
+                        "saturation=(support={},upright={},heading={},motor={}) "
                         "stable={:.3f}/{:.3f}s recenter=(t={:.2f},err={:.3f}m,ready={})",
                         swingContactNow ? "S" : "-",
                         stanceContactNow ? "T" : "-",
@@ -5322,8 +5609,11 @@ private:
                         comp._test5ComHorizontalSpeed,
                         tiltDeg, interStepTiltLimit,
                         comp._test7RootTiltRate,
+                        comp._test7HeadingErrorDeg, interStepHeadingLimit,
+                        headingReady ? "yes" : "NO",
                         rag._locomotionSupportSaturated ? "YES" : "no",
                         rag._locomotionUprightSaturated ? "YES" : "no",
+                        rag._locomotionHeadingSaturated ? "YES" : "no",
                         comp._test4MotorSaturated ? "YES" : "no",
                         comp._test6InterStepStableTime,
                         glm::max(comp.test6InterStepTime, 0.10f),
@@ -5334,19 +5624,51 @@ private:
                 abortSequence("inter-step handoff did not remain ready");
             }
         } else if (continuousEnabled && comp._test4Phase == kStopping) {
-            const float centerError = horizontalDistance(
+            const float supportError = horizontalDistance(
                 rag._locomotionCOM, comp._test7StopEndTarget);
-            const bool recentered = comp._test4PhaseTime >= glm::max(
+            const bool poseReleased = comp._test4PhaseTime >= glm::max(
                     comp.test7StopTime, 0.25f)
-                && centerError <= glm::max(comp.test5ComTolerance, 0.04f)
+                && comp._test7CrouchBlend <= 0.001f;
+            if (poseReleased && !comp._test7StopSettleReferenceValid) {
+                // The walking-to-standing pose blend deliberately changes the staggered
+                // stance geometry. Capture the physical soles once that command is complete,
+                // then measure only continued motion from this settled-pose reference.
+                comp._test7StopSettleFootTargetL = leftFoot;
+                comp._test7StopSettleFootTargetR = rightFoot;
+                comp._test7StopSettleFootDriftL = 0.0f;
+                comp._test7StopSettleFootDriftR = 0.0f;
+                comp._test7StopMaxSettleFootDrift = 0.0f;
+                comp._test7StopSettleReferenceValid = true;
+                comp._test7StopStableTime = 0.0f;
+                spdlog::info(
+                    "[LocoTest7] STOP_SETTLE_REFERENCE "
+                    "transitionDisplacement=(L={:.3f},R={:.3f},max={:.3f})m "
+                    "settleReferences=(L=({:+.3f},{:+.3f},{:+.3f}),"
+                    "R=({:+.3f},{:+.3f},{:+.3f}))",
+                    comp._test7StopFootDriftL,
+                    comp._test7StopFootDriftR,
+                    comp._test7StopMaxFootDrift,
+                    comp._test7StopSettleFootTargetL.x,
+                    comp._test7StopSettleFootTargetL.y,
+                    comp._test7StopSettleFootTargetL.z,
+                    comp._test7StopSettleFootTargetR.x,
+                    comp._test7StopSettleFootTargetR.y,
+                    comp._test7StopSettleFootTargetR.z);
+            }
+            const bool stopFeetSettled = comp._test7StopSettleReferenceValid
+                && comp._test7StopSettleFootDriftL <= 0.040f
+                && comp._test7StopSettleFootDriftR <= 0.040f;
+            const bool settled = poseReleased
+                && supportError <= glm::max(comp.test5ComTolerance, 0.04f)
                 && comp._test4ContactL && comp._test4ContactR
                 && glm::length(leftVelocity) < 0.15f
                 && glm::length(rightVelocity) < 0.15f
                 && comp._test5ComHorizontalSpeed < 0.15f
+                && stopFeetSettled
                 && tiltDeg < 30.0f
                 && !rag._locomotionSupportSaturated
                 && !comp._test4MotorSaturated;
-            comp._test7StopStableTime = recentered
+            comp._test7StopStableTime = settled
                 ? comp._test7StopStableTime + dt : 0.0f;
             if (comp._test7StopStableTime >= glm::max(
                     comp.test7StopHoldTime, 0.25f)) {
@@ -5355,15 +5677,56 @@ private:
                 comp._test7StopStableTime = 0.0f;
                 rag.locomotionSupportTargetWeight = 0.0f;
                 spdlog::info(
-                    "[LocoTest7] phase=RETURN_STAND centerError={:.3f} "
-                    "contact=({},{}) speed={:.3f} tilt={:.1f}",
-                    centerError,
+                    "[LocoTest7] phase=RETURN_STAND supportError={:.3f} "
+                    "contact=({},{}) speed={:.3f} tilt={:.1f} "
+                    "shutdownFeet=(transition=({:.3f},{:.3f}),"
+                    "settleDrift=({:.3f},{:.3f}),locks=({:.2f},{:.2f}),"
+                    "force=({:.0f},{:.0f})N) pose=STANDING",
+                    supportError,
                     comp._test4ContactL ? "L" : "-",
                     comp._test4ContactR ? "R" : "-",
-                    comp._test5ComHorizontalSpeed, tiltDeg);
+                    comp._test5ComHorizontalSpeed, tiltDeg,
+                    comp._test7StopFootDriftL,
+                    comp._test7StopFootDriftR,
+                    comp._test7StopSettleFootDriftL,
+                    comp._test7StopSettleFootDriftR,
+                    rag.locomotionFootLockWeights[0],
+                    rag.locomotionFootLockWeights[1],
+                    rag._locomotionFootLockForce[0],
+                    rag._locomotionFootLockForce[1]);
             } else if (comp._test4PhaseTime >= glm::max(
                            comp.test7StopTime + comp.test5HoldTimeout, 1.0f)) {
-                abortSequence("continuous-gait stop did not recenter");
+                spdlog::warn(
+                    "[LocoTest7] STOP_CHECK result=FAIL supportError={:.3f}/{:.3f}m "
+                    "contact=({},{}) speed=(L={:.3f},R={:.3f},COM={:.3f}) "
+                    "shutdownFeet=(transition=({:.3f},{:.3f},max={:.3f})m,"
+                    "settleDrift=({:.3f},{:.3f},max={:.3f})/0.040m,"
+                    "locks=({:.2f},{:.2f}),force=({:.0f},{:.0f})N) "
+                    "poseReleased={} settleReference={} crouch={:.3f} tilt={:.1f} "
+                    "saturation=(support={},motor={})",
+                    supportError, glm::max(comp.test5ComTolerance, 0.04f),
+                    comp._test4ContactL ? "L" : "-",
+                    comp._test4ContactR ? "R" : "-",
+                    glm::length(leftVelocity),
+                    glm::length(rightVelocity),
+                    comp._test5ComHorizontalSpeed,
+                    comp._test7StopFootDriftL,
+                    comp._test7StopFootDriftR,
+                    comp._test7StopMaxFootDrift,
+                    comp._test7StopSettleFootDriftL,
+                    comp._test7StopSettleFootDriftR,
+                    comp._test7StopMaxSettleFootDrift,
+                    rag.locomotionFootLockWeights[0],
+                    rag.locomotionFootLockWeights[1],
+                    rag._locomotionFootLockForce[0],
+                    rag._locomotionFootLockForce[1],
+                    poseReleased ? "yes" : "NO",
+                    comp._test7StopSettleReferenceValid ? "yes" : "NO",
+                    comp._test7CrouchBlend,
+                    tiltDeg,
+                    rag._locomotionSupportSaturated ? "YES" : "no",
+                    comp._test4MotorSaturated ? "YES" : "no");
+                abortSequence("continuous-gait stop did not settle");
             }
         } else if (continuousEnabled && comp._test4Phase == kReturnStand) {
             const bool locksOff = rag.locomotionFootLockWeights[0] <= 0.001f
@@ -5375,7 +5738,10 @@ private:
                 && glm::length(rightVelocity) < 0.15f
                 && comp._test5ComHorizontalSpeed < 0.15f
                 && tiltDeg < 15.0f
+                && std::abs(comp._test7HeadingErrorDeg)
+                    <= glm::clamp(comp.test7InterStepHeadingLimit, 2.0f, 20.0f)
                 && !rag._locomotionSupportSaturated
+                && !rag._locomotionUprightSaturated
                 && rag.locomotionLiftBone < 0
                 && rag._locomotionLiftForce <= 0.5f
                 && locksOff
@@ -5403,6 +5769,7 @@ private:
                     comp._test4Forward);
                 const bool forwardOk = totalForward >= 0.05f * completed;
                 const bool boundsOk = comp._test7MaxDrift <= 0.040f
+                    && comp._test7StopMaxSettleFootDrift <= 0.040f
                     && comp._test7PeakTilt < 30.0f
                     && comp._test7MaxMotorRatio <= 1.0f;
                 const bool pass = stepCountOk && edgeCountOk
@@ -5414,7 +5781,11 @@ private:
                     "lastSupportAdvance=({:.3f},{:.3f}) "
                     "delta={:.3f}/0.030[{}] "
                     "lastPeriod=({:.3f},{:.3f}) delta={:.3f}/0.750[{}] "
-                    "maxDrift={:.3f}/0.040 peakTilt={:.1f}/30 "
+                    "maxDrift={:.3f}/0.040 "
+                    "stopTransition=(L={:.3f},R={:.3f},max={:.3f})m "
+                    "stopDrift=(L={:.3f},R={:.3f},max={:.3f})/0.040 "
+                    "peakTilt={:.1f}/30 "
+                    "heading=(final={:+.1f},peak={:.1f})deg "
                     "maxMotorRatio={:.2f}/1.00 edges=({},{}) total={}/{}[{}] "
                     "standing={}",
                     pass ? "PASS" : "FAIL",
@@ -5431,7 +5802,16 @@ private:
                     std::abs(comp._test7LastStepPeriod
                            - comp._test7PreviousStepPeriod),
                     periodConverged ? "ok" : "FAIL",
-                    comp._test7MaxDrift, comp._test7PeakTilt,
+                    comp._test7MaxDrift,
+                    comp._test7StopFootDriftL,
+                    comp._test7StopFootDriftR,
+                    comp._test7StopMaxFootDrift,
+                    comp._test7StopSettleFootDriftL,
+                    comp._test7StopSettleFootDriftR,
+                    comp._test7StopMaxSettleFootDrift,
+                    comp._test7PeakTilt,
+                    comp._test7HeadingErrorDeg,
+                    comp._test7PeakHeadingErrorDeg,
                     comp._test7MaxMotorRatio,
                     comp._test6ContactTransitionsL,
                     comp._test6ContactTransitionsR,

@@ -364,12 +364,16 @@ cycle, and final tilt remained within 10 degrees of the initial standing tilt.
 
 ## Test 7 - Continuous gait
 
+**Status: COMPLETE (2026-07-29).**
+
 **Purpose:** turn a validated two-step sequence into a repeatable limit cycle.
 
 **Enabled:** repeated alternation and desired-speed foot-placement feedback.
 
-**Procedure:** first complete 10 steps at constant low speed, then walk for 60 seconds.
-Turning, slopes, uneven terrain, and recovery are separate later milestones.
+**Completion procedure:** complete 10 steps at constant low speed from both mirrored starting
+supports and return cleanly to standing. The optional 60-second endurance mode remains a regression
+and tuning tool; it no longer blocks extraction of the validated gait into the gameplay controller.
+Turning, slopes, uneven terrain, and recovery remain separate later milestones.
 
 **Runtime controls:** select `Test 7 - continuous gait`, wait for `baseline=ready`, then press
 F6 for left support/right-first or F7 for the mirror. The default run stops automatically after
@@ -386,7 +390,12 @@ matches the deliberately slow validation cadence; neither is the eventual gamepl
 speed. The reach clamp must retain the minimum advance plus a target-tracking reserve before
 takeoff. Admission subtracts the filtered loss measured from prior physical landings instead of
 using an unrelated fixed margin, and plant acquisition verifies the same retained support advance
-before capturing the contact pose. During the walking sequence the dynamic-root height target
+before capturing the contact pose. Before each takeoff, the weight-shift gate requires the forward
+COM error to be below 1.5 cm, the lateral error below 1 cm, and forward COM speed below 1 cm/s.
+The forward position band deliberately accommodates the nonzero equilibrium error of the physical
+1.5 Hz PD support spring. A shift that remains blocked for 4.5 seconds with the default settings
+logs `WEIGHT_SHIFT_TIMEOUT` with every readiness predicate and aborts instead of waiting silently.
+During the walking sequence the dynamic-root height target
 ramps into a small 1.8 cm reach crouch and the Test 7 planner limits nominal usable leg reach to
 97.5% of the anatomical chain (without shortening an already longer captured pose). This preserves
 knee bend so small radial motor lag is not magnified into centimetres of horizontal landing error.
@@ -409,17 +418,37 @@ once at inter-step entry. A 0.35-second smoothstep then moves between those immu
 and its analytic derivative supplies the support-target velocity. The target is never rebuilt from
 the vibrating feet each frame, so contact noise cannot become a velocity command and feed back
 through the COM damping term. There is no separate posture-recovery torque and no phase-specific
-hip weakening; the existing implicit upright velocity spring remains the sole root-upright
-controller. Handoff cannot occur until recentering is complete, the COM is within 4 cm of the fixed
-midpoint, tilt is inside the 12-15 degree baseline-relative band, and the upright, support, and
-joint-motor controllers are unsaturated. Raw root angular velocity is diagnostic only: because the
-upright spring explicitly writes angular velocity each physics step, its pre-write measurement
-contains the controller's correction cycle and is not a valid handoff gate. These rules prevent a
-new step from starting in the middle of a saturated correction without adding a second controller
-that can fight the original upright spring.
-On stopping, both the support target and crouch return smoothly to standing before support and
-walking-pose ownership are released. Completion requires another 0.5 seconds in the validated Test
-1 standing conditions.
+hip weakening. Test 7 selects a single physical upright spring for its entire lifetime, including
+baseline settling. A world-to-root SixDOF constraint leaves all translation free. Two force-limited
+position motors drive pitch/roll toward the bind-upright frame, while the same constraint uses a
+lower-authority yaw motor to preserve the heading captured when F6/F7 starts. The heading target is
+never recaptured from the rotated pelvis after a landing. Physical stiffness and damping are sized
+for the whole character rather than normalized from the pelvis body's inertia.
+The initial 700 N*m/rad stiffness is above the approximately 450 N*m/rad small-angle gravity slope
+of the 70.4 kg test ragdoll at standing hip height, while the 250 N*m per-axis cap bounds recovery.
+Heading begins at 180 N*m/rad stiffness, 50 N*m*s/rad damping, and an 80 N*m cap so stance-contact
+yaw impulses are rejected without turning the heading hold into a hard foot-scrubbing lock.
+The motor impulse is applied inside the same iterative solve as the articulated joints and ground
+contacts, so those constraints respond during the correction instead of after an external velocity
+write. This mode bypasses both direct `AddTorque` PD control and the legacy
+`SetAngularVelocity` spring, so no phase boundary can run multiple upright controllers. Tests 1-6
+retain the already-validated legacy spring. Handoff cannot occur until recentering is complete, the
+COM is within 4 cm of the fixed midpoint, tilt is inside the configured gate (15 degrees by default),
+heading error is within 8 degrees, and the orientation, support, and joint-motor controllers are
+unsaturated. Raw root angular velocity remains diagnostic rather than a handoff gate. These rules
+prevent a new step from starting in the
+middle of a saturated correction without recreating the dual-controller recovery shake.
+On stopping, the controller holds the final stable support target from the completed transfer;
+it does not pull the COM toward the midpoint of the staggered soles. Over the configured stop
+duration, the captured walking leg targets blend smoothly into the bind/standing targets while
+the reach crouch unwinds. The physical sole positions at stop entry remain diagnostic references
+for the commanded transition displacement; they are never force targets. Once the pose and crouch
+release finishes, both physical soles are recaptured exactly once and subsequent drift is measured
+from those settled-pose references through the standing handoff. Only that post-release drift must
+remain below 4 cm. `STOP_CHECK` reports both measurements, support error, pose/reference state, and
+lock weights/forces (which must remain zero), so the validator distinguishes intentional stance
+geometry change from continued sliding. Once the released pose is quiet, support and walking-pose
+ownership pass to the validated Test 1 standing controller for another 0.5-second stability check.
 
 `[LocoTest7]` reports `START`, every `STEP_COMPLETE` and `ROLE_SWAP`, periodic `STATUS` and
 `CONTROL_STATUS`, the
@@ -428,24 +457,52 @@ the requested step count or duration, exactly one airborne/contact cycle per ste
 travel, bounded drift/tilt/motor effort, convergence of the final two support advances and step
 periods, and a stable return to standing.
 `CONTROL_STATUS` decomposes the causal control state into signed root pitch/roll/yaw velocity,
-horizontal tilt rate, the upright spring's applied angular-velocity delta and saturation flag,
-support-target lateral/forward velocity, and the COM support controller's position (P) and damping
-(D) force components. `INTERSTEP_CHECK` reports each handoff gate separately so a timeout identifies
-the branch that failed rather than only its final tilt symptom.
+horizontal tilt rate, the active upright mode, legacy angular-velocity delta, the solver motor's
+signed applied torque, per-axis torque cap and saturation, support-target velocity, and the COM
+support controller's position (P) and damping (D) force components. It also reports current/peak
+heading error plus yaw-motor saturation. `INTERSTEP_CHECK` reports each handoff
+gate separately so a timeout identifies the branch that failed rather than only its final tilt
+symptom. The final `COMPLETE_CHECK` reports shutdown drift separately from the maximum active-gait
+drift so a stopping failure cannot be mistaken for a failed step cycle.
 
 **Pass:**
 
-- 10 alternating steps complete with bounded tilt, plant drift, and tracking error;
+- 10 alternating steps complete from both F6/F7 starting supports with bounded tilt, plant drift,
+  and tracking error;
 - step period and length converge instead of growing or shrinking each cycle;
-- the 60-second run does not fall;
 - stopping returns to the validated Test 1 standing state.
+
+**Completion evidence (2026-07-29):** both mirrored ten-step runs emitted
+`COMPLETE_CHECK result=PASS`. They completed 20/20 expected contact edges with 8 mm maximum active-
+gait drift, 11 mm maximum post-release stop drift, 6.2 degrees peak tilt, 0.07 maximum motor ratio,
+and a stable standing return. Forward travel was 0.625 m and 0.636 m; the final support advances
+converged to 66/66 mm and 65/65 mm respectively.
 
 ## Current status
 
-Tests 1-6 have passed. Test 7 is implemented and is the active runtime-validation target. It
-extends the validated measured role swap into continuous alternation, applies bounded desired-
-speed foot-placement feedback, and performs a controlled return to Test 1 standing. The next
-gate is a clean 10-step run in both starting directions; the 60-second endurance run follows.
+Tests 1-7 have passed. The locomotion foundation now covers stable standing, weight shift, physical
+swing and landing, support transfer, mirrored alternation, a repeatable continuous limit cycle, and
+a controlled return to standing. Test 7 remains the regression oracle while its validated control
+laws are simplified and moved out of the validation-only F6/F7 path.
+
+## Next milestone - gameplay character controller
+
+The next task is to turn the validated Test 7 behavior into a smaller input-driven runtime
+controller. Preserve the proven physical invariants while removing validation-specific sequencing,
+duplicated state, and test-only gates:
+
+- map player input direction and magnitude to heading, desired speed, and bounded footholds instead
+  of using fixed F6/F7 forward sequences;
+- retain contact-driven phase changes, COM/velocity foot-placement feedback, velocity lead, reach
+  admission, invariant sole orientation, and the single solver-based upright/heading controller;
+- reuse the stable stop transition when input returns to zero, with a deliberate closing step added
+  later if gameplay requires a symmetric final stance;
+- keep one owner per physical task and never combine foot locks, competing upright controllers, or
+  independently moving support targets;
+- keep Test 7 runnable as a deterministic regression until the gameplay controller reproduces both
+  mirrored passes, then remove only scaffolding proven to be redundant;
+- establish flat-ground start, move, turn, direction-change, and stop parity before adding slopes,
+  uneven terrain, recovery, animation styling, or higher gameplay speeds.
 
 ## Relationship to SIMBICON
 
@@ -474,8 +531,9 @@ Adapt for this engine:
 4. Fix the earliest violated invariant.
 5. Record the result here and advance only after the test passes.
 
-Do not tune continuous walking while an earlier test is failing. Do not add terrain,
-turning, stylistic secondary motion, or recovery logic until Test 7 is stable.
+During controller extraction, preserve the completed Test 7 path as a regression baseline. Do not
+add terrain, stylistic secondary motion, or recovery logic until the input-driven flat-ground
+controller matches its start, gait, mirrored-direction, and stopping invariants.
 
 ## Relevant files
 

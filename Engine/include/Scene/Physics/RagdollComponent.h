@@ -46,7 +46,11 @@ struct RagdollComponent {
     glm::vec3 _locomotionRootVel { 0.0f };
     glm::vec3 _locomotionRootAngularVelocity { 0.0f };
     glm::vec3 _locomotionUprightDeltaAngularVelocity { 0.0f };
+    glm::vec3 _locomotionUprightTorque { 0.0f };
+    bool _locomotionUprightTorqueActive = false;
     bool _locomotionUprightSaturated = false;
+    float _locomotionHeadingErrorDeg = 0.0f;
+    bool _locomotionHeadingSaturated = false;
     glm::vec3 _locomotionCOM { 0.0f };
     glm::vec3 _locomotionCOMVel { 0.0f };
     bool _locomotionCOMValid = false;
@@ -103,9 +107,17 @@ struct RagdollComponent {
     float locomotionTipLimpDeg = 70.0f;
     float locomotionTipLimpTime = 0.5f;
 
-    // Optional physical torque balance; zero uses the velocity spring.
-    float locomotionBalanceTorque = 0.0f;
-    float locomotionBalanceTorqueDamp = 40.0f;
+    // Runtime-selectable solver-backed upright spring. When enabled it REPLACES the
+    // angular-velocity spring; the two paths are never applied in the same physics step.
+    // A world-to-root SixDOF motor leaves translation free, drives pitch/roll upright,
+    // and uses a lower-authority yaw spring to preserve the requested heading.
+    bool locomotionTorqueUpright = false;
+    float locomotionTorqueUprightStiffness = 700.0f;
+    float locomotionTorqueUprightDamping = 100.0f;
+    float locomotionTorqueUprightMaxTorque = 250.0f;
+    float locomotionTorqueHeadingStiffness = 180.0f;
+    float locomotionTorqueHeadingDamping = 50.0f;
+    float locomotionTorqueHeadingMaxTorque = 80.0f;
 
     // SIMBICON gait: the legs move the body, so the pelvis velocity force, the leash and
     // the COM-over-base forces are suppressed (they push the body toward the foot; the
