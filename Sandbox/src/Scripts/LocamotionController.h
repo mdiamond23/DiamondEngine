@@ -10,6 +10,7 @@
 #include "Animation/AnimationComponents.h"
 #include "DebugDraw.h"
 #include "CameraDirector.h"
+#include "LocomotionGaitRuntime.h"
 
 #include <imgui.h>
 #include <nlohmann/json.hpp>
@@ -30,6 +31,7 @@ struct LocamotionControllerComponent
 {
     float maxSpeed        = 1.0f;
     float turnRate        = 10.0f;
+    float runtimeTurnSpeedDeg = 540.0f;
     float deadzone        = 0.2f;
     float minWalkSpeed    = 0.15f;
     float facingOffsetDeg = 90.0f;
@@ -42,7 +44,7 @@ struct LocamotionControllerComponent
     // 3 = single-leg lift, 4 = one forward step, 5 = support transfer,
     // 6 = two-step handoff, 7 = continuous gait, 8 = grounded motor isolation. Validation
     // modes retain physical standing but categorically bypass the gait path.
-    int   validationTest = 3;
+    int   validationTest = 0;
     float test1ShoveImpulse = 25.0f;
     float test1ShoveCooldown = 3.0f;
     float test2ShiftFraction = 0.65f;
@@ -218,12 +220,14 @@ struct LocamotionControllerComponent
         glm::vec3 ankleFromFootWorld { 0.0f };
         glm::vec3 ankleFromFootLocal { 0.0f };
         glm::vec3 kneePoleWorld { 0.0f, 0.0f, -1.0f };
+        glm::vec3 groundReferenceKneePoleHeadingLocal { 0.0f, 0.0f, -1.0f };
         glm::quat plantedFootWorldRotation { 1, 0, 0, 0 };
-        // Captured once from the initial settled stance. Unlike the per-step planted
-        // rotation, this reference is not allowed to ratchet a landing tilt into every
-        // later swing.
-        glm::quat groundReferenceFootWorldRotation { 1, 0, 0, 0 };
+        // Captured once from the settled stance relative to the heading that produced it.
+        // Reapplying the active gait heading preserves the flat sole while allowing its yaw
+        // and the anatomical knee-bend plane to follow a turn.
+        glm::quat groundReferenceFootHeadingLocalRotation { 1, 0, 0, 0 };
         bool groundReferenceFootRotationValid = false;
+        bool groundReferenceKneePoleValid = false;
         glm::vec3 referenceUpperWorld { 0.0f, -1.0f, 0.0f };
         glm::quat referenceHipWorld { 1, 0, 0, 0 };
         glm::quat referenceKneeLocal { 1, 0, 0, 0 };
@@ -464,6 +468,19 @@ struct LocamotionControllerComponent
     bool _test7ReachClampedStep = false;
     bool _test7OldSupportDriftAllowanceLogged = false;
     bool _test7StopSettleReferenceValid = false;
+    // True when the reusable continuous-gait core owns the walking pose. Test 7 is the
+    // first command producer; gameplay input will become another without changing the core.
+    bool _continuousGaitEnabled = false;
+    bool _runtimeWalkIntent = false;
+    bool _runtimeRestartBlocked = false;
+    bool _runtimeTurnActive = false;
+    int _runtimeNextSupportSide = -1;
+    float _runtimeTurnElapsed = 0.0f;
+    float _runtimeTurnDuration = 0.0f;
+    float _runtimeTurnTotalYaw = 0.0f;
+    float _runtimeTurnAppliedYaw = 0.0f;
+    glm::vec3 _runtimeDesiredForward { 0.0f, 0.0f, -1.0f };
+    glm::vec3 _runtimeTurnTargetForward { 0.0f, 0.0f, -1.0f };
     glm::vec3 _test7StartCom { 0.0f };
     glm::vec3 _test7StepStartCom { 0.0f };
     glm::vec3 _test7IkPlanHip { 0.0f };
@@ -509,6 +526,8 @@ inline void DrawComponentInspector<LocamotionControllerComponent>(LocamotionCont
 {
     ImGui::DragFloat("Max Speed", &c.maxSpeed, 0.05f, 0.0f, 10.0f);
     ImGui::DragFloat("Turn Rate", &c.turnRate, 0.1f, 0.0f, 30.0f);
+    ImGui::DragFloat("Runtime Turn Speed", &c.runtimeTurnSpeedDeg,
+                     10.0f, 90.0f, 1080.0f, "%.0f deg/s");
     ImGui::DragFloat("Deadzone", &c.deadzone, 0.01f, 0.0f, 0.9f);
     ImGui::DragFloat("Min Walk Speed", &c.minWalkSpeed, 0.01f, 0.0f, 2.0f);
     ImGui::DragFloat("Facing Offset", &c.facingOffsetDeg, 1.0f, -180.0f, 180.0f, "%.0f deg");
@@ -912,6 +931,7 @@ inline std::string SerializeComponent<LocamotionControllerComponent>(const Locam
     nlohmann::json j;
     j["maxSpeed"] = c.maxSpeed;
     j["turnRate"] = c.turnRate;
+    j["runtimeTurnSpeedDeg"] = c.runtimeTurnSpeedDeg;
     j["deadzone"] = c.deadzone;
     j["minWalkSpeed"] = c.minWalkSpeed;
     j["facingOffsetDeg"] = c.facingOffsetDeg;
@@ -1066,6 +1086,7 @@ inline void DeserializeComponent<LocamotionControllerComponent>(LocamotionContro
     const auto j = nlohmann::json::parse(data);
     c.maxSpeed = j.value("maxSpeed", 1.0f);
     c.turnRate = j.value("turnRate", 10.0f);
+    c.runtimeTurnSpeedDeg = j.value("runtimeTurnSpeedDeg", 540.0f);
     c.deadzone = j.value("deadzone", 0.2f);
     c.minWalkSpeed = j.value("minWalkSpeed", 0.15f);
     c.facingOffsetDeg = j.value("facingOffsetDeg", 90.0f);
@@ -1073,7 +1094,7 @@ inline void DeserializeComponent<LocamotionControllerComponent>(LocamotionContro
     c.consciousness = j.value("consciousness", 1.0f);
     c.postPoweredGrace = j.value("postPoweredGrace", 0.4f);
     c.gaitBlendTime = j.value("gaitBlendTime", 0.6f);
-    c.validationTest = j.value("validationTest", 3);
+    c.validationTest = j.value("validationTest", 0);
     c.test1ShoveImpulse = j.value("test1ShoveImpulse", 25.0f);
     c.test1ShoveCooldown = j.value("test1ShoveCooldown", 3.0f);
     c.test2ShiftFraction = j.value("test2ShiftFraction", 0.65f);
@@ -1270,6 +1291,7 @@ public:
                 rag.locomotionFootLockBones[0] = rag.locomotionFootLockBones[1] = -1;
                 rag.locomotionFootLockWeights[0] = rag.locomotionFootLockWeights[1] = 0.0f;
                 rag.locomotionHeightOffset = 0.0f;
+                comp._continuousGaitEnabled = false;
                 ResetGait(comp);
                 ResetTest1(comp);
                 ResetTest2(comp);
@@ -1304,10 +1326,32 @@ public:
             moveDir.y = 0.0f;
             moveDir = glm::length(moveDir) > 1e-4f ? glm::normalize(moveDir) : glm::vec3(0.0f);
             // Validation is an isolation mode. WASD is deliberately inert so an accidental
-            // input cannot enable a gait controller during a foundation measurement.
-            const bool wantsToWalk = comp.validationTest == 0 && speed > comp.minWalkSpeed;
+            // input cannot enable a gait controller during a foundation measurement. Runtime
+            // uses a lower stop threshold than start threshold so analog noise cannot chatter
+            // the controller between walking and its controlled stop.
+            if (comp.validationTest == 0) {
+                const float startSpeed = glm::max(comp.minWalkSpeed, 0.0f);
+                const float stopSpeed = startSpeed * 0.5f;
+                comp._runtimeWalkIntent = comp._runtimeWalkIntent
+                    ? speed > stopSpeed : speed > startSpeed;
+            } else {
+                comp._runtimeWalkIntent = false;
+            }
+            const bool wantsToWalk = comp.validationTest == 0
+                && comp._runtimeWalkIntent;
+            if (!wantsToWalk)
+                comp._runtimeRestartBlocked = false;
 
-            if (wantsToWalk) {
+            const Diamond::Locomotion::GaitCommand validationGaitCommand =
+                BuildValidationGaitCommand(comp);
+            const Diamond::Locomotion::GaitCommand runtimeGaitCommand =
+                BuildRuntimeGaitCommand(comp, moveDir, speed, wantsToWalk);
+            const Diamond::Locomotion::GaitCommand& continuousGaitCommand =
+                runtimeGaitCommand.enabled
+                    ? runtimeGaitCommand : validationGaitCommand;
+            comp._continuousGaitEnabled = continuousGaitCommand.enabled;
+
+            if (wantsToWalk && !continuousGaitCommand.enabled) {
                 const float targetYaw = std::atan2(-moveDir.x, -moveDir.z);
                 float diff = std::fmod(targetYaw - comp._yaw + glm::pi<float>(), glm::two_pi<float>());
                 if (diff < 0.0f) diff += glm::two_pi<float>();
@@ -1345,9 +1389,11 @@ public:
                     comp._timeSincePowered, name, pressed ? "PRESS" : "RELEASE",
                     h, f, moveDir.x, moveDir.z, speed,
                     wantsToWalk ? "yes" : "no", comp.validationTest,
-                    (comp.validationTest >= 4 && comp.validationTest <= 7)
+                    comp._continuousGaitEnabled
+                        || (comp.validationTest >= 4 && comp.validationTest <= 7)
                         ? comp._test4Phase : comp._test3Phase,
-                    ((comp.validationTest >= 4 && comp.validationTest <= 7)
+                    (comp._continuousGaitEnabled
+                        || (comp.validationTest >= 4 && comp.validationTest <= 7)
                         ? comp._test4BaselineValid
                                               : comp._test3BaselineValid)
                         ? "ready" : "waiting",
@@ -1369,14 +1415,16 @@ public:
             const float poseTarget = ready && tiltDeg < rag.locomotionFallenTilt ? 1.0f : 0.0f;
             comp._poseBlend = Approach(comp._poseBlend, poseTarget, gaitRate * dt);
 
-            if (wantsToWalk && !comp._wasWalking) {
+            if (!continuousGaitCommand.enabled
+                && wantsToWalk && !comp._wasWalking) {
                 comp._stateIndex = 0;
                 comp._stateTime = 0.0f;
                 comp._steps = 0;
                 comp._swingWasAirborne = false;
                 comp._airborneTime = 0.0f;
             }
-            if (wantsToWalk != comp._wasWalking) {
+            if (!continuousGaitCommand.enabled
+                && wantsToWalk != comp._wasWalking) {
                 // Re-anchor once at a start/stop boundary. Never chase the simulated foot
                 // every frame: that was the old false "lock" that reported zero error while
                 // both feet slid away with the pelvis.
@@ -1392,7 +1440,8 @@ public:
             // only correct when there is no swing leg to place.
             // Crossfade, matched to the torque ramp: engine assists fade out exactly as the
             // virtual torques fade in, so total balance authority never dips.
-            const bool torqueGait = gaitRequested && !comp.assistedStepping;
+            const bool torqueGait = gaitRequested
+                && !continuousGaitCommand.enabled && !comp.assistedStepping;
             rag.locomotionSimbicon = torqueGait;
             rag.locomotionSimbiconBlend = torqueGait ? comp._gaitWeight : 0.0f;
             rag.locomotionSupportTargetWeight = 0.0f;
@@ -1403,7 +1452,7 @@ public:
             rag.locomotionHeightOffset = 0.0f;
             rag.locomotionHipTorque[0] = rag.locomotionHipTorque[1] = glm::vec3(0.0f);
             rag.locomotionHipBones[0] = rag.locomotionHipBones[1] = -1;
-            rag.locomotionTorqueUpright = comp.validationTest == 7;
+            rag.locomotionTorqueUpright = continuousGaitCommand.enabled;
             if (rag.locomotionTorqueUpright) {
                 rag.locomotionTorqueUprightStiffness = glm::max(
                     comp.test7UprightStiffness, 0.0f);
@@ -1427,7 +1476,14 @@ public:
                 comp.proceduralFootLockEffectiveMass, 0.0f);
             rag.locomotionFootLockMaxForce = glm::max(comp.proceduralFootLockMaxForce, 0.0f);
 
-            if (comp.validationTest > 0) {
+            if (continuousGaitCommand.enabled) {
+                // Both Test 7 and gameplay use the same physical gait core. This standing
+                // pass resolves the rig and supplies the validated bind pose; the core owns
+                // swing IK, support transfer, heading, and stopping while active.
+                UpdateProceduralGait(scene, entity, comp, rag, false, dt);
+                UpdateTest4(scene, entity, comp, rag, ready, tiltDeg, dt,
+                            continuousGaitCommand);
+            } else if (comp.validationTest > 0) {
                 // Keep the validated bind/standing motor target, but bypass the gait
                 // dispatcher entirely. With walking=false the procedural pose path cannot
                 // acquire plants, solve swing IK, command support transfer, or arm locks.
@@ -1438,8 +1494,9 @@ public:
                     UpdateTest2(scene, entity, comp, rag, ready, tiltDeg, dt);
                 } else if (comp.validationTest == 3) {
                     UpdateTest3(scene, entity, comp, rag, ready, tiltDeg, dt);
-                } else if (comp.validationTest >= 4 && comp.validationTest <= 7) {
-                    UpdateTest4(scene, entity, comp, rag, ready, tiltDeg, dt);
+                } else if (comp.validationTest >= 4 && comp.validationTest <= 6) {
+                    UpdateTest4(scene, entity, comp, rag, ready, tiltDeg, dt,
+                                continuousGaitCommand);
                 } else {
                     UpdateGroundTest(scene, entity, comp, rag, ready, tiltDeg, dt);
                 }
@@ -1461,11 +1518,15 @@ public:
                                  glm::length(glm::vec2(comp._desiredVelocity.x,
                                                        comp._desiredVelocity.z)),
                                  glm::length(glm::vec2(v.x, v.z)), tiltDeg, comp._steps);
-                    spdlog::info("[LocoFrame] tilt(mine={:.1f} engine={:.1f} delta={:+.1f}) right=({:+.2f},{:+.2f},{:+.2f}) fwd=({:+.2f},{:+.2f},{:+.2f}) femurCmd=({:+.2f},{:+.2f},{:+.2f}) femurActual=({:+.2f},{:+.2f},{:+.2f}) femurErr={:.1f}",
+                    spdlog::info("[LocoFrame] tilt(mine={:.1f} engine={:.1f} delta={:+.1f}) entityRight=({:+.2f},{:+.2f},{:+.2f}) entityFwd=({:+.2f},{:+.2f},{:+.2f}) gaitRight=({:+.2f},{:+.2f},{:+.2f}) gaitFwd=({:+.2f},{:+.2f},{:+.2f}) femurCmd=({:+.2f},{:+.2f},{:+.2f}) femurActual=({:+.2f},{:+.2f},{:+.2f}) femurErr={:.1f}",
                                  comp._myTiltDeg, comp._engineTiltDeg,
                                  comp._myTiltDeg - comp._engineTiltDeg,
                                  comp._right.x, comp._right.y, comp._right.z,
                                  comp._fwd.x, comp._fwd.y, comp._fwd.z,
+                                 comp._test4Right.x, comp._test4Right.y,
+                                 comp._test4Right.z,
+                                 comp._test4Forward.x, comp._test4Forward.y,
+                                 comp._test4Forward.z,
                                  comp._femurCmd.x, comp._femurCmd.y, comp._femurCmd.z,
                                  comp._femurActual.x, comp._femurActual.y, comp._femurActual.z,
                                  comp._femurErrDeg);
@@ -1769,6 +1830,64 @@ public:
 private:
     float _debugTimer = 0.0f;
 
+    static Diamond::Locomotion::GaitCommand BuildValidationGaitCommand(const Comp& comp)
+    {
+        using Diamond::Locomotion::GaitCommand;
+        using Diamond::Locomotion::RunLimit;
+
+        GaitCommand command;
+        command.enabled = comp.validationTest == 7;
+        if (!command.enabled) return command;
+
+        const bool startLeftSupport = Input::IsKeyPressed(Key::F6);
+        const bool startRightSupport = Input::IsKeyPressed(Key::F7);
+        command.startRequested = startLeftSupport || startRightSupport;
+        command.initialSupportSide = startLeftSupport ? -1
+            : (startRightSupport ? 1 : 0);
+        command.stopRequested = Input::IsKeyPressed(Key::F8);
+        command.resetRequested = command.stopRequested;
+        command.desiredSpeed = comp.test7DesiredSpeed;
+        command.runLimit = comp.test7EnduranceRun
+            ? RunLimit::Duration : RunLimit::StepCount;
+        command.stepLimit = comp.test7TargetSteps;
+        command.durationLimit = comp.test7EnduranceTime;
+        return command;
+    }
+
+    static Diamond::Locomotion::GaitCommand BuildRuntimeGaitCommand(
+        const Comp& comp, const glm::vec3& moveDirection,
+        float inputSpeed, bool wantsToWalk)
+    {
+        using Diamond::Locomotion::GaitCommand;
+
+        GaitCommand command;
+        command.enabled = comp.validationTest == 0;
+        if (!command.enabled) return command;
+
+        const bool directionChanged = wantsToWalk && comp._test7Running
+            && glm::dot(moveDirection, moveDirection) > 1e-8f
+            && glm::dot(comp._runtimeDesiredForward,
+                        comp._runtimeDesiredForward) > 1e-8f
+            && glm::dot(glm::normalize(moveDirection),
+                        glm::normalize(comp._runtimeDesiredForward))
+                < std::cos(glm::radians(5.0f));
+        command.startRequested = wantsToWalk && !comp._test7Running
+            && !comp._runtimeRestartBlocked;
+        command.stopRequested = comp._test7Running
+            && (!wantsToWalk || directionChanged);
+        command.initialSupportSide = comp._runtimeNextSupportSide;
+        command.desiredForward = moveDirection;
+
+        // Keep Step 2 inside Test 7's validated speed envelope. Input magnitude is still
+        // represented, while the later responsiveness pass can raise cadence and stride
+        // together instead of asking this low-speed gait to jump directly to maxSpeed.
+        const float inputFraction = comp.maxSpeed > 1e-4f
+            ? glm::clamp(inputSpeed / comp.maxSpeed, 0.0f, 1.0f) : 0.0f;
+        command.desiredSpeed = glm::max(comp.test7DesiredSpeed, 0.0f)
+            * inputFraction;
+        return command;
+    }
+
     static float Approach(float value, float target, float amount)
     {
         return value < target ? glm::min(value + amount, target)
@@ -1783,6 +1902,15 @@ private:
         c._stateTime = 0.0f;
         c._steps = 0;
         c._wasWalking = false;
+        c._runtimeWalkIntent = false;
+        c._runtimeRestartBlocked = false;
+        c._runtimeTurnActive = false;
+        c._runtimeNextSupportSide = -1;
+        c._runtimeTurnElapsed = 0.0f;
+        c._runtimeTurnDuration = 0.0f;
+        c._runtimeTurnTotalYaw = 0.0f;
+        c._runtimeTurnAppliedYaw = 0.0f;
+        c._runtimeTurnTargetForward = glm::vec3(0.0f, 0.0f, -1.0f);
         c._swingWasAirborne = false;
         c._airborneTime = 0.0f;
         c._swingContact = false;
@@ -2011,6 +2139,13 @@ private:
         c._test7ReachClampedStep = false;
         c._test7OldSupportDriftAllowanceLogged = false;
         c._test7StopSettleReferenceValid = false;
+        c._runtimeTurnActive = false;
+        c._runtimeTurnElapsed = 0.0f;
+        c._runtimeTurnDuration = 0.0f;
+        c._runtimeTurnTotalYaw = 0.0f;
+        c._runtimeTurnAppliedYaw = 0.0f;
+        c._runtimeDesiredForward = glm::vec3(0.0f, 0.0f, -1.0f);
+        c._runtimeTurnTargetForward = glm::vec3(0.0f, 0.0f, -1.0f);
         c._test7StartCom = glm::vec3(0.0f);
         c._test7StepStartCom = glm::vec3(0.0f);
         c._test7IkPlanHip = glm::vec3(0.0f);
@@ -2025,6 +2160,8 @@ private:
         c._test7HeadingTargetRot = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
         c._legL.groundReferenceFootRotationValid = false;
         c._legR.groundReferenceFootRotationValid = false;
+        c._legL.groundReferenceKneePoleValid = false;
+        c._legR.groundReferenceKneePoleValid = false;
     }
 
     static void ResetGroundTest(Comp& c)
@@ -3041,8 +3178,10 @@ private:
         }
     }
 
-    static void UpdateTest4(Scene& scene, entt::entity entity, Comp& comp,
-                            RagdollComponent& rag, bool ready, float tiltDeg, float dt)
+    static void UpdateTest4(
+        Scene& scene, entt::entity entity, Comp& comp, RagdollComponent& rag,
+        bool ready, float tiltDeg, float dt,
+        const Diamond::Locomotion::GaitCommand& continuousCommand)
     {
         constexpr int kIdle = 0;
         constexpr int kWeightShift = 1;
@@ -3059,10 +3198,13 @@ private:
         constexpr int kAbort = 12;
         constexpr int kStopping = 13;
         constexpr int kReturnStand = 14;
-        const bool transferEnabled = comp.validationTest >= 5;
+        const bool transferEnabled = comp.validationTest >= 5
+            || continuousCommand.enabled;
         const bool twoStepEnabled = comp.validationTest == 6;
-        const bool continuousEnabled = comp.validationTest == 7;
+        const bool continuousEnabled = continuousCommand.enabled;
         const bool multiStepEnabled = twoStepEnabled || continuousEnabled;
+        const bool gameplayCommand = continuousEnabled
+            && continuousCommand.runLimit == Diamond::Locomotion::RunLimit::None;
 
         if (!scene.Has<SkinnedMeshComponent>(entity)
             || !scene.Has<AnimatorComponent>(entity)
@@ -3181,7 +3323,37 @@ private:
                 right = glm::cross(forward, worldUp);
             right = glm::normalize(right);
         };
-
+        auto horizontalForward = [](const glm::quat& heading) {
+            glm::vec3 forward = glm::normalize(heading)
+                * glm::vec3(0.0f, 0.0f, -1.0f);
+            forward.y = 0.0f;
+            return glm::dot(forward, forward) > 1e-8f
+                ? glm::normalize(forward) : glm::vec3(0.0f, 0.0f, -1.0f);
+        };
+        auto signedHeadingDelta = [](glm::vec3 from, glm::vec3 to) {
+            from.y = to.y = 0.0f;
+            if (glm::dot(from, from) < 1e-8f
+                || glm::dot(to, to) < 1e-8f) return 0.0f;
+            from = glm::normalize(from);
+            to = glm::normalize(to);
+            return std::atan2(glm::cross(from, to).y,
+                              glm::clamp(glm::dot(from, to), -1.0f, 1.0f));
+        };
+        auto setGaitHeading = [&](glm::vec3 forward) {
+            forward.y = 0.0f;
+            if (glm::dot(forward, forward) < 1e-8f)
+                forward = glm::vec3(0.0f, 0.0f, -1.0f);
+            forward = glm::normalize(forward);
+            glm::vec3 right = glm::cross(
+                forward, glm::vec3(0.0f, 1.0f, 0.0f));
+            makeHorizontalBasis(right, forward);
+            comp._test4Right = right;
+            comp._test4Forward = forward;
+            const float targetYaw = std::atan2(-forward.x, -forward.z);
+            comp._test7HeadingTargetRot = glm::angleAxis(
+                targetYaw, glm::vec3(0.0f, 1.0f, 0.0f));
+            rag.locomotionTargetRot = comp._test7HeadingTargetRot;
+        };
         if (!comp._test4BaselineValid) {
             comp._test4SettleTime = settledStanding
                 ? comp._test4SettleTime + dt : 0.0f;
@@ -3234,15 +3406,28 @@ private:
             }
         }
 
-        if (Input::IsKeyPressed(Key::F8) && continuousEnabled
+        if (continuousCommand.stopRequested && continuousEnabled
             && comp._test7Running && comp._test4Phase != kStopping
-            && comp._test4Phase != kReturnStand) {
+            && comp._test4Phase != kReturnStand
+            && !comp._test7StopRequested) {
             comp._test7StopRequested = true;
             spdlog::info(
                 "[LocoTest7] STOP_REQUEST accepted phase={} step={} "
                 "action=finish-current-step-then-recenter",
                 comp._test4Phase, comp._test6StepIndex);
-        } else if (Input::IsKeyPressed(Key::F8)) {
+        } else if (gameplayCommand && comp._test7Running
+                   && comp._test7StopRequested
+                   && !continuousCommand.stopRequested
+                   && comp._test4Phase != kStopping
+                   && comp._test4Phase != kReturnStand) {
+            // The player returned to the active heading before the committed stop.
+            // Keep walking instead of carrying a stale stop request into the next step.
+            comp._test7StopRequested = false;
+            spdlog::info(
+                "[LocoTest7] STOP_REQUEST canceled phase={} step={}",
+                comp._test4Phase, comp._test6StepIndex);
+        } else if ((continuousEnabled && continuousCommand.resetRequested)
+                   || (!continuousEnabled && Input::IsKeyPressed(Key::F8))) {
             spdlog::info("[LocoTest4] baseline recapture requested");
             ResetTest4(comp);
             rag.locomotionSupportTargetWeight = 0.0f;
@@ -3251,23 +3436,170 @@ private:
             return;
         }
 
+        auto commitRuntimeStandingHeading = [&](glm::vec3 forward) {
+            setGaitHeading(forward);
+            const float targetYaw = std::atan2(
+                -comp._test4Forward.x, -comp._test4Forward.z);
+            // This is the source used by the general standing controller at the start
+            // of the next update, so the eased physical turn and its target cannot fight.
+            comp._yaw = targetYaw - glm::radians(comp.facingOffsetDeg);
+        };
+        auto rotateRuntimeReferences = [&](const glm::vec3& pivot,
+                                           const glm::quat& turn) {
+            auto rotatePoint = [&](glm::vec3 point) {
+                return pivot + turn * (point - pivot);
+            };
+            comp._test4FootBaselineL = rotatePoint(comp._test4FootBaselineL);
+            comp._test4FootBaselineR = rotatePoint(comp._test4FootBaselineR);
+            comp._test4ComBaseline = rotatePoint(comp._test4ComBaseline);
+            comp._test4SupportTarget = rotatePoint(comp._test4SupportTarget);
+        };
+        auto beginRuntimeTurn = [&](glm::vec3 from, glm::vec3 to,
+                                    const char* action) {
+            from.y = to.y = 0.0f;
+            from = glm::normalize(from);
+            to = glm::normalize(to);
+            comp._runtimeTurnActive = true;
+            comp._runtimeTurnElapsed = 0.0f;
+            comp._runtimeTurnAppliedYaw = 0.0f;
+            comp._runtimeTurnTotalYaw = signedHeadingDelta(from, to);
+            comp._runtimeTurnTargetForward = to;
+            comp._runtimeDesiredForward = to;
+            const float turnDegrees = std::abs(
+                glm::degrees(comp._runtimeTurnTotalYaw));
+            const float turnSpeed = glm::max(
+                comp.runtimeTurnSpeedDeg, 90.0f);
+            comp._runtimeTurnDuration = glm::clamp(
+                turnDegrees / turnSpeed, 0.12f, 0.40f);
+            spdlog::info(
+                "[LocoRuntime] TURN_BLEND {} yaw={:+.1f}deg duration={:.3f}s "
+                "speed={:.0f}deg/s from=({:+.2f},{:+.2f}) "
+                "to=({:+.2f},{:+.2f})",
+                action, glm::degrees(comp._runtimeTurnTotalYaw),
+                comp._runtimeTurnDuration, turnSpeed,
+                from.x, from.z, to.x, to.z);
+        };
+        auto advanceRuntimeTurn = [&](glm::vec3 desiredForward) {
+            constexpr float kTurnThresholdDeg = 0.5f;
+            desiredForward.y = 0.0f;
+            if (glm::dot(desiredForward, desiredForward) > 1e-8f)
+                desiredForward = glm::normalize(desiredForward);
+            else
+                desiredForward = comp._runtimeTurnTargetForward;
+
+            if (std::abs(glm::degrees(signedHeadingDelta(
+                    comp._runtimeTurnTargetForward, desiredForward)))
+                    > kTurnThresholdDeg) {
+                beginRuntimeTurn(comp._test4Forward, desiredForward, "RETARGET");
+            }
+
+            comp._runtimeTurnElapsed = glm::min(
+                comp._runtimeTurnElapsed + dt, comp._runtimeTurnDuration);
+            const float linearT = comp._runtimeTurnDuration > 1e-6f
+                ? comp._runtimeTurnElapsed / comp._runtimeTurnDuration : 1.0f;
+            const float easedT = linearT * linearT * (3.0f - 2.0f * linearT);
+            const float desiredAppliedYaw =
+                comp._runtimeTurnTotalYaw * easedT;
+            const float deltaYaw = desiredAppliedYaw
+                - comp._runtimeTurnAppliedYaw;
+
+            if (std::abs(deltaYaw) > 1e-7f) {
+                const glm::vec3 pivot = 0.5f * (leftFoot + rightFoot);
+                const glm::quat turn = glm::angleAxis(
+                    deltaYaw, glm::vec3(0.0f, 1.0f, 0.0f));
+                if (!Physics::RotateRagdollYaw(rag, pivot, deltaYaw)) {
+                    comp._runtimeTurnActive = false;
+                    comp._runtimeRestartBlocked = true;
+                    spdlog::error(
+                        "[LocoRuntime] TURN_BLEND FAIL applied={:+.1f}deg "
+                        "action=block-restart-until-input-release",
+                        glm::degrees(comp._runtimeTurnAppliedYaw));
+                    return;
+                }
+                rotateRuntimeReferences(pivot, turn);
+                commitRuntimeStandingHeading(
+                    turn * comp._test4Forward);
+                comp._runtimeTurnAppliedYaw = desiredAppliedYaw;
+            }
+
+            comp._test4PreviousSwingFootValid = false;
+            if (linearT >= 1.0f) {
+                comp._runtimeTurnActive = false;
+                commitRuntimeStandingHeading(
+                    comp._runtimeTurnTargetForward);
+                spdlog::info(
+                    "[LocoRuntime] TURN_BLEND COMPLETE yaw={:+.1f}deg "
+                    "duration={:.3f}s heading=({:+.2f},{:+.2f}) "
+                    "action=refresh-one-physics-step",
+                    glm::degrees(comp._runtimeTurnTotalYaw),
+                    comp._runtimeTurnElapsed,
+                    comp._test4Forward.x, comp._test4Forward.z);
+            }
+        };
+
         if (comp._test4Phase == kIdle) {
-            const bool startLeftSupport = Input::IsKeyPressed(Key::F6);
-            const bool startRightSupport = Input::IsKeyPressed(Key::F7);
+            if (gameplayCommand && comp._runtimeTurnActive) {
+                if (!continuousCommand.startRequested) {
+                    comp._runtimeTurnActive = false;
+                    comp._runtimeDesiredForward = comp._test4Forward;
+                    spdlog::info(
+                        "[LocoRuntime] TURN_BLEND CANCELED applied={:+.1f}deg "
+                        "heading=({:+.2f},{:+.2f}) reason=input-release",
+                        glm::degrees(comp._runtimeTurnAppliedYaw),
+                        comp._test4Forward.x, comp._test4Forward.z);
+                } else {
+                    advanceRuntimeTurn(continuousCommand.desiredForward);
+                }
+                return;
+            }
+            const bool startLeftSupport = continuousEnabled
+                ? continuousCommand.startRequested
+                    && continuousCommand.initialSupportSide < 0
+                : Input::IsKeyPressed(Key::F6);
+            const bool startRightSupport = continuousEnabled
+                ? continuousCommand.startRequested
+                    && continuousCommand.initialSupportSide > 0
+                : Input::IsKeyPressed(Key::F7);
             if (startLeftSupport || startRightSupport) {
-                glm::vec3 currentRight = rightFoot - leftFoot;
-                if (glm::dot(currentRight, currentRight) < 1e-8f)
-                    currentRight = comp._test4Right;
-                glm::vec3 currentForward = comp._fwd;
-                makeHorizontalBasis(currentRight, currentForward);
+                const glm::quat startHeading = glm::normalize(
+                    rag.locomotionTargetRot);
+                const glm::vec3 standingForward = horizontalForward(startHeading);
+                glm::vec3 desiredForward = continuousEnabled
+                    && glm::dot(continuousCommand.desiredForward,
+                                continuousCommand.desiredForward) > 1e-8f
+                    ? continuousCommand.desiredForward : comp._fwd;
+                desiredForward.y = 0.0f;
+                if (glm::dot(desiredForward, desiredForward) < 1e-8f)
+                    desiredForward = standingForward;
+                desiredForward = glm::normalize(desiredForward);
+
+                const float requestedTurn = signedHeadingDelta(
+                    standingForward, desiredForward);
+                comp._runtimeDesiredForward = desiredForward;
+
+                // Temporary gameplay turn: ease the complete physical ragdoll around
+                // the settled feet, then leave the gait idle until the next physics step
+                // has refreshed contacts. The ordinary straight gait starts afterward.
+                constexpr float kTurnThresholdDeg = 0.5f;
+                if (gameplayCommand
+                    && std::abs(glm::degrees(requestedTurn))
+                        > kTurnThresholdDeg) {
+                    beginRuntimeTurn(
+                        standingForward, desiredForward, "BEGIN");
+                    advanceRuntimeTurn(desiredForward);
+                    return;
+                }
 
                 comp._test4FootBaselineL = leftFoot;
                 comp._test4FootBaselineR = rightFoot;
                 comp._test4ComBaseline = rag._locomotionCOM;
-                comp._test4Right = glm::normalize(currentRight);
-                comp._test4Forward = glm::normalize(currentForward);
+                setGaitHeading(desiredForward);
                 comp._test4SupportTarget = comp._test4ComBaseline;
                 comp._test4SupportSide = startLeftSupport ? -1 : 1;
+                if (continuousCommand.runLimit
+                        == Diamond::Locomotion::RunLimit::None) {
+                    comp._runtimeNextSupportSide = -comp._test4SupportSide;
+                }
                 comp._test4Phase = kWeightShift;
                 comp._test4PhaseTime = 0.0f;
                 comp._test4SettleTime = 0.0f;
@@ -3316,25 +3648,49 @@ private:
                 comp._test7ContactChangeTimeL = 0.0f;
                 comp._test7ContactChangeTimeR = 0.0f;
                 if (continuousEnabled) {
-                    const float targetYaw = std::atan2(
-                        -comp._test4Forward.x, -comp._test4Forward.z);
-                    comp._test7HeadingTargetRot = glm::angleAxis(
-                        targetYaw, glm::vec3(0.0f, 1.0f, 0.0f));
-                    rag.locomotionTargetRot = comp._test7HeadingTargetRot;
                     auto captureGroundFootReference = [&](auto& leg) {
                         bool rotationOk = false;
                         const glm::quat footWorld = Physics::GetRagdollBoneRotation(
                             rag, leg.footIdx, &rotationOk);
                         leg.groundReferenceFootRotationValid = rotationOk;
-                        if (rotationOk)
-                            leg.groundReferenceFootWorldRotation = glm::normalize(footWorld);
+                        if (rotationOk) {
+                            leg.groundReferenceFootHeadingLocalRotation = glm::normalize(
+                                glm::conjugate(startHeading) * footWorld);
+                        }
+
+                        const glm::vec3 hip = physicalPosition(leg.hipIdx);
+                        const glm::vec3 knee = physicalPosition(leg.kneeIdx);
+                        const glm::vec3 ankle = physicalPosition(leg.ankleIdx);
+                        const glm::vec3 chain = ankle - hip;
+                        const glm::vec3 upper = knee - hip;
+                        leg.groundReferenceKneePoleValid = false;
+                        if (glm::dot(chain, chain) > 1e-8f) {
+                            const glm::vec3 axis = glm::normalize(chain);
+                            glm::vec3 pole = upper - axis * glm::dot(upper, axis);
+                            if (glm::dot(pole, pole) > 1e-8f) {
+                                pole = glm::normalize(pole);
+                                leg.groundReferenceKneePoleHeadingLocal =
+                                    glm::conjugate(startHeading) * pole;
+                                leg.groundReferenceKneePoleValid = true;
+                            }
+                        }
                     };
-                    // F6/F7 start only from a settled double-support stance. Preserve that
-                    // flat-ground sole orientation independently from the physical pose
-                    // recaptured at every role swap, otherwise landing tilt becomes the next
-                    // step's desired tilt and ratchets through the sequence.
+                    // Store the settled feet and anatomical bend planes in the heading-local
+                    // frame. Each touchdown can then adopt the active gait yaw without
+                    // ratcheting measured landing error into the next step.
                     captureGroundFootReference(comp._legL);
                     captureGroundFootReference(comp._legR);
+                    spdlog::info(
+                        "[LocoDirection] START requested=({:+.2f},{:+.2f}) "
+                        "active=({:+.2f},{:+.2f}) right=({:+.2f},{:+.2f}) "
+                        "turn={:+.1f}deg support={} swing={}",
+                        comp._runtimeDesiredForward.x,
+                        comp._runtimeDesiredForward.z,
+                        comp._test4Forward.x, comp._test4Forward.z,
+                        comp._test4Right.x, comp._test4Right.z,
+                        glm::degrees(requestedTurn),
+                        comp._test4SupportSide < 0 ? "LEFT" : "RIGHT",
+                        comp._test4SupportSide < 0 ? "RIGHT" : "LEFT");
                     comp._test7Running = true;
                     comp._test7StopRequested = false;
                     comp._test7RunTime = 0.0f;
@@ -3401,11 +3757,14 @@ private:
                         "maxTorque={:.0f}Nm/axis) "
                         "heading=(stiffness={:.0f}Nm/rad,damping={:.0f}Nm*s/rad,"
                         "maxTorque={:.0f}Nm) gates=(tilt={:.1f}deg,heading={:.1f}deg)",
-                        comp.test7EnduranceRun ? "ENDURANCE" : "TEN_STEP",
-                        comp.test7EnduranceRun
-                            ? glm::max(comp.test7EnduranceTime, 10.0f)
-                            : static_cast<float>(glm::max(comp.test7TargetSteps, 2)),
-                        comp.test7DesiredSpeed,
+                        Diamond::Locomotion::RunLimitName(
+                            continuousCommand.runLimit),
+                        continuousCommand.runLimit
+                                == Diamond::Locomotion::RunLimit::Duration
+                            ? glm::max(continuousCommand.durationLimit, 10.0f)
+                            : static_cast<float>(glm::max(
+                                continuousCommand.stepLimit, 2)),
+                        continuousCommand.desiredSpeed,
                         glm::min(comp.test7MinStepLength, comp.test7MaxStepLength),
                         glm::max(comp.test7MinStepLength, comp.test7MaxStepLength),
                         comp._test7CommandedStepLength,
@@ -3426,8 +3785,8 @@ private:
                 }
                 spdlog::info("[LocoTest{}] sequence start support={} swing={} step={:.3f}m",
                              comp.validationTest,
-                             startLeftSupport ? "LEFT" : "RIGHT",
-                             startLeftSupport ? "RIGHT" : "LEFT",
+                             comp._test4SupportSide < 0 ? "LEFT" : "RIGHT",
+                             comp._test4SupportSide < 0 ? "RIGHT" : "LEFT",
                              comp.test4StepLength);
             }
         }
@@ -3801,13 +4160,23 @@ private:
         };
 
         // The foothold is a target for the sole body, while the two-bone solve ends at
-        // the ankle. Keep their separation in sole-local space. Continuous gait uses the
-        // initial settled sole orientation as its invariant flat-ground reference; the
-        // per-step planted rotation remains only the continuity endpoint at takeoff.
+        // the ankle. Keep their separation in sole-local space. The settled sole reference
+        // is heading-local: pitch/roll remain ground aligned while yaw follows the latched
+        // gait frame. The per-step planted rotation is only the continuity endpoint.
         auto nominalFootWorldRotation = [&]() {
             return continuousEnabled && swing->groundReferenceFootRotationValid
-                ? glm::normalize(swing->groundReferenceFootWorldRotation)
+                ? glm::normalize(comp._test7HeadingTargetRot
+                    * swing->groundReferenceFootHeadingLocalRotation)
                 : glm::normalize(swing->plantedFootWorldRotation);
+        };
+        auto nominalKneePoleWorld = [&]() {
+            glm::vec3 pole = continuousEnabled
+                && swing->groundReferenceKneePoleValid
+                ? comp._test7HeadingTargetRot
+                    * swing->groundReferenceKneePoleHeadingLocal
+                : swing->kneePoleWorld;
+            return glm::dot(pole, pole) > 1e-8f
+                ? glm::normalize(pole) : comp._test4Forward;
         };
         auto ankleFromFootWorld = [&](const glm::quat& footWorldRotation) {
             return glm::normalize(footWorldRotation) * swing->ankleFromFootLocal;
@@ -3820,6 +4189,14 @@ private:
                 glm::conjugate(glm::normalize(a)) * glm::normalize(b));
             return glm::degrees(2.0f * std::acos(
                 glm::clamp(std::abs(difference.w), 0.0f, 1.0f)));
+        };
+        auto horizontalYawDeg = [](const glm::quat& rotation) {
+            glm::vec3 forward = glm::normalize(rotation)
+                * glm::vec3(0.0f, 0.0f, -1.0f);
+            forward.y = 0.0f;
+            if (glm::dot(forward, forward) < 1e-8f) return 0.0f;
+            forward = glm::normalize(forward);
+            return glm::degrees(std::atan2(-forward.x, -forward.z));
         };
         bool physicalSwingFootRotationOk = false;
         const glm::quat physicalSwingFootWorld =
@@ -3854,9 +4231,18 @@ private:
             if (continuousEnabled) {
                 // A limit cycle places the next support relative to the current support,
                 // not relative to where this swing foot happened to land one cycle ago.
-                // Preserve the captured lateral lane so the feet do not converge or cross.
-                const float lateralLane = glm::dot(
+                // Gameplay turns give each anatomical foot a signed lane in the new frame;
+                // a raw projection can change sign during a 90/180-degree reframe and ask
+                // the swing leg to cross through the planted leg.
+                float lateralLane = glm::dot(
                     comp._test4SwingStart - stanceFoot, comp._test4Right);
+                if (gameplayCommand) {
+                    constexpr float kMinimumRuntimeLane = 0.10f;
+                    const float laneMagnitude = glm::clamp(
+                        std::abs(lateralLane), kMinimumRuntimeLane, 0.24f);
+                    const float swingSide = swing == &comp._legL ? -1.0f : 1.0f;
+                    lateralLane = swingSide * laneMagnitude;
+                }
                 requestedTarget = stanceFoot
                     + comp._test4Forward * placementDistance
                     + comp._test4Right * lateralLane;
@@ -3988,6 +4374,25 @@ private:
                 reachClamped ? "HORIZONTAL" : "none",
                 targetGround.hit ? "hit" : "fallback");
             if (continuousEnabled) {
+                const glm::vec3 footholdDelta = target - comp._test4SwingStart;
+                spdlog::info(
+                    "[LocoDirection] FOOTHOLD step={} swing={} "
+                    "command=({:+.2f},{:+.2f}) gait=({:+.2f},{:+.2f}) "
+                    "right=({:+.2f},{:+.2f}) delta=({:+.3f},{:+.3f}) "
+                    "projected=(forward={:+.3f},lateral={:+.3f}) "
+                    "soleYaw=(actual={:+.1f},target={:+.1f})deg",
+                    comp._test6StepIndex,
+                    swing == &comp._legL ? "LEFT" : "RIGHT",
+                    comp._runtimeDesiredForward.x,
+                    comp._runtimeDesiredForward.z,
+                    comp._test4Forward.x, comp._test4Forward.z,
+                    comp._test4Right.x, comp._test4Right.z,
+                    footholdDelta.x, footholdDelta.z,
+                    glm::dot(footholdDelta, comp._test4Forward),
+                    glm::dot(footholdDelta, comp._test4Right),
+                    physicalSwingFootRotationOk
+                        ? horizontalYawDeg(physicalSwingFootWorld) : 0.0f,
+                    horizontalYawDeg(nominalFootWorldRotation()));
                 // The settle gate validates achieved support-to-support advance, so admit
                 // the foothold in that same space. The filtered loss is measured from prior
                 // physical landings; ignoring it here admitted plans that were reachable
@@ -4020,6 +4425,12 @@ private:
             comp._test4SettleTime = 0.0f;
             comp._test4AirborneTime = 0.0f;
             if (continuousEnabled) comp._test7Running = false;
+            if (gameplayCommand) {
+                comp._runtimeRestartBlocked = true;
+                spdlog::warn(
+                    "[LocoRuntime] RESTART_BLOCKED reason=abort "
+                    "action=release-movement-before-retry");
+            }
             spdlog::warn(
                 "[LocoTest4] ABORT {} clear={:.3f} forward={:.3f} contact={} "
                 "target=(h={:.3f},fwd={:+.3f},lat={:+.3f},y={:.3f}) "
@@ -4709,8 +5120,9 @@ private:
                 * glm::angleAxis(kneeDelta, glm::normalize(swing->kneeHingeAxis)));
 
             const glm::vec3 worldForward = glm::normalize(toTarget);
-            glm::vec3 worldBend = swing->kneePoleWorld
-                - worldForward * glm::dot(swing->kneePoleWorld, worldForward);
+            const glm::vec3 kneePole = nominalKneePoleWorld();
+            glm::vec3 worldBend = kneePole
+                - worldForward * glm::dot(kneePole, worldForward);
             if (glm::dot(worldBend, worldBend) < 1e-8f)
                 worldBend = comp._test4Forward;
             worldBend -= worldForward * glm::dot(worldBend, worldForward);
@@ -5158,11 +5570,10 @@ private:
                         comp._test7MaxMotorRatio = glm::max(
                             comp._test7MaxMotorRatio, comp._test4MaxMotorRatio);
 
-                        const bool targetReached = comp.test7EnduranceRun
-                            ? comp._test7RunTime >= glm::max(
-                                comp.test7EnduranceTime, 10.0f)
-                            : comp._test6StepsCompleted >= glm::max(
-                                comp.test7TargetSteps, 2);
+                        const bool targetReached =
+                            Diamond::Locomotion::HasReachedRunLimit(
+                                continuousCommand, comp._test6StepsCompleted,
+                                comp._test7RunTime);
                         const bool shouldStop = targetReached
                                              || comp._test7StopRequested;
                         spdlog::info(
@@ -5178,7 +5589,8 @@ private:
                             comp._test7LastStepLength,
                             comp._test7AchievedSupportAdvance, comAdvance,
                             comp._test7LastStepPeriod,
-                            comp._test7MeasuredSpeed, comp.test7DesiredSpeed,
+                            comp._test7MeasuredSpeed,
+                            continuousCommand.desiredSpeed,
                             stepDrift, comp._test4PeakTilt,
                             comp._test7HeadingErrorDeg,
                             comp._test7PeakHeadingErrorDeg,
@@ -5492,7 +5904,8 @@ private:
                         minimumCommand, maximumStep);
                     const float speedFeedbackTarget = glm::clamp(
                         comp.test7NominalAdvance + comp.test7PlacementGain
-                            * (comp.test7DesiredSpeed - comp._test7MeasuredSpeed),
+                            * (continuousCommand.desiredSpeed
+                               - comp._test7MeasuredSpeed),
                         minimumCommand, maximumStep);
                     const float previousCommand =
                         comp._test7CommandedStepLength;
@@ -5562,7 +5975,8 @@ private:
                         oldSupportSide < 0 ? "LEFT" : "RIGHT",
                         oldSupportSide < 0 ? "RIGHT" : "LEFT",
                         oldSupportSide < 0 ? "LEFT" : "RIGHT",
-                        comp._test7MeasuredSpeed, comp.test7DesiredSpeed,
+                        comp._test7MeasuredSpeed,
+                        continuousCommand.desiredSpeed,
                         comp._test7CommandedStepLength,
                         comp._test6InterStepStableTime,
                         comp._test4ContactL ? "L" : "-",
@@ -5752,9 +6166,9 @@ private:
                 const int completed = comp._test6StepsCompleted;
                 const int edgeTotal = comp._test6ContactTransitionsL
                                     + comp._test6ContactTransitionsR;
-                const bool stepCountOk = comp.test7EnduranceRun
-                    ? comp._test7RunTime >= glm::max(comp.test7EnduranceTime, 10.0f)
-                    : completed >= glm::max(comp.test7TargetSteps, 2);
+                const bool stepCountOk =
+                    Diamond::Locomotion::RunLimitSatisfied(
+                        continuousCommand, completed, comp._test7RunTime);
                 const bool edgeCountOk = edgeTotal == 2 * completed
                     && std::abs(comp._test6ContactTransitionsL
                               - comp._test6ContactTransitionsR) <= 2;
@@ -5764,6 +6178,8 @@ private:
                 const bool periodConverged = completed < 3
                     || std::abs(comp._test7LastStepPeriod
                               - comp._test7PreviousStepPeriod) <= 0.75f;
+                const bool runtimeCommand = continuousCommand.runLimit
+                    == Diamond::Locomotion::RunLimit::None;
                 const float totalForward = glm::dot(
                     rag._locomotionCOM - comp._test7StartCom,
                     comp._test4Forward);
@@ -5774,7 +6190,8 @@ private:
                     && comp._test7MaxMotorRatio <= 1.0f;
                 const bool pass = stepCountOk && edgeCountOk
                     && lengthConverged && periodConverged
-                    && forwardOk && boundsOk && test1Standing;
+                    && (runtimeCommand || forwardOk)
+                    && boundsOk && test1Standing;
                 spdlog::info(
                     "[LocoTest7] COMPLETE_CHECK result={} mode={} "
                     "steps={} time={:.2f}s forward={:.3f}[{}] "
@@ -5789,9 +6206,11 @@ private:
                     "maxMotorRatio={:.2f}/1.00 edges=({},{}) total={}/{}[{}] "
                     "standing={}",
                     pass ? "PASS" : "FAIL",
-                    comp.test7EnduranceRun ? "ENDURANCE" : "TEN_STEP",
+                    Diamond::Locomotion::RunLimitName(
+                        continuousCommand.runLimit),
                     completed, comp._test7RunTime,
-                    totalForward, forwardOk ? "ok" : "FAIL",
+                    totalForward, runtimeCommand
+                        ? "runtime" : (forwardOk ? "ok" : "FAIL"),
                     comp._test7PreviousSupportAdvance,
                     comp._test7LastSupportAdvance,
                     std::abs(comp._test7LastSupportAdvance
@@ -5820,12 +6239,21 @@ private:
                     test1Standing ? "ok" : "FAIL");
                 comp._test7Running = false;
                 if (pass) {
-                    comp._test4Phase = kComplete;
+                    comp._test4Phase = runtimeCommand ? kIdle : kComplete;
                     comp._test4PhaseTime = 0.0f;
-                    spdlog::info(
-                        "[LocoTest7] COMPLETE steps={} time={:.2f}s "
-                        "forward={:.3f} finalTilt={:.1f} support=OFF",
-                        completed, comp._test7RunTime, totalForward, tiltDeg);
+                    comp._test4SupportSide = 0;
+                    comp._test7StopRequested = false;
+                    if (runtimeCommand) {
+                        spdlog::info(
+                            "[LocoRuntime] STOP_COMPLETE steps={} time={:.2f}s "
+                            "forward={:.3f} finalTilt={:.1f} ready=IDLE",
+                            completed, comp._test7RunTime, totalForward, tiltDeg);
+                    } else {
+                        spdlog::info(
+                            "[LocoTest7] COMPLETE steps={} time={:.2f}s "
+                            "forward={:.3f} finalTilt={:.1f} support=OFF",
+                            completed, comp._test7RunTime, totalForward, tiltDeg);
+                    }
                 } else {
                     abortSequence("continuous-gait completion check failed");
                 }
@@ -6654,13 +7082,15 @@ private:
         // rather than the final walking pose, owns the stopped character.
         const bool test3OwnsSwing = comp.validationTest == 3
             && comp._test3Phase >= 2 && comp._test3Phase <= 6;
-        const bool test4OwnsSwing = (comp.validationTest >= 4 && comp.validationTest <= 7)
+        const bool test4OwnsSwing =
+            ((comp.validationTest >= 4 && comp.validationTest <= 7)
+             || comp._continuousGaitEnabled)
             && comp._test4Phase >= 2 && comp._test4Phase <= 11
-            && !(comp.validationTest == 7 && comp._test4Phase == 11);
+            && !(comp._continuousGaitEnabled && comp._test4Phase == 11);
         const bool multiStepOwnsBoth =
             (comp.validationTest == 6 && comp._test6StepIndex == 2
                 && comp._test4Phase >= 1 && comp._test4Phase <= 11)
-            || (comp.validationTest == 7 && comp._test6StepIndex >= 2
+            || (comp._continuousGaitEnabled && comp._test6StepIndex >= 2
                 && comp._test4Phase >= 1 && comp._test4Phase <= 13);
         const bool validationOwnsLeft =
             (test3OwnsSwing && comp._test3SupportSide > 0)

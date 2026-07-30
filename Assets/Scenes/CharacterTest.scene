@@ -633,7 +633,7 @@
           "turnRate": 10.0,
           "uprightScale": 1.0,
           "useHipCOMProxy": true,
-          "validationTest": 7,
+          "validationTest": 0,
           "weightShiftTime": 0.30000001192092896
         },
         "Punch": {

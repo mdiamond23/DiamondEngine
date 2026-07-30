@@ -7,6 +7,13 @@ add_executable(Runtime
 
 target_link_libraries(Runtime PRIVATE MyEngine)
 
+# Runtime includes Scripts/AllScripts.h in one translation unit, just like Sandbox.
+# The header-only component/system registrations can exceed MSVC's standard COFF
+# section count, so both game-facing targets require the extended object format.
+if(MSVC)
+    target_compile_options(Runtime PRIVATE /bigobj)
+endif()
+
 # Windows subsystem: no console window pops up behind the game. main() stays
 # the entry point (main.cpp provides a forwarding WinMain); logs go to
 # runtime.log next to the exe, mirrored to the parent terminal when launched

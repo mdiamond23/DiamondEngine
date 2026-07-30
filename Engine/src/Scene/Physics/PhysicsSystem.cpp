@@ -3286,6 +3286,75 @@ glm::vec3 GetRagdollBoneLinearVelocity(const RagdollComponent& rag, int boneInde
     return FromJolt(s_Impl->joltSystem->GetBodyInterface().GetLinearVelocity(b->id));
 }
 
+bool RotateRagdollYaw(RagdollComponent& rag, glm::vec3 worldPivot, float yawRadians) {
+    if (!s_Impl || rag._ragdollId == 0xFFFFFFFFu
+        || !std::isfinite(yawRadians)
+        || !std::isfinite(worldPivot.x)
+        || !std::isfinite(worldPivot.y)
+        || !std::isfinite(worldPivot.z)) return false;
+    auto it = s_Impl->ragdolls.find(rag._ragdollId);
+    if (it == s_Impl->ragdolls.end() || it->second.bodies.empty()) return false;
+
+    RagdollInstance& inst = it->second;
+    JPH::BodyInterface& bi = s_Impl->joltSystem->GetBodyInterface();
+    const glm::quat turn = glm::angleAxis(
+        yawRadians, glm::vec3(0.0f, 1.0f, 0.0f));
+    struct BodySnapshot {
+        JPH::BodyID id;
+        glm::vec3 position;
+        glm::quat rotation;
+        glm::vec3 linearVelocity;
+        glm::vec3 angularVelocity;
+    };
+    std::vector<BodySnapshot> snapshots;
+    snapshots.reserve(inst.bodies.size());
+    for (const RagdollBody& body : inst.bodies) {
+        snapshots.push_back({
+            body.id,
+            FromJolt(bi.GetPosition(body.id)),
+            FromJolt(bi.GetRotation(body.id)),
+            FromJolt(bi.GetLinearVelocity(body.id)),
+            FromJolt(bi.GetAngularVelocity(body.id))
+        });
+    }
+
+    // The world-backed upright constraint owns a world frame. Recreate it after the
+    // teleport so it cannot pull the root back toward its pre-snap frame.
+    DisableLocomotionUprightConstraint(*s_Impl, inst);
+    for (const BodySnapshot& body : snapshots) {
+        const glm::vec3 position = worldPivot
+            + turn * (body.position - worldPivot);
+        const glm::quat rotation = glm::normalize(turn * body.rotation);
+        bi.SetPositionAndRotation(
+            body.id,
+            JPH::RVec3(position.x, position.y, position.z),
+            ToJolt(rotation), JPH::EActivation::Activate);
+        bi.SetLinearVelocity(body.id, ToJolt(turn * body.linearVelocity));
+        bi.SetAngularVelocity(body.id, ToJolt(turn * body.angularVelocity));
+        bi.InvalidateContactCache(body.id);
+    }
+
+    auto rotatePoint = [&](glm::vec3 point) {
+        return worldPivot + turn * (point - worldPivot);
+    };
+    rag.locomotionTargetPos = rotatePoint(rag.locomotionTargetPos);
+    rag.locomotionSupportTarget = rotatePoint(rag.locomotionSupportTarget);
+    rag.locomotionSupportTargetVel = turn * rag.locomotionSupportTargetVel;
+    rag._locomotionRootVel = turn * rag._locomotionRootVel;
+    rag._locomotionRootAngularVelocity = turn
+        * rag._locomotionRootAngularVelocity;
+    if (rag._locomotionCOMValid)
+        rag._locomotionCOM = rotatePoint(rag._locomotionCOM);
+    rag._locomotionCOMVel = turn * rag._locomotionCOMVel;
+    for (int i = 0; i < 2; ++i) {
+        rag._locomotionFootContactPoint[i] = rotatePoint(
+            rag._locomotionFootContactPoint[i]);
+        rag._locomotionFootContactNormal[i] = turn
+            * rag._locomotionFootContactNormal[i];
+    }
+    return true;
+}
+
 // Kick off a procedural get-up (the auto-on-settle path uses the same StartRagdollGetUp).
 void RagdollGetUp(RagdollComponent& rag) {
     if (!s_Impl || rag._ragdollId == 0xFFFFFFFFu) return;

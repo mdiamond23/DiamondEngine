@@ -504,6 +504,113 @@ duplicated state, and test-only gates:
 - establish flat-ground start, move, turn, direction-change, and stop parity before adding slopes,
   uneven terrain, recovery, animation styling, or higher gameplay speeds.
 
+### Recommended implementation sequence
+
+1. Extract Test 7 into a reusable runtime gait core without changing its validated behavior. The
+   gait consumes a command containing start/stop intent, initial support side, desired world-space
+   travel direction, desired speed, and an optional run limit. Keyboard, gamepad, AI, replay, and
+   the Test 7 harness are command producers rather than branches inside the physical controller.
+2. Feed camera-relative player movement into that core. Initially, desired travel direction and
+   desired facing are the same; independent facing and strafing remain a later extension.
+3. Establish flat-ground parity for standing start, straight movement, direction changes, and the
+   validated controlled stop.
+4. Split the validation harness and diagnostics away from the runtime component after the runtime
+   path reproduces Test 7. Keep Test 7 runnable until the replacement passes both mirrored runs.
+5. Add turning through bounded heading and per-step planning, then validate it in both directions.
+6. Add and validate jumping without weakening the standing, contact, or stop invariants.
+7. Validate variable-speed input and tune responsiveness using acceleration, cadence, stride
+   bounds, and yaw rate together. Do not treat a larger foothold or a higher force limit as an
+   isolated responsiveness fix.
+
+**Implementation status (2026-07-30):** steps 1 and 2 are implemented. The currently scoped
+flat-ground portion of step 3 has passed gameplay validation for standing starts, sustained straight
+movement, controlled stops, and direction changes. Test 7 and normal
+gameplay produce the same `GaitCommand`; normal gameplay maps camera-relative WASD direction and
+input magnitude into the validated continuous gait, uses hysteresis at the walking threshold, and
+requests Test 7's controlled stop when input returns to zero. The commanded direction is latched
+for each run. A live direction change finishes the active step and controlled stop, performs the
+temporary settled turn described below, then restarts in the held direction. It never rotates an
+active planted-foot frame.
+
+**Gameplay validation checkpoint (2026-07-30):** fresh-scene W/A/S/D starts passed; sustained
+straight travel in each commanded direction passed; release during the first step, between steps,
+and after several steps returned through the controlled stop; adjacent 90-degree changes and
+opposite 180-degree reversals completed stop, eased reorientation, and restart in the held direction.
+Variable-speed behavior is deliberately deferred until after controlled turning and jumping. This
+checkpoint is sufficient to begin structural refactoring, provided the Test 7 regression path and
+these runtime scenarios remain behaviorally unchanged throughout the split.
+
+### Runtime control contract
+
+The first gameplay controller faces its direction of travel. This keeps one horizontal command
+vector authoritative and makes camera-relative input unambiguous. A future strafe/aim controller
+may provide separate desired-velocity and desired-facing vectors, but it must not be introduced
+implicitly while basic turning is being validated.
+
+Input magnitude should pass through a deadzone and acceleration limit before becoming desired
+speed. Start and stop require separate thresholds or equivalent hysteresis so small analog-input
+noise cannot chatter between standing and walking. A rapid reversal is initially handled by
+finishing the active step, performing the validated stop, snapping the settled physical rig to the
+new heading, and restarting in that direction. A collision-aware in-place pivot is a separate gait
+capability.
+
+### Turning ownership and validation
+
+Turning must not rotate the entire control frame freely against planted feet. Maintain a smoothly
+rate-limited desired heading, but latch the active swing foothold and its touchdown orientation for
+the step. The stance foot remains fixed in world translation under the existing single-owner rule.
+The next step receives a new heading basis at the phase boundary, and its lateral lane must be
+constructed in that basis with a minimum separation that prevents leg crossing.
+
+The flat-ground sole invariant changes slightly for turning: preserve alignment to the ground
+normal (pitch and roll), while latching a permitted yaw for each new touchdown. Reusing Test 7's
+complete initial world-space sole quaternion would prevent the feet from following a turn and
+would force the heading motor to scrub them across the floor.
+
+Validate turning as another incremental ladder:
+
+- gentle constant-curvature walking, left and right;
+- 45- and 90-degree direction changes initiated in each gait phase;
+- stopping while turning;
+- a rapid 180-degree reversal through controlled stop and restart;
+- only then consider in-place pivots, crossover steps, side steps, or other stylistic IK motion.
+
+Each run retains Test 7's contact, drift, tilt, reach, heading-error, and saturation checks and
+adds minimum foot separation plus requested-versus-achieved travel direction. Larger gameplay
+steps are accepted only if cadence and phase gates allow the COM to advance correspondingly; step
+length by itself is not the gameplay-speed controller.
+
+**Directional-start implementation (2026-07-30):** runtime gait now owns one authoritative
+horizontal `forward/right/heading` frame. Settled sole rotations and anatomical knee-pole vectors
+are stored relative to the heading that produced the standing pose, then reconstructed beneath the
+latched heading for each swing. This preserves flat-ground pitch/roll without forcing every landing
+back to the original W-facing yaw. Once idle, a requested heading change enters a short eased turn
+transition. Each update applies only that frame's incremental yaw to every live ragdoll body around
+the midpoint of the settled feet. A smoothstep curve provides ease-in/ease-out timing; the default
+540 degrees/second produces about 0.17 seconds for 90 degrees and 0.33 seconds for 180 degrees, with
+the duration clamped to 0.12-0.40 seconds. Body-relative transforms, orientations, and linear/angular
+momentum are preserved and the physics contact cache is invalidated. Releasing input stops at the
+current partial heading, while changing direction retargets from that heading. After completion the
+gait stays idle through one physics refresh, then held input starts the ordinary straight gait.
+
+This gameplay turn does **not** discard the valid settled baseline or wait through the one-second
+baseline-acquisition gate. Cached world-space foot, COM, and support references rotate with the
+rig. Slow recapture remains reserved for initial startup, explicit reset, and physical recovery.
+The eased whole-rig rotation is intentionally temporary: it is not swept through collision geometry
+and therefore must be replaced by the bounded, collision-aware turning work in step 5 before it is
+used near crowded obstacles as a final shipping solution.
+
+An aborted runtime step cannot restart while movement remains held; input must return to neutral
+before another start, preventing a failed physical pose from being recaptured in a retry loop.
+Runtime stopping still requires correct contact edges, bounded drift/tilt/motor effort, and a stable
+standing return, but it does not apply Test 7's minimum total-forward-travel criterion when input is
+released after only one step. `[LocoRuntime] TURN_BLEND` reports begin, retarget, cancel, failure,
+and completion with yaw, duration, and heading; `[LocoDirection]` reports requested/active axes, swing side,
+world/projected foothold displacement, and actual versus target sole yaw. Validate W, A, D, and S
+as four independent fresh-scene runs, then test held-input changes W-to-A, A-to-S, S-to-D, D-to-W,
+and 180-degree reversals. No direction may start during the previous direction's stop or abort
+recovery.
+
 ## Relationship to SIMBICON
 
 Keep from the paper:
