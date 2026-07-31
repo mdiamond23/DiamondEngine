@@ -4,21 +4,13 @@
 
 namespace Diamond::Locomotion
 {
-// The gait consumes intent, not keys. Validation, player input, AI, and replay code can
-// all produce the same command without changing the physical controller.
-enum class RunLimit
-{
-    None,
-    StepCount,
-    Duration
-};
-
+// The physical gait consumes intent rather than reading keys directly, so player,
+// AI, or replay controllers can share the same locomotion implementation.
 struct GaitCommand
 {
     bool enabled = false;
     bool startRequested = false;
     bool stopRequested = false;
-    bool resetRequested = false;
 
     // -1 starts on left support, +1 on right support, and 0 does not start.
     int initialSupportSide = 0;
@@ -28,39 +20,5 @@ struct GaitCommand
     glm::vec3 desiredForward { 0.0f };
     float desiredSpeed = 0.0f;
 
-    RunLimit runLimit = RunLimit::None;
-    int stepLimit = 0;
-    float durationLimit = 0.0f;
 };
-
-inline bool HasReachedRunLimit(const GaitCommand& command,
-                               int completedSteps, float elapsedSeconds)
-{
-    switch (command.runLimit) {
-        case RunLimit::StepCount:
-            return completedSteps >= glm::max(command.stepLimit, 2);
-        case RunLimit::Duration:
-            return elapsedSeconds >= glm::max(command.durationLimit, 10.0f);
-        case RunLimit::None:
-            return false;
-    }
-    return false;
-}
-
-inline bool RunLimitSatisfied(const GaitCommand& command,
-                              int completedSteps, float elapsedSeconds)
-{
-    return command.runLimit == RunLimit::None
-        || HasReachedRunLimit(command, completedSteps, elapsedSeconds);
-}
-
-inline const char* RunLimitName(RunLimit limit)
-{
-    switch (limit) {
-        case RunLimit::StepCount: return "TEN_STEP";
-        case RunLimit::Duration: return "ENDURANCE";
-        case RunLimit::None: return "UNBOUNDED";
-    }
-    return "UNBOUNDED";
-}
 }

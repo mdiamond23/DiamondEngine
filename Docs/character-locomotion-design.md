@@ -611,6 +611,39 @@ as four independent fresh-scene runs, then test held-input changes W-to-A, A-to-
 and 180-degree reversals. No direction may start during the previous direction's stop or abort
 recovery.
 
+### Structural refactor checkpoint (2026-07-30)
+
+The validation-to-gameplay refactor is complete at the source-organization level. The primary
+`LocamotionController.h` is now 848 lines (down from roughly 7,700) and contains the runtime
+component, gameplay inspector/serialization, input command production, standing-pose ownership,
+and top-level system update. The detailed physical state machine is isolated in
+`LocomotionPhysicalGait.inl`; this keeps the controller readable without concealing that the gait
+algorithm itself still has substantial complexity.
+
+The embedded Test 1-7 selector, test input paths, diagnostic state, grounded-motor test, validation
+serialization, and validation inspector output have been removed. Former Test 4 concepts now use
+physical-step names, and former Test 7 concepts use gait names. `GaitCommand` is production-only:
+start, stop, initial support side, desired direction, and desired speed. Test-only step-count,
+endurance, and reset commands no longer exist.
+
+The inspector now exposes only gameplay-relevant movement, step-planning, gait-stabilization, pose,
+and IK settings. Serialization writes the same production settings; deserialization accepts the old
+Test 2-7 and procedural key names as migration fallbacks so existing scenes retain their authored
+values. Logging was reduced to runtime lifecycle events, compact opt-in debug status, and failure
+warnings.
+
+Footstep planning remains part of the physical gait because foothold choice, phase admission,
+contact transfer, and stop policy are locomotion responsibilities. The existing engine `IKSolver`
+remains a general model-space analytic two-bone solver; the gait's constrained physical leg command
+is still coupled to ragdoll joint limits, motor targets, sole orientation, and measured physics
+state. Moving that block into the generic solver before defining a clean data-only interface would
+mix gameplay policy into an animation primitive. A later extraction should first introduce a small
+constrained-leg input/output type, then move only the reusable solve math.
+
+Both `Sandbox` and `Runtime` Debug targets compile at this checkpoint. Gameplay behavior still needs
+the same W/A/S/D start, sustained movement, direction-change, stop, and fresh-scene smoke pass after
+the structural split.
+
 ## Relationship to SIMBICON
 
 Keep from the paper:
@@ -645,6 +678,8 @@ controller matches its start, gait, mirrored-direction, and stopping invariants.
 ## Relevant files
 
 - `Sandbox/src/Scripts/LocamotionController.h`
+- `Sandbox/src/Scripts/LocomotionPhysicalGait.inl`
+- `Sandbox/src/Scripts/LocomotionGaitRuntime.h`
 - `Engine/src/Scene/Physics/PhysicsSystem.cpp`
 - `Engine/include/Scene/Physics/RagdollComponent.h`
 - `Engine/include/Scene/Physics/PhysicsAPI.h`
