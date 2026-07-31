@@ -69,6 +69,15 @@ struct LocamotionControllerComponent
     float interStepDuration = 0.25f;
     float driftGrowthTolerance = 0.015f;
     float gaitDesiredSpeed = 0.020f;
+    // Desired time from one planted step to the next. Runtime phase durations are
+    // proportionally compressed to this budget while retaining small physical safety
+    // floors. Set to zero to use the individual phase durations verbatim.
+    float gaitTargetStepPeriod = 1.20f;
+    bool gaitAdaptationEnabled = true;
+    float gaitAdaptationResponse = 0.25f;
+    float gaitMaxStrideCorrection = 0.020f;
+    float gaitMaxPeriodSlowdown = 0.40f;
+    float gaitStressStopThreshold = 3.0f;
     float gaitPlacementGain = 0.75f;
     float gaitNominalAdvance = 0.10f;
     float gaitMinStepLength = 0.06f;
@@ -234,6 +243,20 @@ struct LocamotionControllerComponent
     float _gaitLastStepPeriod = 0.0f;
     float _gaitPreviousStepPeriod = 0.0f;
     float _gaitMeasuredSpeed = 0.0f;
+    float _gaitFilteredForwardError = 0.0f;
+    float _gaitFilteredLateralError = 0.0f;
+    float _gaitFilteredTouchdownSpeed = 0.0f;
+    float _gaitFilteredDrift = 0.0f;
+    float _gaitFilteredMotorRatio = 0.0f;
+    float _gaitFilteredUnloadDeficit = 0.0f;
+    float _gaitAdaptiveStrideOffset = 0.0f;
+    float _gaitAdaptiveLateralOffset = 0.0f;
+    float _gaitAdaptivePeriodOffset = 0.0f;
+    float _gaitAdaptiveTransferBiasOffset = 0.0f;
+    float _gaitStress = 0.0f;
+    int _gaitRecoveryFailureSteps = 0;
+    bool _gaitAdaptiveStopRequested = false;
+    float _gaitPhaseTimeScale = 1.0f;
     float _gaitCommandedStepLength = 0.10f;
     float _gaitReachCommandCeiling = 0.14f;
     float _gaitTakeoffContactRecoveryTime = 0.0f;
@@ -289,6 +312,11 @@ struct LocamotionControllerComponent
     bool _gaitIkPlanHipValid = false;
     bool _gaitReachClampedStep = false;
     bool _gaitOldSupportDriftAllowanceLogged = false;
+    // 0 = ordinary step, 1 = return an early swing to its original plant,
+    // 2 = finish a late swing at a shortened safe foothold.
+    int _gaitCancelMode = 0;
+    bool _gaitLandingVerificationPending = false;
+    float _gaitLandingStableTime = 0.0f;
     bool _gaitStopSettleReferenceValid = false;
     // True while the physical gait owns the walking pose.
     bool _gaitEnabled = false;
@@ -360,6 +388,12 @@ inline void DrawComponentInspector<LocamotionControllerComponent>(LocamotionCont
     }
     if (ImGui::CollapsingHeader("Gait", ImGuiTreeNodeFlags_DefaultOpen)) {
         LOCO_DRAG("Target Gait Speed", gaitDesiredSpeed, 0.005f, 0.0f, 2.0f, "%.3f m/s");
+        LOCO_DRAG("Target Step Period", gaitTargetStepPeriod, 0.01f, 0.0f, 4.0f, "%.2f s");
+        ImGui::Checkbox("Online Gait Adaptation", &c.gaitAdaptationEnabled);
+        LOCO_DRAG("Adaptation Response", gaitAdaptationResponse, 0.01f, 0.01f, 1.0f, "%.2f");
+        LOCO_DRAG("Max Stride Correction", gaitMaxStrideCorrection, 0.002f, 0.0f, 0.10f, "%.3f m");
+        LOCO_DRAG("Max Period Slowdown", gaitMaxPeriodSlowdown, 0.01f, 0.0f, 2.0f, "%.2f s");
+        LOCO_DRAG("Stress Stop Threshold", gaitStressStopThreshold, 0.1f, 0.5f, 10.0f, "%.1f");
         LOCO_DRAG("Transfer Duration", transferDuration, 0.01f, 0.05f, 3.0f, "%.2f s");
         ImGui::SliderFloat("Transfer Support Bias", &c.transferSupportBias, 0.0f, 1.0f);
         LOCO_DRAG("Transfer COM Tolerance", transferComTolerance, 0.002f, 0.002f, 0.2f, "%.3f m");
@@ -389,6 +423,14 @@ inline void DrawComponentInspector<LocamotionControllerComponent>(LocamotionCont
         LOCO_DRAG("Inter-Step Heading Gate", gaitInterStepHeadingLimit, 0.5f, 0.0f, 45.0f, "%.1f deg");
         LOCO_DRAG("Stop Duration", gaitStopTime, 0.01f, 0.05f, 3.0f, "%.2f s");
         LOCO_DRAG("Stop Hold", gaitStopHoldTime, 0.01f, 0.0f, 2.0f, "%.2f s");
+        if (c.gaitAdaptationEnabled) {
+            ImGui::Text("Adaptive: stride %+.3fm  period +%.2fs  transfer +%.3f  stress %.2f  failSteps %d",
+                        c._gaitAdaptiveStrideOffset,
+                        c._gaitAdaptivePeriodOffset,
+                        c._gaitAdaptiveTransferBiasOffset,
+                        c._gaitStress,
+                        c._gaitRecoveryFailureSteps);
+        }
     }
     if (ImGui::CollapsingHeader("Pose and IK", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::SliderFloat("Maximum Leg Reach", &c.maxLegReachFraction, 0.5f, 1.0f);
@@ -427,7 +469,10 @@ inline std::string SerializeComponent<LocamotionControllerComponent>(const Locam
     LOCO_SAVE(footTargetTolerance); LOCO_SAVE(safeReachFraction); LOCO_SAVE(transferDuration);
     LOCO_SAVE(transferSupportBias); LOCO_SAVE(transferComTolerance); LOCO_SAVE(transferHoldDuration);
     LOCO_SAVE(transferTimeout); LOCO_SAVE(interStepDuration); LOCO_SAVE(driftGrowthTolerance);
-    LOCO_SAVE(gaitDesiredSpeed);
+    LOCO_SAVE(gaitDesiredSpeed); LOCO_SAVE(gaitTargetStepPeriod);
+    LOCO_SAVE(gaitAdaptationEnabled); LOCO_SAVE(gaitAdaptationResponse);
+    LOCO_SAVE(gaitMaxStrideCorrection); LOCO_SAVE(gaitMaxPeriodSlowdown);
+    LOCO_SAVE(gaitStressStopThreshold);
     LOCO_SAVE(gaitPlacementGain); LOCO_SAVE(gaitNominalAdvance); LOCO_SAVE(gaitMinStepLength);
     LOCO_SAVE(gaitMaxStepLength); LOCO_SAVE(gaitReachCrouch); LOCO_SAVE(gaitCrouchTime);
     LOCO_SAVE(gaitUsableReachFraction); LOCO_SAVE(gaitSoleLevelTime); LOCO_SAVE(gaitFootPositionGain);
@@ -476,7 +521,10 @@ inline void DeserializeComponent<LocamotionControllerComponent>(LocamotionContro
     LOCO_MIGRATE(transferComTolerance, "test5ComTolerance"); LOCO_MIGRATE(transferHoldDuration, "test5HoldTime");
     LOCO_MIGRATE(transferTimeout, "test5HoldTimeout"); LOCO_MIGRATE(interStepDuration, "test6InterStepTime");
     LOCO_MIGRATE(driftGrowthTolerance, "test6DriftGrowthTolerance");
-    LOCO_MIGRATE(gaitDesiredSpeed, "test7DesiredSpeed");
+    LOCO_MIGRATE(gaitDesiredSpeed, "test7DesiredSpeed"); LOCO_LOAD(gaitTargetStepPeriod);
+    LOCO_LOAD(gaitAdaptationEnabled); LOCO_LOAD(gaitAdaptationResponse);
+    LOCO_LOAD(gaitMaxStrideCorrection); LOCO_LOAD(gaitMaxPeriodSlowdown);
+    LOCO_LOAD(gaitStressStopThreshold);
     LOCO_MIGRATE(gaitPlacementGain, "test7PlacementGain"); LOCO_MIGRATE(gaitNominalAdvance, "test7NominalAdvance");
     LOCO_MIGRATE(gaitMinStepLength, "test7MinStepLength"); LOCO_MIGRATE(gaitMaxStepLength, "test7MaxStepLength");
     LOCO_MIGRATE(gaitReachCrouch, "test7ReachCrouch"); LOCO_MIGRATE(gaitCrouchTime, "test7CrouchTime");

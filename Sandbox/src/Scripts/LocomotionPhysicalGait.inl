@@ -84,6 +84,20 @@
         c._gaitLastStepPeriod = 0.0f;
         c._gaitPreviousStepPeriod = 0.0f;
         c._gaitMeasuredSpeed = 0.0f;
+        c._gaitFilteredForwardError = 0.0f;
+        c._gaitFilteredLateralError = 0.0f;
+        c._gaitFilteredTouchdownSpeed = 0.0f;
+        c._gaitFilteredDrift = 0.0f;
+        c._gaitFilteredMotorRatio = 0.0f;
+        c._gaitFilteredUnloadDeficit = 0.0f;
+        c._gaitAdaptiveStrideOffset = 0.0f;
+        c._gaitAdaptiveLateralOffset = 0.0f;
+        c._gaitAdaptivePeriodOffset = 0.0f;
+        c._gaitAdaptiveTransferBiasOffset = 0.0f;
+        c._gaitStress = 0.0f;
+        c._gaitRecoveryFailureSteps = 0;
+        c._gaitAdaptiveStopRequested = false;
+        c._gaitPhaseTimeScale = 1.0f;
         const float gaitMinimumAdvance = glm::min(
             c.gaitMinStepLength, c.gaitMaxStepLength);
         const float gaitMaximumAdvance = glm::max(
@@ -149,6 +163,9 @@
         c._gaitIkPlanHipValid = false;
         c._gaitReachClampedStep = false;
         c._gaitOldSupportDriftAllowanceLogged = false;
+        c._gaitCancelMode = 0;
+        c._gaitLandingVerificationPending = false;
+        c._gaitLandingStableTime = 0.0f;
         c._gaitStopSettleReferenceValid = false;
         c._runtimeTurnActive = false;
         c._runtimeTurnElapsed = 0.0f;
@@ -482,6 +499,42 @@
             return t * t * (3.0f - 2.0f * t);
         };
 
+        // Cadence is a whole-cycle property. Compressing just SWING made the foot fast
+        // while leaving several seconds of serialized validation around it, so derive one
+        // scale for every cadence-bearing phase. Safety timeouts remain unscaled.
+        const float configuredStepBudget =
+            glm::max(comp.weightShiftDuration, 0.01f)
+            + glm::max(comp.swingDuration, 0.05f)
+            + glm::max(comp.arrivalSettleDuration, 0.0f)
+            + glm::max(comp.descentDuration, 0.05f)
+            + glm::max(comp.plantAcquireDuration, 0.0f)
+            + glm::max(comp.contactSettleDuration, 0.0f)
+            + glm::max(comp.transferDuration, 0.05f)
+            + glm::max(comp.transferHoldDuration, 0.0f)
+            + glm::max(comp.interStepDuration, 0.0f);
+        const float effectiveTargetStepPeriod = glm::max(
+            comp.gaitTargetStepPeriod + comp._gaitAdaptivePeriodOffset, 0.0f);
+        const float cadenceScale = continuousEnabled
+            && comp.gaitTargetStepPeriod > 0.0f
+            ? glm::clamp(effectiveTargetStepPeriod
+                         / glm::max(configuredStepBudget, 0.01f), 0.20f, 1.0f)
+            : 1.0f;
+        comp._gaitPhaseTimeScale = cadenceScale;
+        auto cadenceTime = [&](float configured, float floor) {
+            return glm::max(configured * cadenceScale, floor);
+        };
+        const float cadenceWeightShiftTime = cadenceTime(comp.weightShiftDuration, 0.20f);
+        const float cadenceSwingTime = cadenceTime(comp.swingDuration, 0.28f);
+        const float cadenceArrivalSettleTime = cadenceTime(comp.arrivalSettleDuration, 0.03f);
+        // Descent is also the final task-space convergence window. Keep enough physical
+        // time for the measured sole to catch the target after a fast swing.
+        const float cadenceDescentTime = cadenceTime(comp.descentDuration, 0.18f);
+        const float cadencePlantAcquireTime = cadenceTime(comp.plantAcquireDuration, 0.04f);
+        const float cadenceLandingVerifyTime = cadenceTime(comp.contactSettleDuration, 0.08f);
+        const float cadenceTransferTime = cadenceTime(comp.transferDuration, 0.14f);
+        const float cadenceTransferHoldTime = cadenceTime(comp.transferHoldDuration, 0.06f);
+        const float cadenceInterStepTime = cadenceTime(comp.interStepDuration, 0.04f);
+
         bool leftPositionOk = false, rightPositionOk = false;
         const glm::vec3 leftFoot = physicalPosition(comp._legL.footIdx, &leftPositionOk);
         const glm::vec3 rightFoot = physicalPosition(comp._legR.footIdx, &rightPositionOk);
@@ -653,6 +706,8 @@
         } else if (gameplayCommand && comp._gaitRunning
                    && comp._gaitStopRequested
                    && !continuousCommand.stopRequested
+                   && comp._gaitCancelMode == 0
+                   && !comp._gaitAdaptiveStopRequested
                    && comp._physicalStepPhase != kStopping
                    && comp._physicalStepPhase != kReturnStand) {
             // The player returned to the active heading before the committed stop.
@@ -899,6 +954,7 @@
                     captureGroundFootReference(comp._legR);
                     comp._gaitRunning = true;
                     comp._gaitStopRequested = false;
+                    comp._gaitRecoveryFailureSteps = 0;
                     comp._gaitRunTime = 0.0f;
                     comp._gaitStepStartTime = 0.0f;
                     comp._gaitLastStepPeriod = 0.0f;
@@ -911,7 +967,7 @@
                     const float trackingReserve = glm::min(glm::max(
                         comp.footTargetTolerance * 0.5f, 0.010f), 0.025f);
                     comp._gaitCommandedStepLength = glm::clamp(
-                        comp.gaitNominalAdvance,
+                        comp.gaitNominalAdvance + comp._gaitAdaptiveStrideOffset,
                         glm::min(maximumAdvance,
                                  minimumAdvance + trackingReserve),
                         maximumAdvance);
@@ -951,6 +1007,9 @@
                     comp._gaitTakeoffContactRecoveryActive = false;
                     comp._gaitReachClampedStep = false;
                     comp._gaitOldSupportDriftAllowanceLogged = false;
+                    comp._gaitCancelMode = 0;
+                    comp._gaitLandingVerificationPending = false;
+                    comp._gaitLandingStableTime = 0.0f;
                     comp._gaitStartCom = rag._locomotionCOM;
                     comp._gaitStepStartCom = rag._locomotionCOM;
                 }
@@ -982,7 +1041,7 @@
             ? static_cast<float>(comp._physicalStepSupportSide) : 0.0f;
         comp._physicalStepComCommand = Approach(
             comp._physicalStepComCommand, desiredComCommand,
-            dt / glm::max(comp.weightShiftDuration, 0.01f));
+            dt / cadenceWeightShiftTime);
 
         const float fraction = glm::clamp(comp.supportBias, 0.0f, 1.0f);
         const float leftAvailable = glm::dot(
@@ -1015,7 +1074,7 @@
             && comp._physicalStepPhase <= kComplete) {
             const float transferT = comp._physicalStepPhase == kTransfer
                 ? glm::clamp(comp._physicalStepPhaseTime
-                    / glm::max(comp.transferDuration, 0.05f), 0.0f, 1.0f)
+                    / cadenceTransferTime, 0.0f, 1.0f)
                 : 1.0f;
             comp._supportTransferTransferT = transferT;
             // Unlike the old walking path, transfer is phase-continuous and supplies the
@@ -1029,8 +1088,7 @@
             // Both endpoints were captured once at phase entry. Never rebuild the target
             // from vibrating physical feet: differentiating that moving midpoint turned
             // contact noise into a commanded COM velocity and fed it back into the body.
-            const float duration = glm::max(
-                comp.gaitInterStepRecenterTime, 0.20f);
+            const float duration = cadenceInterStepTime;
             const float recenterT = glm::clamp(
                 comp._physicalStepPhaseTime / duration, 0.0f, 1.0f);
             const float recenterBlend = smoothstep(recenterT);
@@ -1213,14 +1271,16 @@
             const bool activeGaitPhase = comp._physicalStepPhase >= kWeightShift
                                       && comp._physicalStepPhase <= kInterStep;
             if (activeGaitPhase) {
-                // Once transfer has unloaded the old support, its small release slide is
-                // preparation for the next swing rather than loss of the loaded plant.
-                // STOPPING / RETURN_STAND own separate immutable foot anchors and drift
-                // metrics, so their deliberate posture transition cannot contaminate the
-                // active-gait measurement.
-                const float relevantDrift = gaitOldSupportUnloaded
+                // Drift follows support ownership, not the geometric unload estimate.
+                // Before plant acquisition the stance foot is the loaded support. Once the
+                // new plant is settled, that foot owns support stability and movement of
+                // the old foot is release quality for the next swing, not support drift.
+                const bool newSupportAcquired =
+                    comp._physicalStepPlantPoseCaptured
+                    && comp._physicalStepPhase >= kSettle;
+                const float relevantDrift = newSupportAcquired
                     ? comp._physicalStepPlantDrift
-                    : glm::max(comp._physicalStepStanceDrift, comp._physicalStepPlantDrift);
+                    : comp._physicalStepStanceDrift;
                 comp._gaitStepMaxRelevantDrift = glm::max(
                     comp._gaitStepMaxRelevantDrift, relevantDrift);
                 comp._gaitMaxDrift = glm::max(
@@ -1408,6 +1468,8 @@
                         std::abs(lateralLane), kMinimumRuntimeLane, 0.24f);
                     const float swingSide = swing == &comp._legL ? -1.0f : 1.0f;
                     lateralLane = swingSide * laneMagnitude;
+                    lateralLane += glm::clamp(
+                        comp._gaitAdaptiveLateralOffset, -0.015f, 0.015f);
                 }
                 requestedTarget = stanceFoot
                     + comp._physicalStepForward * placementDistance
@@ -1539,6 +1601,17 @@
         auto abortSequence = [&](const char* reason) {
             if (comp._physicalStepPhase == kAbort || comp._physicalStepPhase == kIdle) return;
             const int abortedPhase = comp._physicalStepPhase;
+            // Once both feet are down, recover around the achieved world-space support
+            // point. Returning to the step-entry COM made a successful-looking landing
+            // slide backward before the abort became visible to the player.
+            if (comp._physicalStepContactL && comp._physicalStepContactR) {
+                comp._physicalStepFootBaselineL = leftFoot;
+                comp._physicalStepFootBaselineR = rightFoot;
+                comp._physicalStepComBaseline = comp._physicalStepSupportTarget;
+                comp._physicalStepComCommand = 0.0f;
+                comp._physicalStepComLateral = 0.0f;
+                comp._physicalStepTargetLateral = 0.0f;
+            }
             comp._physicalStepAborted = true;
             comp._physicalStepPhase = kAbort;
             comp._physicalStepPhaseTime = 0.0f;
@@ -1611,8 +1684,7 @@
             rag._locomotionCOMVel, comp._physicalStepForward);
         constexpr float kWeightShiftForwardTolerance = 0.015f;
         constexpr float kWeightShiftForwardSpeedTolerance = 0.010f;
-        const float weightShiftMinimumTime = glm::max(
-            comp.weightShiftDuration, 0.01f);
+        const float weightShiftMinimumTime = cadenceWeightShiftTime;
         // Valid shifts in the current 1.5 Hz setup can need a little over three
         // seconds to settle. Leave margin above that observed range, but never wait
         // forever on an unreachable predicate again.
@@ -1676,6 +1748,52 @@
                 weightShiftTimeReady ? "PASS" : "FAIL",
                 comp._physicalStepPhaseTime, weightShiftMinimumTime);
             abortSequence("weight-shift readiness timed out");
+        }
+
+        // A stop is committed immediately instead of waiting for the complete ordinary
+        // step. Before mid-swing the foot returns to its previous plant. After mid-swing
+        // it continues forward to a shorter, reachable foothold and then transfers support.
+        if (continuousEnabled && comp._gaitStopRequested
+            && comp._gaitCancelMode == 0
+            && comp._physicalStepPhase >= kTakeoff
+            && comp._physicalStepPhase <= kDescent) {
+            const bool inSwing = comp._physicalStepPhase == kSwing;
+            const float swingProgress = inSwing
+                ? glm::clamp(comp._physicalStepPhaseTime / cadenceSwingTime, 0.0f, 1.0f)
+                : (comp._physicalStepPhase == kTakeoff ? 0.0f : 1.0f);
+            const bool returnToPlant = comp._physicalStepPhase == kTakeoff
+                || (inSwing && swingProgress < 0.50f);
+            if (returnToPlant) {
+                comp._gaitCancelMode = 1;
+                comp._physicalStepArcStart = swingFoot;
+                comp._physicalStepFoothold = comp._physicalStepSwingStart;
+                comp._gaitPlannedSupportAdvance = 0.0f;
+                comp._physicalStepPhase = kSwing;
+                comp._physicalStepPhaseTime = 0.0f;
+                comp._physicalStepTrajectoryT = 0.0f;
+                comp._gaitSwingRecontactTime = 0.0f;
+            } else {
+                comp._gaitCancelMode = 2;
+                const float plannedAdvance = glm::dot(
+                    comp._physicalStepFoothold - stanceFoot,
+                    comp._physicalStepForward);
+                const float currentAdvance = glm::dot(
+                    swingFoot - stanceFoot, comp._physicalStepForward);
+                const float shortenedAdvance = glm::clamp(
+                    glm::max(0.03f, currentAdvance + 0.02f),
+                    0.03f, glm::max(plannedAdvance, 0.03f));
+                comp._physicalStepFoothold += comp._physicalStepForward
+                    * (shortenedAdvance - plannedAdvance);
+                comp._gaitPlannedSupportAdvance = shortenedAdvance;
+                if (inSwing) {
+                    comp._physicalStepArcStart = swingFoot;
+                    comp._physicalStepPhaseTime = 0.0f;
+                    comp._physicalStepTrajectoryT = 0.0f;
+                } else if (comp._physicalStepPhase == kArrival) {
+                    comp._physicalStepPhase = kDescent;
+                    comp._physicalStepPhaseTime = 0.0f;
+                }
+            }
         }
 
         const float takeoffHeight = glm::clamp(
@@ -1766,8 +1884,10 @@
             const float maxVerticalSpeed = continuousEnabled
                 ? glm::max(comp.touchdownMaxVerticalSpeed, 0.30f)
                 : glm::max(comp.touchdownMaxVerticalSpeed, 0.05f);
-            const float horizontalTolerance = glm::max(
-                comp.footTargetTolerance, 0.01f);
+            const float horizontalTolerance = continuousEnabled
+                ? glm::max(comp.footTargetTolerance,
+                           glm::max(comp.gaitMaxFootCorrection, 0.01f))
+                : glm::max(comp.footTargetTolerance, 0.01f);
             // Contact can arrive a few frames early as the support-relative target settles.
             // Once descent has genuinely begun, a near-ground, accurately tracked, slow,
             // upward-facing contact is stronger evidence than a brittle time boundary.
@@ -1782,23 +1902,15 @@
                 comp._physicalStepVerticalTargetError <= verticalTolerance;
             if (progressOk && normalOk && velocityOk && horizontalOk && verticalOk) {
                 acceptTouchdown();
-            } else if (!progressOk) {
-                abortSequence("touchdown occurred before safe descent window");
-            } else if (!normalOk) {
-                abortSequence("touchdown normal was below threshold");
-            } else if (!velocityOk) {
-                abortSequence("touchdown vertical speed exceeded threshold");
-            } else if (!horizontalOk) {
-                abortSequence("touchdown horizontal target error exceeded tolerance");
-            } else {
-                abortSequence("touchdown vertical target error exceeded 3 cm");
             }
         };
 
-        const bool touchdownEdge = swingContactNow && !comp._physicalStepPrevSwingContact;
         if (comp._physicalStepPhase == kSwing) {
+            const float activeSwingTime = comp._gaitCancelMode != 0
+                ? glm::max(0.18f, cadenceSwingTime * 0.65f)
+                : cadenceSwingTime;
             const float swingProgress = glm::clamp(
-                comp._physicalStepPhaseTime / glm::max(comp.swingDuration, 0.05f),
+                comp._physicalStepPhaseTime / activeSwingTime,
                 0.0f, 1.0f);
             comp._physicalStepTrajectoryT = 0.70f * swingProgress;
             desiredFoot = trajectoryPoint(swingProgress);
@@ -1875,8 +1987,22 @@
                 comp._gaitSwingRecontactTime = 0.0f;
             }
             if (comp._physicalStepPhase == kArrival && !swingContactNow
-                && comp._physicalStepArrivalStableTime >= glm::max(
-                           comp.arrivalSettleDuration, 0.05f)) {
+                && comp._physicalStepArrivalStableTime >= cadenceArrivalSettleTime) {
+                // Begin from the measured sole, not the ideal hover command. With a short
+                // cadence the motors can trail that command by several centimetres; using
+                // the ideal point again created a discontinuity and then treated ordinary
+                // servo lag as a failed step.
+                comp._physicalStepArcStart = swingFoot;
+                comp._physicalStepPhase = kDescent;
+                comp._physicalStepPhaseTime = 0.0f;
+            } else if (comp._physicalStepPhase == kArrival && !swingContactNow
+                       && comp._physicalStepPhaseTime >= glm::max(
+                           cadenceArrivalSettleTime, 0.06f)
+                       && comp._physicalStepClearance >= 0.040f) {
+                // Gameplay arrival is a transition, not a pose-verification stop. Continue
+                // leveling and horizontal correction throughout descent and let touchdown
+                // contact validate the actual landing.
+                comp._physicalStepArcStart = swingFoot;
                 comp._physicalStepPhase = kDescent;
                 comp._physicalStepPhaseTime = 0.0f;
             } else if (comp._physicalStepPhase == kArrival && !swingContactNow
@@ -1891,33 +2017,32 @@
                     arrivalVerticalError,
                     arrivalVerticalError <= 0.025f ? "ok" : "FAIL",
                     comp._physicalStepArrivalStableTime,
-                    glm::max(comp.arrivalSettleDuration, 0.05f),
-                    comp._physicalStepArrivalStableTime >= glm::max(
-                        comp.arrivalSettleDuration, 0.05f) ? "ok" : "FAIL",
+                    cadenceArrivalSettleTime,
+                    comp._physicalStepArrivalStableTime >= cadenceArrivalSettleTime
+                        ? "ok" : "FAIL",
                     comp._gaitSoleAngularErrorDeg,
                     kSoleArrivalToleranceDeg,
                     soleAligned ? "ok" : "FAIL",
                     comp._physicalStepForwardTargetError,
                     comp._physicalStepLateralTargetError);
-                if (comp._physicalStepHorizontalTargetError > arrivalTolerance)
-                    abortSequence("hover horizontal arrival did not converge before timeout");
-                else if (arrivalVerticalError > 0.025f)
-                    abortSequence("hover vertical arrival did not converge before timeout");
-                else if (!soleAligned)
-                    abortSequence("hover sole orientation did not converge before timeout");
-                else
-                    abortSequence("hover arrival did not remain within tolerance long enough");
+                abortSequence("swing foot could not retain safe clearance before descent");
             }
         } else if (comp._physicalStepPhase == kDescent) {
             const float descentProgress = glm::clamp(
-                comp._physicalStepPhaseTime / glm::max(comp.descentDuration, 0.05f),
+                comp._physicalStepPhaseTime / cadenceDescentTime,
                 0.0f, 1.0f);
             comp._physicalStepTrajectoryT = 0.70f + 0.30f * descentProgress;
             desiredFoot = glm::mix(
-                hoverTarget, comp._physicalStepFoothold, smoothstep(descentProgress));
-            if (touchdownEdge) {
+                comp._physicalStepArcStart, comp._physicalStepFoothold,
+                smoothstep(descentProgress));
+            if (swingContactNow) {
+                // Solver contact is reported before the newly landed sole has dissipated
+                // its approach velocity. Keep validating on subsequent frames instead of
+                // turning that first, expected impact sample into a gait abort.
                 evaluateTouchdown("DESCENT", descentProgress);
-            } else if (descentProgress >= 1.0f) {
+            }
+            if (comp._physicalStepPhase == kDescent
+                && descentProgress >= 1.0f) {
                 comp._physicalStepPhase = kTouchdownWait;
                 comp._physicalStepPhaseTime = 0.0f;
                 desiredFoot = comp._physicalStepFoothold;
@@ -1925,9 +2050,12 @@
         } else if (comp._physicalStepPhase == kTouchdownWait) {
             comp._physicalStepTrajectoryT = 1.0f;
             desiredFoot = comp._physicalStepFoothold;
-            if (touchdownEdge) {
+            if (swingContactNow) {
                 evaluateTouchdown("TOUCHDOWN_WAIT", 1.0f);
-            } else if (comp._physicalStepPhaseTime >= glm::max(comp.plantTimeout, 0.10f)) {
+            }
+            if (comp._physicalStepPhase == kTouchdownWait
+                && comp._physicalStepPhaseTime
+                    >= glm::max(comp.plantTimeout, 0.10f)) {
                 abortSequence("touchdown contact timed out");
             }
         } else if (comp._physicalStepPhase >= kSettle
@@ -1944,6 +2072,34 @@
         } else {
             comp._supportTransferContactLossTime = 0.0f;
         }
+
+        const bool recoverableOldSupportDrift = continuousEnabled
+            && transferEnabled && transferOrHold
+            && comp._physicalStepStanceDrift > 0.040f;
+        if (recoverableOldSupportDrift
+            && !comp._gaitOldSupportDriftAllowanceLogged) {
+            comp._gaitOldSupportDriftAllowanceLogged = true;
+            spdlog::warn(
+                "[LocomotionGait] TRANSFER_DRIFT_RECOVER oldSupport={} "
+                "oldDrift={:.3f}m newSupport={} newDrift={:.3f}m "
+                "oldUnloaded={} action=adapt",
+                comp._physicalStepSupportSide < 0 ? "LEFT" : "RIGHT",
+                comp._physicalStepStanceDrift,
+                comp._physicalStepSupportSide < 0 ? "RIGHT" : "LEFT",
+                comp._physicalStepPlantDrift,
+                gaitOldSupportUnloaded ? "yes" : "no");
+        }
+
+        // During continuous gait the old foot is in the process of becoming the next
+        // swing foot. Its drift is a correction signal, not by itself proof that the
+        // newly acquired support is unsafe. Preserve an emergency boundary only when
+        // large old-foot motion is accompanied by another transfer instability.
+        const bool severeOldSupportInstability = continuousEnabled
+            && transferEnabled && transferOrHold
+            && comp._physicalStepStanceDrift > 0.100f
+            && (comp._physicalStepPlantDrift > 0.025f
+                || tiltDeg >= 20.0f
+                || comp._supportTransferComHorizontalSpeed > 0.35f);
 
         if (comp._physicalStepPhase >= kTakeoff && comp._physicalStepPhase <= kSettle
             && !stanceContactNow) {
@@ -1968,20 +2124,33 @@
                    && comp._supportTransferContactLossTime > 0.05f) {
             abortSequence("foot contact was lost during support transfer");
         } else if (transferEnabled && transferOrHold
-                   && (comp._physicalStepPlantDrift > 0.040f
-                       || (comp._physicalStepStanceDrift > 0.040f
-                           && !gaitOldSupportUnloaded))) {
+                   && comp._physicalStepPlantDrift > 0.040f) {
             if (continuousEnabled) {
                 spdlog::warn(
-                    "[LocomotionGait] TRANSFER_DRIFT_ABORT oldSupport={} oldDrift={:.3f}m "
-                    "newSupport={} newDrift={:.3f}m oldUnloaded={}",
+                    "[LocomotionGait] TRANSFER_DRIFT_ABORT reason=new_support "
+                    "oldSupport={} oldDrift={:.3f}m newSupport={} newDrift={:.3f}m",
                     comp._physicalStepSupportSide < 0 ? "LEFT" : "RIGHT",
                     comp._physicalStepStanceDrift,
                     comp._physicalStepSupportSide < 0 ? "RIGHT" : "LEFT",
-                    comp._physicalStepPlantDrift,
-                    gaitOldSupportUnloaded ? "yes" : "no");
+                    comp._physicalStepPlantDrift);
             }
-            abortSequence("plant drift exceeded 4 cm during support transfer");
+            abortSequence("new support drift exceeded 4 cm during transfer");
+        } else if (transferEnabled && transferOrHold
+                   && !continuousEnabled
+                   && comp._physicalStepStanceDrift > 0.040f) {
+            abortSequence("old support drift exceeded 4 cm during transfer");
+        } else if (severeOldSupportInstability) {
+            spdlog::warn(
+                "[LocomotionGait] TRANSFER_DRIFT_ABORT reason=compound_instability "
+                "oldSupport={} oldDrift={:.3f}m newSupport={} newDrift={:.3f}m "
+                "comSpeed={:.3f}mps tilt={:.1f}",
+                comp._physicalStepSupportSide < 0 ? "LEFT" : "RIGHT",
+                comp._physicalStepStanceDrift,
+                comp._physicalStepSupportSide < 0 ? "RIGHT" : "LEFT",
+                comp._physicalStepPlantDrift,
+                comp._supportTransferComHorizontalSpeed,
+                tiltDeg);
+            abortSequence("severe old-support drift accompanied by unstable transfer");
         } else if (transferEnabled && comp._physicalStepPhase >= kTransfer
                    && comp._physicalStepPhase <= kHold && tiltDeg >= 30.0f) {
             abortSequence("tilt reached 30 degrees during support transfer");
@@ -2258,6 +2427,262 @@
                 || (continuousEnabled && comp._physicalStepPhase == kStopping)))
             writeLegPose(*stance);
 
+        auto beginStopping = [&]() {
+            capturePhysicalLocalPose(*swing);
+            capturePhysicalLocalPose(*stance);
+            comp._gaitStopStartTarget = comp._physicalStepSupportTarget;
+            comp._gaitStopEndTarget = comp._gaitStopStartTarget;
+            comp._gaitStopFootTargetL = leftFoot;
+            comp._gaitStopFootTargetR = rightFoot;
+            comp._gaitStopFootDriftL = 0.0f;
+            comp._gaitStopFootDriftR = 0.0f;
+            comp._gaitStopMaxFootDrift = 0.0f;
+            comp._gaitStopSettleFootDriftL = 0.0f;
+            comp._gaitStopSettleFootDriftR = 0.0f;
+            comp._gaitStopMaxSettleFootDrift = 0.0f;
+            comp._gaitStopSettleReferenceValid = false;
+            comp._gaitStopStableTime = 0.0f;
+            comp._physicalStepPhase = kStopping;
+            comp._physicalStepPhaseTime = 0.0f;
+        };
+
+        auto beginTransfer = [&]() {
+            const float transferFraction = glm::clamp(
+                comp.transferSupportBias + comp._gaitAdaptiveTransferBiasOffset,
+                0.70f, 0.98f);
+            glm::vec3 comStart = rag._locomotionCOM;
+            glm::vec3 newPlant = swingFoot;
+            comStart.y = comp._physicalStepSupportTarget.y;
+            newPlant.y = comp._physicalStepSupportTarget.y;
+            comp._supportTransferTransferStartTarget =
+                comp._physicalStepSupportTarget;
+            const float forwardTransferFraction = continuousEnabled
+                ? 0.50f : transferFraction;
+            if (continuousEnabled) {
+                glm::vec3 forwardSupportPoint = glm::mix(
+                    stanceFoot, swingFoot, forwardTransferFraction);
+                forwardSupportPoint.y = comp._physicalStepSupportTarget.y;
+                comp._supportTransferTransferEndTarget = comStart
+                    + comp._physicalStepRight * glm::dot(
+                        newPlant - comStart, comp._physicalStepRight)
+                        * transferFraction
+                    + comp._physicalStepForward * glm::dot(
+                        forwardSupportPoint - comStart,
+                        comp._physicalStepForward);
+            } else {
+                comp._supportTransferTransferEndTarget = glm::mix(
+                    comStart, newPlant, transferFraction);
+            }
+            comp._supportTransferTransferT = 0.0f;
+            comp._supportTransferHoldStableTime = 0.0f;
+            comp._supportTransferContactLossTime = 0.0f;
+            comp._physicalStepPhase = kTransfer;
+            comp._physicalStepPhaseTime = 0.0f;
+        };
+
+        auto updateGaitAdaptation = [&]() {
+            const float response = glm::clamp(
+                comp.gaitAdaptationResponse, 0.01f, 1.0f);
+            if (!comp.gaitAdaptationEnabled) {
+                comp._gaitAdaptiveStrideOffset = glm::mix(
+                    comp._gaitAdaptiveStrideOffset, 0.0f, response);
+                comp._gaitAdaptiveLateralOffset = glm::mix(
+                    comp._gaitAdaptiveLateralOffset, 0.0f, response);
+                comp._gaitAdaptivePeriodOffset = glm::mix(
+                    comp._gaitAdaptivePeriodOffset, 0.0f, response);
+                comp._gaitAdaptiveTransferBiasOffset = glm::mix(
+                    comp._gaitAdaptiveTransferBiasOffset, 0.0f, response);
+                comp._gaitStress *= 0.60f;
+                comp._gaitRecoveryFailureSteps = 0;
+                return;
+            }
+
+            auto filter = [&](float& state, float sample) {
+                state = glm::mix(state, sample, response);
+            };
+            const float previousFilteredDrift = comp._gaitFilteredDrift;
+            const float previousFilteredUnload =
+                comp._gaitFilteredUnloadDeficit;
+            const float stepDrift = comp._gaitStepMaxRelevantDrift;
+            const float geometricUnloadDeficit = glm::max(
+                comp._supportTransferComToNewSupport + 0.020f
+                    - comp._supportTransferComToOldSupport,
+                0.0f);
+            const float releaseQualityDeficit = gaitOldSupportUnloaded
+                ? 0.0f
+                : glm::max(comp._physicalStepStanceDrift - 0.040f, 0.0f);
+            const float unloadDeficit = glm::max(
+                geometricUnloadDeficit, releaseQualityDeficit);
+            filter(comp._gaitFilteredForwardError,
+                   comp._physicalStepForwardTargetError);
+            filter(comp._gaitFilteredLateralError,
+                   comp._physicalStepLateralTargetError);
+            filter(comp._gaitFilteredTouchdownSpeed,
+                   std::abs(comp._physicalStepTouchdownVy));
+            filter(comp._gaitFilteredDrift, stepDrift);
+            filter(comp._gaitFilteredMotorRatio,
+                   comp._physicalStepMaxMotorRatio);
+            filter(comp._gaitFilteredUnloadDeficit, unloadDeficit);
+
+            const float maxStrideCorrection = glm::max(
+                comp.gaitMaxStrideCorrection, 0.0f);
+            const bool authorityLimited = comp._gaitReachClampedStep
+                || comp._gaitFilteredMotorRatio > 0.80f;
+            const float landingFeedForward = authorityLimited
+                ? 0.0f
+                : glm::clamp(comp._gaitFilteredForwardError * 0.50f,
+                             -maxStrideCorrection, maxStrideCorrection);
+            const float driftPenalty = glm::clamp(
+                glm::max(comp._gaitFilteredDrift - 0.015f, 0.0f) * 1.5f,
+                0.0f, maxStrideCorrection);
+            const float authorityPenalty = authorityLimited
+                ? glm::min(maxStrideCorrection, 0.015f) : 0.0f;
+            const float targetStrideOffset = glm::clamp(
+                landingFeedForward - driftPenalty - authorityPenalty,
+                -maxStrideCorrection, maxStrideCorrection);
+            comp._gaitAdaptiveStrideOffset = glm::mix(
+                comp._gaitAdaptiveStrideOffset,
+                targetStrideOffset, response);
+
+            const float targetLateralOffset = glm::clamp(
+                comp._gaitFilteredLateralError * 0.35f,
+                -0.015f, 0.015f);
+            comp._gaitAdaptiveLateralOffset = glm::mix(
+                comp._gaitAdaptiveLateralOffset,
+                targetLateralOffset, response);
+
+            const float touchdownLimit = glm::max(
+                comp.touchdownMaxVerticalSpeed, 0.30f);
+            const float impactSlowdown = glm::max(
+                comp._gaitFilteredTouchdownSpeed - touchdownLimit, 0.0f) * 0.80f;
+            const float driftSlowdown = glm::max(
+                comp._gaitFilteredDrift - 0.015f, 0.0f) * 5.0f;
+            const float motorSlowdown = glm::max(
+                comp._gaitFilteredMotorRatio - 0.75f, 0.0f) * 0.50f;
+            const float reachSlowdown = comp._gaitReachClampedStep ? 0.10f : 0.0f;
+            const float targetPeriodOffset = glm::clamp(
+                impactSlowdown + driftSlowdown + motorSlowdown + reachSlowdown,
+                0.0f, glm::max(comp.gaitMaxPeriodSlowdown, 0.0f));
+            comp._gaitAdaptivePeriodOffset = glm::mix(
+                comp._gaitAdaptivePeriodOffset,
+                targetPeriodOffset, response);
+
+            const float targetTransferBiasOffset = glm::clamp(
+                comp._gaitFilteredUnloadDeficit * 1.5f, 0.0f, 0.06f);
+            comp._gaitAdaptiveTransferBiasOffset = glm::mix(
+                comp._gaitAdaptiveTransferBiasOffset,
+                targetTransferBiasOffset, response);
+
+            const float impactStress = glm::max(
+                comp._gaitFilteredTouchdownSpeed - touchdownLimit, 0.0f)
+                / glm::max(touchdownLimit, 0.10f) * 0.50f;
+            const float driftStress = glm::max(
+                comp._gaitFilteredDrift - 0.020f, 0.0f) / 0.020f * 0.75f;
+            const float motorStress = glm::max(
+                comp._gaitFilteredMotorRatio - 0.80f, 0.0f) / 0.20f * 0.75f;
+            const float reachStress = comp._gaitReachClampedStep ? 0.35f : 0.0f;
+            const float unloadStress = glm::clamp(
+                comp._gaitFilteredUnloadDeficit / 0.020f, 0.0f, 1.0f) * 0.25f;
+            const float stepStress = impactStress + driftStress + motorStress
+                + reachStress + unloadStress;
+            comp._gaitStress = comp._gaitStress * 0.60f + stepStress;
+            const float stressThreshold = glm::max(
+                comp.gaitStressStopThreshold, 0.5f);
+            const bool driftWorsening = comp._gaitFilteredDrift
+                > previousFilteredDrift + 0.001f;
+            const bool unloadWorsening = comp._gaitFilteredUnloadDeficit
+                > previousFilteredUnload + 0.001f;
+            auto correctionNearLimit = [](float value, float limit) {
+                return limit <= 1e-4f || std::abs(value) >= limit * 0.80f;
+            };
+            const float periodCorrectionLimit = glm::max(
+                comp.gaitMaxPeriodSlowdown, 0.0f);
+            const float transferCorrectionLimit = glm::min(
+                0.060f,
+                glm::max(0.98f - glm::clamp(
+                    comp.transferSupportBias, 0.70f, 0.98f), 0.0f));
+            const bool strideDriftCorrectionSaturated =
+                maxStrideCorrection <= 1e-4f
+                || comp._gaitAdaptiveStrideOffset
+                    <= -maxStrideCorrection * 0.80f;
+            const bool driftCorrectionSaturated =
+                strideDriftCorrectionSaturated
+                && correctionNearLimit(
+                    comp._gaitAdaptivePeriodOffset, periodCorrectionLimit);
+            const bool unloadCorrectionSaturated = correctionNearLimit(
+                comp._gaitAdaptiveTransferBiasOffset,
+                transferCorrectionLimit);
+            const bool unresolvedDrift = driftStress > 0.0f
+                && driftWorsening && driftCorrectionSaturated;
+            const bool unresolvedUnload = unloadStress > 0.0f
+                && unloadWorsening && unloadCorrectionSaturated;
+            const bool unresolvedRecoverableStress =
+                comp._gaitStress >= stressThreshold
+                && (unresolvedDrift || unresolvedUnload);
+            comp._gaitRecoveryFailureSteps = unresolvedRecoverableStress
+                ? comp._gaitRecoveryFailureSteps + 1
+                : glm::max(comp._gaitRecoveryFailureSteps - 1, 0);
+
+            // Impact and authority failures may request recovery directly. Drift and
+            // unload errors must first keep worsening for several completed steps after
+            // their bounded corrections are substantially exhausted.
+            const float urgentStress = impactStress + motorStress + reachStress;
+            const bool urgentRecovery = urgentStress >= stressThreshold;
+            const bool exhaustedRecovery =
+                comp._gaitRecoveryFailureSteps >= 3;
+            if (!comp._gaitStopRequested
+                && (urgentRecovery || exhaustedRecovery)) {
+                spdlog::warn(
+                    "[LocomotionGait] ADAPTIVE_STOP_REQUEST step={} "
+                    "reason={} failSteps={} "
+                    "stress={:.2f}/{:.2f} components=(impact={:.2f},drift={:.2f},"
+                    "motor={:.2f},reach={:.2f},unload={:.2f}) "
+                    "filtered=(impact={:.3f}mps,drift={:.3f}m,motor={:.2f},"
+                    "unload={:.3f}m) correction=(stride={:+.3f}m,"
+                    "period=+{:.2f}s,transfer={:+.3f}) saturation=(drift={},unload={})",
+                    comp._stepSequenceStepIndex,
+                    urgentRecovery ? "urgent" : "recovery_exhausted",
+                    comp._gaitRecoveryFailureSteps,
+                    comp._gaitStress, stressThreshold,
+                    impactStress, driftStress, motorStress,
+                    reachStress, unloadStress,
+                    comp._gaitFilteredTouchdownSpeed,
+                    comp._gaitFilteredDrift,
+                    comp._gaitFilteredMotorRatio,
+                    comp._gaitFilteredUnloadDeficit,
+                    comp._gaitAdaptiveStrideOffset,
+                    comp._gaitAdaptivePeriodOffset,
+                    comp._gaitAdaptiveTransferBiasOffset,
+                    driftCorrectionSaturated ? "yes" : "no",
+                    unloadCorrectionSaturated ? "yes" : "no");
+                comp._gaitAdaptiveStopRequested = true;
+                comp._gaitStopRequested = true;
+            }
+        };
+
+        const bool locksOff = rag.locomotionFootLockWeights[0] <= 0.001f
+                           && rag.locomotionFootLockWeights[1] <= 0.001f
+                           && rag._locomotionFootLockForce[0] <= 0.5f
+                           && rag._locomotionFootLockForce[1] <= 0.5f;
+        const bool landingStable = comp._physicalStepPlantPoseCaptured
+            && comp._physicalStepContactL && comp._physicalStepContactR
+            && glm::length(leftVelocity) < 0.15f
+            && glm::length(rightVelocity) < 0.15f
+            && horizontalSpeed < 0.15f
+            && comp._physicalStepPlantDrift <= 0.040f
+            && tiltDeg < 30.0f
+            && !rag._locomotionSupportSaturated
+            && rag.locomotionLiftBone < 0
+            && rag._locomotionLiftForce <= 0.5f
+            && locksOff
+            && !comp._physicalStepMotorSaturated;
+        if (comp._gaitLandingVerificationPending
+            && comp._physicalStepPhase >= kSettle
+            && comp._physicalStepPhase <= kHold) {
+            comp._gaitLandingStableTime = landingStable
+                ? comp._gaitLandingStableTime + dt : 0.0f;
+        }
+
         if (comp._physicalStepPhase == kSettle) {
             const float minimumSupportAdvance = glm::min(
                 comp.gaitMinStepLength, comp.gaitMaxStepLength);
@@ -2270,40 +2695,66 @@
                     && plantSpeed <= maxAcquireSpeed;
                 comp._physicalStepPlantAcquireStableTime = acquisitionKinematicallyStable
                     ? comp._physicalStepPlantAcquireStableTime + dt : 0.0f;
-                if (comp._physicalStepPlantAcquireStableTime >= glm::max(
-                        comp.plantAcquireDuration, 0.05f)) {
+                if (comp._physicalStepPlantAcquireStableTime
+                    >= cadencePlantAcquireTime) {
                     const float retainedFromTarget =
                         comp._gaitPlannedSupportAdvance
                         - glm::max(comp._physicalStepForwardTargetError, 0.0f);
+                    // Runtime landing accepts a bounded tracking miss and feeds it into the
+                    // next foothold. A stable physical contact is recoverable; treating a
+                    // few centimetres of servo lag as ABORT caused the release-to-restart
+                    // behavior and pulled the COM back to the old baseline.
+                    const float requiredAdvance = comp._gaitCancelMode == 1
+                        ? 0.0f
+                        : glm::min(minimumSupportAdvance, glm::max(
+                            0.03f, comp._gaitPlannedSupportAdvance
+                                - glm::max(comp.footTargetTolerance, 0.01f)));
                     const bool retainsMinimumAdvance = !continuousEnabled
                         || comp._gaitAchievedSupportAdvance + 0.0005f
-                            >= minimumSupportAdvance;
+                            >= requiredAdvance;
                     if (!retainsMinimumAdvance) {
                         spdlog::warn(
-                            "[LocomotionGait] LANDING_ADVANCE_CHECK result=FAIL "
+                            "[LocomotionGait] LANDING_ADVANCE_CHECK result=RECOVER "
                             "planned={:.3f} retainedFromTarget={:.3f} "
                             "achieved={:.3f}/{:.3f} forwardError={:+.3f} "
                             "stanceDrift={:.3f}",
                             comp._gaitPlannedSupportAdvance,
                             retainedFromTarget,
                             comp._gaitAchievedSupportAdvance,
-                            minimumSupportAdvance,
+                            requiredAdvance,
                             comp._physicalStepForwardTargetError,
                             comp._physicalStepStanceDrift);
-                        abortSequence(
-                            "stable landing did not retain minimum support advance");
-                    } else {
-                        // Keep the converged analytic landing command. Copying the
-                        // measured pose here promoted residual hip/ankle motor lag into the
-                        // next equilibrium and made forward lean and toe pitch ratchet per
-                        // step. Tests 4-6 retain their already-validated physical capture.
-                        if (!continuousEnabled)
-                            capturePhysicalLocalPose(*swing);
-                        comp._physicalStepPlantPoseCaptured = true;
-                        comp._physicalStepSettleTime = 0.0f;
-                        if (continuousEnabled) {
-                        }
+                        // Finish this contact safely and stop; held input can start again
+                        // automatically once standing, without a mandatory key release.
+                        comp._gaitStopRequested = true;
+                        comp._gaitCancelMode = 2;
                     }
+                    if (!continuousEnabled)
+                        capturePhysicalLocalPose(*swing);
+                    const float impactSettlingDrift =
+                        comp._physicalStepPlantDrift;
+                    // First contact is not the final support pose: the sole can rock or
+                    // compress into place while plant acquisition verifies low velocity.
+                    // From here onward, measure true support sliding from that settled
+                    // plant instead of preserving the transient first-impact offset.
+                    comp._physicalStepTouchdownPlant = swingFoot;
+                    comp._physicalStepPlantDrift = 0.0f;
+                    if (continuousEnabled && impactSettlingDrift > 0.010f) {
+                        spdlog::info(
+                            "[LocomotionGait] LANDING_ANCHOR_REBASE "
+                            "impactSettleDrift={:.3f}m action=settled_plant",
+                            impactSettlingDrift);
+                    }
+                    comp._physicalStepPlantPoseCaptured = true;
+                    comp._physicalStepSettleTime = 0.0f;
+                    comp._gaitLandingVerificationPending = true;
+                    comp._gaitLandingStableTime = 0.0f;
+
+                    // Transfer and landing verification now run together. An early-return
+                    // cancellation has no new support foot, so it verifies in place and
+                    // enters the standing transition directly.
+                    if (comp._gaitCancelMode != 1 && transferEnabled)
+                        beginTransfer();
                 } else if (comp._physicalStepPhaseTime >= glm::max(
                                comp.plantAcquireTimeout, 0.20f)) {
                     spdlog::warn(
@@ -2314,113 +2765,19 @@
                         stanceContactNow ? "yes" : "no",
                         plantSpeed, maxAcquireSpeed,
                         comp._physicalStepPlantAcquireStableTime,
-                        glm::max(comp.plantAcquireDuration, 0.05f),
+                        cadencePlantAcquireTime,
                         comp._physicalStepForwardTravel, comp._physicalStepPlantDrift);
                     abortSequence("new plant did not settle before acquisition timeout");
                 }
             }
-            const bool locksOff = rag.locomotionFootLockWeights[0] <= 0.001f
-                               && rag.locomotionFootLockWeights[1] <= 0.001f
-                               && rag._locomotionFootLockForce[0] <= 0.5f
-                               && rag._locomotionFootLockForce[1] <= 0.5f;
-            const bool stablePlant = comp._physicalStepPlantPoseCaptured
-                && comp._physicalStepContactL && comp._physicalStepContactR
-                && glm::length(leftVelocity) < 0.15f
-                && glm::length(rightVelocity) < 0.15f
-                && horizontalSpeed < 0.15f
-                && comp._physicalStepStanceDrift <= 0.040f
-                && comp._physicalStepPlantDrift <= 0.040f
-                && tiltDeg < 30.0f
-                && std::abs(tiltDeg - comp._physicalStepInitialTilt) <= 10.0f
-                && !rag._locomotionSupportSaturated
-                && rag.locomotionLiftBone < 0
-                && rag._locomotionLiftForce <= 0.5f
-                && locksOff
-                && !comp._physicalStepMotorSaturated;
-            const bool stepDistanceValid = continuousEnabled
-                ? comp._gaitAchievedSupportAdvance + 0.0005f
-                    >= minimumSupportAdvance
-                : comp._physicalStepForwardTravel >= 0.149f;
-            comp._physicalStepSettleTime = stablePlant
-                ? comp._physicalStepSettleTime + dt : 0.0f;
-            if (comp._physicalStepSettleTime >= glm::max(
-                    comp.contactSettleDuration, 0.30f)) {
-                if (!stepDistanceValid) {
-                    if (continuousEnabled) {
-                        spdlog::warn(
-                            "[LocomotionGait] SUPPORT_ADVANCE_CHECK result=FAIL "
-                            "planned={:.3f} achieved={:.3f}/{:.3f} "
-                            "footTravel={:.3f} targetError={:.3f}",
-                            comp._gaitPlannedSupportAdvance,
-                            comp._gaitAchievedSupportAdvance,
-                            minimumSupportAdvance,
-                            comp._physicalStepForwardTravel,
-                            comp._physicalStepHorizontalTargetError);
-                        abortSequence(
-                            "settled step finished below minimum support advance");
-                    } else {
-                        abortSequence(
-                            "settled step finished below 15 cm forward travel");
-                    }
-                } else if (transferEnabled) {
-                    if (continuousEnabled) {
-                        const float settledLoss = glm::max(
-                            comp._gaitPlannedSupportAdvance
-                                - comp._gaitAchievedSupportAdvance,
-                            0.0f);
-                        comp._gaitSettledTrackingLoss = settledLoss
-                            > comp._gaitSettledTrackingLoss
-                            ? settledLoss
-                            : glm::mix(comp._gaitSettledTrackingLoss,
-                                       settledLoss, 0.25f);
-                        const float nextReserve = glm::min(glm::max(
-                            glm::min(glm::max(
-                                comp.footTargetTolerance * 0.5f,
-                                0.010f), 0.025f),
-                            comp._gaitSettledTrackingLoss + 0.003f),
-                            0.040f);
-                    }
-                    const float transferFraction = glm::clamp(
-                        comp.transferSupportBias, 0.70f, 1.0f);
-                    glm::vec3 comStart = rag._locomotionCOM;
-                    glm::vec3 newPlant = swingFoot;
-                    comStart.y = comp._physicalStepSupportTarget.y;
-                    newPlant.y = comp._physicalStepSupportTarget.y;
-                    comp._supportTransferTransferStartTarget = comp._physicalStepSupportTarget;
-                    const float forwardTransferFraction = continuousEnabled
-                        ? 0.50f : transferFraction;
-                    if (continuousEnabled) {
-                        glm::vec3 forwardSupportPoint = glm::mix(
-                            stanceFoot, swingFoot, forwardTransferFraction);
-                        forwardSupportPoint.y = comp._physicalStepSupportTarget.y;
-                        // Double support should finish with the COM centered fore/aft
-                        // between the planted feet. The following WEIGHT_SHIFT owns the
-                        // deliberate move toward the new stance foot before it unloads the
-                        // rear leg. Keeping these jobs separate prevents forward lean from
-                        // accumulating at every role swap.
-                        comp._supportTransferTransferEndTarget = comStart
-                            + comp._physicalStepRight * glm::dot(
-                                newPlant - comStart, comp._physicalStepRight)
-                                * transferFraction
-                            + comp._physicalStepForward * glm::dot(
-                                forwardSupportPoint - comStart,
-                                comp._physicalStepForward);
-                    } else {
-                        comp._supportTransferTransferEndTarget = glm::mix(
-                            comStart, newPlant, transferFraction);
-                    }
-                    comp._supportTransferTransferT = 0.0f;
-                    comp._supportTransferHoldStableTime = 0.0f;
-                    comp._supportTransferContactLossTime = 0.0f;
-                    comp._physicalStepPhase = kTransfer;
-                    comp._physicalStepPhaseTime = 0.0f;
-                } else {
-                    comp._physicalStepPhase = kComplete;
-                    comp._physicalStepPhaseTime = 0.0f;
-                }
+            if (comp._gaitCancelMode == 1
+                && comp._physicalStepPlantPoseCaptured
+                && comp._gaitLandingStableTime >= cadenceLandingVerifyTime) {
+                comp._gaitLandingVerificationPending = false;
+                beginStopping();
             }
         } else if (comp._physicalStepPhase == kTransfer) {
-            if (comp._physicalStepPhaseTime >= glm::max(comp.transferDuration, 0.05f)) {
+            if (comp._physicalStepPhaseTime >= cadenceTransferTime) {
                 comp._physicalStepPhase = kHold;
                 comp._physicalStepPhaseTime = 0.0f;
                 comp._supportTransferHoldStableTime = 0.0f;
@@ -2436,17 +2793,14 @@
             // The old support foot can become the next swing foot after transfer.
             const bool oldLegUnloaded = comp._supportTransferComToNewSupport + 0.020f
                                       < comp._supportTransferComToOldSupport;
-            if (continuousEnabled && oldLegUnloaded
-                && comp._physicalStepStanceDrift > 0.040f
-                && !comp._gaitOldSupportDriftAllowanceLogged) {
-                comp._gaitOldSupportDriftAllowanceLogged = true;
-            }
             const bool locksOff = rag.locomotionFootLockWeights[0] <= 0.001f
                                && rag.locomotionFootLockWeights[1] <= 0.001f
                                && rag._locomotionFootLockForce[0] <= 0.5f
                                && rag._locomotionFootLockForce[1] <= 0.5f;
-            const bool stableTransfer = comAtTarget && insideNewSupport
-                && oldLegUnloaded
+            // Geometry-only unload estimates are advisory in gameplay. The transfer target
+            // is authoritative; any unload deficit is fed into the next step's bounded
+            // transfer-bias correction instead of terminating an otherwise stable gait.
+            const bool stableTransfer = comAtTarget
                 && swingContactNow && stanceContactNow
                 && glm::length(leftVelocity) < 0.15f
                 && glm::length(rightVelocity) < 0.15f
@@ -2462,8 +2816,25 @@
             comp._supportTransferHoldStableTime = stableTransfer
                 ? comp._supportTransferHoldStableTime + dt : 0.0f;
 
-            if (comp._supportTransferHoldStableTime >= glm::max(
-                    comp.transferHoldDuration, 0.50f)) {
+            const bool landingVerified = !comp._gaitLandingVerificationPending
+                || comp._gaitLandingStableTime >= cadenceLandingVerifyTime;
+            if (landingVerified
+                && comp._supportTransferHoldStableTime
+                    >= cadenceTransferHoldTime) {
+                comp._gaitLandingVerificationPending = false;
+                if (comp._gaitCancelMode == 0)
+                    updateGaitAdaptation();
+                if (continuousEnabled) {
+                    const float settledLoss = glm::max(
+                        comp._gaitPlannedSupportAdvance
+                            - comp._gaitAchievedSupportAdvance,
+                        0.0f);
+                    comp._gaitSettledTrackingLoss = settledLoss
+                        > comp._gaitSettledTrackingLoss
+                        ? settledLoss
+                        : glm::mix(comp._gaitSettledTrackingLoss,
+                                   settledLoss, 0.25f);
+                }
                 if (multiStepEnabled) {
                     if (continuousEnabled) {
                         comp._stepSequenceStepsCompleted = comp._stepSequenceStepIndex;
@@ -2493,34 +2864,19 @@
                         const bool shouldStop = comp._gaitStopRequested;
 
                         if (shouldStop) {
-                            capturePhysicalLocalPose(*swing);
-                            capturePhysicalLocalPose(*stance);
-                            comp._gaitStopStartTarget = comp._physicalStepSupportTarget;
-                            comp._gaitStopEndTarget = comp._gaitStopStartTarget;
-                            // Capture immutable sole references for shutdown drift reporting.
-                            // They are measurements only and never become force targets.
-                            comp._gaitStopFootTargetL = leftFoot;
-                            comp._gaitStopFootTargetR = rightFoot;
-                            comp._gaitStopFootDriftL = 0.0f;
-                            comp._gaitStopFootDriftR = 0.0f;
-                            comp._gaitStopMaxFootDrift = 0.0f;
-                            comp._gaitStopSettleFootDriftL = 0.0f;
-                            comp._gaitStopSettleFootDriftR = 0.0f;
-                            comp._gaitStopMaxSettleFootDrift = 0.0f;
-                            comp._gaitStopSettleReferenceValid = false;
-                            comp._gaitStopStableTime = 0.0f;
-                            comp._physicalStepPhase = kStopping;
-                            comp._physicalStepPhaseTime = 0.0f;
+                            beginStopping();
                         } else {
                             comp._physicalStepPhase = kInterStep;
                             comp._physicalStepPhaseTime = 0.0f;
                             comp._stepSequenceInterStepStableTime = 0.0f;
                             comp._gaitInterStepRecenterStart =
                                 comp._physicalStepSupportTarget;
+                            // TRANSFER already established the next stable support point.
+                            // Re-centering to the sole midpoint here pulled the character
+                            // backward after every successful step. Hold that achieved
+                            // world-space target while the next role swap is admitted.
                             comp._gaitInterStepRecenterTarget =
-                                0.5f * (leftFoot + rightFoot);
-                            comp._gaitInterStepRecenterTarget.y =
-                                comp._physicalStepSupportTarget.y;
+                                comp._physicalStepSupportTarget;
                             comp._gaitInterStepRecenterT = 0.0f;
                             comp._gaitInterStepCenterError =
                                 horizontalDistance(
@@ -2568,7 +2924,7 @@
                 }
             } else if (comp._physicalStepPhaseTime >= glm::max(
                            comp.transferTimeout,
-                           glm::max(comp.transferHoldDuration, 0.50f))) {
+                           cadenceTransferHoldTime)) {
                 spdlog::warn(
                     "[LocomotionGait] TRANSFER_CHECK result=FAIL "
                     "COMerr={:.3f}/{:.3f}[{}] newRegion={:.3f}/{:.3f}[{}] "
@@ -2590,7 +2946,7 @@
                     rag._locomotionSupportSaturated ? "YES" : "no",
                     comp._physicalStepMotorSaturated ? "YES" : "no",
                     comp._supportTransferHoldStableTime,
-                    glm::max(comp.transferHoldDuration, 0.50f));
+                    cadenceTransferHoldTime);
                 abortSequence("support transfer did not settle before hold timeout");
             }
         } else if (comp._physicalStepPhase == kInterStep) {
@@ -2620,8 +2976,7 @@
                 && !comp._physicalStepMotorSaturated;
             comp._stepSequenceInterStepStableTime = interStepReady
                 ? comp._stepSequenceInterStepStableTime + dt : 0.0f;
-            if (comp._stepSequenceInterStepStableTime >= glm::max(
-                    comp.interStepDuration, 0.10f)) {
+            if (comp._stepSequenceInterStepStableTime >= cadenceInterStepTime) {
                 const float completedPlannedAdvance =
                     comp._gaitPlannedSupportAdvance;
                 const float completedAchievedAdvance =
@@ -2665,6 +3020,9 @@
                 comp._gaitIkPlanHipValid = false;
                 comp._gaitReachClampedStep = false;
                 comp._gaitOldSupportDriftAllowanceLogged = false;
+                comp._gaitCancelMode = 0;
+                comp._gaitLandingVerificationPending = false;
+                comp._gaitLandingStableTime = 0.0f;
                 comp._physicalStepInitialTilt = tiltDeg;
                 comp._physicalStepPeakTilt = tiltDeg;
                 comp._physicalStepFinalTilt = tiltDeg;
@@ -2696,7 +3054,8 @@
                         comp._gaitReachCommandCeiling,
                         minimumCommand, maximumStep);
                     const float speedFeedbackTarget = glm::clamp(
-                        comp.gaitNominalAdvance + comp.gaitPlacementGain
+                        comp.gaitNominalAdvance + comp._gaitAdaptiveStrideOffset
+                            + comp.gaitPlacementGain
                             * (continuousCommand.desiredSpeed
                                - comp._gaitMeasuredSpeed),
                         minimumCommand, maximumStep);
@@ -2767,7 +3126,7 @@
                         rag._locomotionHeadingSaturated ? "YES" : "no",
                         comp._physicalStepMotorSaturated ? "YES" : "no",
                         comp._stepSequenceInterStepStableTime,
-                        glm::max(comp.interStepDuration, 0.10f),
+                        cadenceInterStepTime,
                         comp._gaitInterStepRecenterT,
                         comp._gaitInterStepCenterError,
                         recenterReady ? "yes" : "NO");
@@ -2871,9 +3230,16 @@
                 const int completed = comp._stepSequenceStepsCompleted;
                 const int edgeTotal = comp._stepSequenceContactTransitionsL
                                     + comp._stepSequenceContactTransitionsR;
-                const bool edgeCountOk = edgeTotal == 2 * completed
+                const bool completedEdgeCountOk = edgeTotal == 2 * completed
+                    && std::abs(comp._stepSequenceContactTransitionsL
+                               - comp._stepSequenceContactTransitionsR) <= 2;
+                const bool cancelledReturnEdgeCountOk =
+                    comp._gaitCancelMode == 1
+                    && edgeTotal == 2 * completed + 2
                     && std::abs(comp._stepSequenceContactTransitionsL
                               - comp._stepSequenceContactTransitionsR) <= 2;
+                const bool edgeCountOk = completedEdgeCountOk
+                    || cancelledReturnEdgeCountOk;
                 const bool lengthConverged = completed < 3
                     || std::abs(comp._gaitLastSupportAdvance
                               - comp._gaitPreviousSupportAdvance) <= 0.030f;
@@ -2883,24 +3249,51 @@
                 const float totalForward = glm::dot(
                     rag._locomotionCOM - comp._gaitStartCom,
                     comp._physicalStepForward);
-                const bool boundsOk = comp._gaitMaxDrift <= 0.040f
-                    && comp._gaitStopMaxSettleFootDrift <= 0.040f
-                    && comp._gaitPeakTilt < 30.0f
-                    && comp._gaitMaxMotorRatio <= 1.0f;
-                const bool pass = edgeCountOk
-                    && lengthConverged && periodConverged
-                    && boundsOk && standingSettled;
+                const bool currentStopSafe =
+                    comp._gaitStopSettleReferenceValid
+                    && comp._gaitStopMaxSettleFootDrift <= 0.040f;
+                // Historical peaks, edge counts, and convergence remain regression
+                // diagnostics. Active-phase guards already handle real loss of contact,
+                // support, or upright stability; a safely settled recovery must not be
+                // converted back into an abort by the error that requested recovery.
+                const bool pass = currentStopSafe && standingSettled;
+                const bool adaptiveRecovery =
+                    comp._gaitAdaptiveStopRequested;
                 comp._gaitRunning = false;
                 if (pass) {
                     comp._physicalStepPhase = kIdle;
                     comp._physicalStepPhaseTime = 0.0f;
                     comp._physicalStepSupportSide = 0;
                     comp._gaitStopRequested = false;
+                    comp._gaitAdaptiveStopRequested = false;
+                    comp._gaitRecoveryFailureSteps = 0;
+                    comp._gaitStress *= 0.50f;
                     spdlog::info(
                         "[LocoRuntime] STOP_COMPLETE steps={} time={:.2f}s "
-                        "forward={:.3f} finalTilt={:.1f} ready=IDLE",
-                        completed, comp._gaitRunTime, totalForward, tiltDeg);
+                        "forward={:.3f} finalTilt={:.1f} recovery={} "
+                        "stopSettleDrift={:.3f}m diagnostics=(edges={},length={},"
+                        "period={},historyDrift={:.3f}m,historyTilt={:.1f},"
+                        "historyMotor={:.2f}) ready=IDLE",
+                        completed, comp._gaitRunTime, totalForward, tiltDeg,
+                        adaptiveRecovery ? "adaptive" : "commanded",
+                        comp._gaitStopMaxSettleFootDrift,
+                        edgeCountOk ? "ok" : "mismatch",
+                        lengthConverged ? "ok" : "variable",
+                        periodConverged ? "ok" : "variable",
+                        comp._gaitMaxDrift,
+                        comp._gaitPeakTilt,
+                        comp._gaitMaxMotorRatio);
                 } else {
+                    spdlog::warn(
+                        "[LocomotionGait] STOP_COMPLETION_CHECK result=FAIL "
+                        "standing={} settleReference={} stopSettleDrift={:.3f}/0.040m "
+                        "history=(drift={:.3f}m,tilt={:.1f},motor={:.2f})",
+                        standingSettled ? "yes" : "NO",
+                        comp._gaitStopSettleReferenceValid ? "yes" : "NO",
+                        comp._gaitStopMaxSettleFootDrift,
+                        comp._gaitMaxDrift,
+                        comp._gaitPeakTilt,
+                        comp._gaitMaxMotorRatio);
                     abortSequence("continuous-gait completion check failed");
                 }
             } else if (comp._physicalStepPhaseTime >= 3.0f) {
