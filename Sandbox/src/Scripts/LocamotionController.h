@@ -149,6 +149,7 @@ struct LocamotionControllerComponent
         float groundOffset = 0.06f;
         float lockWeight = 0.0f;
         bool commandValid = false;
+        bool plantSolveValid = false;
         glm::quat hipCommand { 1, 0, 0, 0 };
         glm::quat kneeCommand { 1, 0, 0, 0 };
         glm::quat ankleCommand { 1, 0, 0, 0 };
@@ -300,6 +301,9 @@ struct LocamotionControllerComponent
     float _gaitFootTargetSpeed = 0.0f;
     float _gaitSoleLevelBlend = 0.0f;
     float _gaitSoleAngularErrorDeg = 0.0f;
+    float _gaitPlantPreviousDrift = 0.0f;
+    float _gaitPlantDriftRate = 0.0f;
+    bool _gaitPlantRecoveryLogged = false;
     float _gaitInterStepRecenterT = 0.0f;
     float _gaitInterStepCenterError = 0.0f;
     float _gaitRootPitchRate = 0.0f;
@@ -318,10 +322,29 @@ struct LocamotionControllerComponent
     bool _gaitLandingVerificationPending = false;
     float _gaitLandingStableTime = 0.0f;
     bool _gaitStopSettleReferenceValid = false;
+    // Once the first transfer has established a real support foot, subsequent steps keep
+    // one continuous support target and bypass the stop/recenter/weight-shift reset.
+    bool _gaitContinuousCycle = false;
+    bool _gaitBypassWeightShift = false;
+    float _gaitNewSupportLoad = 0.0f;
+    glm::vec3 _gaitCycleSupportTarget { 0.0f };
+    // One velocity-continuous pelvis/support command spans late swing, touchdown,
+    // transfer, and the following takeoff. FSM phases only validate that motion.
+    bool _gaitSupportCurveActive = false;
+    int _gaitSupportCurveStep = -1;
+    float _gaitSupportCurveTime = 0.0f;
+    float _gaitSupportCurveDuration = 0.0f;
+    glm::vec3 _gaitSupportCurveStart { 0.0f };
+    glm::vec3 _gaitSupportCurveEnd { 0.0f };
+    glm::vec3 _gaitSupportCurveStartVelocity { 0.0f };
+    glm::vec3 _gaitSupportCurveEndVelocity { 0.0f };
+    glm::vec3 _gaitSupportCommandVelocity { 0.0f };
     // True while the physical gait owns the walking pose.
     bool _gaitEnabled = false;
     bool _runtimeWalkIntent = false;
     bool _runtimeRestartBlocked = false;
+    int _runtimeAutoRetryCount = 0;
+    float _runtimeRecoveryCooldown = 0.0f;
     bool _runtimeTurnActive = false;
     int _runtimeNextSupportSide = -1;
     float _runtimeTurnElapsed = 0.0f;
@@ -627,8 +650,13 @@ public:
             comp._runtimeWalkIntent = comp._runtimeWalkIntent
                 ? speed > stopSpeed : speed > startSpeed;
             const bool wantsToWalk = comp._runtimeWalkIntent;
-            if (!wantsToWalk)
+            comp._runtimeRecoveryCooldown = glm::max(
+                comp._runtimeRecoveryCooldown - dt, 0.0f);
+            if (!wantsToWalk) {
                 comp._runtimeRestartBlocked = false;
+                comp._runtimeAutoRetryCount = 0;
+                comp._runtimeRecoveryCooldown = 0.0f;
+            }
 
             const Diamond::Locomotion::GaitCommand gaitCommand =
                 BuildRuntimeGaitCommand(
@@ -704,12 +732,17 @@ public:
                 if (_debugTimer >= 0.5f) {
                     _debugTimer = 0.0f;
                     spdlog::debug(
-                        "[Locomotion] phase={} running={} stop={} steps={} "
+                        "[Locomotion] phase={} phaseTime={:.2f}s trajectory={:.2f} "
+                        "running={} stop={} steps={} stepPeriod={:.2f}s speed={:.3f}m/s "
                         "headingError={:+.1f}deg tilt={:.1f}deg",
                         comp._physicalStepPhase,
+                        comp._physicalStepPhaseTime,
+                        comp._physicalStepTrajectoryT,
                         comp._gaitRunning ? "yes" : "no",
                         comp._gaitStopRequested ? "yes" : "no",
                         comp._stepSequenceStepsCompleted,
+                        comp._gaitLastStepPeriod,
+                        comp._gaitMeasuredSpeed,
                         comp._gaitHeadingErrorDeg,
                         tiltDeg);
                 }
@@ -737,7 +770,8 @@ private:
                         glm::normalize(comp._runtimeDesiredForward))
                 < std::cos(glm::radians(5.0f));
         command.startRequested = wantsToWalk && !comp._gaitRunning
-            && !comp._runtimeRestartBlocked;
+            && !comp._runtimeRestartBlocked
+            && comp._runtimeRecoveryCooldown <= 0.0f;
         command.stopRequested = comp._gaitRunning
             && (!wantsToWalk || directionChanged);
         command.initialSupportSide = comp._runtimeNextSupportSide;
@@ -764,6 +798,8 @@ private:
         c._poseBlend = 0.0f;
         c._runtimeWalkIntent = false;
         c._runtimeRestartBlocked = false;
+        c._runtimeAutoRetryCount = 0;
+        c._runtimeRecoveryCooldown = 0.0f;
         c._runtimeTurnActive = false;
         c._runtimeNextSupportSide = -1;
         c._runtimeTurnElapsed = 0.0f;
