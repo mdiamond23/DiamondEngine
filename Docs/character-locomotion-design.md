@@ -924,6 +924,188 @@ demonstrates that neither a fixed COM endpoint nor a low total-foot-speed requir
 completion signal for a continuously correcting plant. The implementation is restored to the
 fifth-slice behavior pending a handoff design that does not introduce another stop condition.
 
+**2026-08-03 boundary review: swing landmark discontinuity corrected.** The latest compact phase log
+contained one genuine two-step handoff followed by a third-plant failure. Across that window the
+one-frame desired-foot change at `SWING -> ARRIVAL` grew from 2.8 cm to 6.3 cm to 8.6 cm, incoming
+touchdown load rose from roughly 21 percent to 32 percent, and the third plant slid 3.9 cm before
+acquisition timed out. The cause was an implementation mismatch in the nominal unified trajectory:
+the swing evaluated `trajectoryPoint(0.70)`, then the transition frame replaced it with
+`hoverTarget`, whose horizontal position was already the final foothold; `ARRIVAL` returned to
+`trajectoryPoint(0.70)` on the next frame. This forward/back target impulse also entered the
+task-space velocity-lead term immediately before descent. The transition now retains
+`trajectoryPoint(0.70)`, preserving the intended horizontal continuation into descent. Plant
+acquisition timeout output also reports the previously hidden loaded-sole predicate, so a level-angle
+miss can no longer appear as a failure where every printed gate passed.
+
+The same run exposed a separate `HOLD` timing race. Three transfer failures had 97-100 percent
+new-foot load, both contacts, 0.056-0.075 m/s COM speed, 1.2-2.2 degree tilt, and no support or motor
+saturation. They failed the COM predicate because it still referenced the Hermite curve's static
+endpoint even though the controller intentionally continued the support command beyond that point.
+`HOLD` completion now measures COM tracking error against the live support command. The fixed
+endpoint and new-foot radius remain diagnostic, while contact, 68-percent load ownership, sole
+alignment, plant drift, bounded motion, tilt, lift release, lock ownership, and saturation remain
+mandatory gates. This removes dependence on landing verification becoming ready during the brief
+instant that the moving COM crosses an obsolete point.
+
+The immediate validation is the same short held-forward run in the compact log format. A passing
+run should show a near-frame-scale `targetStep.foot` at both `SWING -> ARRIVAL` and
+`ARRIVAL -> DESCENT`, rather than a stride-scaled jump; plant recovery should then converge below
+3 cm with non-growing drift through at least six real `INTER_STEP` role swaps. Support-curve and
+plant thresholds remain unchanged for this check.
+
+The support-command ceiling is now the serialized inspector property
+`gaitSupportMaxSpeed`, with a compatibility default of 0.30 m/s. `CharacterTest.scene` uses
+0.15 m/s for the next diagnostic run; the cap applies to curve entry, plant acquisition, and the
+post-acquisition transfer ramp.
+
+**2026-08-03 staged touchdown transfer.** The first run under the 0.15 m/s diagnostic cap produced
+seven support curves, three completed handoffs, and four plant-acquisition timeouts, with no
+transfer, stance-drift, or touchdown failures. Completed handoffs left `HOLD` at 0.047-0.095 m/s,
+confirming that the cap removed the previous 0.21-0.30 m/s handoff escalation. It did not remove the
+root contact problem: every touchdown still entered `PLANT_RECOVERY`, and the visible standing
+interruptions remained the 0.6-second acquisition timeout followed by `ABORT -> IDLE` auto-retry.
+
+Touchdown therefore no longer re-targets the support curve directly to the full new-foot handoff.
+It C1-reseeds from the live command toward 20 percent of the remaining current-to-plant span while
+the incoming sole proves stable. Successful acquisition performs a second C1 re-seed from that exact
+position and velocity to the ordinary full transfer target. A plant already within 2.5 cm, with a
+level sole, low foot speed, both contacts, and drift growth no greater than 0.05 m/s receives up to
+0.20 seconds of bounded grace instead of a whole-body abort; unsafe or worsening plants retain the
+base timeout. `SUPPORT_CURVE_ACQUIRED` and `PLANT_ACQUIRE_GRACE` expose both decisions, and failure
+logs now identify the incoming foot explicitly.
+
+The 0.15 m/s scene value is a temporary stability envelope, not the intended gait-speed ceiling.
+The component default remains 0.30 m/s, the staged transfer preserves nonzero velocity at both
+boundaries, and later speed/turning work can raise the scene cap without removing the touchdown
+stability state.
+
+**2026-08-03 contact-pivot plant correction.** The staged-transfer run made the remaining invariant
+visible: six first plants acquired, four reached a real handoff, but no second plant acquired. The
+five failures covered both incoming feet, ruling out a left-only calibration fault. Failed second
+plants had support command speed as low as 0.03 m/s, while the foot body reached 0.18-0.20 m/s,
+translated about 4 cm, and rolled to 13-16 degrees. Their touchdown contact was repeatedly near
+`+/-0.11 m` on the sole's long edge, matching the box half-extent. Every landing entering
+`PLANT_RECOVERY` was therefore consistent with the controller counting the center translation
+required to rock an edge contact flat as plant slip.
+
+Touchdown now captures one immutable world contact point and its foot-local material coordinate.
+Plant drift measures motion of that material point rather than motion of the rigid body's center.
+During planted-leg sole leveling, IK derives the compatible foot-center target around the contact
+pivot and applies restoring correction to pivot error; it no longer commands both a fixed center
+and a fixed edge while changing orientation. The derived level-center target persists when the new
+plant becomes the next stance foot. New `TOUCHDOWN_ANCHOR`, `anchorDrift`, and `centerTravel`
+diagnostics distinguish real patch slip from the expected center compensation.
+
+The same run exposed two unrelated commanded stops at 5.9/6.0 cm and 5.1/6.0 cm achieved advance.
+Landing advance now has 1 cm of hysteresis, matching the scale of accepted physical tracking error,
+and logs when that margin preserves continuation. Truly short landings still request the bounded
+standing recovery.
+
+**2026-08-03 trend-aware acquisition and retry recovery.** The first contact-pivot validation
+completed ten full handoffs and reached touchdown on step eleven. The eleventh plant retained both
+contacts, safe foot speed, a 6.8-degree sole, and only 2.5 cm of anchor drift, but its filtered drift
+growth of 0.058 m/s narrowly missed the former 0.050 m/s grace predicate. A later failed plant was
+already stationary at 0.009 m/s with -0.001 m/s drift growth, but remained 3.6 cm from its immutable
+first-impact patch. One separate 4.0 cm plant was still growing at 0.096 m/s and remained a genuine
+slip. The correction system was active in all three cases; the remaining problem was classifying
+its outcome at the fixed timeout.
+
+The strict acquisition proof remains unchanged at no more than 3 cm of anchor drift and no more
+than 0.02 m/s outward growth for the complete stable interval. Safe plants within 3 cm may now use
+the existing 0.20-second grace while growth is no greater than 0.08 m/s, giving bounded correction
+time to a converging near-miss without declaring it stable early. A plant between 3 and 4 cm may
+capture one fresh contact anchor only after both contacts remain present, the sole is level, foot
+speed is at most 0.03 m/s, and absolute drift growth is at most 0.01 m/s for 0.10 seconds. This
+one-time rebase recognizes a new stationary contact patch; it cannot ratchet repeatedly through a
+slide. A plant beyond 4 cm and still growing faster than 0.05 m/s must remain in that state for
+0.18 seconds before the emergency guard aborts. This persistence distinguishes an ordinary
+first-impact excursion from a slide that correction is not arresting.
+
+Plant correction still uses the validated 65-percent restoring bias and 2 cm cap. Acquisition,
+recovery, rebase, and failure logs now report peak requested/applied correction and whether that cap
+was reached, so correction authority can be raised later only from measured saturation evidence.
+Automatic retries also retain the 0.35-second cooldown but now require 0.25 seconds of stable double
+support after the abort has completed and the FSM has entered `IDLE` before held movement can start
+another gait. `AUTO_RETRY_READY` exposes that proof. Stability accumulated while the abort pose was
+still active no longer permits a next-frame `IDLE -> WEIGHT_SHIFT` restart. The scene's temporary
+0.15 m/s support cap is unchanged.
+
+**2026-08-03 two-stage plant-anchor ownership.** The trend-aware run reached nine steps, but the
+incoming feet became visibly wobblier over the sequence. The log showed a strong signature on the
+right plants: requested pivot corrections repeatedly reached roughly 2.5-3.0 cm and saturated at
+the 2 cm safety cap, while the collision-local contact on one failed plant moved from approximately
+`+0.10 m` to `-0.11 m` along the sole. The rigid body retained contact and the character remained
+upright; the controller was fighting an obsolete first-impact edge after the load-bearing patch had
+migrated across the rolling sole. A separate transfer reached the 68-percent load boundary but lost
+its stable window to a very small projection fluctuation.
+
+Plant ownership is now explicitly two-stage. The first-impact material point remains authoritative
+only during initial rocking. Contact-local migration begins fading that pivot's position and
+restoring authority between 3 and 8 cm, preventing heel/toe manifold changes from injecting more
+rocking. Once both feet remain in contact and the incoming sole stays within 8 degrees, below
+0.75 rad/s angular speed, and below 0.12 m/s horizontal speed for 0.08 seconds, the controller
+captures the measured sole center. It blends from the pivot-compatible center to that frozen center
+over 0.09 seconds, then measures and corrects center drift for the rest of support. This is an
+ownership handoff rather than a moving rebase: the center target is captured once and cannot chase
+a sliding foot. `PLANT_CONTACT_MIGRATION` and `PLANT_ANCHOR_HANDOFF` expose the transition and its
+measured quiet conditions.
+
+The COM projection used as the load-bearing proxy now has hysteresis. New-support ownership latches
+at 0.68 and remains valid until the projection falls below 0.64, including through `INTER_STEP`.
+`SUPPORT_LOAD_LATCH` records acquire/release edges. The 65-percent planted correction gain, 2 cm
+correction cap, strict acquisition limits, emergency slip guard, and temporary 0.15 m/s support
+speed envelope remain unchanged, isolating this test to anchor ownership and load-gate chatter.
+
+**2026-08-03 anchor-handoff blocker telemetry.** The first two-stage validation showed that the
+feature was not applied symmetrically: all four left plants reached `PLANT_ANCHOR_HANDOFF`, while
+none of five right plants did. Every right plant remained under impact-pivot ownership, repeatedly
+reached the 2 cm correction cap, and step nine eventually aborted at 4 cm of new-support drift.
+The load latch acquired cleanly on each completed transfer and did not explain that failure. One
+right contact also migrated 0.254 m in foot-local space immediately before transfer, confirming a
+collision-manifold flip but not whether pitch rocking, threshold chatter, or controller-induced
+translation prevented the 0.08-second quiet proof.
+
+`PLANT_ANCHOR_TRACE` now samples each pivot-owned `SETTLE` at 0.10-second intervals. It records all
+four handoff gates, current and maximum contiguous quiet time, heading-relative pitch/roll/yaw
+angular velocity, forward/lateral/vertical foot velocity, pivot and center error components,
+contact-local migration, support-command velocity, and correction saturation. Handoff, acquisition,
+and transfer-abort summaries also report cumulative time blocked by contact, sole angle, angular
+speed, and linear speed. These signals are diagnostic only; no quiet threshold or correction
+authority changed.
+
+The same run exposed a separate deterministic deadline error. A left center handoff occurred at
+0.623 seconds, reset the acquisition proof as required by the new drift invariant, and then aborted
+at 0.663 seconds against the original 0.600-second timeout despite only 4 mm of center drift. A
+handoff now receives a bounded post-transition deadline of its required stable proof plus 0.06
+seconds. This prevents the ownership transition itself from guaranteeing failure while leaving the
+ordinary and recoverable acquisition deadlines unchanged.
+
+**2026-08-03 correction-overload pivot release.** The blocker telemetry separated the remaining
+right-foot wobble from general gait instability. The validation completed 20 steps before failing
+on right step 21. Ordinary right plants repeatedly commanded the full 2 cm pivot correction while
+the foot reversed between roughly 0.2-0.4 m/s translation and 2-4 rad/s rotation. By contrast,
+right steps 7 and 15 experienced large collision-contact migration, which naturally faded pivot
+authority; their correction peaks stayed near 2-3 mm, the feet quieted, and center handoff
+succeeded. Left plants were generally quiet without needing that release. The support command was
+only about 0.03-0.07 m/s, so increasing support damping or permanently reducing gait speed would
+not address the measured excitation source.
+
+The controller now treats sustained correction saturation plus excessive planted-foot motion as a
+failed ownership mode rather than a request for more authority. If the correction is at its 2 cm
+cap while horizontal motion exceeds 0.12 m/s or angular motion exceeds 0.75 rad/s for 0.032 seconds,
+it latches a side-neutral pivot release. Over 0.06 seconds, the same smooth weight fades both the
+impact-pivot position target and its restoring correction to passive measured-foot ownership. The
+normal 0.08-second quiet proof then captures the sole center. Once this recovery has latched,
+support acquisition and transfer cannot proceed until that center handoff is complete; the nearby
+settled-contact rebase is also disabled so it cannot restore obsolete pivot ownership.
+
+`PLANT_PIVOT_RELEASE` records the correction and motion that caused the latch. `PLANT_ANCHOR_TRACE`
+now includes per-frame correction demand, cap state, trigger duration, and release weight, while
+handoff, acquisition, and acquisition-failure summaries identify recovery-release ownership. The
+existing contact requirements, 8-degree sole gate, 4 cm persistent-slip abort, 30-degree tilt abort,
+65-percent correction gain, 2 cm correction cap, and temporary 0.15 m/s support-speed test envelope
+remain unchanged.
+
 ## Relationship to SIMBICON
 
 Keep from the paper:

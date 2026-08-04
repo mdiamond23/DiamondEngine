@@ -6,6 +6,7 @@
         c._physicalStepContactL = c._physicalStepContactR = false;
         c._physicalStepPrevSwingContact = false;
         c._physicalStepTouchdownAccepted = false;
+        c._physicalStepTouchdownContactValid = false;
         c._physicalStepAborted = false;
         c._physicalStepTime = 0.0f;
         c._physicalStepSettleTime = 0.0f;
@@ -18,6 +19,28 @@
         c._physicalStepArrivalStableTime = 0.0f;
         c._physicalStepReachLimit = 0.0f;
         c._physicalStepPlantAcquireStableTime = 0.0f;
+        c._physicalStepPlantSettledOffsetTime = 0.0f;
+        c._physicalStepPlantUnsafeTime = 0.0f;
+        c._physicalStepPlantAnchorRebased = false;
+        c._physicalStepPlantCenterAnchorActive = false;
+        c._physicalStepPlantContactMigrationLogged = false;
+        c._physicalStepPlantPivotReleaseLatched = false;
+        c._physicalStepPlantPivotStableTime = 0.0f;
+        c._physicalStepPlantPivotMaxStableTime = 0.0f;
+        c._physicalStepPlantPivotReleaseTriggerTime = 0.0f;
+        c._physicalStepPlantPivotReleaseTime = 0.0f;
+        c._physicalStepPlantPivotReleaseWeight = 0.0f;
+        c._physicalStepPlantCenterBlendTime = 0.0f;
+        c._physicalStepPlantAnchorTelemetryTime = 0.0f;
+        c._physicalStepPlantAnchorHandoffPhaseTime = -1.0f;
+        c._physicalStepPlantPivotContactBlockedTime = 0.0f;
+        c._physicalStepPlantPivotSoleBlockedTime = 0.0f;
+        c._physicalStepPlantPivotAngularBlockedTime = 0.0f;
+        c._physicalStepPlantPivotLinearBlockedTime = 0.0f;
+        c._physicalStepPlantContactMigration = 0.0f;
+        c._physicalStepPlantAngularSpeed = 0.0f;
+        c._physicalStepPlantCenterAnchorStart = glm::vec3(0.0f);
+        c._physicalStepPlantCenterAnchorTarget = glm::vec3(0.0f);
         c._physicalStepTrajectoryT = 0.0f;
         c._physicalStepClearance = 0.0f;
         c._physicalStepForwardTravel = 0.0f;
@@ -28,6 +51,7 @@
         c._physicalStepVerticalTargetError = 0.0f;
         c._physicalStepTouchdownVy = 0.0f;
         c._physicalStepTouchdownNormalY = 0.0f;
+        c._physicalStepPlantCenterTravel = 0.0f;
         c._physicalStepStanceDrift = c._physicalStepPlantDrift = 0.0f;
         c._physicalStepMaxStanceDrift = c._physicalStepMaxPlantDrift = 0.0f;
         c._physicalStepInitialTilt = c._physicalStepPeakTilt = c._physicalStepFinalTilt = 0.0f;
@@ -44,6 +68,8 @@
         c._physicalStepFoothold = glm::vec3(0.0f);
         c._physicalStepDesiredFoot = glm::vec3(0.0f);
         c._physicalStepTouchdownPlant = glm::vec3(0.0f);
+        c._physicalStepTouchdownContactWorld = glm::vec3(0.0f);
+        c._physicalStepTouchdownContactLocal = glm::vec3(0.0f);
         c._physicalStepApiVelocity = glm::vec3(0.0f);
         c._physicalStepMeasuredVelocity = glm::vec3(0.0f);
         c._physicalStepPreviousSwingFoot = glm::vec3(0.0f);
@@ -154,6 +180,12 @@
         c._gaitPlantPreviousDrift = 0.0f;
         c._gaitPlantDriftRate = 0.0f;
         c._gaitPlantRecoveryLogged = false;
+        c._gaitPlantCorrectionPeakRequested = 0.0f;
+        c._gaitPlantCorrectionPeakApplied = 0.0f;
+        c._gaitPlantCorrectionSaturated = false;
+        c._gaitPlantCorrectionRequested = 0.0f;
+        c._gaitPlantCorrectionApplied = 0.0f;
+        c._gaitPlantCorrectionAtLimit = false;
         c._gaitInterStepRecenterT = 0.0f;
         c._gaitInterStepCenterError = 0.0f;
         c._gaitRootPitchRate = 0.0f;
@@ -173,6 +205,7 @@
         c._gaitContinuousCycle = false;
         c._gaitBypassWeightShift = false;
         c._gaitNewSupportLoad = 0.0f;
+        c._gaitNewSupportLoadLatched = false;
         c._gaitCycleSupportTarget = glm::vec3(0.0f);
         c._gaitSupportCurveActive = false;
         c._gaitSupportCurveStep = -1;
@@ -627,6 +660,31 @@
             && glm::length(rightVelocity) < 0.15f
             && horizontalSpeed < 0.15f
             && tiltDeg < 15.0f;
+        if (gameplayCommand && comp._physicalStepPhase == kIdle
+            && !comp._gaitRunning
+            && !comp._runtimeRestartBlocked
+            && comp._runtimeAutoRetryCount > 0) {
+            constexpr float kRetryStableTime = 0.25f;
+            const float previousStableTime = comp._runtimeRecoveryStableTime;
+            comp._runtimeRecoveryStableTime = settledStanding
+                ? comp._runtimeRecoveryStableTime + dt : 0.0f;
+            if (previousStableTime < kRetryStableTime
+                && comp._runtimeRecoveryStableTime >= kRetryStableTime) {
+                spdlog::info(
+                    "[LocoRuntime] AUTO_RETRY_READY attempt={} stable={:.3f}s "
+                    "contact=({},{}) speed=(L={:.3f},R={:.3f},root={:.3f}) "
+                    "tilt={:.1f} phase=IDLE action=resume-held-intent",
+                    comp._runtimeAutoRetryCount,
+                    comp._runtimeRecoveryStableTime,
+                    comp._physicalStepContactL ? "L" : "-",
+                    comp._physicalStepContactR ? "R" : "-",
+                    glm::length(leftVelocity),
+                    glm::length(rightVelocity),
+                    horizontalSpeed, tiltDeg);
+            }
+        } else {
+            comp._runtimeRecoveryStableTime = 0.0f;
+        }
 
         auto makeHorizontalBasis = [](glm::vec3& right, glm::vec3& forward) {
             constexpr float basisEpsilon = 1e-8f;
@@ -909,11 +967,41 @@
                 comp._gaitPlannedSupportAdvance = 0.0f;
                 comp._gaitAchievedSupportAdvance = 0.0f;
                 comp._physicalStepPlantAcquireStableTime = 0.0f;
+                comp._physicalStepPlantSettledOffsetTime = 0.0f;
+                comp._physicalStepPlantUnsafeTime = 0.0f;
+                comp._physicalStepPlantAnchorRebased = false;
+                comp._physicalStepPlantCenterAnchorActive = false;
+                comp._physicalStepPlantContactMigrationLogged = false;
+                comp._physicalStepPlantPivotReleaseLatched = false;
+                comp._physicalStepPlantPivotStableTime = 0.0f;
+                comp._physicalStepPlantPivotMaxStableTime = 0.0f;
+                comp._physicalStepPlantPivotReleaseTriggerTime = 0.0f;
+                comp._physicalStepPlantPivotReleaseTime = 0.0f;
+                comp._physicalStepPlantPivotReleaseWeight = 0.0f;
+                comp._physicalStepPlantCenterBlendTime = 0.0f;
+                comp._physicalStepPlantAnchorTelemetryTime = 0.0f;
+                comp._physicalStepPlantAnchorHandoffPhaseTime = -1.0f;
+                comp._physicalStepPlantPivotContactBlockedTime = 0.0f;
+                comp._physicalStepPlantPivotSoleBlockedTime = 0.0f;
+                comp._physicalStepPlantPivotAngularBlockedTime = 0.0f;
+                comp._physicalStepPlantPivotLinearBlockedTime = 0.0f;
+                comp._physicalStepPlantContactMigration = 0.0f;
+                comp._physicalStepPlantAngularSpeed = 0.0f;
+                comp._physicalStepPlantCenterAnchorStart = glm::vec3(0.0f);
+                comp._physicalStepPlantCenterAnchorTarget = glm::vec3(0.0f);
                 comp._gaitPlantPreviousDrift = 0.0f;
                 comp._gaitPlantDriftRate = 0.0f;
                 comp._gaitPlantRecoveryLogged = false;
+                comp._gaitPlantCorrectionPeakRequested = 0.0f;
+                comp._gaitPlantCorrectionPeakApplied = 0.0f;
+                comp._gaitPlantCorrectionSaturated = false;
+                comp._gaitPlantCorrectionRequested = 0.0f;
+                comp._gaitPlantCorrectionApplied = 0.0f;
+                comp._gaitPlantCorrectionAtLimit = false;
                 comp._physicalStepTrajectoryT = 0.0f;
                 comp._physicalStepTouchdownAccepted = false;
+                comp._physicalStepTouchdownContactValid = false;
+                comp._physicalStepPlantCenterTravel = 0.0f;
                 comp._physicalStepAborted = false;
                 comp._physicalStepMaxStanceDrift = 0.0f;
                 comp._physicalStepMaxPlantDrift = 0.0f;
@@ -984,6 +1072,7 @@
                     captureGroundFootReference(comp._legL);
                     captureGroundFootReference(comp._legR);
                     comp._gaitRunning = true;
+                    comp._runtimeRecoveryStableTime = 0.0f;
                     comp._gaitStopRequested = false;
                     comp._gaitRecoveryFailureSteps = 0;
                     comp._gaitRunTime = 0.0f;
@@ -1047,6 +1136,7 @@
                     comp._gaitContinuousCycle = false;
                     comp._gaitBypassWeightShift = false;
                     comp._gaitNewSupportLoad = 0.0f;
+                    comp._gaitNewSupportLoadLatched = false;
                     comp._gaitCycleSupportTarget = comp._physicalStepSupportTarget;
                     comp._gaitSupportCurveActive = false;
                     comp._gaitSupportCurveStep = -1;
@@ -1189,7 +1279,10 @@
         // used a touchdown smoothstep followed by a second transfer smoothstep; both
         // segments imposed zero velocity at their boundary and produced the visible
         // stop-then-burst. Pre-contact motion is deliberately limited to 20% of the
-        // eventual span; credible contact re-targets the same curve to the full handoff.
+        // eventual span. Credible contact advances only to a partial-load target while
+        // the sole settles; plant acquisition C1-reseeds the curve to the full handoff.
+        const float configuredSupportMaxSpeed = glm::clamp(
+            comp.gaitSupportMaxSpeed, 0.01f, 1.0f);
         bool startedSupportCurveThisFrame = false;
         if (continuousEnabled && comp._gaitRunning
             && comp._gaitCancelMode == 0
@@ -1219,10 +1312,9 @@
                 comp._gaitSupportCommandVelocity;
             incomingVelocity.y = 0.0f;
             const float incomingSpeed = glm::length(incomingVelocity);
-            constexpr float kMaximumSupportCurveSpeed = 0.30f;
-            if (incomingSpeed > kMaximumSupportCurveSpeed
+            if (incomingSpeed > configuredSupportMaxSpeed
                 && incomingSpeed > 1e-6f) {
-                incomingVelocity *= kMaximumSupportCurveSpeed / incomingSpeed;
+                incomingVelocity *= configuredSupportMaxSpeed / incomingSpeed;
             }
             comp._gaitSupportCurveStartVelocity = incomingVelocity;
 
@@ -1238,11 +1330,12 @@
             spdlog::info(
                 "[LocomotionGait] SUPPORT_CURVE_BEGIN step={} duration={:.3f}s "
                 "mode=preload fraction=0.20 load={:.2f} "
-                "limits=(speed=0.30mps,accel=1.75mps2) "
+                "limits=(speed={:.2f}mps,accel=1.75mps2) "
                 "velocity=({:+.3f},{:+.3f})->({:+.3f},{:+.3f})",
                 comp._stepSequenceStepIndex,
                 comp._gaitSupportCurveDuration,
                 comp._gaitNewSupportLoad,
+                configuredSupportMaxSpeed,
                 comp._gaitSupportCurveStartVelocity.x,
                 comp._gaitSupportCurveStartVelocity.z,
                 comp._gaitSupportCurveEndVelocity.x,
@@ -1303,13 +1396,15 @@
             const bool acquiringPlant = comp._physicalStepPhase == kSettle
                 && comp._physicalStepTouchdownAccepted
                 && !comp._physicalStepPlantPoseCaptured;
-            float maximumSupportSpeed = 0.30f;
+            float maximumSupportSpeed = configuredSupportMaxSpeed;
             float maximumSupportAcceleration = 1.75f;
             if (acquiringPlant) {
                 const float driftPressure = glm::clamp(
                     (comp._physicalStepPlantDrift - 0.015f) / 0.015f,
                     0.0f, 1.0f);
-                maximumSupportSpeed = glm::mix(0.15f, 0.08f, driftPressure);
+                maximumSupportSpeed = glm::min(
+                    configuredSupportMaxSpeed,
+                    glm::mix(0.15f, 0.08f, driftPressure));
                 maximumSupportAcceleration = glm::mix(
                     0.85f, 0.55f, driftPressure);
 
@@ -1331,7 +1426,10 @@
                 // plant speed back to the ordinary transfer ceiling.
                 const float transferRamp = smoothstep(glm::clamp(
                     comp._physicalStepPhaseTime / 0.15f, 0.0f, 1.0f));
-                maximumSupportSpeed = glm::mix(0.15f, 0.30f, transferRamp);
+                const float transferStartSpeed = glm::min(
+                    configuredSupportMaxSpeed, 0.15f);
+                maximumSupportSpeed = glm::mix(
+                    transferStartSpeed, configuredSupportMaxSpeed, transferRamp);
                 maximumSupportAcceleration = glm::mix(
                     0.85f, 1.75f, transferRamp);
             }
@@ -1466,8 +1564,37 @@
                           rag._locomotionCOM.z - stanceFoot.z),
                 supportSpan) / supportSpanLengthSq, 0.0f, 1.0f)
             : 0.5f;
+        constexpr float kNewSupportLoadAcquireThreshold = 0.68f;
+        constexpr float kNewSupportLoadReleaseThreshold = 0.64f;
+        const bool loadHandoffPhase = comp._physicalStepPhase >= kTransfer
+                                   && comp._physicalStepPhase <= kInterStep;
+        if (!continuousEnabled || !loadHandoffPhase) {
+            comp._gaitNewSupportLoadLatched = false;
+        } else if (!comp._gaitNewSupportLoadLatched
+                   && comp._gaitNewSupportLoad
+                        >= kNewSupportLoadAcquireThreshold) {
+            comp._gaitNewSupportLoadLatched = true;
+            spdlog::info(
+                "[LocomotionGait] SUPPORT_LOAD_LATCH step={} action=ACQUIRE "
+                "load={:.3f} thresholds={:.2f}/{:.2f}",
+                comp._stepSequenceStepIndex,
+                comp._gaitNewSupportLoad,
+                kNewSupportLoadAcquireThreshold,
+                kNewSupportLoadReleaseThreshold);
+        } else if (comp._gaitNewSupportLoadLatched
+                   && comp._gaitNewSupportLoad
+                        < kNewSupportLoadReleaseThreshold) {
+            comp._gaitNewSupportLoadLatched = false;
+            spdlog::info(
+                "[LocomotionGait] SUPPORT_LOAD_LATCH step={} action=RELEASE "
+                "load={:.3f} thresholds={:.2f}/{:.2f}",
+                comp._stepSequenceStepIndex,
+                comp._gaitNewSupportLoad,
+                kNewSupportLoadAcquireThreshold,
+                kNewSupportLoadReleaseThreshold);
+        }
         const bool gaitOldSupportUnloaded = continuousEnabled && transferOrHold
-            && comp._gaitNewSupportLoad >= 0.68f;
+            && comp._gaitNewSupportLoadLatched;
         if (comp._physicalStepPreviousSwingFootValid && dt > 1e-6f)
             comp._physicalStepMeasuredVelocity =
                 (swingFoot - comp._physicalStepPreviousSwingFoot) / dt;
@@ -1479,12 +1606,29 @@
         bool swingRotationOk = false;
         const glm::quat swingRotation = Physics::GetRagdollBoneRotation(
             rag, swing->footIdx, &swingRotationOk);
+        bool swingAngularVelocityOk = false;
+        const glm::vec3 swingAngularVelocity =
+            Physics::GetRagdollBoneAngularVelocity(
+                rag, swing->footIdx, &swingAngularVelocityOk);
+        comp._physicalStepPlantAngularSpeed = swingAngularVelocityOk
+            ? glm::length(swingAngularVelocity) : 0.0f;
         comp._physicalStepFootUpY = swingRotationOk
             ? (swingRotation * glm::vec3(0.0f, 1.0f, 0.0f)).y : 0.0f;
         comp._physicalStepContactPoint = contactPoint;
         comp._physicalStepContactLocal = swingContactNow && swingRotationOk
             ? glm::conjugate(swingRotation) * (contactPoint - swingFoot)
             : glm::vec3(0.0f);
+        if (comp._physicalStepTouchdownAccepted
+            && comp._physicalStepTouchdownContactValid
+            && swingContactNow && swingRotationOk) {
+            // The deepest collision point is expected to walk across a rolling sole.
+            // Keep the largest observed migration so a later contact-query flip cannot
+            // silently re-authorize correction toward the obsolete impact edge.
+            comp._physicalStepPlantContactMigration = glm::max(
+                comp._physicalStepPlantContactMigration,
+                glm::length(comp._physicalStepContactLocal
+                    - comp._physicalStepTouchdownContactLocal));
+        }
         const glm::vec3 stanceBaseline = comp._physicalStepSupportSide < 0
             ? comp._physicalStepFootBaselineL : comp._physicalStepFootBaselineR;
         comp._physicalStepStanceDrift = glm::length(glm::vec2(
@@ -1492,9 +1636,24 @@
         comp._physicalStepMaxStanceDrift = glm::max(
             comp._physicalStepMaxStanceDrift, comp._physicalStepStanceDrift);
         if (comp._physicalStepTouchdownAccepted) {
-            comp._physicalStepPlantDrift = glm::length(glm::vec2(
+            comp._physicalStepPlantCenterTravel = glm::length(glm::vec2(
                 swingFoot.x - comp._physicalStepTouchdownPlant.x,
                 swingFoot.z - comp._physicalStepTouchdownPlant.z));
+            if (comp._physicalStepTouchdownContactValid && swingRotationOk) {
+                const glm::vec3 currentTouchdownMaterialPoint = swingFoot
+                    + swingRotation
+                        * comp._physicalStepTouchdownContactLocal;
+                comp._physicalStepPlantDrift = glm::length(glm::vec2(
+                    currentTouchdownMaterialPoint.x
+                        - comp._physicalStepTouchdownContactWorld.x,
+                    currentTouchdownMaterialPoint.z
+                        - comp._physicalStepTouchdownContactWorld.z));
+            } else {
+                // Retain the old center metric only when the physics query could not
+                // provide a usable touchdown material point.
+                comp._physicalStepPlantDrift =
+                    comp._physicalStepPlantCenterTravel;
+            }
             const float driftRateSample = dt > 1e-6f
                 ? (comp._physicalStepPlantDrift
                     - comp._gaitPlantPreviousDrift) / dt
@@ -1507,6 +1666,7 @@
                 comp._physicalStepMaxPlantDrift, comp._physicalStepPlantDrift);
         } else {
             comp._physicalStepPlantDrift = 0.0f;
+            comp._physicalStepPlantCenterTravel = 0.0f;
             comp._gaitPlantPreviousDrift = 0.0f;
             comp._gaitPlantDriftRate = 0.0f;
         }
@@ -1920,6 +2080,7 @@
                 constexpr float kAutomaticRetryCooldown = 0.35f;
                 ++comp._runtimeAutoRetryCount;
                 comp._runtimeRecoveryCooldown = kAutomaticRetryCooldown;
+                comp._runtimeRecoveryStableTime = 0.0f;
                 comp._runtimeRestartBlocked =
                     comp._runtimeAutoRetryCount > kMaximumAutomaticRetries;
                 if (comp._runtimeRestartBlocked) {
@@ -1930,7 +2091,8 @@
                 } else {
                     spdlog::warn(
                         "[LocoRuntime] AUTO_RETRY_QUEUED attempt={}/{} "
-                        "cooldown={:.2f}s action=resume-held-intent-after-recovery",
+                        "cooldown={:.2f}s stableGate=0.25s "
+                        "action=resume-held-intent-after-recovery",
                         comp._runtimeAutoRetryCount,
                         kMaximumAutomaticRetries,
                         kAutomaticRetryCooldown);
@@ -2245,41 +2407,108 @@
         auto acceptTouchdown = [&]() {
             comp._physicalStepTouchdownAccepted = true;
             comp._physicalStepTouchdownPlant = swingFoot;
-            swing->plantFoot = swingFoot;
+            comp._physicalStepTouchdownContactValid = swingContactNow
+                && swingRotationOk
+                && std::isfinite(contactPoint.x)
+                && std::isfinite(contactPoint.y)
+                && std::isfinite(contactPoint.z);
+            if (comp._physicalStepTouchdownContactValid) {
+                comp._physicalStepTouchdownContactWorld = contactPoint;
+                comp._physicalStepTouchdownContactLocal =
+                    comp._physicalStepContactLocal;
+                // A sole that touches on an edge must translate its center while rotating
+                // flat. Seed the persistent planted-center target from the immutable world
+                // contact so leveling never asks that material point to slide through the
+                // floor while also holding the body center fixed.
+                swing->plantFoot =
+                    comp._physicalStepTouchdownContactWorld
+                    - nominalFootWorldRotation(*swing)
+                        * comp._physicalStepTouchdownContactLocal;
+            } else {
+                swing->plantFoot = swingFoot;
+                comp._physicalStepTouchdownContactWorld = glm::vec3(0.0f);
+                comp._physicalStepTouchdownContactLocal = glm::vec3(0.0f);
+            }
             swing->planted = true;
             comp._physicalStepTouchdownVy = swingVelocity.y;
             comp._physicalStepTouchdownNormalY = contactNormal.y;
             comp._physicalStepPlantDrift = 0.0f;
+            comp._physicalStepPlantCenterTravel = 0.0f;
             comp._physicalStepMaxPlantDrift = 0.0f;
             comp._gaitPlantPreviousDrift = 0.0f;
             comp._gaitPlantDriftRate = 0.0f;
             comp._gaitPlantRecoveryLogged = false;
+            comp._physicalStepPlantSettledOffsetTime = 0.0f;
+            comp._physicalStepPlantUnsafeTime = 0.0f;
+            comp._physicalStepPlantAnchorRebased = false;
+            comp._physicalStepPlantCenterAnchorActive = false;
+            comp._physicalStepPlantContactMigrationLogged = false;
+            comp._physicalStepPlantPivotReleaseLatched = false;
+            comp._physicalStepPlantPivotStableTime = 0.0f;
+            comp._physicalStepPlantPivotMaxStableTime = 0.0f;
+            comp._physicalStepPlantPivotReleaseTriggerTime = 0.0f;
+            comp._physicalStepPlantPivotReleaseTime = 0.0f;
+            comp._physicalStepPlantPivotReleaseWeight = 0.0f;
+            comp._physicalStepPlantCenterBlendTime = 0.0f;
+            comp._physicalStepPlantAnchorTelemetryTime = 0.0f;
+            comp._physicalStepPlantAnchorHandoffPhaseTime = -1.0f;
+            comp._physicalStepPlantPivotContactBlockedTime = 0.0f;
+            comp._physicalStepPlantPivotSoleBlockedTime = 0.0f;
+            comp._physicalStepPlantPivotAngularBlockedTime = 0.0f;
+            comp._physicalStepPlantPivotLinearBlockedTime = 0.0f;
+            comp._physicalStepPlantContactMigration = 0.0f;
+            comp._physicalStepPlantAngularSpeed = 0.0f;
+            comp._physicalStepPlantCenterAnchorStart = swing->plantFoot;
+            comp._physicalStepPlantCenterAnchorTarget = swingFoot;
+            comp._gaitNewSupportLoadLatched = false;
+            comp._gaitPlantCorrectionPeakRequested = 0.0f;
+            comp._gaitPlantCorrectionPeakApplied = 0.0f;
+            comp._gaitPlantCorrectionSaturated = false;
+            comp._gaitPlantCorrectionRequested = 0.0f;
+            comp._gaitPlantCorrectionApplied = 0.0f;
+            comp._gaitPlantCorrectionAtLimit = false;
             // Retain the final landing IK command briefly while contact settles. Capturing
             // the first-impact joint pose immediately allowed the sole to rock backward.
             comp._physicalStepPlantPoseCaptured = false;
             comp._physicalStepPlantAcquireStableTime = 0.0f;
+            const float pivotCenterShift = glm::length(glm::vec2(
+                swing->plantFoot.x - swingFoot.x,
+                swing->plantFoot.z - swingFoot.z));
+            spdlog::info(
+                "[LocomotionGait] TOUCHDOWN_ANCHOR step={} plant={} valid={} "
+                "contactLocal=({:+.3f},{:+.3f},{:+.3f}) "
+                "centerComp={:.3f}m sole={:.1f}deg",
+                comp._stepSequenceStepIndex,
+                comp._physicalStepSupportSide < 0 ? "RIGHT" : "LEFT",
+                comp._physicalStepTouchdownContactValid ? "yes" : "NO",
+                comp._physicalStepTouchdownContactLocal.x,
+                comp._physicalStepTouchdownContactLocal.y,
+                comp._physicalStepTouchdownContactLocal.z,
+                pivotCenterShift,
+                comp._gaitSoleAngularErrorDeg);
             comp._supportTransferTransferStartTarget =
                 comp._physicalStepSupportTarget;
+            constexpr float kPlantAcquireSupportFraction = 0.20f;
+            const float touchdownSupportFraction = continuousEnabled
+                ? kPlantAcquireSupportFraction : 0.35f;
             comp._supportTransferTransferEndTarget = glm::mix(
-                comp._physicalStepSupportTarget, swingFoot, 0.35f);
+                comp._physicalStepSupportTarget, swingFoot,
+                touchdownSupportFraction);
             comp._supportTransferTransferEndTarget.y =
                 comp._physicalStepSupportTarget.y;
             if (continuousEnabled && comp._gaitSupportCurveActive) {
-                // Replace the predicted foothold with the actual collision-supported
-                // plant while preserving current position and velocity. This C1 re-seed
-                // redirects the pelvis without introducing a touchdown stop.
-                const float transferFraction = glm::clamp(
-                    comp.transferSupportBias
-                        + comp._gaitAdaptiveTransferBiasOffset,
-                    0.70f, 0.98f);
+                // Replace the predicted foothold with a partial-load target around the
+                // actual collision-supported plant. Preserve current position and velocity,
+                // but do not pull the COM through the full handoff until the sole has proved
+                // stable. Plant acquisition performs the second C1 re-seed.
                 glm::vec3 incomingVelocity =
                     comp._gaitSupportCommandVelocity;
                 incomingVelocity.y = 0.0f;
                 comp._gaitSupportCurveStart =
                     comp._physicalStepSupportTarget;
                 comp._gaitSupportCurveStartVelocity = incomingVelocity;
-                comp._gaitSupportCurveEnd = glm::mix(
-                    stanceFoot, swing->plantFoot, transferFraction);
+                comp._gaitSupportCurveEnd =
+                    comp._supportTransferTransferEndTarget;
                 comp._gaitSupportCurveEnd.y =
                     comp._gaitSupportCurveStart.y;
                 comp._gaitSupportCurveTime = 0.0f;
@@ -2297,8 +2526,10 @@
                     comp._physicalStepForward * outgoingSpeed;
                 spdlog::info(
                     "[LocomotionGait] SUPPORT_CURVE_CONTACT step={} "
-                    "duration={:.3f}s incomingSpeed={:.3f} load={:.2f}",
+                    "mode=plant-acquire fraction={:.2f} duration={:.3f}s "
+                    "incomingSpeed={:.3f} load={:.2f}",
                     comp._stepSequenceStepIndex,
+                    kPlantAcquireSupportFraction,
                     comp._gaitSupportCurveDuration,
                     glm::length(incomingVelocity),
                     comp._gaitNewSupportLoad);
@@ -2379,7 +2610,13 @@
             if (comp._physicalStepPhase == kSwing && swingProgress >= 1.0f) {
                 comp._physicalStepPhase = kArrival;
                 comp._physicalStepPhaseTime = 0.0f;
-                desiredFoot = hoverTarget;
+                // The shared trajectory has only completed its approach landmark here;
+                // horizontal motion intentionally continues through descent.  Snapping
+                // to hoverTarget moved the foot all the way to the foothold for one frame,
+                // then ARRIVAL moved it back to trajectoryPoint(kSwingArrivalT).  The
+                // resulting forward/back velocity impulse grew with every planned step
+                // and destabilized the following plant.
+                desiredFoot = trajectoryPoint(kSwingArrivalT);
             }
         } else if (comp._physicalStepPhase == kArrival) {
             comp._physicalStepTrajectoryT = kSwingArrivalT;
@@ -2540,6 +2777,16 @@
             && (comp._physicalStepPlantDrift > 0.025f
                 || tiltDeg >= 20.0f
                 || comp._supportTransferComHorizontalSpeed > 0.35f);
+        constexpr float kPlantSlipDriftLimit = 0.040f;
+        constexpr float kPlantSlipGrowthLimit = 0.050f;
+        constexpr float kPlantSlipPersistence = 0.18f;
+        const bool growingUnacquiredPlantSlip = continuousEnabled
+            && comp._physicalStepPhase == kSettle
+            && !comp._physicalStepPlantPoseCaptured
+            && comp._physicalStepPlantDrift > kPlantSlipDriftLimit
+            && comp._gaitPlantDriftRate > kPlantSlipGrowthLimit;
+        comp._physicalStepPlantUnsafeTime = growingUnacquiredPlantSlip
+            ? comp._physicalStepPlantUnsafeTime + dt : 0.0f;
 
         if (comp._physicalStepPhase >= kTakeoff && comp._physicalStepPhase <= kSettle
             && !stanceContactNow) {
@@ -2555,6 +2802,27 @@
                    && comp._physicalStepPhaseTime >= 0.10f
                    && comp._physicalStepClearance < 0.030f) {
             abortSequence("airborne swing lost clearance");
+        } else if (growingUnacquiredPlantSlip
+                   && comp._physicalStepPlantUnsafeTime
+                        >= kPlantSlipPersistence) {
+            spdlog::warn(
+                "[LocomotionGait] PLANT_SLIP_GUARD result=ABORT "
+                "drift={:.3f}/{:.3f}m rate={:+.3f}/{:+.3f}mps "
+                "persistent={:.3f}/{:.3f}s footSpeed={:.3f} "
+                "supportSpeed={:.3f} correctionPeak={:.3f}/{:.3f}m "
+                "saturated={}",
+                comp._physicalStepPlantDrift,
+                kPlantSlipDriftLimit,
+                comp._gaitPlantDriftRate,
+                kPlantSlipGrowthLimit,
+                comp._physicalStepPlantUnsafeTime,
+                kPlantSlipPersistence,
+                glm::length(swingVelocity),
+                glm::length(comp._gaitSupportCommandVelocity),
+                comp._gaitPlantCorrectionPeakRequested,
+                comp._gaitPlantCorrectionPeakApplied,
+                comp._gaitPlantCorrectionSaturated ? "yes" : "no");
+            abortSequence("new plant remained beyond 4 cm while still sliding");
         } else if (comp._physicalStepPhase == kSettle
                    && comp._physicalStepPlantPoseCaptured
                    && comp._physicalStepPlantDrift > 0.040f) {
@@ -2568,11 +2836,43 @@
             if (continuousEnabled) {
                 spdlog::warn(
                     "[LocomotionGait] TRANSFER_DRIFT_ABORT reason=new_support "
-                    "oldSupport={} oldDrift={:.3f}m newSupport={} newDrift={:.3f}m",
+                    "oldSupport={} oldDrift={:.3f}m newSupport={} newDrift={:.3f}m "
+                    "anchorStage={} handoffAt={:.3f}s migration={:.3f}m "
+                    "sole={:.1f}deg angular=(pitch={:+.3f},roll={:+.3f},"
+                    "yaw={:+.3f},mag={:.3f})radps footVelocity="
+                    "(fwd={:+.3f},lat={:+.3f},y={:+.3f})mps "
+                    "contactLocal=({:+.3f},{:+.3f},{:+.3f}) "
+                    "impactLocal=({:+.3f},{:+.3f},{:+.3f}) "
+                    "correctionPeak={:.3f}/{:.3f}m saturated={} "
+                    "supportSpeed={:.3f}mps load={:.3f} latched={}",
                     comp._physicalStepSupportSide < 0 ? "LEFT" : "RIGHT",
                     comp._physicalStepStanceDrift,
                     comp._physicalStepSupportSide < 0 ? "RIGHT" : "LEFT",
-                    comp._physicalStepPlantDrift);
+                    comp._physicalStepPlantDrift,
+                    comp._physicalStepPlantCenterAnchorActive
+                        ? "center" : "pivot",
+                    comp._physicalStepPlantAnchorHandoffPhaseTime,
+                    comp._physicalStepPlantContactMigration,
+                    comp._gaitSoleAngularErrorDeg,
+                    glm::dot(swingAngularVelocity, comp._physicalStepRight),
+                    glm::dot(swingAngularVelocity, comp._physicalStepForward),
+                    swingAngularVelocity.y,
+                    comp._physicalStepPlantAngularSpeed,
+                    glm::dot(swingVelocity, comp._physicalStepForward),
+                    glm::dot(swingVelocity, comp._physicalStepRight),
+                    swingVelocity.y,
+                    comp._physicalStepContactLocal.x,
+                    comp._physicalStepContactLocal.y,
+                    comp._physicalStepContactLocal.z,
+                    comp._physicalStepTouchdownContactLocal.x,
+                    comp._physicalStepTouchdownContactLocal.y,
+                    comp._physicalStepTouchdownContactLocal.z,
+                    comp._gaitPlantCorrectionPeakRequested,
+                    comp._gaitPlantCorrectionPeakApplied,
+                    comp._gaitPlantCorrectionSaturated ? "yes" : "no",
+                    glm::length(comp._gaitSupportCommandVelocity),
+                    comp._gaitNewSupportLoad,
+                    comp._gaitNewSupportLoadLatched ? "yes" : "no");
             }
             abortSequence("new support drift exceeded 4 cm during transfer");
         } else if (transferEnabled && transferOrHold
@@ -2595,6 +2895,285 @@
                    && comp._physicalStepPhase <= kHold && tiltDeg >= 30.0f) {
             abortSequence("tilt reached 30 degrees during support transfer");
         }
+
+        // Stage one preserves the first credible impact point while the sole rolls flat.
+        // Stage two freezes the measured sole center after a short level/quiet window.
+        // That second ownership mode is important because the collision manifold's
+        // deepest point can migrate from heel to toe; continuing to pull the original
+        // material point back to the impact patch is positive feedback for rocking.
+        constexpr float kPlantPivotQuietTime = 0.08f;
+        constexpr float kPlantPivotSoleToleranceDeg = 8.0f;
+        constexpr float kPlantPivotAngularSpeedLimit = 0.75f;
+        constexpr float kPlantPivotLinearSpeedLimit = 0.12f;
+        constexpr float kPlantPivotReleaseTriggerTime = 0.032f;
+        constexpr float kPlantPivotReleaseBlendDuration = 0.06f;
+        constexpr float kPlantContactMigrationNotice = 0.060f;
+        constexpr float kPlantCenterBlendDuration = 0.09f;
+        constexpr float kPostHandoffAcquireMargin = 0.06f;
+        const float swingHorizontalSpeed = glm::length(glm::vec2(
+            swingVelocity.x, swingVelocity.z));
+        const bool plantPivotStage = continuousEnabled
+            && comp._physicalStepPhase == kSettle
+            && comp._physicalStepTouchdownAccepted
+            && comp._physicalStepTouchdownContactValid
+            && !comp._physicalStepPlantCenterAnchorActive;
+        const bool pivotContactReady = swingContactNow && stanceContactNow;
+        const bool pivotSoleReady = comp._gaitSoleAngularErrorDeg
+            <= kPlantPivotSoleToleranceDeg;
+        const bool pivotAngularReady = swingAngularVelocityOk
+            && comp._physicalStepPlantAngularSpeed
+                <= kPlantPivotAngularSpeedLimit;
+        const bool pivotLinearReady = swingHorizontalSpeed
+            <= kPlantPivotLinearSpeedLimit;
+        // A capped position servo that coincides with continued foot motion is no
+        // longer stabilizing the impact pivot; it is feeding energy into the planted
+        // leg. This uses the preceding frame's correction measurement so the release
+        // decision is based on the command that produced the motion seen here.
+        const bool pivotReleaseOverloaded = plantPivotStage
+            && comp._gaitPlantCorrectionAtLimit
+            && (!pivotAngularReady || !pivotLinearReady);
+        if (!comp._physicalStepPlantPivotReleaseLatched) {
+            comp._physicalStepPlantPivotReleaseTriggerTime =
+                pivotReleaseOverloaded
+                ? comp._physicalStepPlantPivotReleaseTriggerTime + dt
+                : 0.0f;
+            if (comp._physicalStepPlantPivotReleaseTriggerTime
+                    >= kPlantPivotReleaseTriggerTime) {
+                comp._physicalStepPlantPivotReleaseLatched = true;
+                comp._physicalStepPlantPivotReleaseTime = 0.0f;
+                spdlog::info(
+                    "[LocomotionGait] PLANT_PIVOT_RELEASE step={} plant={} "
+                    "t={:.3f}s sustained={:.3f}/{:.3f}s "
+                    "correction={:.3f}/{:.3f}m horizontalSpeed={:.3f}/{:.3f} "
+                    "angularSpeed={:.3f}/{:.3f}radps "
+                    "action=fade-pivot-and-require-center",
+                    comp._stepSequenceStepIndex,
+                    comp._physicalStepSupportSide < 0 ? "RIGHT" : "LEFT",
+                    comp._physicalStepPhaseTime,
+                    comp._physicalStepPlantPivotReleaseTriggerTime,
+                    kPlantPivotReleaseTriggerTime,
+                    comp._gaitPlantCorrectionRequested,
+                    comp._gaitPlantCorrectionApplied,
+                    swingHorizontalSpeed,
+                    kPlantPivotLinearSpeedLimit,
+                    comp._physicalStepPlantAngularSpeed,
+                    kPlantPivotAngularSpeedLimit);
+            }
+        }
+        if (comp._physicalStepPlantPivotReleaseLatched) {
+            comp._physicalStepPlantPivotReleaseTime = glm::min(
+                comp._physicalStepPlantPivotReleaseTime + dt,
+                kPlantPivotReleaseBlendDuration);
+            comp._physicalStepPlantPivotReleaseWeight = smoothstep(
+                comp._physicalStepPlantPivotReleaseTime
+                    / kPlantPivotReleaseBlendDuration);
+        } else {
+            comp._physicalStepPlantPivotReleaseWeight = 0.0f;
+        }
+        const float contactMigrationRelease = smoothstep(
+            (comp._physicalStepPlantContactMigration - 0.030f) / 0.050f);
+        const float pivotOwnershipRelease = glm::max(
+            contactMigrationRelease,
+            comp._physicalStepPlantPivotReleaseWeight);
+        const bool pivotReleaseReady =
+            !comp._physicalStepPlantPivotReleaseLatched
+            || comp._physicalStepPlantPivotReleaseWeight >= 0.999f;
+        const bool pivotQuiet = plantPivotStage
+            && pivotContactReady && pivotSoleReady
+            && pivotAngularReady && pivotLinearReady
+            && pivotReleaseReady;
+        comp._physicalStepPlantPivotStableTime = pivotQuiet
+            ? comp._physicalStepPlantPivotStableTime + dt : 0.0f;
+        comp._physicalStepPlantPivotMaxStableTime = glm::max(
+            comp._physicalStepPlantPivotMaxStableTime,
+            comp._physicalStepPlantPivotStableTime);
+
+        if (plantPivotStage) {
+            if (!pivotContactReady)
+                comp._physicalStepPlantPivotContactBlockedTime += dt;
+            if (!pivotSoleReady)
+                comp._physicalStepPlantPivotSoleBlockedTime += dt;
+            if (!pivotAngularReady)
+                comp._physicalStepPlantPivotAngularBlockedTime += dt;
+            if (!pivotLinearReady)
+                comp._physicalStepPlantPivotLinearBlockedTime += dt;
+
+            constexpr float kPlantAnchorTelemetryPeriod = 0.10f;
+            comp._physicalStepPlantAnchorTelemetryTime += dt;
+            if (comp._physicalStepPlantAnchorTelemetryTime
+                    >= kPlantAnchorTelemetryPeriod) {
+                comp._physicalStepPlantAnchorTelemetryTime -=
+                    kPlantAnchorTelemetryPeriod;
+                glm::vec3 pivotError(0.0f);
+                if (swingRotationOk) {
+                    const glm::vec3 measuredMaterialPoint = swingFoot
+                        + swingRotation
+                            * comp._physicalStepTouchdownContactLocal;
+                    pivotError = comp._physicalStepTouchdownContactWorld
+                        - measuredMaterialPoint;
+                }
+                const glm::vec3 centerTargetError =
+                    swing->plantFoot - swingFoot;
+                const glm::vec3 contactLocalDelta =
+                    comp._physicalStepContactLocal
+                    - comp._physicalStepTouchdownContactLocal;
+                spdlog::info(
+                    "[LocomotionGait] PLANT_ANCHOR_TRACE step={} plant={} "
+                    "t={:.3f}s gates=(contact={},sole={},angular={},linear={}) "
+                    "quiet={:.3f}/{:.3f}/{:.3f}s sole={:.1f}/{:.1f}deg "
+                    "angular=(pitch={:+.3f},roll={:+.3f},yaw={:+.3f},mag={:.3f}/{:.3f}) "
+                    "velocity=(fwd={:+.3f},lat={:+.3f},y={:+.3f},h={:.3f}/{:.3f}) "
+                    "error=(pivotF={:+.3f},pivotLat={:+.3f},centerF={:+.3f},centerLat={:+.3f}) "
+                    "contactDelta=({:+.3f},{:+.3f},{:+.3f}) migration={:.3f} "
+                    "supportVelocity=(fwd={:+.3f},lat={:+.3f}) "
+                    "correctionNow={:.3f}/{:.3f}m atLimit={} "
+                    "correctionPeak={:.3f}/{:.3f}m saturated={} "
+                    "pivotRelease=(latched={},trigger={:.3f}/{:.3f}s,weight={:.2f})",
+                    comp._stepSequenceStepIndex,
+                    comp._physicalStepSupportSide < 0 ? "RIGHT" : "LEFT",
+                    comp._physicalStepPhaseTime,
+                    pivotContactReady ? "ok" : "BLOCK",
+                    pivotSoleReady ? "ok" : "BLOCK",
+                    pivotAngularReady ? "ok" : "BLOCK",
+                    pivotLinearReady ? "ok" : "BLOCK",
+                    comp._physicalStepPlantPivotStableTime,
+                    comp._physicalStepPlantPivotMaxStableTime,
+                    kPlantPivotQuietTime,
+                    comp._gaitSoleAngularErrorDeg,
+                    kPlantPivotSoleToleranceDeg,
+                    glm::dot(swingAngularVelocity, comp._physicalStepRight),
+                    glm::dot(swingAngularVelocity, comp._physicalStepForward),
+                    swingAngularVelocity.y,
+                    comp._physicalStepPlantAngularSpeed,
+                    kPlantPivotAngularSpeedLimit,
+                    glm::dot(swingVelocity, comp._physicalStepForward),
+                    glm::dot(swingVelocity, comp._physicalStepRight),
+                    swingVelocity.y,
+                    swingHorizontalSpeed,
+                    kPlantPivotLinearSpeedLimit,
+                    glm::dot(pivotError, comp._physicalStepForward),
+                    glm::dot(pivotError, comp._physicalStepRight),
+                    glm::dot(centerTargetError, comp._physicalStepForward),
+                    glm::dot(centerTargetError, comp._physicalStepRight),
+                    contactLocalDelta.x,
+                    contactLocalDelta.y,
+                    contactLocalDelta.z,
+                    comp._physicalStepPlantContactMigration,
+                    glm::dot(comp._gaitSupportCommandVelocity,
+                             comp._physicalStepForward),
+                    glm::dot(comp._gaitSupportCommandVelocity,
+                             comp._physicalStepRight),
+                    comp._gaitPlantCorrectionRequested,
+                    comp._gaitPlantCorrectionApplied,
+                    comp._gaitPlantCorrectionAtLimit ? "yes" : "no",
+                    comp._gaitPlantCorrectionPeakRequested,
+                    comp._gaitPlantCorrectionPeakApplied,
+                    comp._gaitPlantCorrectionSaturated ? "yes" : "no",
+                    comp._physicalStepPlantPivotReleaseLatched
+                        ? "yes" : "no",
+                    comp._physicalStepPlantPivotReleaseTriggerTime,
+                    kPlantPivotReleaseTriggerTime,
+                    comp._physicalStepPlantPivotReleaseWeight);
+            }
+        }
+
+        if (comp._physicalStepTouchdownContactValid
+            && comp._physicalStepPlantContactMigration
+                >= kPlantContactMigrationNotice
+            && !comp._physicalStepPlantContactMigrationLogged) {
+            comp._physicalStepPlantContactMigrationLogged = true;
+            spdlog::info(
+                "[LocomotionGait] PLANT_CONTACT_MIGRATION step={} plant={} "
+                "distance={:.3f}m sole={:.1f}deg angularSpeed={:.3f}radps "
+                "action=release-impact-pivot",
+                comp._stepSequenceStepIndex,
+                comp._physicalStepSupportSide < 0 ? "RIGHT" : "LEFT",
+                comp._physicalStepPlantContactMigration,
+                comp._gaitSoleAngularErrorDeg,
+                comp._physicalStepPlantAngularSpeed);
+        }
+
+        if (comp._physicalStepPlantPivotStableTime
+                >= kPlantPivotQuietTime
+            && pivotReleaseReady
+            && !comp._physicalStepPlantCenterAnchorActive) {
+            const glm::vec3 pivotCompatibleCenter =
+                comp._physicalStepTouchdownContactWorld
+                - nominalFootWorldRotation(*swing)
+                    * comp._physicalStepTouchdownContactLocal;
+            // Begin from the ownership mix actually used by IK on the preceding frame.
+            // Starting at the raw pivot after migration had already released it would
+            // reintroduce the obsolete-edge pull at the handoff boundary.
+            const glm::vec3 currentOwnedCenter = glm::mix(
+                pivotCompatibleCenter, swingFoot,
+                pivotOwnershipRelease);
+            comp._physicalStepPlantCenterAnchorActive = true;
+            comp._physicalStepPlantCenterBlendTime = 0.0f;
+            comp._physicalStepPlantAnchorHandoffPhaseTime =
+                comp._physicalStepPhaseTime;
+            comp._physicalStepPlantCenterAnchorStart = currentOwnedCenter;
+            comp._physicalStepPlantCenterAnchorTarget = swingFoot;
+            swing->plantFoot = currentOwnedCenter;
+
+            // From this point drift means displacement of the captured sole center,
+            // not displacement of a first-impact material point that no longer bears load.
+            comp._physicalStepTouchdownContactValid = false;
+            comp._physicalStepTouchdownPlant = swingFoot;
+            comp._physicalStepPlantDrift = 0.0f;
+            comp._physicalStepPlantCenterTravel = 0.0f;
+            comp._gaitPlantPreviousDrift = 0.0f;
+            comp._gaitPlantDriftRate = 0.0f;
+            comp._physicalStepPlantAcquireStableTime = 0.0f;
+            comp._physicalStepPlantSettledOffsetTime = 0.0f;
+            comp._physicalStepPlantUnsafeTime = 0.0f;
+            spdlog::info(
+                "[LocomotionGait] PLANT_ANCHOR_HANDOFF step={} plant={} "
+                "mode={} quiet={:.3f}s sole={:.1f}deg "
+                "angularSpeed={:.3f}radps contactMigration={:.3f}m "
+                "pivotRelease={:.2f} blend={:.3f}s centerShift={:.3f}m "
+                "maxQuiet={:.3f}s blocked=(contact={:.3f},sole={:.3f},"
+                "angular={:.3f},linear={:.3f})s "
+                "deadlineProtectedUntil={:.3f}s",
+                comp._stepSequenceStepIndex,
+                comp._physicalStepSupportSide < 0 ? "RIGHT" : "LEFT",
+                comp._physicalStepPlantPivotReleaseLatched
+                    ? "recovery-release-to-center" : "pivot-to-center",
+                comp._physicalStepPlantPivotStableTime,
+                comp._gaitSoleAngularErrorDeg,
+                comp._physicalStepPlantAngularSpeed,
+                comp._physicalStepPlantContactMigration,
+                comp._physicalStepPlantPivotReleaseWeight,
+                kPlantCenterBlendDuration,
+                horizontalDistance(
+                    comp._physicalStepPlantCenterAnchorStart,
+                    comp._physicalStepPlantCenterAnchorTarget),
+                comp._physicalStepPlantPivotMaxStableTime,
+                comp._physicalStepPlantPivotContactBlockedTime,
+                comp._physicalStepPlantPivotSoleBlockedTime,
+                comp._physicalStepPlantPivotAngularBlockedTime,
+                comp._physicalStepPlantPivotLinearBlockedTime,
+                comp._physicalStepPlantAnchorHandoffPhaseTime
+                    + cadencePlantAcquireTime
+                    + kPostHandoffAcquireMargin);
+        }
+        if (comp._physicalStepPlantCenterAnchorActive) {
+            comp._physicalStepPlantCenterBlendTime = glm::min(
+                comp._physicalStepPlantCenterBlendTime + dt,
+                kPlantCenterBlendDuration);
+            const float centerBlend = smoothstep(
+                comp._physicalStepPlantCenterBlendTime
+                    / kPlantCenterBlendDuration);
+            swing->plantFoot = glm::mix(
+                comp._physicalStepPlantCenterAnchorStart,
+                comp._physicalStepPlantCenterAnchorTarget,
+                centerBlend);
+        }
+
+        // These values describe only the correction produced by this frame's pivot
+        // solve. The release detector consumes them on the next frame.
+        comp._gaitPlantCorrectionRequested = 0.0f;
+        comp._gaitPlantCorrectionApplied = 0.0f;
+        comp._gaitPlantCorrectionAtLimit = false;
 
         const bool liftAssistActive = comp._physicalStepPhase >= kTakeoff
                                    && comp._physicalStepPhase <= kDescent;
@@ -2628,23 +3207,6 @@
                               const glm::vec3& targetFoot,
                               bool movingFoot) {
             glm::vec3 controlledFoot = targetFoot;
-            if (continuousEnabled && !movingFoot) {
-                // Joint motors follow angles, not a world-space point. Bias the analytic
-                // target a short distance beyond the immutable anchor so measured plant
-                // error produces active restoring motion instead of merely recomputing
-                // the same lagging pose.
-                glm::vec3 plantCorrection = targetFoot - measuredFoot;
-                plantCorrection.y = 0.0f;
-                plantCorrection *= 0.65f;
-                constexpr float kMaximumPlantCorrection = 0.020f;
-                const float correctionLength = glm::length(plantCorrection);
-                if (correctionLength > kMaximumPlantCorrection
-                    && correctionLength > 1e-6f) {
-                    plantCorrection *=
-                        kMaximumPlantCorrection / correctionLength;
-                }
-                controlledFoot += plantCorrection;
-            }
             if (movingFoot) {
                 comp._gaitFootCorrection = 0.0f;
                 comp._gaitFootCorrectionForward = 0.0f;
@@ -2692,8 +3254,6 @@
                     footCorrection, comp._physicalStepForward);
                 comp._gaitFootTargetSpeed = glm::length(targetVelocity);
             }
-            controlledLeg.desiredFoot = controlledFoot;
-            const glm::vec3 hipPosition = physicalPosition(controlledLeg.hipIdx);
             float soleLevelBlend = 0.0f;
             if (continuousEnabled
                 && controlledLeg.groundReferenceFootRotationValid) {
@@ -2716,6 +3276,72 @@
             const glm::quat desiredFootWorld = glm::normalize(glm::slerp(
                 glm::normalize(controlledLeg.plantedFootWorldRotation),
                 nominalFootWorldRotation(controlledLeg), soleLevelBlend));
+            const bool touchdownPivotOwnsPlant = continuousEnabled
+                && !movingFoot && &controlledLeg == swing
+                && comp._physicalStepTouchdownContactValid;
+            if (touchdownPivotOwnsPlant) {
+                // The captured contact is the translational invariant. As the ankle levels
+                // the sole, derive the compatible body-center target around that world
+                // pivot instead of commanding an impossible fixed center and fixed edge.
+                const glm::vec3 pivotCompatibleCenter =
+                    comp._physicalStepTouchdownContactWorld
+                    - desiredFootWorld
+                        * comp._physicalStepTouchdownContactLocal;
+                // A large change in the collision-local contact means the sole has rolled
+                // away from its impact edge. Fade both pivot position ownership and its
+                // restoring correction, allowing the foot to quiet before the center
+                // anchor captures it. Keeping full authority here caused the observed
+                // heel/toe contact flips to grow on every subsequent step.
+                controlledFoot = glm::mix(
+                    pivotCompatibleCenter, measuredFoot,
+                    pivotOwnershipRelease);
+                if (swingRotationOk) {
+                    const glm::vec3 measuredMaterialPoint = measuredFoot
+                        + swingRotation
+                            * comp._physicalStepTouchdownContactLocal;
+                    glm::vec3 plantCorrection =
+                        comp._physicalStepTouchdownContactWorld
+                        - measuredMaterialPoint;
+                    plantCorrection.y = 0.0f;
+                    plantCorrection *= 0.65f
+                        * (1.0f - pivotOwnershipRelease);
+                    constexpr float kMaximumPlantCorrection = 0.020f;
+                    const float correctionLength = glm::length(plantCorrection);
+                    comp._gaitPlantCorrectionRequested = correctionLength;
+                    comp._gaitPlantCorrectionAtLimit =
+                        correctionLength >= kMaximumPlantCorrection;
+                    comp._gaitPlantCorrectionPeakRequested = glm::max(
+                        comp._gaitPlantCorrectionPeakRequested,
+                        correctionLength);
+                    if (correctionLength > kMaximumPlantCorrection
+                        && correctionLength > 1e-6f) {
+                        comp._gaitPlantCorrectionSaturated = true;
+                        plantCorrection *=
+                            kMaximumPlantCorrection / correctionLength;
+                    }
+                    comp._gaitPlantCorrectionPeakApplied = glm::max(
+                        comp._gaitPlantCorrectionPeakApplied,
+                        glm::length(plantCorrection));
+                    comp._gaitPlantCorrectionApplied =
+                        glm::length(plantCorrection);
+                    controlledFoot += plantCorrection;
+                }
+            } else if (continuousEnabled && !movingFoot) {
+                // Flat established stance feet retain the center-based restoring solve.
+                glm::vec3 plantCorrection = targetFoot - measuredFoot;
+                plantCorrection.y = 0.0f;
+                plantCorrection *= 0.65f;
+                constexpr float kMaximumPlantCorrection = 0.020f;
+                const float correctionLength = glm::length(plantCorrection);
+                if (correctionLength > kMaximumPlantCorrection
+                    && correctionLength > 1e-6f) {
+                    plantCorrection *=
+                        kMaximumPlantCorrection / correctionLength;
+                }
+                controlledFoot += plantCorrection;
+            }
+            controlledLeg.desiredFoot = controlledFoot;
+            const glm::vec3 hipPosition = physicalPosition(controlledLeg.hipIdx);
             glm::vec3 desiredAnkle = controlledFoot
                 + ankleFromFootWorld(controlledLeg, desiredFootWorld);
             const glm::vec3 requestedAnkle = desiredAnkle;
@@ -2976,6 +3602,70 @@
                 comp._supportTransferTransferEndTarget = glm::mix(
                     comStart, newPlant, transferFraction);
             }
+            if (continuousEnabled && comp._gaitSupportCurveActive) {
+                // Acquisition deliberately used only a partial-load target. Continue from
+                // the exact command position and velocity toward the full support handoff;
+                // this restores load progression without a settle-to-transfer stop.
+                glm::vec3 incomingVelocity =
+                    comp._gaitSupportCommandVelocity;
+                incomingVelocity.y = 0.0f;
+                const float incomingSpeed = glm::length(incomingVelocity);
+                if (incomingSpeed > configuredSupportMaxSpeed
+                    && incomingSpeed > 1e-6f) {
+                    incomingVelocity *= configuredSupportMaxSpeed / incomingSpeed;
+                }
+                comp._gaitSupportCurveStart =
+                    comp._physicalStepSupportTarget;
+                comp._gaitSupportCurveStartVelocity = incomingVelocity;
+                comp._gaitSupportCurveEnd =
+                    comp._supportTransferTransferEndTarget;
+                comp._gaitSupportCurveEnd.y =
+                    comp._gaitSupportCurveStart.y;
+                comp._gaitSupportCurveTime = 0.0f;
+                comp._gaitSupportCurveDuration = glm::max(
+                    cadenceTransferTime * 1.50f, 0.30f);
+                const float remainingForward = glm::max(glm::dot(
+                    comp._gaitSupportCurveEnd - comp._gaitSupportCurveStart,
+                    comp._physicalStepForward), 0.0f);
+                const float outgoingSpeed = glm::clamp(
+                    0.25f * remainingForward
+                        / comp._gaitSupportCurveDuration,
+                    0.03f, 0.10f);
+                comp._gaitSupportCurveEndVelocity =
+                    comp._physicalStepForward * outgoingSpeed;
+                spdlog::info(
+                    "[LocomotionGait] SUPPORT_CURVE_ACQUIRED step={} "
+                    "plant={} duration={:.3f}s speed={:.3f}->{:.3f} "
+                    "load={:.2f} anchorDrift={:.3f} centerTravel={:.3f} "
+                    "correctionPeak={:.3f}/{:.3f}m saturated={} rebased={} "
+                    "centerAnchor={} pivotRelease={}/{:.2f} "
+                    "maxQuiet={:.3f}/{:.3f}s "
+                    "blocked=(contact={:.3f},sole={:.3f},angular={:.3f},"
+                    "linear={:.3f})s migration={:.3f}m angularNow={:.3f}radps",
+                    comp._stepSequenceStepIndex,
+                    comp._physicalStepSupportSide < 0 ? "RIGHT" : "LEFT",
+                    comp._gaitSupportCurveDuration,
+                    glm::length(incomingVelocity), outgoingSpeed,
+                    comp._gaitNewSupportLoad,
+                    comp._physicalStepPlantDrift,
+                    comp._physicalStepPlantCenterTravel,
+                    comp._gaitPlantCorrectionPeakRequested,
+                    comp._gaitPlantCorrectionPeakApplied,
+                    comp._gaitPlantCorrectionSaturated ? "yes" : "no",
+                    comp._physicalStepPlantAnchorRebased ? "yes" : "no",
+                    comp._physicalStepPlantCenterAnchorActive ? "yes" : "no",
+                    comp._physicalStepPlantPivotReleaseLatched
+                        ? "yes" : "no",
+                    comp._physicalStepPlantPivotReleaseWeight,
+                    comp._physicalStepPlantPivotMaxStableTime,
+                    kPlantPivotQuietTime,
+                    comp._physicalStepPlantPivotContactBlockedTime,
+                    comp._physicalStepPlantPivotSoleBlockedTime,
+                    comp._physicalStepPlantPivotAngularBlockedTime,
+                    comp._physicalStepPlantPivotLinearBlockedTime,
+                    comp._physicalStepPlantContactMigration,
+                    comp._physicalStepPlantAngularSpeed);
+            }
             comp._supportTransferTransferT = 0.0f;
             comp._supportTransferHoldStableTime = 0.0f;
             comp._supportTransferContactLossTime = 0.0f;
@@ -3198,41 +3888,186 @@
             const float minimumSupportAdvance = glm::min(
                 comp.gaitMinStepLength, comp.gaitMaxStepLength);
             if (!comp._physicalStepPlantPoseCaptured) {
+                const char* incomingPlantSide =
+                    comp._physicalStepSupportSide < 0 ? "RIGHT" : "LEFT";
                 const float plantSpeed = glm::length(swingVelocity);
                 const float maxAcquireSpeed = continuousEnabled
                     ? glm::max(comp.plantAcquireMaxSpeed, 0.18f)
                     : glm::max(comp.plantAcquireMaxSpeed, 0.01f);
                 constexpr float kPlantAcquireDriftLimit = 0.030f;
                 constexpr float kPlantAcquireGrowthLimit = 0.020f;
+                constexpr float kSettledOffsetDriftLimit = 0.040f;
+                constexpr float kSettledOffsetGrowthLimit = 0.010f;
+                constexpr float kSettledOffsetSpeedLimit = 0.030f;
+                constexpr float kSettledOffsetTime = 0.10f;
+                const bool settledOffsetCandidate = continuousEnabled
+                    && !comp._physicalStepPlantAnchorRebased
+                    && !comp._physicalStepPlantCenterAnchorActive
+                    && !comp._physicalStepPlantPivotReleaseLatched
+                    && swingContactNow && stanceContactNow
+                    && plantSpeed <= kSettledOffsetSpeedLimit
+                    && loadedSoleReady
+                    && comp._physicalStepPlantDrift > kPlantAcquireDriftLimit
+                    && comp._physicalStepPlantDrift <= kSettledOffsetDriftLimit
+                    && std::abs(comp._gaitPlantDriftRate)
+                        <= kSettledOffsetGrowthLimit;
+                comp._physicalStepPlantSettledOffsetTime = settledOffsetCandidate
+                    ? comp._physicalStepPlantSettledOffsetTime + dt : 0.0f;
+                if (comp._physicalStepPlantSettledOffsetTime
+                        >= kSettledOffsetTime
+                    && swingRotationOk
+                    && std::isfinite(contactPoint.x)
+                    && std::isfinite(contactPoint.y)
+                    && std::isfinite(contactPoint.z)) {
+                    const float previousAnchorDrift =
+                        comp._physicalStepPlantDrift;
+                    const float previousCenterTravel =
+                        comp._physicalStepPlantCenterTravel;
+                    const float previousDriftRate = comp._gaitPlantDriftRate;
+                    const glm::vec3 previousContactLocal =
+                        comp._physicalStepTouchdownContactLocal;
+
+                    // A sole that has stopped on a nearby patch is no longer sliding.
+                    // Capture that physical contact as the new invariant instead of
+                    // pulling the loaded foot back toward its first-impact patch.
+                    comp._physicalStepTouchdownContactWorld = contactPoint;
+                    comp._physicalStepTouchdownContactLocal =
+                        comp._physicalStepContactLocal;
+                    comp._physicalStepTouchdownContactValid = true;
+                    comp._physicalStepTouchdownPlant = swingFoot;
+                    swing->plantFoot =
+                        comp._physicalStepTouchdownContactWorld
+                        - nominalFootWorldRotation(*swing)
+                            * comp._physicalStepTouchdownContactLocal;
+                    comp._physicalStepPlantDrift = 0.0f;
+                    comp._physicalStepPlantCenterTravel = 0.0f;
+                    comp._gaitPlantPreviousDrift = 0.0f;
+                    comp._gaitPlantDriftRate = 0.0f;
+                    comp._physicalStepPlantAcquireStableTime = 0.0f;
+                    comp._physicalStepPlantSettledOffsetTime = 0.0f;
+                    comp._physicalStepPlantAnchorRebased = true;
+                    comp._physicalStepPlantContactMigration = 0.0f;
+                    comp._physicalStepPlantContactMigrationLogged = false;
+                    comp._physicalStepPlantPivotStableTime = 0.0f;
+                    spdlog::info(
+                        "[LocomotionGait] PLANT_ANCHOR_REBASE step={} plant={} "
+                        "oldDrift={:.3f}m centerTravel={:.3f}m rate={:+.3f}mps "
+                        "contactLocal=({:+.3f},{:+.3f},{:+.3f})->"
+                        "({:+.3f},{:+.3f},{:+.3f}) "
+                        "correctionPeak={:.3f}/{:.3f}m saturated={} "
+                        "action=acquire-settled-contact",
+                        comp._stepSequenceStepIndex,
+                        incomingPlantSide,
+                        previousAnchorDrift,
+                        previousCenterTravel,
+                        previousDriftRate,
+                        previousContactLocal.x,
+                        previousContactLocal.y,
+                        previousContactLocal.z,
+                        comp._physicalStepTouchdownContactLocal.x,
+                        comp._physicalStepTouchdownContactLocal.y,
+                        comp._physicalStepTouchdownContactLocal.z,
+                        comp._gaitPlantCorrectionPeakRequested,
+                        comp._gaitPlantCorrectionPeakApplied,
+                        comp._gaitPlantCorrectionSaturated ? "yes" : "no");
+                }
                 const bool plantDriftReady = !continuousEnabled
                     || comp._physicalStepPlantDrift
                         <= kPlantAcquireDriftLimit;
                 const bool plantDriftNoLongerGrowing = !continuousEnabled
                     || comp._gaitPlantDriftRate
                         <= kPlantAcquireGrowthLimit;
+                // Once the impact pivot has been released as an active recovery, the
+                // quiet center capture is mandatory. A merely slow foot must not start
+                // support transfer while ownership is still fading away from the edge.
+                const bool plantAnchorOwnershipReady = !continuousEnabled
+                    || !comp._physicalStepPlantPivotReleaseLatched
+                    || comp._physicalStepPlantCenterAnchorActive;
                 const bool acquisitionKinematicallyStable =
                     swingContactNow && stanceContactNow
                     && plantSpeed <= maxAcquireSpeed
                     && loadedSoleReady
                     && plantDriftReady
-                    && plantDriftNoLongerGrowing;
+                    && plantDriftNoLongerGrowing
+                    && plantAnchorOwnershipReady;
+                constexpr float kRecoverableAcquireDriftLimit = 0.030f;
+                constexpr float kRecoverableAcquireGrowthLimit = 0.080f;
+                constexpr float kRecoverableAcquireGraceTime = 0.20f;
+                const float baseAcquireTimeout = glm::max(
+                    comp.plantAcquireTimeout, 0.20f);
+                const bool recoverableDriftTrend =
+                    comp._physicalStepPlantDrift
+                        <= kRecoverableAcquireDriftLimit
+                    && comp._gaitPlantDriftRate
+                        <= kRecoverableAcquireGrowthLimit;
+                const bool recoverableSettledOffset =
+                    comp._physicalStepPlantDrift > kPlantAcquireDriftLimit
+                    && comp._physicalStepPlantDrift
+                        <= kSettledOffsetDriftLimit
+                    && plantSpeed <= kSettledOffsetSpeedLimit
+                    && std::abs(comp._gaitPlantDriftRate)
+                        <= kSettledOffsetGrowthLimit;
+                const bool recoverableAcquireGrace = continuousEnabled
+                    && swingContactNow && stanceContactNow
+                    && plantSpeed <= maxAcquireSpeed
+                    && loadedSoleReady
+                    && (recoverableDriftTrend
+                        || recoverableSettledOffset);
+                const float ordinaryAcquireTimeout = baseAcquireTimeout
+                    + (recoverableAcquireGrace
+                        ? kRecoverableAcquireGraceTime : 0.0f);
+                // A center handoff changes the drift invariant and intentionally resets
+                // the stable proof. A handoff near the old absolute timeout must receive
+                // enough bounded time to prove that new invariant; otherwise the state
+                // transition itself deterministically causes an abort a few frames later.
+                const float postHandoffAcquireDeadline =
+                    comp._physicalStepPlantAnchorHandoffPhaseTime >= 0.0f
+                    ? comp._physicalStepPlantAnchorHandoffPhaseTime
+                        + cadencePlantAcquireTime
+                        + kPostHandoffAcquireMargin
+                    : 0.0f;
+                const float activeAcquireTimeout = glm::max(
+                    ordinaryAcquireTimeout, postHandoffAcquireDeadline);
                 if (continuousEnabled
                     && comp._physicalStepPlantDrift > 0.020f
                     && !comp._gaitPlantRecoveryLogged) {
                     comp._gaitPlantRecoveryLogged = true;
                     spdlog::info(
                         "[LocomotionGait] PLANT_RECOVERY step={} "
-                        "drift={:.3f}/{:.3f}m rate={:+.3f}/{:+.3f}mps "
-                        "supportSpeed={:.3f} action=decelerate-lateral-and-correct",
+                        "anchorDrift={:.3f}/{:.3f}m centerTravel={:.3f}m "
+                        "rate={:+.3f}/{:+.3f}mps "
+                        "supportSpeed={:.3f} correctionPeak={:.3f}/{:.3f}m "
+                        "saturated={} action=decelerate-lateral-and-correct",
                         comp._stepSequenceStepIndex,
                         comp._physicalStepPlantDrift,
                         kPlantAcquireDriftLimit,
+                        comp._physicalStepPlantCenterTravel,
                         comp._gaitPlantDriftRate,
                         kPlantAcquireGrowthLimit,
-                        glm::length(comp._gaitSupportCommandVelocity));
+                        glm::length(comp._gaitSupportCommandVelocity),
+                        comp._gaitPlantCorrectionPeakRequested,
+                        comp._gaitPlantCorrectionPeakApplied,
+                        comp._gaitPlantCorrectionSaturated ? "yes" : "no");
                 }
                 comp._physicalStepPlantAcquireStableTime = acquisitionKinematicallyStable
                     ? comp._physicalStepPlantAcquireStableTime + dt : 0.0f;
+                if (recoverableAcquireGrace
+                    && comp._physicalStepPhaseTime >= baseAcquireTimeout
+                    && comp._physicalStepPhaseTime - dt < baseAcquireTimeout) {
+                    spdlog::info(
+                        "[LocomotionGait] PLANT_ACQUIRE_GRACE step={} plant={} "
+                        "mode={} timeout={:.3f}->{:.3f}s anchorDrift={:.3f} "
+                        "centerTravel={:.3f} rate={:+.3f} speed={:.3f} sole={:.1f}",
+                        comp._stepSequenceStepIndex,
+                        incomingPlantSide,
+                        recoverableSettledOffset ? "settled-offset" : "trend",
+                        baseAcquireTimeout, activeAcquireTimeout,
+                        comp._physicalStepPlantDrift,
+                        comp._physicalStepPlantCenterTravel,
+                        comp._gaitPlantDriftRate,
+                        plantSpeed,
+                        comp._gaitSoleAngularErrorDeg);
+                }
                 if (comp._physicalStepPlantAcquireStableTime
                     >= cadencePlantAcquireTime) {
                     const float retainedFromTarget =
@@ -3247,9 +4082,20 @@
                         : glm::min(minimumSupportAdvance, glm::max(
                             0.03f, comp._gaitPlannedSupportAdvance
                                 - glm::max(comp.footTargetTolerance, 0.01f)));
+                    constexpr float kLandingAdvanceHysteresis = 0.010f;
                     const bool retainsMinimumAdvance = !continuousEnabled
-                        || comp._gaitAchievedSupportAdvance + 0.0005f
-                            >= requiredAdvance;
+                        || comp._gaitAchievedSupportAdvance
+                            + kLandingAdvanceHysteresis >= requiredAdvance;
+                    if (continuousEnabled
+                        && comp._gaitAchievedSupportAdvance < requiredAdvance
+                        && retainsMinimumAdvance) {
+                        spdlog::info(
+                            "[LocomotionGait] LANDING_ADVANCE_CHECK "
+                            "result=HYSTERESIS achieved={:.3f}/{:.3f} margin={:.3f}m",
+                            comp._gaitAchievedSupportAdvance,
+                            requiredAdvance,
+                            kLandingAdvanceHysteresis);
+                    }
                     if (!retainsMinimumAdvance) {
                         spdlog::warn(
                             "[LocomotionGait] LANDING_ADVANCE_CHECK result=RECOVER "
@@ -3269,10 +4115,9 @@
                     }
                     if (!continuousEnabled)
                         capturePhysicalLocalPose(*swing);
-                    // Keep the credible-contact anchor immutable. Re-basing it after the
-                    // sole had already moved made the first slide invisible, then holding
-                    // fixed joint angles allowed another four centimetres during transfer.
-                    // The planted-leg IK now absorbs pelvis motion around this world point.
+                    // The two-stage plant has now captured either the quiet sole center or,
+                    // as a fallback, a credible settled contact. Keep solving the planted
+                    // leg while the pelvis passes over that world-space support.
                     comp._physicalStepPlantPoseCaptured = true;
                     comp._physicalStepSettleTime = 0.0f;
                     comp._gaitLandingVerificationPending = true;
@@ -3283,23 +4128,59 @@
                     // enters the standing transition directly.
                     if (comp._gaitCancelMode != 1 && transferEnabled)
                         beginTransfer();
-                } else if (comp._physicalStepPhaseTime >= glm::max(
-                               comp.plantAcquireTimeout, 0.20f)) {
+                } else if (comp._physicalStepPhaseTime
+                               >= activeAcquireTimeout) {
                     spdlog::warn(
-                        "[LocomotionStep] PLANT_ACQUIRE result=FAIL contact={} "
+                        "[LocomotionStep] PLANT_ACQUIRE result=FAIL plant={} contact={} "
                         "stance={} speed={:.3f}/{:.3f} stable={:.3f}/{:.3f}s "
-                        "forward={:.3f} drift={:.3f}/{:.3f} "
-                        "driftRate={:+.3f}/{:+.3f}",
+                        "timeout={:.3f}/{:.3f}s forward={:.3f} "
+                        "anchorDrift={:.3f}/{:.3f} centerTravel={:.3f} "
+                        "driftRate={:+.3f}/{:+.3f} sole={:.1f}/{:.1f}[{}] "
+                        "correctionPeak={:.3f}/{:.3f} saturated={} "
+                        "rebased={} centerAnchor={} ownershipReady={} "
+                        "pivotRelease={}/{:.2f} handoffAt={:.3f}s "
+                        "migration={:.3f}m maxQuiet={:.3f}/{:.3f}s "
+                        "blocked=(contact={:.3f},sole={:.3f},angular={:.3f},"
+                        "linear={:.3f})s "
+                        "angularSpeed={:.3f}radps pivotQuiet={:.3f}s "
+                        "settled={:.3f}s",
+                        incomingPlantSide,
                         swingContactNow ? "yes" : "no",
                         stanceContactNow ? "yes" : "no",
                         plantSpeed, maxAcquireSpeed,
                         comp._physicalStepPlantAcquireStableTime,
                         cadencePlantAcquireTime,
+                        comp._physicalStepPhaseTime,
+                        activeAcquireTimeout,
                         comp._physicalStepForwardTravel,
                         comp._physicalStepPlantDrift,
                         kPlantAcquireDriftLimit,
+                        comp._physicalStepPlantCenterTravel,
                         comp._gaitPlantDriftRate,
-                        kPlantAcquireGrowthLimit);
+                        kPlantAcquireGrowthLimit,
+                        comp._gaitSoleAngularErrorDeg,
+                        kLoadedSoleToleranceDeg,
+                        loadedSoleReady ? "ok" : "FAIL",
+                        comp._gaitPlantCorrectionPeakRequested,
+                        comp._gaitPlantCorrectionPeakApplied,
+                        comp._gaitPlantCorrectionSaturated ? "yes" : "no",
+                        comp._physicalStepPlantAnchorRebased ? "yes" : "no",
+                        comp._physicalStepPlantCenterAnchorActive ? "yes" : "no",
+                        plantAnchorOwnershipReady ? "yes" : "no",
+                        comp._physicalStepPlantPivotReleaseLatched
+                            ? "yes" : "no",
+                        comp._physicalStepPlantPivotReleaseWeight,
+                        comp._physicalStepPlantAnchorHandoffPhaseTime,
+                        comp._physicalStepPlantContactMigration,
+                        comp._physicalStepPlantPivotMaxStableTime,
+                        kPlantPivotQuietTime,
+                        comp._physicalStepPlantPivotContactBlockedTime,
+                        comp._physicalStepPlantPivotSoleBlockedTime,
+                        comp._physicalStepPlantPivotAngularBlockedTime,
+                        comp._physicalStepPlantPivotLinearBlockedTime,
+                        comp._physicalStepPlantAngularSpeed,
+                        comp._physicalStepPlantPivotStableTime,
+                        comp._physicalStepPlantSettledOffsetTime);
                     abortSequence("new plant did not settle before acquisition timeout");
                 }
             }
@@ -3314,7 +4195,7 @@
                 cadenceTransferTime, 0.08f);
             const bool loadHandoffReady = continuousEnabled
                 && comp._physicalStepPhaseTime >= minimumDynamicTransferTime
-                && comp._gaitNewSupportLoad >= 0.68f
+                && comp._gaitNewSupportLoadLatched
                 && loadedSoleReady;
             if (loadHandoffReady
                 || comp._physicalStepPhaseTime >= cadenceTransferTime) {
@@ -3328,14 +4209,23 @@
             const float comTolerance = glm::max(comp.transferComTolerance, 0.01f);
             const float newSupportRadius = glm::max(comTolerance, 0.065f);
             const bool comAtTarget = comp._supportTransferComError <= comTolerance;
+            const float liveSupportError = horizontalDistance(
+                rag._locomotionCOM, comp._physicalStepSupportTarget);
+            const float liveSupportTolerance = glm::max(comTolerance, 0.065f);
+            // The continuous curve deliberately cruises beyond its Hermite endpoint.
+            // Validating against that stale endpoint made HOLD completion depend on the
+            // landing-verification window coinciding with the instant the COM passed it.
+            // Track the command that actually owns support instead; load, contact, sole,
+            // drift, motion, tilt, and saturation remain independent safety gates below.
+            const bool transferPositionReady = continuousEnabled
+                ? liveSupportError <= liveSupportTolerance
+                : comAtTarget;
             const bool insideNewSupport =
                 comp._supportTransferComToNewSupport <= newSupportRadius;
             // We do not yet expose a per-foot normal impulse, so project the COM along the
-            // complete old-to-new support span. Crossing 68% is the load-bearing proxy:
-            // the new foot owns most of the base before the old foot may become swing.
-            constexpr float kNewSupportLoadThreshold = 0.68f;
-            const bool oldLegUnloaded =
-                comp._gaitNewSupportLoad >= kNewSupportLoadThreshold;
+            // complete old-to-new support span. Acquire at 68%, but retain ownership down
+            // to 64% so sub-frame COM noise cannot repeatedly reset the stable window.
+            const bool oldLegUnloaded = comp._gaitNewSupportLoadLatched;
             const bool locksOff = rag.locomotionFootLockWeights[0] <= 0.001f
                                && rag.locomotionFootLockWeights[1] <= 0.001f
                                && rag._locomotionFootLockForce[0] <= 0.5f
@@ -3346,7 +4236,7 @@
                 : glm::length(leftVelocity) < 0.15f
                     && glm::length(rightVelocity) < 0.15f
                     && comp._supportTransferComHorizontalSpeed < 0.15f;
-            const bool stableTransfer = comAtTarget
+            const bool stableTransfer = transferPositionReady
                 && swingContactNow && stanceContactNow
                 && oldLegUnloaded
                 && loadedSoleReady
@@ -3476,16 +4366,18 @@
                            cadenceTransferHoldTime)) {
                 spdlog::warn(
                     "[LocomotionGait] TRANSFER_CHECK result=FAIL "
-                    "COMerr={:.3f}/{:.3f}[{}] newRegion={:.3f}/{:.3f}[{}] "
+                    "endpointErr={:.3f}/{:.3f} commandErr={:.3f}/{:.3f}[{}] "
+                    "newRegion={:.3f}/{:.3f}[{}] "
                     "newLoad={:.2f}/{:.2f}[{}] "
                     "contact=({},{}) speed={:.3f} drift=({:.3f},{:.3f}) "
                     "tilt={:.1f}/30 supportSat={} motorSat={} stable={:.3f}/{:.3f}s",
                     comp._supportTransferComError, comTolerance,
-                    comAtTarget ? "ok" : "FAIL",
+                    liveSupportError, liveSupportTolerance,
+                    transferPositionReady ? "ok" : "FAIL",
                     comp._supportTransferComToNewSupport, newSupportRadius,
                     insideNewSupport ? "ok" : "FAIL",
                     comp._gaitNewSupportLoad,
-                    kNewSupportLoadThreshold,
+                    kNewSupportLoadAcquireThreshold,
                     oldLegUnloaded ? "ok" : "FAIL",
                     comp._physicalStepContactL ? "L" : "-",
                     comp._physicalStepContactR ? "R" : "-",
@@ -3515,7 +4407,7 @@
                 || std::abs(comp._gaitHeadingErrorDeg) <= interStepHeadingLimit;
             const bool interStepReady = continuousEnabled
                 ? swingContactNow && stanceContactNow
-                    && comp._gaitNewSupportLoad >= 0.68f
+                    && comp._gaitNewSupportLoadLatched
                     && loadedSoleReady
                     && tiltDeg <= interStepTiltLimit
                     && headingReady
@@ -3581,11 +4473,42 @@
                 comp._gaitPlannedSupportAdvance = 0.0f;
                 comp._gaitAchievedSupportAdvance = 0.0f;
                 comp._physicalStepPlantAcquireStableTime = 0.0f;
+                comp._physicalStepPlantSettledOffsetTime = 0.0f;
+                comp._physicalStepPlantUnsafeTime = 0.0f;
+                comp._physicalStepPlantAnchorRebased = false;
+                comp._physicalStepPlantCenterAnchorActive = false;
+                comp._physicalStepPlantContactMigrationLogged = false;
+                comp._physicalStepPlantPivotReleaseLatched = false;
+                comp._physicalStepPlantPivotStableTime = 0.0f;
+                comp._physicalStepPlantPivotMaxStableTime = 0.0f;
+                comp._physicalStepPlantPivotReleaseTriggerTime = 0.0f;
+                comp._physicalStepPlantPivotReleaseTime = 0.0f;
+                comp._physicalStepPlantPivotReleaseWeight = 0.0f;
+                comp._physicalStepPlantCenterBlendTime = 0.0f;
+                comp._physicalStepPlantAnchorTelemetryTime = 0.0f;
+                comp._physicalStepPlantAnchorHandoffPhaseTime = -1.0f;
+                comp._physicalStepPlantPivotContactBlockedTime = 0.0f;
+                comp._physicalStepPlantPivotSoleBlockedTime = 0.0f;
+                comp._physicalStepPlantPivotAngularBlockedTime = 0.0f;
+                comp._physicalStepPlantPivotLinearBlockedTime = 0.0f;
+                comp._physicalStepPlantContactMigration = 0.0f;
+                comp._physicalStepPlantAngularSpeed = 0.0f;
+                comp._physicalStepPlantCenterAnchorStart = glm::vec3(0.0f);
+                comp._physicalStepPlantCenterAnchorTarget = glm::vec3(0.0f);
                 comp._gaitPlantPreviousDrift = 0.0f;
                 comp._gaitPlantDriftRate = 0.0f;
                 comp._gaitPlantRecoveryLogged = false;
+                comp._gaitPlantCorrectionPeakRequested = 0.0f;
+                comp._gaitPlantCorrectionPeakApplied = 0.0f;
+                comp._gaitPlantCorrectionSaturated = false;
+                comp._gaitPlantCorrectionRequested = 0.0f;
+                comp._gaitPlantCorrectionApplied = 0.0f;
+                comp._gaitPlantCorrectionAtLimit = false;
                 comp._physicalStepTrajectoryT = 0.0f;
                 comp._physicalStepTouchdownAccepted = false;
+                comp._physicalStepTouchdownContactValid = false;
+                comp._physicalStepPlantCenterTravel = 0.0f;
+                comp._gaitNewSupportLoadLatched = false;
                 comp._physicalStepMaxStanceDrift = 0.0f;
                 comp._physicalStepMaxPlantDrift = 0.0f;
                 comp._gaitStepMaxRelevantDrift = 0.0f;
@@ -3675,6 +4598,7 @@
                         nextCommand, minimumCommand, maximumStep);
                     ++comp._stepSequenceStepIndex;
                     comp._runtimeAutoRetryCount = 0;
+                    comp._runtimeRecoveryStableTime = 0.0f;
                     comp._gaitStepStartTime = comp._gaitRunTime;
                     comp._gaitStepStartCom = rag._locomotionCOM;
                 } else {
@@ -3893,6 +4817,7 @@
             comp._physicalStepPhaseTime = 0.0f;
             comp._physicalStepSupportSide = 0;
             comp._physicalStepTouchdownAccepted = false;
+            comp._physicalStepTouchdownContactValid = false;
         }
 
         comp._physicalStepPrevSwingContact = swingContactNow;

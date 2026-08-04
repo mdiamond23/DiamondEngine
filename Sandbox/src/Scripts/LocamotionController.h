@@ -73,6 +73,7 @@ struct LocamotionControllerComponent
     // proportionally compressed to this budget while retaining small physical safety
     // floors. Set to zero to use the individual phase durations verbatim.
     float gaitTargetStepPeriod = 1.20f;
+    float gaitSupportMaxSpeed = 0.30f;
     bool gaitAdaptationEnabled = true;
     float gaitAdaptationResponse = 0.25f;
     float gaitMaxStrideCorrection = 0.020f;
@@ -167,6 +168,7 @@ struct LocamotionControllerComponent
     bool  _physicalStepContactL = false, _physicalStepContactR = false;
     bool  _physicalStepPrevSwingContact = false;
     bool  _physicalStepTouchdownAccepted = false;
+    bool  _physicalStepTouchdownContactValid = false;
     bool  _physicalStepAborted = false;
     float _physicalStepTime = 0.0f;
     float _physicalStepSettleTime = 0.0f;
@@ -179,6 +181,30 @@ struct LocamotionControllerComponent
     float _physicalStepArrivalStableTime = 0.0f;
     float _physicalStepReachLimit = 0.0f;
     float _physicalStepPlantAcquireStableTime = 0.0f;
+    float _physicalStepPlantSettledOffsetTime = 0.0f;
+    float _physicalStepPlantUnsafeTime = 0.0f;
+    bool _physicalStepPlantAnchorRebased = false;
+    // Landing owns the first material contact only while the sole is still rocking.
+    // Once it is level and quiet, ownership blends to a frozen sole-center anchor.
+    bool _physicalStepPlantCenterAnchorActive = false;
+    bool _physicalStepPlantContactMigrationLogged = false;
+    bool _physicalStepPlantPivotReleaseLatched = false;
+    float _physicalStepPlantPivotStableTime = 0.0f;
+    float _physicalStepPlantPivotMaxStableTime = 0.0f;
+    float _physicalStepPlantPivotReleaseTriggerTime = 0.0f;
+    float _physicalStepPlantPivotReleaseTime = 0.0f;
+    float _physicalStepPlantPivotReleaseWeight = 0.0f;
+    float _physicalStepPlantCenterBlendTime = 0.0f;
+    float _physicalStepPlantAnchorTelemetryTime = 0.0f;
+    float _physicalStepPlantAnchorHandoffPhaseTime = -1.0f;
+    float _physicalStepPlantPivotContactBlockedTime = 0.0f;
+    float _physicalStepPlantPivotSoleBlockedTime = 0.0f;
+    float _physicalStepPlantPivotAngularBlockedTime = 0.0f;
+    float _physicalStepPlantPivotLinearBlockedTime = 0.0f;
+    float _physicalStepPlantContactMigration = 0.0f;
+    float _physicalStepPlantAngularSpeed = 0.0f;
+    glm::vec3 _physicalStepPlantCenterAnchorStart { 0.0f };
+    glm::vec3 _physicalStepPlantCenterAnchorTarget { 0.0f };
     float _physicalStepTrajectoryT = 0.0f;
     float _physicalStepClearance = 0.0f;
     float _physicalStepForwardTravel = 0.0f;
@@ -189,6 +215,7 @@ struct LocamotionControllerComponent
     float _physicalStepVerticalTargetError = 0.0f;
     float _physicalStepTouchdownVy = 0.0f;
     float _physicalStepTouchdownNormalY = 0.0f;
+    float _physicalStepPlantCenterTravel = 0.0f;
     float _physicalStepStanceDrift = 0.0f, _physicalStepPlantDrift = 0.0f;
     float _physicalStepMaxStanceDrift = 0.0f, _physicalStepMaxPlantDrift = 0.0f;
     float _physicalStepInitialTilt = 0.0f, _physicalStepPeakTilt = 0.0f, _physicalStepFinalTilt = 0.0f;
@@ -206,6 +233,8 @@ struct LocamotionControllerComponent
     glm::vec3 _physicalStepFoothold { 0.0f };
     glm::vec3 _physicalStepDesiredFoot { 0.0f };
     glm::vec3 _physicalStepTouchdownPlant { 0.0f };
+    glm::vec3 _physicalStepTouchdownContactWorld { 0.0f };
+    glm::vec3 _physicalStepTouchdownContactLocal { 0.0f };
     glm::vec3 _physicalStepApiVelocity { 0.0f };
     glm::vec3 _physicalStepMeasuredVelocity { 0.0f };
     glm::vec3 _physicalStepPreviousSwingFoot { 0.0f };
@@ -304,6 +333,12 @@ struct LocamotionControllerComponent
     float _gaitPlantPreviousDrift = 0.0f;
     float _gaitPlantDriftRate = 0.0f;
     bool _gaitPlantRecoveryLogged = false;
+    float _gaitPlantCorrectionPeakRequested = 0.0f;
+    float _gaitPlantCorrectionPeakApplied = 0.0f;
+    bool _gaitPlantCorrectionSaturated = false;
+    float _gaitPlantCorrectionRequested = 0.0f;
+    float _gaitPlantCorrectionApplied = 0.0f;
+    bool _gaitPlantCorrectionAtLimit = false;
     float _gaitInterStepRecenterT = 0.0f;
     float _gaitInterStepCenterError = 0.0f;
     float _gaitRootPitchRate = 0.0f;
@@ -327,6 +362,7 @@ struct LocamotionControllerComponent
     bool _gaitContinuousCycle = false;
     bool _gaitBypassWeightShift = false;
     float _gaitNewSupportLoad = 0.0f;
+    bool _gaitNewSupportLoadLatched = false;
     glm::vec3 _gaitCycleSupportTarget { 0.0f };
     // One velocity-continuous pelvis/support command spans late swing, touchdown,
     // transfer, and the following takeoff. FSM phases only validate that motion.
@@ -345,6 +381,7 @@ struct LocamotionControllerComponent
     bool _runtimeRestartBlocked = false;
     int _runtimeAutoRetryCount = 0;
     float _runtimeRecoveryCooldown = 0.0f;
+    float _runtimeRecoveryStableTime = 0.0f;
     bool _runtimeTurnActive = false;
     int _runtimeNextSupportSide = -1;
     float _runtimeTurnElapsed = 0.0f;
@@ -412,6 +449,7 @@ inline void DrawComponentInspector<LocamotionControllerComponent>(LocamotionCont
     if (ImGui::CollapsingHeader("Gait", ImGuiTreeNodeFlags_DefaultOpen)) {
         LOCO_DRAG("Target Gait Speed", gaitDesiredSpeed, 0.005f, 0.0f, 2.0f, "%.3f m/s");
         LOCO_DRAG("Target Step Period", gaitTargetStepPeriod, 0.01f, 0.0f, 4.0f, "%.2f s");
+        LOCO_DRAG("Support Motion Speed Cap", gaitSupportMaxSpeed, 0.01f, 0.01f, 1.0f, "%.2f m/s");
         ImGui::Checkbox("Online Gait Adaptation", &c.gaitAdaptationEnabled);
         LOCO_DRAG("Adaptation Response", gaitAdaptationResponse, 0.01f, 0.01f, 1.0f, "%.2f");
         LOCO_DRAG("Max Stride Correction", gaitMaxStrideCorrection, 0.002f, 0.0f, 0.10f, "%.3f m");
@@ -492,7 +530,7 @@ inline std::string SerializeComponent<LocamotionControllerComponent>(const Locam
     LOCO_SAVE(footTargetTolerance); LOCO_SAVE(safeReachFraction); LOCO_SAVE(transferDuration);
     LOCO_SAVE(transferSupportBias); LOCO_SAVE(transferComTolerance); LOCO_SAVE(transferHoldDuration);
     LOCO_SAVE(transferTimeout); LOCO_SAVE(interStepDuration); LOCO_SAVE(driftGrowthTolerance);
-    LOCO_SAVE(gaitDesiredSpeed); LOCO_SAVE(gaitTargetStepPeriod);
+    LOCO_SAVE(gaitDesiredSpeed); LOCO_SAVE(gaitTargetStepPeriod); LOCO_SAVE(gaitSupportMaxSpeed);
     LOCO_SAVE(gaitAdaptationEnabled); LOCO_SAVE(gaitAdaptationResponse);
     LOCO_SAVE(gaitMaxStrideCorrection); LOCO_SAVE(gaitMaxPeriodSlowdown);
     LOCO_SAVE(gaitStressStopThreshold);
@@ -545,6 +583,7 @@ inline void DeserializeComponent<LocamotionControllerComponent>(LocamotionContro
     LOCO_MIGRATE(transferTimeout, "test5HoldTimeout"); LOCO_MIGRATE(interStepDuration, "test6InterStepTime");
     LOCO_MIGRATE(driftGrowthTolerance, "test6DriftGrowthTolerance");
     LOCO_MIGRATE(gaitDesiredSpeed, "test7DesiredSpeed"); LOCO_LOAD(gaitTargetStepPeriod);
+    LOCO_LOAD(gaitSupportMaxSpeed);
     LOCO_LOAD(gaitAdaptationEnabled); LOCO_LOAD(gaitAdaptationResponse);
     LOCO_LOAD(gaitMaxStrideCorrection); LOCO_LOAD(gaitMaxPeriodSlowdown);
     LOCO_LOAD(gaitStressStopThreshold);
@@ -656,6 +695,7 @@ public:
                 comp._runtimeRestartBlocked = false;
                 comp._runtimeAutoRetryCount = 0;
                 comp._runtimeRecoveryCooldown = 0.0f;
+                comp._runtimeRecoveryStableTime = 0.0f;
             }
 
             const Diamond::Locomotion::GaitCommand gaitCommand =
@@ -771,7 +811,9 @@ private:
                 < std::cos(glm::radians(5.0f));
         command.startRequested = wantsToWalk && !comp._gaitRunning
             && !comp._runtimeRestartBlocked
-            && comp._runtimeRecoveryCooldown <= 0.0f;
+            && comp._runtimeRecoveryCooldown <= 0.0f
+            && (comp._runtimeAutoRetryCount == 0
+                || comp._runtimeRecoveryStableTime >= 0.25f);
         command.stopRequested = comp._gaitRunning
             && (!wantsToWalk || directionChanged);
         command.initialSupportSide = comp._runtimeNextSupportSide;
@@ -800,6 +842,7 @@ private:
         c._runtimeRestartBlocked = false;
         c._runtimeAutoRetryCount = 0;
         c._runtimeRecoveryCooldown = 0.0f;
+        c._runtimeRecoveryStableTime = 0.0f;
         c._runtimeTurnActive = false;
         c._runtimeNextSupportSide = -1;
         c._runtimeTurnElapsed = 0.0f;
