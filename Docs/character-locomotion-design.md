@@ -1347,18 +1347,21 @@ state, and enters the validated standing return. It does not invoke the settled 
    on the temporary fallback during this slice. Run mirrored W-to-diagonal left/right changes for at
    least six completed steps each. Heading error must decrease after every successful transfer; no
    planted reference may rotate or exceed existing drift gates.
-3. **Feasibility-backed yaw.** Route the candidate end pose through both-leg reach/envelope checks,
+3. **Feasibility-backed yaw — accepted at the conservative 5-degree runtime baseline
+   (2026-08-05).** Route the candidate end pose through both-leg reach/envelope checks,
    add descending yaw admission, and expose the limiting constraint. Raise the cap gradually toward
    the smallest value that produces responsive motion without routine joint clamping; do not choose
    the value from the authored hip limit alone. Repeat mirrored arcs at each increase and retain a
    meaningful hip/ankle/reach reserve.
-4. **Turn-dominant and zero-advance steps.** Add smooth advance reduction for large remaining heading
+   The accepted baseline keeps feasibility observational, the cap fixed at 5 degrees, and records
+   authoritative routing, descending-yaw reconstruction, and cap expansion as deferred extensions.
+4. **Turn-dominant and zero-advance steps — accepted (2026-08-05).** Add smooth advance reduction for large remaining heading
    errors, replace forward-only admission/landing success with objective-relative checks, and make
    support-curve tangents vector-relative. Validate fresh-scene 45- and 90-degree changes in both
    directions, including changes requested during weight shift, swing, descent, transfer, and
    inter-step. No case may abort solely because a deliberate turn produced less than the straight-
    gait minimum forward advance.
-5. **Retarget, stop, and reversal behavior.** Allow the desired heading to change at any time while
+5. **CURRENT — Retarget, stop, and reversal behavior.** Allow the desired heading to change at any time while
    keeping the admitted active step immutable after its commit point. Test left-to-right retargets,
    input release in every major phase, and 180-degree requests. Initially, 180 degrees may use the
    validated controlled stop if multi-step turn admission cannot retain separation or joint margin;
@@ -1994,6 +1997,263 @@ and desired-to-commanded FK position error must converge through shared rate adm
 settling at a lateral offset. The red desired-trajectory marker must reach the green foothold, and no
 inside step may reset through SWING or ARRIVAL. Dependency-inclusive Debug builds pass for `Sandbox`
 and `Runtime`, and `git diff --check` is clean; physical validation remains user-run.
+
+**Slice 2 runtime acceptance (2026-08-05): accepted.** The position-primary, zero-runtime-swivel
+chain and bounded stance width passed the straight four-step/start-stop regression and mirrored
+W-to-diagonal turns. Slice 3 therefore inherits the current 5-degree turn as its behavioral
+baseline. The retained Slice 2j orientation sampler is not part of that acceptance proof: passing
+steps can still report `counterfactual accepted=no` or a 180-degree hypothetical clamp before later
+committing successfully. It remains diagnostic-only and must never be promoted directly into a
+routing gate.
+
+**Slice 3 rollout sequence (2026-08-05): feasibility-backed yaw begins in shadow mode.** Keep the
+accepted executor and the 5-degree cap unchanged while admission is introduced in four explicit
+gates:
+
+1. Evaluate the final grounded pose for both physical constraint chains in read-only shadow mode.
+   Use captured ragdoll segment geometry, the current position-primary two-vector reconstruction,
+   zero applied swivel, actual authored envelopes, the fixed stance sole, and the predicted end
+   heading. Report swing/stance reach, knee margin, hip and ankle clamp/reserve, FK closure, lane,
+   separation, ground validity, and the first limiting constraint.
+2. Compare each shadow decision with the unchanged executor. A committed step that shadow would
+   reject is a false rejection; a runtime abort after a shadow-safe decision is a false acceptance.
+   Either result blocks routing activation and requires the predictor to be corrected, not the
+   physical gait, motors, contact gates, or joint limits to be retuned.
+3. Only after the 5-degree straight and mirrored matrix contains no unexplained mismatches may the
+   shadow result become authoritative. Enable it at the same 5-degree cap first, then add descending
+   yaw admission while rebuilding the full grounded pose and both-leg proof at every candidate yaw.
+4. Raise the cap in small increments. At every value, run fresh mirrored arcs through complete
+   outside/inside step pairs and retain the zero-yaw four-step/start-stop regression. Stop increasing
+   at the first routine clamp, lost reserve, crossover, anchor/drift regression, or directional
+   asymmetry; responsiveness alone cannot override the weakest measured reserve.
+
+The first implementation stage emits `[LocomotionTurnFeasibilityShadow]` once per planned turn.
+`[LocomotionTurnFeasibilityMismatch]` distinguishes a shadow rejection of a step that later commits
+from a shadow-safe step that later aborts, and records the action to keep shadow routing disabled.
+This telemetry is observational: it cannot change `candidateAccepted`, `activeHeadingPlan`, the
+foothold, a joint target, or any phase transition.
+
+Dependency-inclusive Debug builds pass for both `Sandbox` and `Runtime`, and `git diff --check` is
+clean. Runtime shadow classification remains user-run; no Slice 3 feasibility result is yet allowed
+to alter admission.
+
+**Slice 3 shadow refinement (2026-08-05): safety-buffer consumption and dynamic tracking reserve.**
+The first mirrored shadow run produced 35 evaluated turn plans: 29 shadow-safe, six shadow-unsafe,
+five committed false rejections, and one aborted false acceptance. Both directions also contained
+one ARRIVAL abort and automatic retry. The apparent stand-up between turn segments was therefore the
+validated recovery path, not only a visual cadence seam.
+
+All five false rejections were caused by only 0.31-1.42 degrees of predicted ankle loss against the
+controller's already-inset three-degree safety envelope; the corresponding authored hard envelope
+was not violated. Shadow evaluation now records both values separately. An ankle pose remains unsafe
+if it clamps against the authored hard limit or consumes more than 1.5 degrees (half) of the
+three-degree safety buffer. Lesser consumption remains visible as reduced reserve but does not reject
+an otherwise exact physical-chain pose.
+
+The initial two physical ARRIVAL failures were inside-foot turns whose admitted target speed used
+98.7 and 100 percent of the 0.78 m/s target-speed ceiling, so the first dynamic refinement required
+five percent admitted-speed headroom. A follow-up mirrored run showed that this was too conservative:
+of 23 shadow records, 20 were safe and all three unsafe results were tracking-reserve decisions. The
+predictor had zero false acceptances and correctly anticipated the only runtime abort, but still
+falsely rejected two committed steps. One of those clean steps succeeded at 0.766/0.780 m/s, proving
+that admitted speed near the ceiling is not itself a sufficient failure condition. The ankle change
+did behave as intended: up to 1.21 degrees of safety-buffer consumption committed with no authored
+hard-limit clamp or ankle-envelope mismatch.
+
+The next mirrored run invalidated discarded request as a gate as well. Of 35 shadow records, 13 were
+classified unsafe: twelve committed false rejections, one correctly anticipated abort, and one
+additional abort was a false acceptance with zero clamp loss. Intentional pair-budget and
+descending-yaw target reshaping produced 0.129-0.354 m/s of loss on successful steps, so the value
+does not isolate physical tracking danger. Requested, admitted, and limit speed plus clamp loss and
+the former eight-percent reference remain in telemetry, explicitly marked `gate=disabled`.
+Clamp loss can no longer set `constraint=swing-tracking-reserve` or change shadow safety.
+
+That run also separated the visible posture seam from abort recovery. On both completed rotations,
+the final nonzero-yaw step committed normally and was followed immediately by an unrestricted
+zero-yaw step. The transition touchdown rose from 0.069-0.103 m/s on the final turning step to
+0.564-0.596 m/s, then triggered plant recovery, pivot release, and a zero-support-velocity settle.
+This is the observed stand-up before straight travel resumes. A committed nonzero-yaw step now arms
+one latched turn-exit step. The latch is consumed only when that zero-yaw step commits; while active,
+the step retains the 0.78 m/s inside-foot admission budget, 0.05 m/s conditioned support transport,
+coherent swing command, turn touchdown-readiness gates, and the governed arrival/descent path.
+`exitBlend=yes`, `SUPPORT_TRANSPORT_TURN_EXIT`, and the transition touchdown metrics
+make the seam directly verifiable without changing the accepted yaw cap.
+
+**Slice 3 pre-activation stabilization (2026-08-05): outside-foot initiation and explicit ankle
+reserve.** The turn-exit rerun validated both conditioned exit steps: touchdown linear speed fell
+from the former 0.564-0.596 m/s seam to 0.035 and 0.005 m/s, angular speed fell to 0.070 and
+0.068 rad/s, and both steps committed without an exit abort or pivot release. Keep this path fixed.
+
+The same run contained two earlier ARRIVAL aborts. Both were fresh positive-yaw attempts beginning
+on the anatomical inside foot; the automatic retry that finally began on the outside foot completed
+the full arc. A new turn may therefore defer, but not reject, yaw for one already-admitted inside-foot
+step. The step retains its zero-yaw straight advance and all ordinary landing invariants, reports
+`constraint=turn-initiation-role`, and emits `[LocomotionTurnInitiation] action=DEFER_YAW`. The desired
+heading remains unchanged, so the following outside foot must carry the first nonzero admitted yaw.
+This rule does not alter an established turn pair, a live turn already containing a committed yaw,
+the accepted turn-exit step, or stop handling.
+
+The only remaining false rejection consumed 1.66 degrees of the three-degree ankle safety buffer
+and zero degrees of the authored hard envelope, then committed cleanly. Shadow feasibility now
+expresses the soft rule as a remaining-reserve invariant: at least one full degree of the configured
+safety buffer must remain. With the current three-degree inset, up to two degrees of soft-envelope
+consumption is diagnostic-safe; any authored hard-limit clamp remains unsafe. Runtime activation is
+still blocked. The next mirrored test must show one deferral only when an inside foot would otherwise
+initiate the turn, first nonzero yaw on the following outside foot, zero turn aborts/retries, zero
+unexplained shadow mismatches, both quiet exit blends, four subsequent zero-yaw steps, and the
+validated controlled stop before shadow feasibility can become authoritative at five degrees.
+
+**Slice 3 lane-floor closure (2026-08-05): final five-degree runtime edge pending validation.** The
+next matrix produced 33/33 shadow-safe physical poses, no false rejection, two correctly sequenced
+inside-first deferrals, three quiet exit blends, monotonic completed heading progress, and a passing
+controlled stop. Its only failure occurred in `WEIGHT_SHIFT`, before takeoff or physical tracking:
+the first outside-foot plan requested 1.056 m/s, advance projection reached its zero-forward floor,
+and the immutable lateral lane still measured 0.622 m/s against the 0.620 m/s outside budget. The
+final gate allowed only 0.001 m/s of closure, so it rejected the otherwise grounded plan and forced
+one automatic retry; the later 0.570 m/s outside-foot plan completed.
+
+Admission now measures and reports that zero-forward lane floor explicitly. The binary projector
+still targets the exact speed ceiling, but a final floor no more than 0.005 m/s above the ceiling is
+accepted as bounded geometric/numerical closure and emits
+`[LocomotionTurnAdmission] result=LANE_FLOOR_TOLERANCE`. A larger overshoot remains rejected, emits
+`result=LANE_FLOOR_EXCEEDED`, and records `action=await-descending-yaw`; it is not hidden by raising
+the outside-foot budget. `[LocomotionTurnPlan]` and abort telemetry also record the floor, tolerance,
+and applied/exceeded state. The 0.005 m/s allowance is less than one percent of the 0.620 m/s budget
+and covers the observed 0.002 m/s floor without authorizing a materially different trajectory.
+
+**Slice 3 runtime acceptance (2026-08-05): accepted at the fixed 5-degree cap.** The final mirrored
+run contained zero turn aborts, automatic retries, restart blocks, shadow false rejections, shadow
+false acceptances, or confirmed unsafe outcomes. All 22 evaluated turn poses were shadow-safe. The
+inside-first request deferred exactly one zero-yaw step and the following anatomical outside foot
+carried the first nonzero yaw. Both completed turns used exactly one conditioned exit step; their
+touchdowns measured 0.024/0.007 m/s linear and 0.217/0.060 rad/s angular, with no visible stand-up or
+recovery seam. Completed heading error converged and no lane-floor closure or exceedance was needed.
+The controlled stop was not repeated in that final session, but passed the immediately preceding
+matrix; the intervening patch changes only turn admission and does not alter stop routing.
+
+This acceptance freezes the validated behavior: a 5-degree cap, outside-foot-first initiation,
+read-only both-leg feasibility telemetry, bounded pair conditioning, and one quiet turn-exit step.
+It does not claim that shadow feasibility is authoritative or that descending yaw and larger caps
+have been validated. Those are retained as named follow-up extensions rather than silently entering
+Slice 4. The current focus is now Slice 4's turn-dominant runtime validation matrix.
+An abort following an unsafe prediction now emits
+`[LocomotionTurnFeasibilityOutcome] result=SHADOW_REJECTION_CONFIRMED`, separating a correctly
+anticipated runtime failure from the existing false-acceptance mismatch.
+Dependency-inclusive Debug builds pass for `Sandbox` and `Runtime`, and `git diff --check` is clean.
+
+**Slice 4 implementation (2026-08-05): build-verified; physical validation pending.** The unified
+planner now classifies every admitted step as translation, angular, or combined. Remaining committed
+heading error supplies a serialized smooth advance envelope: full advance through 15 degrees,
+smooth reduction between 15 and 45 degrees, and zero commanded advance at 45 degrees and above.
+The ordinary physical-turn route now remains available through 90 degrees while the accepted
+per-step yaw cap stays fixed at 5 degrees. Inside-first initiation deferrals and the conditioned
+zero-yaw exit step retain full translation so neither inherited Slice 3 transition is silently
+reclassified as a pivot.
+
+The same advance envelope now owns foothold construction, conditioned pair transport, and the
+inter-step cruise rebase. Zero-span support curves publish zero endpoint velocity; nonzero turning
+curves derive their endpoint tangent from the actual horizontal support span. Landing checks use the
+admitted objective: straight translation retains the existing minimum-advance invariant, combined
+steps compare against their admitted advance with the existing foot-target tolerance, and angular
+steps may accept a measured zero-advance footprint while still requiring the ordinary contact, load,
+sole, drift, tilt, support, and saturation gates. HOLD additionally requires signed angular progress
+within a two-degree-or-40-percent tolerance before committing an angular objective.
+
+Forward stride filtering updates for translation-bearing steps. Settled-loss reserve learning updates
+only for translation-only steps, so turn-dominant combined loss cannot contaminate admission of the
+conditioned straight exit. Pure angular steps freeze both forward integrators; combined steps retain
+forward-error and stride adaptation while continuing to feed lateral, touchdown, drift, motor, reach,
+unload, cadence-slowdown, transfer-bias, stress, and recovery feedback. Turn-plan and commit telemetry
+report objective type, nominal advance, heading advance scale, requested,
+admitted, and achieved advance, and independent translation/angular satisfaction. Both-leg
+feasibility remains read-only shadow telemetry; descending-yaw reconstruction and cap expansion were
+not enabled. Dependency-inclusive Debug builds pass for `Sandbox` and `Runtime`, and `git diff
+--check` is clean. The fresh-scene mirrored 45/90-degree phase matrix remains the acceptance gate.
+
+**Slice 4 landing-objective stabilization (2026-08-05): implementation complete; rerun pending.**
+The first extensive matrix proved the physical 90-degree route but produced eight visible standing
+returns. None was an abort, restart block, contact failure, or turn-exit seam. Six combined and two
+translation landings finished with stable support but missed the existing 10 mm advance hysteresis by
+only 2-7 mm; the landing check requested a controlled stop, and held input restarted after
+`RETURN_STAND`. Sub-tolerance admitted translation is now objective-relative: a turning step carries
+an independent translation objective only when its admitted advance is at least the larger of 2 cm
+and the configured foot-target tolerance plus 1 cm. With the accepted 4 cm tolerance, the two 3.5 cm
+plans from the run are angular rather than brittle combined objectives.
+
+Translation-bearing landings retain the 10 mm hysteresis and add a separately named 8 mm
+`OBJECTIVE_CLOSURE` band. It is evaluated only after the existing contact, center-ownership, sole,
+drift, tilt, motor, and support gates; larger misses still request the controlled recovery. A
+historical replay of all eight records classifies two as angular and six as bounded closure, with zero
+remaining recovery requests. Landing-triggered stops now latch their cause so `STOP_COMPLETE` reports
+`recovery=landing-objective` rather than the misleading `commanded`. No feasibility, heading, anchor,
+or physical safety limit changed. Dependency-inclusive builds and the fresh runtime rerun remain the
+verification gates.
+
+The follow-up mirrored 90-degree run isolated one remaining positive-yaw failure at the 30-degree
+angular-to-combined crossover. Its accepted contact and angular transfer were valid, but the combined
+step retained 6 mm against a 30 mm translation requirement, 6 mm below the hysteresis-plus-closure
+boundary; the mirrored negative-yaw step retained 16 mm and passed. A combined landing shortfall now
+emits `COMBINED_REPLAN`, preserves the measured physical footprint, and retries translation from that
+footprint on the next plan while retaining all angular, contact, ownership, sole, drift, tilt, motor,
+and support proofs. Translation-only shortfalls remain strict controlled recoveries. This prevents a
+single turn-dominant servo miss from manufacturing a stand/restart without weakening straight gait.
+Dependency-inclusive Debug builds pass for `Sandbox` and `Runtime`; the fresh mirrored runtime rerun
+remains the behavioral verification gate.
+
+**Slice 4 lane-floor yaw descent (2026-08-05): implementation complete; rerun pending.** The next
+matrix validated both 90-degree routes and the combined-footprint replan, but one positive 45-degree
+outside step reached an immutable 0.626 m/s lateral-lane floor against the 0.620 m/s outside budget
+and 0.005 m/s closure. The plan aborted before takeoff with zero achieved swing speed, then completed
+only after automatic retry. Increasing the closure would merely move this binary edge.
+
+Outside turn admission now searches downward from the angular-speed-admitted yaw when the zero-
+advance lane still exceeds the existing speed boundary. It admits the largest yaw whose rebuilt lane
+and released-sole rotation satisfy the unchanged linear and angular budgets, then reconstructs the
+mid/end heading basis, foothold, grounding, reach, support prediction, orientation evaluation, and
+shadow feasibility from that yaw. The following inside step inherits the descended yaw ratio through
+the existing pair contract. `YAW_DESCENT` reports the requested/admitted yaw and before/after lane
+floor; `LANE_FLOOR_TOLERANCE` remains the bounded final closure, and a plan still rejects if no
+positive-yaw footprint fits. The greater-than-90-degree settled fallback and its cancellation behavior
+are explicitly deferred and unchanged. Dependency-inclusive build verification is complete; the
+fresh mirrored 45/90-degree runtime matrix remains the acceptance gate.
+
+**Slice 4 exit-reserve isolation (2026-08-05): implementation complete; rerun pending.** The next
+positive 45-degree route completed its yaw, but its conditioned zero-yaw exit aborted before takeoff.
+Swing-speed admission reduced advance from 134 to 102 mm; the shared settled-loss reserve had reached
+its 40 mm cap after an earlier combined-footprint replan, leaving only 62 mm predicted against the
+scene's 80 mm minimum. Automatic retry reset that reserve, and the equivalent exit then achieved
+85 mm, proving that the rejected pose was not an unsafe physical route.
+
+Combined steps still update forward-error and stride adaptation, but only translation-only landings
+may now update `_gaitSettledTrackingLoss`. The straight and conditioned-exit predictor therefore
+retains evidence from comparable translation steps instead of inheriting turn-dominant loss. A new
+`MINIMUM_ADVANCE_REJECTED` admission record reports planned, predicted, minimum, and reserve values
+plus pose feasibility whenever this proof blocks a step. No minimum, speed, reach, landing, or turn
+limit changed. Dependency-inclusive builds pass; a fresh direct mirrored 45/90-degree matrix remains
+required before Slice 4 acceptance.
+
+**Slice 4 runtime acceptance (2026-08-05): accepted.** The final direct mirrored matrix completed
+positive and negative 45-degree turns and positive and negative 90-degree turns with zero turn aborts,
+automatic retries, restart blocks, lane-floor exceedances, minimum-advance rejections, landing
+recoveries, feasibility mismatches, confirmed shadow rejections, or logged failures. Every completed
+turn converged to zero remaining heading error and committed its conditioned zero-yaw exit; exit
+touchdown horizontal speeds measured 0.010, 0.013, 0.035, 0.018, and 0.021 m/s across the five tested
+sequences.
+
+The matrix exercised the new descending-yaw path on the previously failing positive outside step.
+Admission reduced yaw from 5.000 to 2.426 degrees and rebuilt the immutable lane floor from 0.646 to
+0.625 m/s, inside the unchanged 0.620 m/s budget plus 0.005 m/s closure. Four `COMBINED_REPLAN` and
+the ordinary angular `TURN_REPLAN` records preserved stable measured footprints and continued without
+a standing return; eleven `OBJECTIVE_CLOSURE` records likewise completed through the accepted stable-
+contact band. These are expected objective-relative replans, not recovery failures.
+
+The controlled stop was not repeated in this final session. It remains inherited from the preceding
+validated straight/stop regression because the intervening changes affect yaw reconstruction,
+objective-relative landing policy, and settled tracking-reserve ownership, not stop routing. Closing
+the final test process while a straight step was active did expose a Vulkan Memory Allocator assertion
+for unfreed dedicated allocations after `HealthSystem::OnDestroy`. Track that shutdown/resource-
+cleanup defect separately; it did not occur in locomotion control and does not block Slice 4's runtime
+acceptance. The active roadmap focus advances to Slice 5 retarget, stop, and reversal behavior.
 
 Each slice records requested/admitted/achieved yaw, remaining heading error, candidate/admitted/
 actual sole pose, swing and stance joint margins, minimum foot separation, support-target position

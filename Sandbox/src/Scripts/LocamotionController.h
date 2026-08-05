@@ -98,7 +98,9 @@ struct LocamotionControllerComponent
     float gaitHeadingDamping = 50.0f;
     float gaitHeadingMaxTorque = 80.0f;
     float gaitMaxTurnStepDeg = 5.0f;
-    float gaitTurnFallbackDeg = 45.0f;
+    float gaitTurnFallbackDeg = 90.0f;
+    float gaitTurnFullAdvanceDeg = 15.0f;
+    float gaitTurnZeroAdvanceDeg = 45.0f;
     float gaitMaxFootSeparation = 0.18f;
     float gaitInterStepTiltLimit = 15.0f;
     float gaitInterStepHeadingLimit = 8.0f;
@@ -127,17 +129,47 @@ struct LocamotionControllerComponent
         None,
         ControllerYawLimit,
         TurnPairBudget,
+        TurnInitiationRole,
         SwingLinearSpeed,
+        SwingTrackingReserve,
         SwingAngularSpeed,
+        PhysicalGeometry,
         SwingReach,
+        StanceReach,
         SwingHipEnvelope,
         StanceHipEnvelope,
         KneeEnvelope,
         AnkleEnvelope,
+        CommandClosure,
         FootSeparation,
         LaneCrossing,
         Terrain,
         MinimumAdvance
+    };
+
+    enum class TurnStepObjective {
+        None,
+        Translation,
+        Angular,
+        Combined
+    };
+
+    struct TurnLegFeasibilityDiagnostics {
+        float reach = 0.0f;
+        float reachLimit = 0.0f;
+        float reachMargin = 0.0f;
+        float kneeBendDeg = 0.0f;
+        float kneeMarginDeg = 0.0f;
+        float hipClampDeg = 0.0f;
+        float hipSwingReserve = 0.0f;
+        float hipTwistMarginDeg = 0.0f;
+        float ankleClampDeg = 0.0f;
+        float ankleHardClampDeg = 0.0f;
+        float ankleSwingReserve = 0.0f;
+        float ankleTwistMarginDeg = 0.0f;
+        float positionClosure = 0.0f;
+        bool physicalGeometryValid = false;
+        bool safe = false;
     };
 
     struct TurnPlanDiagnostics {
@@ -159,8 +191,14 @@ struct LocamotionControllerComponent
         float achievedYaw = 0.0f;
         float plannedTurnProgress = 0.0f;
         float achievedTurnProgress = 0.0f;
+        float nominalAdvance = 0.0f;
+        float headingAdvanceScale = 1.0f;
         float requestedAdvance = 0.0f;
         float admittedAdvance = 0.0f;
+        float achievedAdvance = 0.0f;
+        TurnStepObjective objective = TurnStepObjective::None;
+        bool translationObjectiveSatisfied = false;
+        bool angularObjectiveSatisfied = false;
 
         // Dynamic swing admission is expressed in the same target-space motion that
         // the trajectory generator will command.  Achieved values are measured from
@@ -170,6 +208,8 @@ struct LocamotionControllerComponent
         float requiredSwingSpeed = 0.0f;
         float admittedSwingSpeed = 0.0f;
         float swingSpeedLimit = 0.0f;
+        float minimumLaneSwingSpeed = 0.0f;
+        float swingSpeedClosureTolerance = 0.0f;
         float requiredAngularSpeed = 0.0f;
         float admittedAngularSpeed = 0.0f;
         float angularSpeedLimit = 0.0f;
@@ -214,14 +254,33 @@ struct LocamotionControllerComponent
         glm::vec3 predictedContactSupportVelocity { 0.0f };
         TurnConstraintResult limitingConstraint =
             TurnConstraintResult::NotEvaluated;
+        // Slice 3 begins in shadow mode. This proof uses the current physical-chain,
+        // zero-swivel execution math but cannot yet reject or alter a foothold. It must
+        // first demonstrate that accepted 5-degree turns are not false rejections.
+        TurnLegFeasibilityDiagnostics shadowSwing;
+        TurnLegFeasibilityDiagnostics shadowStance;
+        TurnConstraintResult shadowLimitingConstraint =
+            TurnConstraintResult::NotEvaluated;
+        float shadowRequestedSwingSpeed = 0.0f;
+        float shadowAdmittedSwingSpeed = 0.0f;
+        float shadowSwingSpeedLimit = 0.0f;
+        float shadowSwingSpeedClampLoss = 0.0f;
+        float shadowSwingSpeedClampReference = 0.0f;
         bool swingFootLeft = false;
         bool outsideFoot = false;
         bool pairBudgetApplied = false;
         bool pairBudgetLatched = false;
+        bool swingSpeedLaneFloorApplied = false;
+        bool swingSpeedLaneFloorExceeded = false;
+        bool turnInitiationDeferred = false;
+        bool turnExitBlendApplied = false;
         bool footSeparationLimited = false;
         bool candidateGrounded = false;
         bool candidateEvaluated = false;
         bool candidateAccepted = false;
+        bool shadowFeasibilityEvaluated = false;
+        bool shadowFeasibilitySafe = false;
+        bool shadowRuntimeAccepted = false;
         bool activeHeadingPlan = false;
         bool touchdownReadinessBlockedLogged = false;
     };
@@ -231,10 +290,12 @@ struct LocamotionControllerComponent
     float _gaitTurnPairAdvanceScale = 1.0f;
     float _gaitTurnPairYawScale = 1.0f;
     float _gaitTurnPairYawSign = 0.0f;
+    bool _gaitTurnExitBlendPending = false;
 
     struct LegState {
         int footIdx = -1, ankleIdx = -1, kneeIdx = -1, hipIdx = -1;
         glm::vec3 kneeHingeAxis { 1.0f, 0.0f, 0.0f };
+        float kneeMinDeg = 0.0f, kneeMaxDeg = 150.0f;
         glm::vec3 ankleAxis { 1.0f, 0.0f, 0.0f };
         glm::vec3 hipTwistAxis { 1.0f, 0.0f, 0.0f };
         float hipSwingNormalDeg = 60.0f, hipSwingPlaneDeg = 60.0f;
@@ -444,6 +505,7 @@ struct LocamotionControllerComponent
     float _gaitContactChangeTimeR = 0.0f;
     bool _gaitRunning = false;
     bool _gaitStopRequested = false;
+    bool _gaitLandingObjectiveStopRequested = false;
     float _gaitRunTime = 0.0f;
     float _gaitStepStartTime = 0.0f;
     float _gaitLastStepPeriod = 0.0f;
@@ -658,6 +720,8 @@ inline void DrawComponentInspector<LocamotionControllerComponent>(LocamotionCont
         LOCO_DRAG("Heading Max Torque", gaitHeadingMaxTorque, 5.0f, 0.0f, 1000.0f, "%.0f");
         LOCO_DRAG("Maximum Turn Per Step", gaitMaxTurnStepDeg, 0.25f, 0.0f, 20.0f, "%.2f deg");
         LOCO_DRAG("Turn Fallback Threshold", gaitTurnFallbackDeg, 1.0f, 5.0f, 180.0f, "%.1f deg");
+        LOCO_DRAG("Turn Full Advance Through", gaitTurnFullAdvanceDeg, 1.0f, 0.0f, 90.0f, "%.1f deg");
+        LOCO_DRAG("Turn Zero Advance At", gaitTurnZeroAdvanceDeg, 1.0f, 0.0f, 180.0f, "%.1f deg");
         LOCO_DRAG("Maximum Foot Separation", gaitMaxFootSeparation, 0.005f, 0.10f, 0.30f, "%.3f m");
         LOCO_DRAG("Inter-Step Tilt Gate", gaitInterStepTiltLimit, 0.5f, 0.0f, 45.0f, "%.1f deg");
         LOCO_DRAG("Inter-Step Heading Gate", gaitInterStepHeadingLimit, 0.5f, 0.0f, 45.0f, "%.1f deg");
@@ -721,6 +785,7 @@ inline std::string SerializeComponent<LocamotionControllerComponent>(const Locam
     LOCO_SAVE(gaitUprightDamping); LOCO_SAVE(gaitUprightMaxTorque); LOCO_SAVE(gaitHeadingStiffness);
     LOCO_SAVE(gaitHeadingDamping); LOCO_SAVE(gaitHeadingMaxTorque);
     LOCO_SAVE(gaitMaxTurnStepDeg); LOCO_SAVE(gaitTurnFallbackDeg);
+    LOCO_SAVE(gaitTurnFullAdvanceDeg); LOCO_SAVE(gaitTurnZeroAdvanceDeg);
     LOCO_SAVE(gaitMaxFootSeparation); LOCO_SAVE(gaitInterStepTiltLimit);
     LOCO_SAVE(gaitInterStepHeadingLimit); LOCO_SAVE(gaitStopTime); LOCO_SAVE(gaitStopHoldTime);
     LOCO_SAVE(maxLegReachFraction); LOCO_SAVE(standingPoseResponse); LOCO_SAVE(hipLimitMarginDeg);
@@ -783,6 +848,7 @@ inline void DeserializeComponent<LocamotionControllerComponent>(LocamotionContro
     LOCO_MIGRATE(gaitHeadingDamping, "test7HeadingDamping");
     LOCO_MIGRATE(gaitHeadingMaxTorque, "test7HeadingMaxTorque");
     LOCO_LOAD(gaitMaxTurnStepDeg); LOCO_LOAD(gaitTurnFallbackDeg);
+    LOCO_LOAD(gaitTurnFullAdvanceDeg); LOCO_LOAD(gaitTurnZeroAdvanceDeg);
     LOCO_LOAD(gaitMaxFootSeparation);
     LOCO_MIGRATE(gaitInterStepTiltLimit, "test7InterStepTiltLimit");
     LOCO_MIGRATE(gaitInterStepHeadingLimit, "test7InterStepHeadingLimit");
@@ -984,17 +1050,36 @@ private:
             case Result::None:              return "none";
             case Result::ControllerYawLimit:return "controller-yaw-limit";
             case Result::TurnPairBudget:    return "turn-pair-budget";
+            case Result::TurnInitiationRole:
+                return "turn-initiation-role";
             case Result::SwingLinearSpeed:  return "swing-linear-speed";
+            case Result::SwingTrackingReserve:
+                return "swing-tracking-reserve";
             case Result::SwingAngularSpeed: return "swing-angular-speed";
+            case Result::PhysicalGeometry:  return "physical-geometry";
             case Result::SwingReach:        return "swing-reach";
+            case Result::StanceReach:       return "stance-reach";
             case Result::SwingHipEnvelope:  return "swing-hip-envelope";
             case Result::StanceHipEnvelope: return "stance-hip-envelope";
             case Result::KneeEnvelope:      return "knee-envelope";
             case Result::AnkleEnvelope:     return "ankle-envelope";
+            case Result::CommandClosure:    return "command-closure";
             case Result::FootSeparation:    return "foot-separation";
             case Result::LaneCrossing:      return "lane-crossing";
             case Result::Terrain:           return "terrain";
             case Result::MinimumAdvance:    return "minimum-advance";
+        }
+        return "unknown";
+    }
+
+    static const char* TurnObjectiveName(Comp::TurnStepObjective objective)
+    {
+        using Objective = Comp::TurnStepObjective;
+        switch (objective) {
+            case Objective::None:        return "none";
+            case Objective::Translation: return "translation";
+            case Objective::Angular:     return "angular";
+            case Objective::Combined:    return "combined";
         }
         return "unknown";
     }
