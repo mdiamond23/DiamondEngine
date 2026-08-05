@@ -97,6 +97,9 @@ struct LocamotionControllerComponent
     float gaitHeadingStiffness = 180.0f;
     float gaitHeadingDamping = 50.0f;
     float gaitHeadingMaxTorque = 80.0f;
+    float gaitMaxTurnStepDeg = 5.0f;
+    float gaitTurnFallbackDeg = 45.0f;
+    float gaitMaxFootSeparation = 0.18f;
     float gaitInterStepTiltLimit = 15.0f;
     float gaitInterStepHeadingLimit = 8.0f;
     float gaitStopTime = 1.0f;
@@ -116,6 +119,119 @@ struct LocamotionControllerComponent
     bool ikWriteEnabled = true;
     bool debug = false;
 
+    // Bounded turn-plan state. Desired heading remains live, committed heading advances
+    // only after support transfer, and an admitted active plan stays immutable until
+    // that transfer succeeds or the step is cancelled.
+    enum class TurnConstraintResult {
+        NotEvaluated,
+        None,
+        ControllerYawLimit,
+        TurnPairBudget,
+        SwingLinearSpeed,
+        SwingAngularSpeed,
+        SwingReach,
+        SwingHipEnvelope,
+        StanceHipEnvelope,
+        KneeEnvelope,
+        AnkleEnvelope,
+        FootSeparation,
+        LaneCrossing,
+        Terrain,
+        MinimumAdvance
+    };
+
+    struct TurnPlanDiagnostics {
+        glm::vec3 desiredForward { 0.0f, 0.0f, -1.0f };
+        glm::vec3 committedForward { 0.0f, 0.0f, -1.0f };
+        glm::vec3 activeStartForward { 0.0f, 0.0f, -1.0f };
+        glm::vec3 activeStartRight { 1.0f, 0.0f, 0.0f };
+        glm::vec3 activeMidForward { 0.0f, 0.0f, -1.0f };
+        glm::vec3 activeMidRight { 1.0f, 0.0f, 0.0f };
+        glm::vec3 activeEndForward { 0.0f, 0.0f, -1.0f };
+        glm::vec3 activeEndRight { 1.0f, 0.0f, 0.0f };
+        glm::quat activeStartRotation { 1.0f, 0.0f, 0.0f, 0.0f };
+        glm::quat activeEndRotation { 1.0f, 0.0f, 0.0f, 0.0f };
+
+        // Angles are stored in radians and converted to degrees only for telemetry.
+        float desiredHeadingError = 0.0f;
+        float requestedYaw = 0.0f;
+        float admittedYaw = 0.0f;
+        float achievedYaw = 0.0f;
+        float plannedTurnProgress = 0.0f;
+        float achievedTurnProgress = 0.0f;
+        float requestedAdvance = 0.0f;
+        float admittedAdvance = 0.0f;
+
+        // Dynamic swing admission is expressed in the same target-space motion that
+        // the trajectory generator will command.  Achieved values are measured from
+        // the physical sole and accumulated over the admitted step.
+        float requestedSwingDistance = 0.0f;
+        float admittedSwingDistance = 0.0f;
+        float requiredSwingSpeed = 0.0f;
+        float admittedSwingSpeed = 0.0f;
+        float swingSpeedLimit = 0.0f;
+        float requiredAngularSpeed = 0.0f;
+        float admittedAngularSpeed = 0.0f;
+        float angularSpeedLimit = 0.0f;
+        float achievedSwingSpeed = 0.0f;
+        float achievedAngularSpeed = 0.0f;
+        // A speed-limited outside step publishes one coupled budget for the
+        // immediately following inside step.  These copies make the admission
+        // decision and its support/arrival conditioning visible in one record.
+        float pairAdvanceScale = 1.0f;
+        float pairYawScale = 1.0f;
+        float supportTransportSpeed = 0.0f;
+        float arrivalTrajectoryT = 0.70f;
+
+        glm::vec3 planOrigin { 0.0f };
+        glm::vec3 candidateFootPosition { 0.0f };
+        glm::vec3 admittedFootPosition { 0.0f };
+        glm::quat candidateFootRotation { 1.0f, 0.0f, 0.0f, 0.0f };
+        glm::quat admittedFootRotation { 1.0f, 0.0f, 0.0f, 0.0f };
+        glm::quat stanceFootRotationAtAdmission { 1.0f, 0.0f, 0.0f, 0.0f };
+        float requestedReach = 0.0f;
+        float admittedReach = 0.0f;
+        float reachLimit = 0.0f;
+        float reachMargin = 0.0f;
+        float candidateFootSeparation = 0.0f;
+        float admittedFootSeparation = 0.0f;
+        float rawFootSeparation = 0.0f;
+        float maximumFootSeparation = 0.0f;
+        // Counterfactual Slice 2j prediction. Retained for comparison only; it no
+        // longer gates or modifies an admitted plan.
+        float sampledAnkleClampDeg = 0.0f;
+        float admittedKneeSwivelDeg = 0.0f;
+        float sampledSwivelClosure = 0.0f;
+        bool sampledSwivelAccepted = false;
+        float stanceReferenceRotationDeltaDeg = 0.0f;
+        float plantReferenceRotationDeltaDeg = 0.0f;
+        float touchdownSoleErrorDeg = 0.0f;
+        float touchdownAngularSpeed = 0.0f;
+        float touchdownHorizontalSpeed = 0.0f;
+        glm::vec3 predictedContactHip { 0.0f };
+        glm::vec3 actualContactHip { 0.0f };
+        glm::vec3 contactHipError { 0.0f };
+        glm::vec3 predictedContactSupportVelocity { 0.0f };
+        TurnConstraintResult limitingConstraint =
+            TurnConstraintResult::NotEvaluated;
+        bool swingFootLeft = false;
+        bool outsideFoot = false;
+        bool pairBudgetApplied = false;
+        bool pairBudgetLatched = false;
+        bool footSeparationLimited = false;
+        bool candidateGrounded = false;
+        bool candidateEvaluated = false;
+        bool candidateAccepted = false;
+        bool activeHeadingPlan = false;
+        bool touchdownReadinessBlockedLogged = false;
+    };
+
+    TurnPlanDiagnostics _gaitTurnPlan;
+    bool _gaitTurnPairPendingInside = false;
+    float _gaitTurnPairAdvanceScale = 1.0f;
+    float _gaitTurnPairYawScale = 1.0f;
+    float _gaitTurnPairYawSign = 0.0f;
+
     struct LegState {
         int footIdx = -1, ankleIdx = -1, kneeIdx = -1, hipIdx = -1;
         glm::vec3 kneeHingeAxis { 1.0f, 0.0f, 0.0f };
@@ -132,6 +248,12 @@ struct LocamotionControllerComponent
         glm::vec3 desiredFoot { 0.0f };
         glm::vec3 ankleFromFootWorld { 0.0f };
         glm::vec3 ankleFromFootLocal { 0.0f };
+        // Physical constraint-chain geometry captured in each parent body's local
+        // frame. Runtime IK must use the same link vectors the ragdoll actually
+        // enforces; imported skeleton localT remains animation/skin geometry.
+        glm::vec3 upperSegmentLocal { 0.0f };
+        glm::vec3 lowerSegmentLocal { 0.0f };
+        bool segmentGeometryValid = false;
         glm::vec3 kneePoleWorld { 0.0f, 0.0f, -1.0f };
         glm::vec3 groundReferenceKneePoleHeadingLocal { 0.0f, 0.0f, -1.0f };
         glm::quat plantedFootWorldRotation { 1, 0, 0, 0 };
@@ -155,6 +277,9 @@ struct LocamotionControllerComponent
         glm::quat kneeCommand { 1, 0, 0, 0 };
         glm::quat ankleCommand { 1, 0, 0, 0 };
         glm::quat footCommand { 1, 0, 0, 0 };
+        // Continuous knee-plane redundancy state. Slice 2m admits changes at a bounded
+        // rate so turn orientation can move through the whole leg without branch flips.
+        float kneePlaneSwivelRad = 0.0f;
     };
 
     float _yaw = 0.0f;
@@ -206,6 +331,57 @@ struct LocamotionControllerComponent
     glm::vec3 _physicalStepPlantCenterAnchorStart { 0.0f };
     glm::vec3 _physicalStepPlantCenterAnchorTarget { 0.0f };
     float _physicalStepTrajectoryT = 0.0f;
+    // Slice 2g: the inside turn owns a measured-state trajectory governor.
+    // Position and world-space sole commands retain their rates across phase
+    // boundaries so ARRIVAL and DESCENT cannot reintroduce an impulse.
+    float _gaitSwingCommandSpeed = 0.0f;
+    float _gaitSwingCommandAngularSpeed = 0.0f;
+    float _gaitSwingCommandTrackingError = 0.0f;
+    float _gaitSwingSoleCommandErrorDeg = 0.0f;
+    // Slice 2h: measured-parent cancellation is bounded before the final local
+    // ankle motor command is acceleration/rate limited. The path fields retain
+    // the sampled 3D timing proof used by the swing safety deadline.
+    float _gaitAnkleCommandAngularSpeed = 0.0f;
+    float _gaitAnkleCommandDeltaDeg = 0.0f;
+    float _gaitAnkleParentCompensationDeg = 0.0f;
+    float _gaitAnkleParentCompensationAppliedDeg = 0.0f;
+    float _gaitAnkleAchievableResidualDeg = 0.0f;
+    float _gaitAnkleDiagnosticCooldown = 0.0f;
+    float _gaitIkAnkleEnvelopeClampDeg = 0.0f;
+    float _gaitIkExactAnkleClampDeg = 0.0f;
+    float _gaitIkKneeSwivelRequestedDeg = 0.0f;
+    float _gaitIkKneeSwivelAppliedDeg = 0.0f;
+    float _gaitIkKneeSwivelCandidateClosure = 0.0f;
+    bool _gaitIkKneeSwivelCandidateAccepted = false;
+    float _gaitIkOrientationPriority = 1.0f;
+    float _gaitIkOrientationRelaxedDeg = 0.0f;
+    float _gaitIkAnkleSwingUsage = 0.0f;
+    float _gaitIkAnkleSwingReserve = 0.0f;
+    float _gaitIkAnkleTwistDeg = 0.0f;
+    float _gaitIkAnkleTwistMarginDeg = 0.0f;
+    // Slice 2m: one shared rate admission for the complete swing-leg command.
+    float _gaitCoherentJointScale = 1.0f;
+    float _gaitCoherentHipDeltaDeg = 0.0f;
+    float _gaitCoherentKneeDeltaDeg = 0.0f;
+    float _gaitCoherentAnkleDeltaDeg = 0.0f;
+    // Slice 2k diagnostic: split swing-foot error into IK/FK closure error and
+    // powered-ragdoll tracking error. No field participates in control routing.
+    glm::vec3 _gaitFkDesiredPosition { 0.0f };
+    glm::vec3 _gaitFkCommandPosition { 0.0f };
+    glm::vec3 _gaitFkPhysicalPosition { 0.0f };
+    glm::vec3 _gaitFkDesiredToCommand { 0.0f };
+    glm::vec3 _gaitFkCommandToPhysical { 0.0f };
+    glm::vec3 _gaitFkDesiredToPhysical { 0.0f };
+    float _gaitFkDesiredToCommandOrientationDeg = 0.0f;
+    float _gaitFkCommandToPhysicalOrientationDeg = 0.0f;
+    float _gaitFkDesiredToPhysicalOrientationDeg = 0.0f;
+    float _gaitFkDiagnosticCooldown = 0.0f;
+    bool _gaitFkValid = false;
+    float _gaitSwingPathLength = 0.0f;
+    float _gaitSwingMinimumDuration = 0.0f;
+    float _gaitSwingDeadline = 0.0f;
+    glm::quat _gaitSwingSoleCommandWorld { 1.0f, 0.0f, 0.0f, 0.0f };
+    bool _gaitSwingSoleCommandValid = false;
     float _physicalStepClearance = 0.0f;
     float _physicalStepForwardTravel = 0.0f;
     float _physicalStepTargetError = 0.0f;
@@ -480,6 +656,9 @@ inline void DrawComponentInspector<LocamotionControllerComponent>(LocamotionCont
         LOCO_DRAG("Heading Stiffness", gaitHeadingStiffness, 5.0f, 0.0f, 1000.0f, "%.0f");
         LOCO_DRAG("Heading Damping", gaitHeadingDamping, 2.0f, 0.0f, 300.0f, "%.0f");
         LOCO_DRAG("Heading Max Torque", gaitHeadingMaxTorque, 5.0f, 0.0f, 1000.0f, "%.0f");
+        LOCO_DRAG("Maximum Turn Per Step", gaitMaxTurnStepDeg, 0.25f, 0.0f, 20.0f, "%.2f deg");
+        LOCO_DRAG("Turn Fallback Threshold", gaitTurnFallbackDeg, 1.0f, 5.0f, 180.0f, "%.1f deg");
+        LOCO_DRAG("Maximum Foot Separation", gaitMaxFootSeparation, 0.005f, 0.10f, 0.30f, "%.3f m");
         LOCO_DRAG("Inter-Step Tilt Gate", gaitInterStepTiltLimit, 0.5f, 0.0f, 45.0f, "%.1f deg");
         LOCO_DRAG("Inter-Step Heading Gate", gaitInterStepHeadingLimit, 0.5f, 0.0f, 45.0f, "%.1f deg");
         LOCO_DRAG("Stop Duration", gaitStopTime, 0.01f, 0.05f, 3.0f, "%.2f s");
@@ -540,7 +719,9 @@ inline std::string SerializeComponent<LocamotionControllerComponent>(const Locam
     LOCO_SAVE(gaitFootVelocityLeadTime); LOCO_SAVE(gaitMaxFootCorrection);
     LOCO_SAVE(gaitInterStepRecenterTime); LOCO_SAVE(gaitUprightStiffness);
     LOCO_SAVE(gaitUprightDamping); LOCO_SAVE(gaitUprightMaxTorque); LOCO_SAVE(gaitHeadingStiffness);
-    LOCO_SAVE(gaitHeadingDamping); LOCO_SAVE(gaitHeadingMaxTorque); LOCO_SAVE(gaitInterStepTiltLimit);
+    LOCO_SAVE(gaitHeadingDamping); LOCO_SAVE(gaitHeadingMaxTorque);
+    LOCO_SAVE(gaitMaxTurnStepDeg); LOCO_SAVE(gaitTurnFallbackDeg);
+    LOCO_SAVE(gaitMaxFootSeparation); LOCO_SAVE(gaitInterStepTiltLimit);
     LOCO_SAVE(gaitInterStepHeadingLimit); LOCO_SAVE(gaitStopTime); LOCO_SAVE(gaitStopHoldTime);
     LOCO_SAVE(maxLegReachFraction); LOCO_SAVE(standingPoseResponse); LOCO_SAVE(hipLimitMarginDeg);
     LOCO_SAVE(poseWeight); LOCO_SAVE(uprightScale); LOCO_SAVE(ikWriteEnabled);
@@ -601,6 +782,8 @@ inline void DeserializeComponent<LocamotionControllerComponent>(LocamotionContro
     LOCO_MIGRATE(gaitHeadingStiffness, "test7HeadingStiffness");
     LOCO_MIGRATE(gaitHeadingDamping, "test7HeadingDamping");
     LOCO_MIGRATE(gaitHeadingMaxTorque, "test7HeadingMaxTorque");
+    LOCO_LOAD(gaitMaxTurnStepDeg); LOCO_LOAD(gaitTurnFallbackDeg);
+    LOCO_LOAD(gaitMaxFootSeparation);
     LOCO_MIGRATE(gaitInterStepTiltLimit, "test7InterStepTiltLimit");
     LOCO_MIGRATE(gaitInterStepHeadingLimit, "test7InterStepHeadingLimit");
     LOCO_MIGRATE(gaitStopTime, "test7StopTime"); LOCO_MIGRATE(gaitStopHoldTime, "test7StopHoldTime");
@@ -793,6 +976,29 @@ public:
 private:
     float _debugTimer = 0.0f;
 
+    static const char* TurnConstraintName(Comp::TurnConstraintResult result)
+    {
+        using Result = Comp::TurnConstraintResult;
+        switch (result) {
+            case Result::NotEvaluated:      return "not-evaluated";
+            case Result::None:              return "none";
+            case Result::ControllerYawLimit:return "controller-yaw-limit";
+            case Result::TurnPairBudget:    return "turn-pair-budget";
+            case Result::SwingLinearSpeed:  return "swing-linear-speed";
+            case Result::SwingAngularSpeed: return "swing-angular-speed";
+            case Result::SwingReach:        return "swing-reach";
+            case Result::SwingHipEnvelope:  return "swing-hip-envelope";
+            case Result::StanceHipEnvelope: return "stance-hip-envelope";
+            case Result::KneeEnvelope:      return "knee-envelope";
+            case Result::AnkleEnvelope:     return "ankle-envelope";
+            case Result::FootSeparation:    return "foot-separation";
+            case Result::LaneCrossing:      return "lane-crossing";
+            case Result::Terrain:           return "terrain";
+            case Result::MinimumAdvance:    return "minimum-advance";
+        }
+        return "unknown";
+    }
+
     static Diamond::Locomotion::GaitCommand BuildRuntimeGaitCommand(
         const Comp& comp, const glm::vec3& moveDirection,
         float inputSpeed, bool wantsToWalk)
@@ -802,20 +1008,21 @@ private:
         GaitCommand command;
         command.enabled = true;
 
-        const bool directionChanged = wantsToWalk && comp._gaitRunning
+        const bool directionExceedsPhysicalTurn = wantsToWalk && comp._gaitRunning
             && glm::dot(moveDirection, moveDirection) > 1e-8f
-            && glm::dot(comp._runtimeDesiredForward,
-                        comp._runtimeDesiredForward) > 1e-8f
+            && glm::dot(comp._gaitTurnPlan.committedForward,
+                        comp._gaitTurnPlan.committedForward) > 1e-8f
             && glm::dot(glm::normalize(moveDirection),
-                        glm::normalize(comp._runtimeDesiredForward))
-                < std::cos(glm::radians(5.0f));
+                        glm::normalize(comp._gaitTurnPlan.committedForward))
+                < std::cos(glm::radians(glm::clamp(
+                    comp.gaitTurnFallbackDeg, 5.0f, 180.0f))) - 1e-5f;
         command.startRequested = wantsToWalk && !comp._gaitRunning
             && !comp._runtimeRestartBlocked
             && comp._runtimeRecoveryCooldown <= 0.0f
             && (comp._runtimeAutoRetryCount == 0
                 || comp._runtimeRecoveryStableTime >= 0.25f);
         command.stopRequested = comp._gaitRunning
-            && (!wantsToWalk || directionChanged);
+            && (!wantsToWalk || directionExceedsPhysicalTurn);
         command.initialSupportSide = comp._runtimeNextSupportSide;
         command.desiredForward = moveDirection;
 
@@ -945,10 +1152,13 @@ private:
             BlendPose(animator, leg.footIdx, leg.footCommand, poseWeight);
         };
 
+        // Physical gait phases are ordered through INTER_STEP (11); SUPPORT_READY (8)
+        // is deliberately included so standing pose cannot steal the newly center-owned
+        // leg before transfer begins.
         const bool gaitOwnsSwing = comp._physicalStepPhase >= 2
-            && comp._physicalStepPhase <= 10;
+            && comp._physicalStepPhase <= 11;
         const bool gaitOwnsBoth = comp._stepSequenceStepIndex >= 2
-            && comp._physicalStepPhase >= 1 && comp._physicalStepPhase <= 13;
+            && comp._physicalStepPhase >= 1 && comp._physicalStepPhase <= 14;
         const bool gaitOwnsLeft = gaitOwnsBoth
             || (gaitOwnsSwing && comp._physicalStepSupportSide > 0);
         const bool gaitOwnsRight = gaitOwnsBoth

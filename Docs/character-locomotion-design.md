@@ -1106,6 +1106,931 @@ existing contact requirements, 8-degree sole gate, 4 cm persistent-slip abort, 3
 65-percent correction gain, 2 cm correction cap, and temporary 0.15 m/s support-speed test envelope
 remain unchanged.
 
+**2026-08-03 straight-line continuous-walking acceptance.** The first validation after adding the
+correction-overload release completed 44 consecutive alternating plants. All 44 touchdowns reached
+support acquisition and the load latch; the first 43 completed the following rear-foot release. The
+final step entered `HOLD -> STOPPING` from a healthy state after input was released, with 1 mm rear
+drift, 1 mm plant drift, and 0.69 normalized new-support load. There were no locomotion warnings,
+failed checks, aborts, or automatic retries. This is the first long runtime run in the current
+continuous controller that ended because the player stopped rather than because the gait failed.
+
+The new recovery behaved deterministically rather than merely postponing a failure. It activated on
+21 of 22 right plants and one left plant. Each recovery faded the saturated pivot correction to
+zero, established the required quiet interval, handed ownership to the sole center, and continued
+the alternating cycle without accumulated drift. Across the run, 38 plants used center handoff,
+one used the bounded settled-contact rebase, and the remaining five acquired safely within the
+existing drift gates. The strong right-side activation rate confirms that a plant-impact asymmetry
+still exists, but the controller now contains it repeatably. Keep that asymmetry visible in turning
+telemetry rather than weakening the recovery or creating side-specific gains.
+
+**Decision:** straight-line continuous walking V1 is complete at the current low-speed test
+envelope. This does not complete cadence or higher-speed tuning: the temporary 0.15 m/s support cap
+remains in place, and several hold phases still exceed their nominal timing budgets. Preserve this
+44-step run as the regression baseline while developing later features.
+
+**Next session (2026-08-04): bounded continuous turning.** Begin with small per-step heading changes
+at the current speed. Rotate the latched heading and foothold-planning basis through one deliberate
+owner; do not directly spin the root or rotate an active planted-foot frame. Preserve the plant
+anchor, pivot-release, load-hysteresis, slip, contact, and tilt systems unchanged. Validate mirrored
+left and right arcs first, then increase allowed heading change per step before revisiting cadence
+or walking speed.
+
+### Bounded continuous turning - authoritative implementation plan
+
+**Design decision (2026-08-04): implement and validate this in small slices.** The final behavior is
+one unified step planner, not separate forward-step and turn-step state machines. A step command has
+two independent quantities: horizontal advance and heading change. Straight walking has nonzero
+advance and nearly zero yaw; turning in place has nearly zero advance and nonzero yaw; an ordinary
+arc has both. The existing contact-driven phases, support ownership, swing trajectory, plant
+acquisition, and transfer remain the executor for all three cases.
+
+The work may live on one branch, but each slice below must remain buildable and must pass its own
+short physical check before enabling the next slice. A one-shot behavioral switch would change
+stop routing, foothold construction, body-heading control, and success metrics simultaneously. A
+failure would then be ambiguous between steering geometry, joint reach, support motion, and contact
+ownership. The staged sequence is therefore part of the design, not merely a preferred workflow.
+
+This section supersedes the temporary settled `TURN_BLEND` as the intended runtime direction-change
+behavior. Keep the whole-ragdoll blend available only as a guarded fallback while the early slices
+are being validated. It must not run during an admitted physical turn step, and it can be removed
+after the final validation matrix passes. Continuous turning requires no new `PhysicsAPI` operation
+and must never call `RotateRagdollYaw` on the ordinary path.
+
+#### Command and state contract
+
+The first implementation continues using `GaitCommand::desiredForward` as both travel direction and
+desired facing. Separate movement and aim/facing vectors remain deferred with strafing. Unlike the
+current runtime, a live change in `desiredForward` does not automatically request a controlled stop.
+The gait stores three distinct headings:
+
+- **desired heading:** the latest normalized horizontal command and the final direction the player
+  is asking for;
+- **committed heading:** the heading physically established by completed support transfers and used
+  as the start of the next plan;
+- **active step heading:** immutable start/end headings admitted for the current swing, plus a
+  normalized turn-progress value used to move the body-heading target between them.
+
+Retargeting the input changes the desired heading immediately, but it does not rewrite an already
+committed late-swing foothold. The next step consumes the newest error. Early-swing replanning may be
+added after the latched version passes; it is not required for continuous multi-step turning V1.
+For V1, successful foothold admission immediately before `TAKEOFF` is the commit point.
+
+Add explicit per-step telemetry/state rather than overloading `_physicalStepForward` or
+`_gaitHeadingTargetRot` with several meanings. The implementation needs equivalents of:
+
+- requested and admitted yaw for the step;
+- start, midpoint, and end forward/right bases;
+- active-step start/end heading rotations;
+- requested and admitted horizontal advance;
+- planned and achieved angular progress;
+- candidate versus admitted foot position and yaw;
+- the constraint that limited admission, when any.
+
+`_physicalStepForward` and `_physicalStepRight` currently feed placement, error projection,
+adaptation, and diagnostics. Keep a step's measurement basis immutable until its transfer completes.
+Drive the physical heading through the separate active-step rotation, then publish the end basis as
+the next committed basis at `INTER_STEP`. This prevents changing projections underneath the current
+step while the pelvis is turning.
+
+#### Per-step steering geometry
+
+At the existing foothold-planning point, compute the shortest signed horizontal yaw error:
+
+```text
+yawError = atan2(cross(committedForward, desiredForward).y,
+                  dot(committedForward, desiredForward))
+requestedStepYaw = clamp(yawError, -maxYawPerStep, +maxYawPerStep)
+endHeading = rotateY(requestedStepYaw) * committedHeading
+midHeading = rotateY(0.5 * requestedStepYaw) * committedHeading
+```
+
+`maxYawPerStep` is a conservative controller/cadence limit, not an alias for the swing hip's twist
+limit. Begin at 5 degrees for the first physical slice. Increase it only after mirrored runs show
+joint-limit reserve, stable support transfer, and bounded planted-foot drift. The final allowed yaw
+is the smaller of this controller limit and the whole-step feasible yaw described below.
+
+Construct the requested footprint as a full pose. The current support foot remains the world-space
+origin for the relative step, the midpoint heading supplies the arc tangent, and the end heading
+supplies the final lateral stance axis:
+
+```text
+requestedPosition = stanceFoot
+                  + forward(midHeading) * requestedAdvance
+                  + right(endHeading) * signedFootSeparation
+requestedRotation = endHeadingRotation
+                  * swingFootHeadingLocalSettledRotation
+```
+
+The signed separation preserves the existing anatomical left/right lane and minimum runtime width.
+Using the end-heading right axis rotates the new foot pair toward the requested facing; using the
+mid-heading forward axis makes nonzero advance follow the chord of a small arc instead of stepping
+fully along either the old or new direction. Terrain raycasts continue grounding the resulting
+position and pitch/roll. Ground alignment and yaw are separate: pitch/roll follow the hit normal,
+while the admitted turn determines the sole's touchdown yaw.
+
+For gentle turns, retain the validated straight-line advance. A later turn-dominant slice reduces
+advance according to the remaining heading error: small error gives a normal curved step, large
+error approaches zero advance, and advance returns smoothly as the committed heading aligns. Do
+not encode this as a new FSM mode. It is only a scalar input to the same footprint formula.
+
+Alternating zero-advance steps rotate the swing footprint about the current stance foot. The body
+naturally shifts over each real support in turn, so no synthetic root pivot is needed for V1. If a
+later style requires a mathematically fixed turn center, add a persistent gait-reference pose above
+this planner; do not reintroduce direct root rotation.
+
+#### Whole-step feasibility and yaw admission
+
+Admission evaluates a foot **pose**, not just horizontal distance. First clamp the requested yaw by
+the authored per-step limit, build the candidate, and test the complete predicted end-of-step
+configuration. If it is not safe, reduce the requested yaw and rebuild the pose until it is safe or
+until the turn falls below a small no-progress threshold. A descending bounded search is sufficient
+for V1; a general optimizer is unnecessary.
+
+The feasibility result must include:
+
+- the existing swing-leg anatomical and configured reach with the candidate sole rotation included
+  in the ankle offset;
+- swing-hip cone and twist margin after the constrained leg solve, not merely whether the final
+  command was silently clamped;
+- predicted stance-hip twist margin while its sole remains planted and the pelvis follows the
+  active-step heading;
+- knee and ankle envelopes for both legs;
+- minimum left/right foot separation, correct anatomical lane sign, and a swing path that does not
+  pass through the stance leg;
+- valid grounded position and acceptable surface normal;
+- retained reach and joint-limit reserve for physical tracking and balance correction.
+
+The current reach binary search may still shorten an otherwise valid horizontal candidate, but a
+turn plan must re-evaluate separation, lane sign, and angular progress after that shortening. The
+planner records requested versus clamped hip/ankle commands. If a joint target loses more than the
+admitted margin, shrink step yaw and solve again rather than accepting a footprint that no longer
+represents the plan.
+
+The admission loop is conceptually:
+
+```text
+admittedYaw = requestedStepYaw
+repeat:
+    candidate = buildFootPose(admittedYaw, requestedAdvance)
+    candidate = groundCandidate(candidate)
+    result = predictBothLegsAndCheckConstraints(candidate)
+    if result.safe: admit immutable candidate and stop
+    admittedYaw *= reductionFactor
+until abs(admittedYaw) < minimumUsefulYaw
+```
+
+Failure to admit a useful yaw does not immediately weaken limits. Hold the current committed
+heading and use the existing stable stop/fallback path, logging the limiting constraint and side.
+
+#### Physical heading ownership
+
+The heading torque remains the only owner of pelvis/root orientation during a physical step. Latch
+the current physical/committed heading as the start target and the admitted heading as the end
+target. Evaluate a monotonic turn curve from takeoff through support transfer:
+
+- weight shift performs no or only a small authored pre-turn while both feet are planted;
+- swing advances most of the heading target while the released leg can reposition;
+- touchdown and transfer finish the remaining yaw as the new foot acquires load;
+- `INTER_STEP` commits the end heading only after the existing heading, contact, load, drift, tilt,
+  and saturation gates pass.
+
+Use shortest-path normalized quaternion interpolation for the target, driven by the gait trajectory
+clock rather than a new wall-clock animation. A delayed contact may delay commitment, but it must
+not make the heading target jump or restart from a new measured yaw. The stance leg continues using
+its frozen planted world anchor. The swing sole and anatomical knee plane interpolate from their
+captured takeoff references toward the admitted end-heading references. Existing plant pivot,
+center handoff, correction-overload release, and slip ownership do not rotate with the desired
+heading after contact; they remain world-space physical facts.
+
+The inter-step heading-error limit continues protecting the next role swap. It compares the physical
+root against the **incremental admitted end heading**, never against a distant final 90- or
+180-degree input heading. Otherwise a safe multi-step turn would stall after its first step.
+
+#### Generalizing forward-only control and validation
+
+A turn-in-place step intentionally has little forward support advance, so the current minimum-
+advance admission and landing checks cannot remain the universal definition of success. Classify
+the admitted plan by its nonzero objectives without adding a separate FSM:
+
+- translation objective: validate planned versus achieved horizontal advance;
+- angular objective: validate planned versus achieved root/sole yaw and decreasing remaining
+  heading error;
+- combined objective: validate both with their respective tolerances.
+
+Forward gait adaptation must not interpret zero advance during a deliberate turn as stride loss or
+stress. Freeze its forward correction integrators during a pure turn, or feed them only the admitted
+translation objective. Preserve lateral/drift/contact/motor feedback. Add angular tracking telemetry
+before considering adaptive yaw correction.
+
+The support curves already carry vector positions and velocities, but several endpoint tangents are
+derived from a nonnegative projection onto `_physicalStepForward`. During turning, use the actual
+horizontal direction from the current support target toward the planned transfer target. A pure
+turn may have primarily lateral/tangential support motion; forcing its feed-forward velocity along
+the old forward axis would create a pause or a sideways disturbance. Position and velocity remain
+continuous across the existing support-ownership handoffs.
+
+Stopping remains contact-driven. Releasing input during a turn finishes or safely cancels the
+active swing using the existing early/late cancellation rules, transfers to a valid double-support
+state, and enters the validated standing return. It does not invoke the settled whole-ragdoll blend.
+
+#### Implementation slices and verification gates
+
+1. **State and diagnostics only.** Add the desired/committed/active heading distinction, planned-yaw
+   fields, constraint-result telemetry, and debug visualization of start/end bases and candidate
+   footprint pose. Leave runtime routing and footholds unchanged. Build `Sandbox` and `Runtime`, run
+   one straight four-step start/stop, and confirm every new yaw value remains zero with no target
+   or support-command change.
+2. **Gentle curved steps at 5 degrees per step.** Stop treating an ordinary direction change as a
+   stop request when its path is allowed by the new planner. Admit at most 5 degrees, build the
+   curved footprint with the existing full advance, and phase the heading target through the step.
+   Permit desired errors through 45 degrees to converge over repeated steps; keep errors above that
+   on the temporary fallback during this slice. Run mirrored W-to-diagonal left/right changes for at
+   least six completed steps each. Heading error must decrease after every successful transfer; no
+   planted reference may rotate or exceed existing drift gates.
+3. **Feasibility-backed yaw.** Route the candidate end pose through both-leg reach/envelope checks,
+   add descending yaw admission, and expose the limiting constraint. Raise the cap gradually toward
+   the smallest value that produces responsive motion without routine joint clamping; do not choose
+   the value from the authored hip limit alone. Repeat mirrored arcs at each increase and retain a
+   meaningful hip/ankle/reach reserve.
+4. **Turn-dominant and zero-advance steps.** Add smooth advance reduction for large remaining heading
+   errors, replace forward-only admission/landing success with objective-relative checks, and make
+   support-curve tangents vector-relative. Validate fresh-scene 45- and 90-degree changes in both
+   directions, including changes requested during weight shift, swing, descent, transfer, and
+   inter-step. No case may abort solely because a deliberate turn produced less than the straight-
+   gait minimum forward advance.
+5. **Retarget, stop, and reversal behavior.** Allow the desired heading to change at any time while
+   keeping the admitted active step immutable after its commit point. Test left-to-right retargets,
+   input release in every major phase, and 180-degree requests. Initially, 180 degrees may use the
+   validated controlled stop if multi-step turn admission cannot retain separation or joint margin;
+   enable full physical multi-step reversal only after both turn directions pass symmetrically.
+6. **Remove the temporary blend and run regressions.** Disable ordinary `TURN_BLEND` routing, remove
+   dead state only after no caller remains, and repeat the accepted 44-step straight run. Then run
+   at least 20 completed plants on a constant left arc and 20 on a constant right arc, followed by
+   the phase-by-phase 45/90-degree matrix and controlled stops. Only after this gate may cadence,
+   stride, or gameplay-speed tuning resume.
+
+**Slice 1 implementation and acceptance (2026-08-04): accepted.**
+`LocamotionControllerComponent::TurnPlanDiagnostics` now keeps desired, committed, and immutable
+active-step start/mid/end bases separate. It also carries requested/admitted/achieved yaw, angular
+progress, requested/admitted advance, candidate/admitted sole poses, reach reserve, foot separation,
+ground/admission status, and an extensible limiting-constraint result. All angular planning fields
+are initialized to zero and are observational only in this slice. The existing straight planner
+copies its already-computed candidate and admitted results into this structure after the existing
+reach projection; no new field is read by command routing, foothold construction, support control,
+phase transitions, or the constrained leg solve.
+
+With locomotion debug enabled, each admission emits one `[LocomotionTurnPlan]` record. Debug drawing
+shows the active start basis in blue, the end basis in magenta, and the candidate sole pose with a
+small position marker and local right/up/forward axes. The vertically separated basis origins make
+the expected zero-yaw overlap visible without changing either physical frame.
+
+Both dependency-inclusive Debug builds passed for `Sandbox` and `Runtime`. The accepted manual
+straight run is the isolated session from 12:11:32 through 12:11:41 in `logs/loco_debug.log`; an
+earlier process-automation launch that visibly slid was discarded rather than counted. The accepted
+session contains exactly four turn-plan records. Every record reports desired error, requested yaw,
+admitted yaw, and achieved yaw as `+0.000` degrees; all four candidates are grounded and accepted
+with `constraint=none`; and requested/admitted advance, reach, and separation are identical. There
+are no aborts, failed checks, retries, or restart blocks in the session. Ordinary phase-transition
+target deltas after gait activation remain at most 1.6 mm for the foot and 1.2 mm for support, with
+no command discontinuity. The commanded stop completes with `steps=4`, returns to `IDLE`, and
+reports 1.6 cm stop-settle drift, 1.4-degree final tilt, correct contact edges, and no adaptive
+recovery.
+The historical stride-length diagnostic is `variable`, but it is not a stop-safety failure and is
+outside this state-only slice. Slice 1 therefore passes its build, zero-yaw, unchanged-routing, and
+four-step start/stop gates.
+
+**Slice 2 implementation and validation (2026-08-04): mixed-frame validation failure.**
+Runtime direction changes are now compared with the last successfully committed heading. Desired
+errors through the configurable 45-degree fallback threshold remain in the live physical gait;
+larger errors retain the temporary settled whole-ragdoll blend. Each admitted footprint clamps its
+yaw to `gaitMaxTurnStepDeg` (5 degrees by default), keeps the existing full step advance along the
+midpoint heading, and places the anatomical lane along the end-heading right axis. Reach projection
+uses the end-heading sole rotation. The first implementation deliberately retained the accepted
+straight-gait forward admission, landing checks, and support tangents; the mirrored run proved that
+those dependencies cannot remain deferred until Slice 4 even at the conservative 5-degree cap.
+
+The active heading target follows a shortest-path quaternion interpolation across swing, descent,
+settle, and support transfer. The planned end heading is immutable after foothold admission. The
+committed heading, physical gait basis, runtime yaw, and next-step frame advance only after the
+existing successful-transfer gate. The old stance sole continues to use its captured world-space
+rotation throughout the step; only the released foot receives the admitted end-heading rotation,
+and that rotation becomes its new planted reference at touchdown. A cancelled early return retains
+its previous sole rotation. Zero-admitted-yaw steps still report exactly zero requested, admitted,
+and achieved turn even when ordinary heading hold has a small physical tracking error.
+
+`[LocomotionTurnPlan]` reports the bounded candidate as before. Each successful transfer now also
+emits `[LocomotionTurnCommit]` with admitted/achieved yaw, planned progress, remaining heading error
+before and after commit, a monotonic-decrease result, both existing translational drift maxima, and
+the old-stance/new-plant reference-rotation deltas. The reference deltas should be zero to logging
+precision; they distinguish immutable command references from ordinary physical sole tracking
+error. Dependency-inclusive Debug builds pass for both `Sandbox` and `Runtime`, and `git diff
+--check` is clean.
+
+The mirrored validation did establish the new heading ownership: both directions eventually
+completed all nine 5-degree commits, every successful transfer reduced remaining heading error,
+achieved yaw stayed near the admitted yaw, and both planted-reference rotation deltas remained zero.
+It did not establish a usable gait. The negative turn required ten abort recoveries (five minimum-
+advance rejections, two plant slips, one transfer-drift abort, and two acquisition timeouts); the
+positive turn required five (three minimum-advance rejections, one plant slip, and one transfer-
+drift abort). A plan could log 10.1 cm of admitted midpoint-frame advance and then fail the old-
+forward minimum-advance gate. Accepted failing plants touched down with roughly 14-15 degrees of
+sole error, accelerated horizontally to 0.28-0.43 m/s while angular speed reached as much as
+2.54 rad/s, saturated the 2 cm planted correction, and crossed the 4 cm slip boundary. Once the
+heading error reached zero, the original straight gait became stable again. Slice 2 therefore
+failed because the curved footprint, straight objective projections, and straight support tangents
+did not share one frame; the authored yaw cap, scalar reach, and heading convergence were not the
+limiting failures.
+
+**Slice 2b implementation (2026-08-04): frame-consistent gentle turns; validation pending.**
+An admitted nonzero turn now owns one immutable translation coordinate system for its entire step.
+Because midpoint forward and end right are slightly oblique, advance and lane are recovered as the
+coefficients of that pair rather than as raw projections:
+
+```text
+advance = dot(delta, endForward) / dot(midForward, endForward)
+lane    = dot(delta, midRight)   / dot(endRight, midRight)
+```
+
+The requested/admitted planner values, minimum-advance admission, physical support-to-support
+advance, target error, landing retention, settled tracking loss, and gait adaptation now use those
+coefficients. At 5 degrees, a 10 cm advance plus an 18 cm lane previously appeared in the start
+frame as alternating approximately 11.6 cm and 8.4 cm steps; both now remain the authored 10 cm.
+`[LocomotionTurnPlan]` reports `legacyStart` beside the authoritative admitted advance so the removed
+alternation remains visible. Zero-yaw and cancelled steps take the original straight projections
+exactly.
+
+Preload, contact-acquisition, and full-transfer Hermite curves preserve their incoming C1 velocity,
+but an active turn derives its outgoing tangent from the actual horizontal start-to-end support
+span. The plant-drift speed limiter decomposes motion in midpoint forward/right instead of the stale
+step-entry frame. Straight steps retain their previous forward tangent. This makes support motion
+follow the curved footprint without changing its accepted 0.15 m/s speed or 1.75 m/s2 acceleration
+limits.
+
+Turn steps must also establish an angularly credible sole before accepting support ownership.
+Unlike straight arrival, turn arrival cannot use the 30 ms milestone bypass while sole error exceeds
+10 degrees and receives at most 0.25 seconds for convergence. A contacting turn sole is not admitted
+until error is at most 10 degrees, angular speed at most 0.75 rad/s, and horizontal speed at most
+0.12 m/s; touchdown receives the same bounded 0.25-second window. The body heading remains at its
+80-percent touchdown target while waiting, and the eventual anchor captures the then-current quiet
+material contact instead of the unstable first impact. `[LocomotionTurnTouchdown]` logs the first
+blocked readiness sample; touchdown and commit records carry the accepted sole, angular-speed, and
+horizontal-speed values.
+
+Dependency-inclusive Debug builds pass for both `Sandbox` and `Runtime`, and `git diff --check` is
+clean.
+
+**Slice 2c implementation (2026-08-04): explicit support ownership; validation pending.** The first
+2b run proved that the angular touchdown gate was functioning, but exposed a later invariant
+violation. One recorded turn waited 351 ms and accepted contact at 9.9 degrees sole error,
+0.032 rad/s angular speed, and 0.005 m/s horizontal speed. Only 33 ms later, ordinary plant
+acquisition began transfer with `centerAnchor=no` and `maxQuiet=0.000/0.080s`. Repeated failures then
+reported `TRANSFER_DRIFT_ABORT reason=new_support`, `anchorStage=pivot`, no handoff time, and
+4.0-4.3 cm new-support drift. The controller had treated a safe impact as permission to bear load.
+
+Planting now has three explicitly different authorities:
+
+1. `TOUCHDOWN_WAIT` accepts a collision only after the relevant impact-readiness gates pass.
+2. `SETTLE` owns the immutable material-point pivot. It holds the exact support command present at
+   impact and may roll, recovery-release, or rebase that pivot, but it cannot advance load or body
+   heading. Only the existing 80 ms quiet proof may capture the sole-center anchor.
+3. `SUPPORT_READY` owns that captured center. It completes the fixed 90 ms center blend and then
+   proves the ordinary contact, speed, sole, drift, and drift-rate gates for an independent plant-
+   acquisition interval. Only that proof may enter `TRANSFER`.
+
+The pre-contact preload remains bounded and may reach its former partial-load position before
+impact. At accepted touchdown its curve is frozen at the current commanded position with zero
+feed-forward velocity. `beginTransfer()` re-seeds the full handoff from that exact stationary state
+only after `[LocomotionGait] SUPPORT_OWNERSHIP_READY`. Consequently
+`SUPPORT_CURVE_ACQUIRED` must always report `centerAnchor=yes` and `maxQuiet>=0.080/0.080s`; a pivot
+that cannot establish center ownership aborts in `SETTLE`, while a captured center that cannot stay
+stable aborts in `SUPPORT_READY`. The turn target remains at 80 percent through both states and
+finishes its remaining 20 percent during physical transfer.
+
+Dependency-inclusive Debug builds pass for both `Sandbox` and `Runtime`, and `git diff --check` is
+clean. Runtime validation must confirm the new phase sequence
+`TOUCHDOWN_WAIT -> SETTLE -> SUPPORT_READY -> TRANSFER`, zero support speed in both ownership-proof
+states, and no `TRANSFER_DRIFT_ABORT` whose anchor stage is still `pivot`.
+
+**Slice 2d implementation (2026-08-04): objective-relative landing and closed-loop handoff;
+validation pending.** The first run with explicit ownership proved that the state split worked:
+successful plants reached `SUPPORT_READY` with a center anchor and a complete quiet interval. The
+same visible stand-and-retry behavior remained because three later policies deliberately routed a
+physically stable turn back to recovery.
+
+First, the straight minimum-forward-advance check no longer requests `STOPPING` solely because an
+active angular step lands short. A quiet center-owned turn plant logs
+`LANDING_ADVANCE_CHECK result=TURN_REPLAN`, retains its actual physical footprint, completes the
+ordinary transfer gates, and seeds the next plan from the measured feet. Straight translation
+retains its existing controlled-stop behavior. Forward stride/loss adaptation is skipped while an
+angular objective is active so an intentional curved step cannot inflate the following stride.
+
+Second, support transfer is closed around the same live old-to-new foot span used by the load latch.
+The command now targets at least 0.74 normalized new-support load and corrects that component each
+frame as either physical foot settles. The existing physical ownership latch remains 0.68 acquire /
+0.64 release; it has not been weakened. Hermite continuity, the 0.15 m/s support-speed ceiling, and
+the acceleration limiter remain authoritative. `TRANSFER_CHECK` now reports actual load, commanded
+load, command target, latch threshold, and every boolean HOLD gate. The fixed distance to the new
+sole is explicitly labeled telemetry because it is not a completion gate.
+
+Third, impact-pivot release and loaded-support validation now use one 12-degree sole-ownership
+tolerance. The prior 8-degree pivot gate could hold a motionless 9-11-degree sole until timeout even
+though the immediately following loaded-support state already accepted it at 12 degrees. Contact,
+0.75 rad/s angular speed, 0.12 m/s horizontal speed, and the full 80 ms quiet proof remain required,
+so this removes an unreachable transition rather than bypassing physical ownership.
+
+Finally, foothold reach admission predicts contact-time hip position from the actual pre-contact
+support path plus the admitted heading's hip orbit. Its displacement is bounded by support speed and
+the current cadence horizon instead of a fixed 1.5 cm. Reach must be valid from both the current hip
+and the predicted contact hip, preventing a favorable prediction from admitting a target that is
+unreachable before support motion completes.
+
+Repeat the same two fresh W-to-diagonal sessions through nine successful commits. No curved plan may
+fail minimum advance solely because `legacyStart` is smaller than admitted advance. Every accepted
+turn touchdown must satisfy the 10-degree/0.75-rad/s/0.12-m/s readiness limits; support target speed
+must remain at most 0.15 m/s; all commits must decrease error with zero reference-rotation deltas;
+and neither run may abort, cross lanes, exceed 4 cm drift, or visibly scrub a planted foot. Follow
+each completed turn with at least four zero-yaw steps and the validated stop to confirm the turn did
+not leave a poisoned straight-gait state.
+
+**Slice 2e implementation (2026-08-04): committed transport and dynamic swing admission;
+validation pending.** The 2d logs showed that explicit plant ownership and live transfer load had
+removed the former post-landing reset path: transfer gates passed and turn steps committed. The
+remaining failures happened earlier, overwhelmingly on the outside foot. Those plans passed a
+static reach test with only 3-24 mm reserve, then asked the physical sole to cover a longer curved
+path while the support command continued cruising along the preceding foot-to-foot transfer chord.
+Arrival misses were therefore not another contact timeout: the planner and the next swing were
+using different future pelvis motion, and no gate checked whether the foot arc fit the available
+trajectory time.
+
+Successful transfer commitment now C1-reseeds a dedicated support-transport Hermite segment. Its
+start position and velocity are the exact live support command at commitment; its endpoint velocity
+is projected onto the newly committed forward direction and its endpoint lies on that same tangent.
+The former lateral transfer component is smoothly removed inside the bounded segment instead of
+becoming the next swing's indefinite cruise direction. `[LocomotionGait]
+SUPPORT_TRANSPORT_REBASE` records both velocity vectors and the discarded old-frame lateral speed.
+The existing 0.15 m/s runtime speed cap and 1.75 m/s2 acceleration cap remain authoritative.
+
+Contact-hip prediction now evaluates that exact active support segment through takeoff, swing, and
+arrival, then seeds the same candidate-dependent 20-percent descent preload used at runtime. A
+fixed 120 Hz forward simulation applies the runtime position gain, speed cap, acceleration cap, and
+incoming command velocity. The resulting support position, support velocity, and 80-percent heading
+hip orbit produce the reach-test contact hip. This replaces the old displacement clamp, which could
+hide precisely the lateral transport responsible for the failures.
+
+Turn footholds also receive dynamic target-space admission before anatomical reach projection. The
+trajectory's actual smoothstep peak derivative converts swing-start-to-target distance into required
+linear speed. Inside feet are limited to 0.78 m/s and outside feet to 0.62 m/s; if a candidate is
+too fast, binary search removes forward advance while preserving its anatomical lane and admitted
+yaw. A turn-dominant plan may consequently admit less than the straight 6 cm minimum advance and is
+judged by its angular objective; the already implemented `TURN_REPLAN` landing path retains the
+measured result. Straight zero-yaw footholds bypass this policy unchanged. Dynamic angular admission
+measures the complete released-sole rotation (normally two committed yaw increments), not merely the
+current step delta, and bounds it by the 2.25 rad/s peak sole-leveling rate. A future increase above
+the current five-degree step cap therefore cannot silently exceed the available convergence time.
+
+`[LocomotionTurnPlan]`, `[LocomotionTurnContact]`, `[LocomotionTurnAbort]`, and turn-commit records
+now identify the swing side and whether it is the outside foot. They report requested/admitted swing
+distance and peak target speed, speed limits, achieved physical linear/angular peaks, predicted and
+actual contact hip, their error vector, and predicted contact support velocity. The arrival and
+touchdown timeouts remain safety gates and were not enlarged.
+
+Dependency-inclusive Debug builds pass for `Sandbox` and `Runtime`, and `git diff --check` is clean.
+Runtime validation should first confirm that four straight start/stop steps remain unchanged. Then
+repeat both turn directions: every outside plan above 0.62 m/s must show
+`constraint=swing-linear-speed` and a reduced admitted distance/advance; contact-hip error should
+shrink materially from the former 5.5-15.7 cm lateral range; support rebase output must preserve its
+incoming velocity at the segment start and converge to the committed tangent; and no arrival or
+touchdown abort should occur. If a failure remains, the new side/speed/hip record is the evidence
+for adjusting a physical budget rather than another phase timeout.
+
+**Slice 2f implementation (2026-08-04): paired turn budgets and inside-foot convergence;
+validation pending.** The first 2e run validated outside-foot dynamic admission: ten of eleven
+outside plans reduced advance at the 0.62 m/s target-speed limit and none aborted. All six remaining
+nonzero-yaw aborts belonged to the inside foot. Four stopped in `ARRIVAL` with 8-11 cm remaining
+horizontal error and 22-28 degrees of sole error; two reached `TOUCHDOWN_WAIT` near the admitted
+foothold but did not satisfy an unrecorded final motion gate. Static reach was not the separator:
+contact-hip prediction was within roughly 0.4-4 cm and failed inside plans were below the independent
+0.78 m/s target-speed ceiling. The failed pair instead combined a heavily shortened outside step
+with an immediately full-advance, full-yaw inside step while the pelvis resumed its 0.10 m/s
+transport. `ARRIVAL` then held the trajectory at `t=0.70`, so the controller asked the sole to settle
+while deliberately retaining the final 30 percent of its trajectory.
+
+An accepted outside turn plan now publishes one persistent budget for the immediately following
+inside plan. Its advance scale is the outside plan's admitted/requested advance ratio, bounded to
+0.25-1.0. Its yaw scale is `0.55 + 0.45 * advanceScale`, bounded to 0.55-1.0. The next inside plan
+applies both scales before dynamic speed and reach admission, reports `constraint=turn-pair-budget`
+unless a stricter linear-speed or reach constraint wins, and consumes the budget exactly once. A
+direction reversal, unexpected foot role, stop, abort, or fresh start clears the pending pair, so a
+stale budget cannot leak into another turn. Straight zero-yaw planning never reads it.
+
+When that paired inside plan is admitted, the active support transport is C1-reseeded from its exact
+current command position and velocity toward a 0.05 m/s committed-forward tangent. The horizon
+covers predicted takeoff plus swing and arrival, and the existing support speed/acceleration limiter
+remains authoritative. Contact-hip prediction therefore evaluates the same slower incoming pelvis
+curve that runtime will use. `[LocomotionGait] SUPPORT_TRANSPORT_PAIR` records the scale pair and
+incoming/outgoing velocity; turn-plan and abort records carry the applied/latched pair flags,
+scales, conditioned support speed, and final arrival trajectory coordinate.
+
+Inside-turn `ARRIVAL` now performs a bounded hover-height crawl from trajectory `t=0.70` to at most
+`t=0.82` over the existing timeout. It does not enlarge the timeout or change sole readiness. If
+readiness succeeds, descent continues from the reached coordinate and blends height continuously
+from hover to the foothold, avoiding a target jump. Outside and straight trajectories retain the
+existing path exactly. Finally, a turn touchdown timeout emits one complete
+`[LocomotionTurnTouchdown] action=TIMEOUT` snapshot for contact, normal, vertical speed, horizontal
+and vertical target error, sole error, angular speed, and horizontal speed. The 10-degree,
+0.75-rad/s, 0.12-m/s, contact-normal, vertical-speed, and target-error thresholds are unchanged.
+
+Dependency-inclusive Debug builds pass for `Sandbox` and `Runtime`, and `git diff --check` is clean.
+Runtime validation should repeat both mirrored W-to-diagonal turns from a fresh settled launch. An
+outside plan with reduced advance must show `latched=yes`; the immediately following inside plan
+must show `applied=yes`, proportionally reduced advance/yaw, `support=0.050mps`, and no intervening
+reset. Every such inside step must pass `ARRIVAL` and touchdown. If a touchdown still times out, the
+new final gate snapshot—not a longer timeout—selects the next fix. After both turns complete with
+zero stand-ups, run at least four zero-yaw steps and the validated stop before advancing to Slice 3.
+
+**Slice 2g implementation (2026-08-04): measured-state inside-foot command governor; validation
+pending.** The 2f rerun ruled out paired geometry, predicted hip position, and joint reach as the
+remaining primary failure. Seven recurring paired inside-foot aborts all applied the reduced pair
+budget and 0.05 m/s support transport. Their planned swing speeds were only 0.40-0.54 m/s, yet the
+physical sole reached 1.09-1.22 m/s; planned angular speeds were 0.43-2.25 rad/s while measured peaks
+reached 10.46-14.44 rad/s. Arrival and touchdown hip prediction was generally within 2 cm, reach
+shortfall and hip-envelope clamp were zero, and the knee retained roughly 45-47 degrees of bend.
+The failed touchdown snapshots were marginal and single-gate: 10.6 versus 10 degrees sole error,
+0.122 versus 0.120 m/s horizontal speed, or 0.196 versus 0.120 m/s horizontal speed. The remaining
+problem was therefore command tracking and braking, not another foothold budget.
+
+The inside turn now owns a persistent measured-state trajectory clock from `SWING` through
+`DESCENT`. Wall-clock phase progress is only a ceiling. The command accelerates at no more than
+2.5 m/s2, respects the already admitted swing-speed budget up to a hard 0.80 m/s ceiling, and brakes
+toward the next stopping endpoint. It advances normally while the measured sole is within 2.5 cm
+of the current command, slows continuously between 2.5 and 7 cm, and stops advancing beyond 7 cm so
+the physical foot can catch up. A bounded binary search converts the per-frame distance budget to
+trajectory progress. The position-command speed is retained across phase boundaries instead of
+being recreated from wall-clock progress.
+
+Inside `ARRIVAL`, the 2f hover crawl remains, but its command is governed by that same clock. The
+transition to descent now requires the complete already-computed stable-pose proof--horizontal
+foothold error, hover height, sole alignment, no contact, and the configured stable interval--rather
+than one frame of sole alignment. During descent, touchdown progress is derived from governed
+trajectory progress. Position feedback remains active through touchdown wait; only velocity
+feed-forward fades during descent. This fixes the former behavior where all task-space correction
+vanished exactly when the lagging sole needed to brake onto the foothold. Ordinary straight,
+outside-turn, and cancellation trajectories retain their prior wall-clock path exactly.
+
+Sole orientation now has an equivalent world-space governor for the inside foot. Its angular
+command accelerates at no more than 12 rad/s2, is limited to 0.75-2.25 rad/s according to the
+admitted plan, brakes against remaining command angle, and slows when the measured sole trails the
+world command by 8-20 degrees. The rate-limited world command is converted each frame through the
+measured knee into a local ankle target. That compensated local target is applied directly rather
+than filtered a second time; hip and knee commands retain their existing response filter. Ankle
+envelope clamping remains authoritative and is now measured explicitly.
+
+The existing arrival, descent, and touchdown safety windows are not enlarged. A governed swing or
+descent that cannot reach its milestone inside its nominal duration plus the existing relevant
+safety window aborts with `[LocomotionTurnGovernor]`. Successful contact and abort records now
+include trajectory progress, linear command speed, measured tracking error, angular command speed,
+world-sole tracking error, and ankle-envelope clamp. Runtime validation must show that paired inside
+steps no longer exceed their admitted physical speed by the former factor, reach full arrival
+stability before descent, and satisfy touchdown without a stand-up. Repeat both mirrored turns,
+then four zero-yaw steps and the validated stop before advancing to Slice 3.
+
+Dependency-inclusive Debug builds pass for both `Sandbox` and `Runtime`, and `git diff --check` is
+clean. This is compile-time acceptance only; Slice 2g remains runtime-validation pending.
+
+**Slice 2h implementation (2026-08-04): bounded ankle compensation and path-consistent timing;
+validation pending.** The 2g run produced twelve aborts, all on the inside foot: six governed
+`SWING` timeouts and six `ARRIVAL` stability timeouts. The visible shake was controller chatter,
+not a weak or unreachable leg. Failed inside ankles repeatedly carried 12-22 degrees of motor error
+while the opposite ankle was generally within 2-4 degrees. Their commanded twist reversed during a
+monotonic swing, every swing timeout lost 7.5-12.6 degrees to the ankle envelope, and measured sole
+angular speed reached 9-14.5 rad/s while the world command was only about 0.1-0.45 rad/s. Hip clamp
+and reach shortfall remained zero, with 44-48 degrees of knee bend. The terminal ankle control was
+therefore the first inconsistent layer.
+
+The exact measured-knee cancellation introduced an algebraic high-bandwidth loop: knee motion
+changed the child-local ankle target, the 16 Hz position motor moved the light ankle/foot bodies,
+and that movement changed the next measured-parent correction. Slice 2g then applied this moving
+local target directly. Slice 2h instead constructs the nominal ankle target beneath the filtered
+hip/knee command that the motor will actually receive, compares it with exact measured-parent
+compensation, and admits at most six degrees of that correction. The resulting target still passes
+through the authored ankle envelope. The final local ankle command accelerates at no more than
+20 rad/s2, is rate-limited to 1.75-3.25 rad/s according to the admitted sole budget, brakes against
+its remaining local angle, and is clamped once more after interpolation. Hip and knee filtering,
+motor frequency, damping, torque, and all authored joint limits remain unchanged.
+
+After local rate and envelope limits, the controller reconstructs the sole orientation that the
+current physical parent plus bounded local motor command can actually produce. That reachable
+orientation becomes the next frame's world-governor state, so the outer loop cannot integrate
+through an ankle boundary and repeatedly demand an impossible pose. Thresholded
+`[LocomotionTurnAnkle]` records report requested/admitted parent compensation, envelope loss,
+per-frame local command step, local command rate, reachable-world residual, and physical sole
+tracking. Contact and abort records retain the same values.
+
+The six swing timeouts also exposed a separate clock mismatch. Their final physical tracking error
+was only 1.8-3.1 cm, but the deadline was derived from cadence while the new governor limited motion
+along the full vertical-plus-horizontal arc. The governed deadline now samples that 3D path at 24
+segments, solves its acceleration-limited minimum traversal time using the same 2.5 m/s2 acceleration
+and 0.45-0.80 m/s command-speed bounds, then takes the larger of that derived deadline plus an
+80 ms tracking reserve and the existing safety deadline. `[LocomotionTurnGovernor]` reports sampled
+path length, minimum duration, and final deadline on failure.
+
+Finally, the arrival crawl previously first reached `t=0.82` on the same frame as its unchanged
+timeout, making the 30 ms full-pose stability proof structurally unavailable. The crawl now reserves
+at least 60 ms inside the existing arrival window, including two frames beyond the configured
+stability duration. No arrival threshold or timeout was enlarged. Validation must show materially
+smaller inside-ankle motor error and sole angular peaks, no repeated twist reversals, and no swing or
+arrival abort. Repeat both mirrored turns before the four zero-yaw steps and controlled stop.
+
+Dependency-inclusive Debug builds pass for both `Sandbox` and `Runtime`, and `git diff --check` is
+clean. This is compile-time acceptance only; Slice 2h remains runtime-validation pending.
+
+**Rejected Slice 2i experiment (2026-08-04): command-space leg shaping and moving-leg motor
+profile; reverted.** The 2h rerun kept the final local ankle command inside its intended bounds,
+but the remaining failures still coincided exactly with physical inside-leg shake. In a representative
+failure, the local ankle moved only 0.39-0.94 degrees per diagnostic interval, ankle-envelope loss was
+zero after TAKEOFF, and reachable-world residual stayed near 0.3-1.6 degrees. The physical sole still
+alternated through 12.4, 7.4, 18.5, 7.0, and 26.3 degrees of tracking error. At the same time, a hip
+command moving from 26.3 to 32.6 to 30.9 degrees produced physical poses of 15.2, 38.0, and 20.2
+degrees, while ankle motor error reached 16.3 degrees. Hip and ankle torque ratios remained below
+roughly five and one percent respectively, with no reach shortfall or terminal envelope clamp. The
+governed path had a 0.372-second calculated minimum inside a 0.680-second deadline but reached only
+`trajectoryT=0.163`. The stand-up was therefore downstream recovery from a swing timeout: coupled
+servo ringing repeatedly left the tracking tube and stopped the command clock.
+
+The forward-walking horizontal task-space correction was already active on the inside turn. The
+runtime scene uses 0.60 proportional gain, 100 ms of target-velocity lead, and a 6 cm cap, so adding
+another measured-joint correction would have duplicated the powered-ragdoll servos. Slice 2i instead
+keeps the same low-frequency correction objective but shapes it for the governed inside foot. Its
+proportional term is scaled to 65 percent of the configured gain, its admitted magnitude is capped at
+4 cm, and a persistent command state follows the requested bias with at most 0.12 m/s velocity and
+0.80 m/s2 acceleration. Direction reversal first removes the old correction velocity. Straight,
+outside-turn, planted-foot, and cancellation correction paths retain their existing behavior.
+
+Hip, knee, and ankle commands now carry persistent angular-velocity vectors for the governed inside
+leg from TAKEOFF through TOUCHDOWN_WAIT. Shortest-arc target velocity is acceleration limited; a
+moving target cannot instantaneously reverse the integrated pose command. Hip command speed and
+acceleration are bounded at 2.0 rad/s and 10 rad/s2, knee at 3.0 rad/s and 18 rad/s2, and the terminal
+ankle at 1.25-2.25 rad/s according to the admitted yaw budget with 12 rad/s2 acceleration. The
+measured-parent ankle correction remains capped at six degrees, but it is now its own slow bias with
+0.75 rad/s speed and 6 rad/s2 acceleration instead of an algebraic local target. Starting these
+governors in TAKEOFF removes the controller-mode seam at the first SWING frame.
+
+The persistent world-space sole trajectory is no longer overwritten by an orientation reconstructed
+from the raw measured knee every frame. Reachability is projected through the commanded hip/knee
+chain for residual telemetry, while physical sole error may slow the outer governor without becoming
+the outer governor's state. This preserves the admitted world trajectory as the equilibrium and
+breaks the remaining measured-parent feedback loop.
+
+Finally, only the active inside swing leg blends over 100 ms from the authored 16 Hz, damping-ratio
+1.0 springs to a moving-leg profile: 10 Hz hip, 12 Hz knee, 8 Hz ankle, and damping ratio 1.2. Torque
+limits and joint envelopes are unchanged. The engine reapplies authored spring settings to every
+other joint every physics substep, so the profile cannot leak into stance, straight walking,
+standing, or get-up control. `[LocoMotor]` now reports live spring frequency, damping, profile
+weight, and measured child-to-parent angular speed. `[LocomotionTurnAnkle]`, successful contact, and
+abort records report requested/admitted foot correction, correction rate, hip/knee/ankle command
+rates, and motor-profile blend.
+
+Runtime acceptance requires both mirrored turn directions to complete without an inside-foot abort,
+without repeated sole-error excursions above the 8-20 degree governor band, and without alternating
+hip/ankle tracking reversals. The governed trajectory must reach its arrival landmark before the
+unchanged deadline. Four zero-yaw steps and the validated stop must then confirm that the transient
+profile and correction state return to zero. Debug builds and static checks are recorded after the
+implementation below; physical validation remains user-run.
+
+The runtime result rejected this experiment. The inside foot stopped completing the step at least as
+often as before, while the new command governors obscured the earlier validated 2h behavior. More
+importantly, the added logs disproved the premise: low command rates coexisted with 5.5-7.4 rad/s
+physical ankle motion, 6-21 degrees of envelope loss, and 5-16 degrees of reachable-sole residual.
+The worst samples combined 9.5-10.2 cm position tracking error with 53-59 degrees of sole error and
+early ground contact. The missing layer was not more temporal filtering. The point-position IK chose
+one knee plane first, then assigned all remaining world-sole orientation to a terminal ankle whose
+authored safe envelope is only about 27 degrees of swing and seven degrees of twist after margin.
+All Slice 2i command-space shaping, motor-profile routing, and transient state has therefore been
+removed. Slice 2h's bounded measured-parent compensation and local ankle governor are restored.
+Measured child-to-parent angular-rate telemetry remains because it is diagnostic-only.
+
+**Rejected Slice 2j experiment (2026-08-04): orientation-aware whole-leg allocation; reverted.**
+The analytical two-bone solve used its redundant knee-bend plane instead of fixing it
+to the nominal pole. For an active inside turn, it samples 25 swivel angles over plus/minus 60 degrees,
+then performs two local refinement passes. Every candidate solves the hip position, clamps the hip to
+its authored swing/twist envelope, composes the resulting knee world orientation, and measures the
+terminal ankle orientation lost to its own envelope. Candidate cost strongly prioritized eliminating
+ankle loss, then hip loss, branch motion, and unnecessary swivel. The selected swivel persisted across
+frames and was limited to 240 degrees/second, preventing analytical branch flips. Straight walking,
+outside turns, stance solves, cancellation, torque limits, and authored joint limits retain their 2h
+behavior.
+
+Sole orientation was explicitly secondary only while the inside foot had airborne clearance. From
+trajectory `t=0.25` to `t=0.55`, its authority ramps smoothly from the released sole orientation to the
+exact admitted world orientation. The ankle endpoint is constructed after that blend, so the position
+and orientation tasks describe one consistent terminal transform. Exact landing orientation has full
+authority before arrival or descent can begin; no touchdown threshold was relaxed.
+
+Admission tested more than point reach. At trajectory `t=0.60`, `0.80`, and `1.00`, it predicted the
+hip, reconstructed the two-bone geometry, searched the same redundant knee plane, clamped both hip and
+ankle, and recorded the worst exact-sole ankle loss. If the requested footprint exceeded 0.75 degrees of
+loss, a binary projection reduced horizontal advance until all three late-swing samples fit. If even
+the zero-advance projection was not feasible, the plan was rejected with `constraint=ankle-envelope`
+instead of entering a swing that can only fail at arrival. The plan record includes sampled ankle
+clamp and contact swivel.
+
+Runtime records separated requested and applied knee swivel, exact versus currently relaxed ankle
+loss, orientation priority, relaxed orientation angle, normalized ankle swing reserve, and signed
+twist margin. `[LocoMotor]` retains relative angular speed and additionally reports Jolt's actual
+twist/swing joint-limit lambda converted to torque. That distinguishes a motor tracking error from a
+physical limit impulse during the next run.
+
+Runtime acceptance required both mirrored inside steps to show a smooth swivel command, positive
+ankle swing/twist reserve before descent, no repeated joint-limit impulse sign reversal, no violent
+sole shake, and no swing/arrival abort. Then repeat four zero-yaw steps and the controlled stop to
+confirm the new redundancy path is dormant outside turning. Dependency-inclusive Debug builds pass
+for `Sandbox` and `Runtime`, and `git diff --check` is clean; physical validation remains user-run.
+
+The runtime result rejected both the admission proof and the live allocation. Nine of thirteen turn
+plans were denied in `WEIGHT_SHIFT` with `constraint=ankle-envelope`, so the foot never entered
+`TAKEOFF`. The 0.75-degree admission gate compared a hypothetical settled configuration with a
+controller that begins from a measured pose and filters hip, knee, ankle, and swivel at different
+rates. A plan predicted at 0.2 degrees of ankle loss and 25 degrees of swivel began its real swing at
+only 1.9 degrees of applied swivel and 9.2 degrees of ankle loss. The predictor was therefore not a
+valid routing invariant.
+
+The four plans admitted by that gate also disproved ankle feasibility as the root cause. Two failed
+with zero final ankle-envelope loss and positive swing reserve, while horizontal sole error remained
+5.3-6.1 cm and physical sole angular speed peaked at 6.8-9.2 rad/s. One right ankle was commanded to
+-3.0 degrees of twist while the measured ankle crossed to +11.5 degrees with 22.8 degrees of complete
+motor error. Slice 2j's hard admission, target projection, early orientation relaxation, and applied
+knee swivel are removed. Its sampled admission loss and best-swivel calculation remain
+counterfactual telemetry only; they cannot change a foothold or any joint target. Slice 2h runtime
+behavior is restored.
+
+**Slice 2k implementation (2026-08-04): commanded-FK closure diagnostic; runtime validation
+pending.** Before choosing another controller, every active turn frame now reconstructs the sole pose
+from the exact hip, knee, and ankle commands written to the powered ragdoll. It records three poses:
+the corrected desired sole, that commanded-joint forward-kinematics sole, and the measured physical
+sole. Position and orientation error are split into desired-to-commanded `ik`, commanded-to-physical
+`motor`, and desired-to-physical `total` terms. `[LocomotionTurnFK]` emits the complete vectors and
+magnitudes every 100 ms; successful contact and abort records retain the final split.
+
+This diagnostic is read-only. If `ik` is already large, the analytical solve, frame composition, or
+independent command filtering is internally inconsistent. If `ik` remains small while `motor` grows,
+the powered-ragdoll chain is failing to follow a valid command and the next controller must address
+coupled physical tracking. The retained counterfactual admission clamp/best swivel and Jolt limit
+torques allow either result to be distinguished from a genuine joint-limit collision.
+Dependency-inclusive Debug builds pass for `Sandbox` and `Runtime`, and `git diff --check` is clean.
+Physical classification remains runtime-validation pending.
+
+**Slice 2l implementation (2026-08-04): coherent governed-sole command; runtime validation
+pending.** Slice 2k showed that the inside footprint was admitted, but the controller subsequently
+created two independent errors. The analytical target was filtered separately at the hip, knee, and
+ankle, so the final joint triplet no longer forward-kinematically reproduced the desired sole. The
+powered ragdoll then lagged that already-inconsistent command. In the worst recorded TAKEOFF sample,
+desired-to-commanded closure reached 12.4 cm while commanded-to-physical error reached 11.5 cm; the
+two temporarily cancelled to a misleading 5 cm total error before diverging during swing.
+
+The governed inside swing now uses one authority hierarchy instead of blending competing controller
+outputs. Its Cartesian sole trajectory remains acceleration limited and subordinate to measured
+physical tracking. TAKEOFF lift and contact-recovery lift ramp continuously in task space rather than
+jumping by five to eight centimetres on the first frame. The analytical two-bone solve writes the hip
+and knee solution for that admitted intermediate sole pose directly; it no longer applies a second,
+independent joint-space response filter. The terminal ankle is derived from the exact commanded knee
+orientation, then passed through the existing authored envelope. Measured knee motion is retained as
+feedback telemetry for the outer governor but is no longer injected into the ankle motor target, so
+the ankle cannot chase physical parent lag while the parent simultaneously chases another command.
+Straight walking, outside turns, planted-leg solving, cancellation, joint envelopes, motor torque,
+contact gates, and all abort gates retain their existing routes.
+
+`[LocomotionTurnFK]` identifies `controller=coherent`; its `ik` term is the decisive invariant for this
+slice. A valid run should keep desired-to-commanded position closure near numerical/envelope residual
+rather than the previous 2-12 cm range. `[LocomotionTurnAnkle] controller=coherent` reports measured
+parent disagreement explicitly as unapplied feedback, alongside the exact local command step,
+command rate, envelope loss, attainable world residual, and physical sole tracking. The physical
+`motor` term may initially remain nonzero, but it must converge without the alternating 3-7 rad/s
+inside-ankle motion seen previously. Runtime acceptance requires mirrored inside steps to enter
+TAKEOFF, complete ARRIVAL/DESCENT without reset, and preserve the existing 2.5 cm/10 degree arrival
+gate. Four zero-yaw steps and the controlled stop must remain unchanged.
+Dependency-inclusive Debug builds pass for `Sandbox` and `Runtime`, and `git diff --check` is clean;
+physical validation remains user-run.
+
+**Slice 2m implementation (2026-08-04): physical-chain IK and shared joint-rate admission;
+runtime validation pending.** Slice 2l removed the independently filtered hip/knee targets and
+measured-parent ankle cancellation, which made the remaining conflict measurable. The first coherent
+TAKEOFF samples closed within 5-11 mm, but later samples accumulated 5-6.5 cm of desired-to-commanded
+position error despite zero hip/knee command lag and zero hip-envelope loss. At the same time, the
+terminal ankle was commanded through 6.7-7.0 degrees in one frame (approximately 15 rad/s) to retain
+zero world-orientation residual after an upstream parent change. The powered ankle subsequently
+oscillated at 4-10 rad/s with 14-23 degrees of physical tracking error. Mirrored logs showed the same
+failure, and outside turn ankles also exhibited it even though their less strict arrival route did not
+immediately abort.
+
+The imported skeleton and the ragdoll are deliberately not rewritten to match one another. Skeleton
+`localT` is animation/skin geometry; changing it at runtime would alter the rendered hierarchy without
+rebaking inverse bind matrices, constraints, or animation. Instead, each leg capture records the live
+ragdoll hip-to-knee vector in the hip body's local frame and knee-to-ankle vector in the knee body's
+local frame. Analytical lengths, hip direction reconstruction, admission telemetry, and commanded FK
+now use those physical constraint-chain vectors consistently. Skeleton translations remain an explicit
+fallback only when a complete live ragdoll capture is unavailable.
+
+Turn orientation is no longer terminal-ankle-only. The existing redundant knee-plane search evaluates
+the unfiltered coherent chain, and its optimum is admitted at no more than 120 degrees/second. This
+allows hip orientation and knee plane to take a continuous share of the sole task without the previous
+sampled branch jump. The old Slice 2j hard feasibility gate remains removed: knee-plane allocation can
+change execution commands but cannot reject or project a footprint.
+
+Finally, the coherent route measures the requested hip, knee, and ankle delta from the previous command
+and admits one shared fraction bounded by 240, 300, and 240 degrees/second respectively. Applying one
+fraction to all three joints replaces the independent temporal layers that made the ankle race ahead of
+its parents. The temporary desired-to-commanded residual is therefore an explicit rate-admission result,
+not an accidental IK disagreement; the existing measured-state trajectory governor waits for it to
+converge. `[LocomotionTurnFK]` reports `geometry=(ragdoll,upper,lower)` and
+`jointAdmission=(scale,requested hip/knee/ankle delta)`. `[LocomotionTurnAnkle]` and abort records retain
+the same shared admission data. Runtime acceptance requires the raw ankle request to stop alternating,
+the admitted local ankle step to remain within its 240-degree/second bound, physical sole angular error
+to converge below 10 degrees, and mirrored inside steps to complete without weakening arrival safety.
+Dependency-inclusive Debug builds pass for `Sandbox` and `Runtime`, and `git diff --check` is clean;
+physical validation remains user-run.
+
+**Slice 2n implementation (2026-08-04): position-primary leg closure and bounded stance width;
+runtime validation pending.** Slice 2m's first physical run separated the remaining failure cleanly.
+The shared joint admission reached `scale=1.000` with sub-degree requests, but the commanded FK sole
+was still 4-12 cm from the Cartesian target. Error grew with the magnitude of the applied knee-plane
+swivel and was predominantly lateral. On the worst inside step, a -25-degree swivel produced 11.5 cm
+of desired-to-commanded position error; the measured-state governor correctly stopped the trajectory
+at `t=0.197`, after which the swing timed out. A later -13.8-degree swivel retained approximately
+4 cm of command-space error through ARRIVAL. The powered-ragdoll motor error was smaller than the
+command-space error in both cases. Slice 2m's rate admission and physical segment capture are therefore
+retained, while its runtime swivel application is rejected.
+
+The underlying construction aligned only the physical upper-link direction with `RotationBetween`.
+That shortest-arc rotation left hip twist about the upper segment unspecified, so the actual knee
+hinge and lower physical link did not occupy the sampled knee plane. Slice 2n instead constructs
+orthonormal frames from two vectors: the physical hip-to-knee link and the hinged knee-to-ankle link.
+Mapping both source vectors to the requested upper/lower directions determines the missing axial hip
+rotation. Every sampled candidate is then reconstructed through full FK, including the bounded hip,
+bounded ankle, terminal-foot relation, and ankle-to-sole offset. Position is a hard primary invariant:
+a candidate exceeding 3 mm of sole-position closure error is discarded before ankle margin, hip
+margin, branch continuity, or knee-pole preference can affect its score.
+
+Corrected swivel search remains counterfactual for this validation pass. Runtime explicitly commands
+zero swivel, but the zero-swivel pose itself uses the corrected two-vector construction. This removes
+the proven lateral command displacement while preserving `bestSwivel`, closure, and accepted/rejected
+telemetry for a later controlled re-enable. `[LocomotionTurnFK]` now includes
+`closure`, `accepted`, `appliedSwivel=0`, and `runtimeSwivel=disabled`; contact and abort records retain
+the same candidate proof. A nonzero counterfactual swivel must never influence a joint command in this
+slice. Debug drawing adds a magenta commanded-FK marker and orange-to-magenta closure segment, followed
+by a cyan physical marker and magenta-to-cyan motor-tracking segment, so the two error sources remain
+visually separable from the orange desired trajectory and green foothold.
+
+Planner width is independently bounded so a wide abort/reset pose cannot perpetuate an expanding gait.
+The signed anatomical lane still has the existing 10 cm minimum, while the new serialized
+`gaitMaxFootSeparation` begins at 18 cm. `[LocomotionTurnPlan]` reports raw, candidate, admitted, maximum,
+and limited separation, and uses `constraint=foot-separation` when this clamp is the limiting admission
+result. This bound addresses the observed occasional 22 cm plan, but it is not treated as the primary
+fix because the same inside-foot failure occurred with admitted separations of only 10-12.4 cm.
+
+Runtime acceptance for Slice 2n is one straight four-step start/stop followed by mirrored diagonal
+turns. Straight plans must remain inside the 18 cm bound without new aborts. During inside turns,
+`appliedSwivel` must remain zero, counterfactual accepted candidates must report at most 3 mm closure,
+and desired-to-commanded FK position error must converge through shared rate admission rather than
+settling at a lateral offset. The red desired-trajectory marker must reach the green foothold, and no
+inside step may reset through SWING or ARRIVAL. Dependency-inclusive Debug builds pass for `Sandbox`
+and `Runtime`, and `git diff --check` is clean; physical validation remains user-run.
+
+Each slice records requested/admitted/achieved yaw, remaining heading error, candidate/admitted/
+actual sole pose, swing and stance joint margins, minimum foot separation, support-target position
+and velocity steps, contact edges, plant-anchor ownership, drift, tilt, motor saturation, and the
+existing right-side pivot-release asymmetry. Turning work must not relax the accepted contact,
+12-degree ownership-sole, 4 cm persistent-slip, 30-degree tilt, correction, load-hysteresis, or temporary
+support-speed limits.
+
+#### Final acceptance criteria
+
+- straight input still reproduces the accepted continuous gait and controlled stop, with no change
+  attributable to zero-yaw planning;
+- ordinary direction changes through 90 degrees remain in the physical gait instead of stopping,
+  rotating the complete ragdoll, and restarting;
+- completed-step heading error converges monotonically apart from a logged live retarget;
+- left and right turns preserve anatomical lane sign and minimum foot separation with no crossover;
+- stance material anchors remain fixed in world space until their existing ownership handoff;
+- the swing foot lands with the admitted yaw and ground-aligned pitch/roll without routine joint-
+  envelope clamping;
+- support position and velocity targets remain continuous at the same phase boundaries validated by
+  straight walking;
+- turn-dominant steps are judged by their admitted angular objective and do not poison forward gait
+  adaptation;
+- release or retarget during every major gait phase reaches either continued stable walking or the
+  validated standing return without a restart loop;
+- the ordinary turn path contains no direct ragdoll transform rotation and requires no physics-
+  engine change.
+
+The geometry follows the future-footprint principle described by Johansen's [*Automated
+Semi-Procedural Animation for Character Locomotion*](https://runevision.com/thesis/rune_skovbo_johansen_thesis.pdf),
+while the physical division between per-step heading, predictive foot placement, and balance control
+follows the compatible structure in Coros, Beaudoin, and van de Panne's [*Generalized Biped Walking
+Control*](https://www.cs.ubc.ca/~van/papers/2010-TOG-gbwc/paper.pdf). A later balance refinement may
+add an inverted-pendulum or capture-point offset to the nominal steering footprint before feasibility
+projection. That is deliberately outside the first turning implementation; current support and
+landing feedback remain unchanged until the nominal steering behavior passes.
+
 ## Relationship to SIMBICON
 
 Keep from the paper:

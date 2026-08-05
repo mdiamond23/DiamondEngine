@@ -2,6 +2,11 @@
 // physical step state machine, foot planning, and constrained ragdoll leg solve.
     static void ResetPhysicalGait(Comp& c)
     {
+        c._gaitTurnPlan = {};
+        c._gaitTurnPairPendingInside = false;
+        c._gaitTurnPairAdvanceScale = 1.0f;
+        c._gaitTurnPairYawScale = 1.0f;
+        c._gaitTurnPairYawSign = 0.0f;
         c._physicalStepBaselineValid = false;
         c._physicalStepContactL = c._physicalStepContactR = false;
         c._physicalStepPrevSwingContact = false;
@@ -42,6 +47,43 @@
         c._physicalStepPlantCenterAnchorStart = glm::vec3(0.0f);
         c._physicalStepPlantCenterAnchorTarget = glm::vec3(0.0f);
         c._physicalStepTrajectoryT = 0.0f;
+        c._gaitSwingCommandSpeed = 0.0f;
+        c._gaitSwingCommandAngularSpeed = 0.0f;
+        c._gaitSwingCommandTrackingError = 0.0f;
+        c._gaitSwingSoleCommandErrorDeg = 0.0f;
+        c._gaitAnkleCommandAngularSpeed = 0.0f;
+        c._gaitAnkleCommandDeltaDeg = 0.0f;
+        c._gaitAnkleParentCompensationDeg = 0.0f;
+        c._gaitAnkleParentCompensationAppliedDeg = 0.0f;
+        c._gaitAnkleAchievableResidualDeg = 0.0f;
+        c._gaitAnkleDiagnosticCooldown = 0.0f;
+        c._gaitIkAnkleEnvelopeClampDeg = 0.0f;
+        c._gaitIkExactAnkleClampDeg = 0.0f;
+        c._gaitIkKneeSwivelRequestedDeg = 0.0f;
+        c._gaitIkKneeSwivelAppliedDeg = 0.0f;
+        c._gaitIkOrientationPriority = 1.0f;
+        c._gaitIkOrientationRelaxedDeg = 0.0f;
+        c._gaitIkAnkleSwingUsage = 0.0f;
+        c._gaitIkAnkleSwingReserve = 0.0f;
+        c._gaitIkAnkleTwistDeg = 0.0f;
+        c._gaitIkAnkleTwistMarginDeg = 0.0f;
+        c._gaitFkDesiredPosition = glm::vec3(0.0f);
+        c._gaitFkCommandPosition = glm::vec3(0.0f);
+        c._gaitFkPhysicalPosition = glm::vec3(0.0f);
+        c._gaitFkDesiredToCommand = glm::vec3(0.0f);
+        c._gaitFkCommandToPhysical = glm::vec3(0.0f);
+        c._gaitFkDesiredToPhysical = glm::vec3(0.0f);
+        c._gaitFkDesiredToCommandOrientationDeg = 0.0f;
+        c._gaitFkCommandToPhysicalOrientationDeg = 0.0f;
+        c._gaitFkDesiredToPhysicalOrientationDeg = 0.0f;
+        c._gaitFkDiagnosticCooldown = 0.0f;
+        c._gaitFkValid = false;
+        c._gaitSwingPathLength = 0.0f;
+        c._gaitSwingMinimumDuration = 0.0f;
+        c._gaitSwingDeadline = 0.0f;
+        c._gaitSwingSoleCommandWorld = glm::quat(
+            1.0f, 0.0f, 0.0f, 0.0f);
+        c._gaitSwingSoleCommandValid = false;
         c._physicalStepClearance = 0.0f;
         c._physicalStepForwardTravel = 0.0f;
         c._physicalStepTargetError = 0.0f;
@@ -307,6 +349,48 @@
         return glm::angleAxis(std::acos(d), glm::normalize(glm::cross(a, b)));
     }
 
+    // Recover the complete rotation between two vector pairs. Aligning only the
+    // upper-leg direction leaves the hip's twist about that segment undefined; the
+    // knee hinge can then occupy a different plane and the lower link misses its
+    // Cartesian endpoint. The secondary vector fixes that axial degree of freedom.
+    static bool RotationMatchingVectorPair(
+        const glm::vec3& sourcePrimary,
+        const glm::vec3& sourceSecondary,
+        const glm::vec3& targetPrimary,
+        const glm::vec3& targetSecondary,
+        glm::quat& rotation)
+    {
+        if (glm::dot(sourcePrimary, sourcePrimary) < 1e-8f
+            || glm::dot(sourceSecondary, sourceSecondary) < 1e-8f
+            || glm::dot(targetPrimary, targetPrimary) < 1e-8f
+            || glm::dot(targetSecondary, targetSecondary) < 1e-8f) {
+            return false;
+        }
+        const glm::vec3 sourceAxis = glm::normalize(sourcePrimary);
+        const glm::vec3 targetAxis = glm::normalize(targetPrimary);
+        glm::vec3 sourcePlane = sourceSecondary
+            - sourceAxis * glm::dot(sourceSecondary, sourceAxis);
+        glm::vec3 targetPlane = targetSecondary
+            - targetAxis * glm::dot(targetSecondary, targetAxis);
+        if (glm::dot(sourcePlane, sourcePlane) < 1e-8f
+            || glm::dot(targetPlane, targetPlane) < 1e-8f) {
+            return false;
+        }
+        sourcePlane = glm::normalize(sourcePlane);
+        targetPlane = glm::normalize(targetPlane);
+        const glm::vec3 sourceNormal = glm::normalize(
+            glm::cross(sourceAxis, sourcePlane));
+        const glm::vec3 targetNormal = glm::normalize(
+            glm::cross(targetAxis, targetPlane));
+        const glm::mat3 sourceBasis(
+            sourceAxis, sourcePlane, sourceNormal);
+        const glm::mat3 targetBasis(
+            targetAxis, targetPlane, targetNormal);
+        rotation = glm::normalize(glm::quat_cast(
+            targetBasis * glm::transpose(sourceBasis)));
+        return true;
+    }
+
     // Physical body rotation when the bone has one, else the animated pose. World-frame
     // targets must compose against the physical parent -- the two diverge exactly when
     // balance feedback matters.
@@ -375,6 +459,63 @@
         const glm::quat clamped = glm::normalize(
             basis * glm::normalize(clampedSwing * clampedTwist) * glm::conjugate(basis));
         return glm::normalize(restLocal * clamped);
+    }
+
+    struct EnvelopeMeasurement {
+        float swingUsage = 0.0f;
+        float swingReserve = 1.0f;
+        float twistDeg = 0.0f;
+        float twistMarginDeg = 0.0f;
+    };
+
+    static EnvelopeMeasurement MeasureEnvelope(
+        const Envelope& env, const glm::quat& restLocal,
+        const glm::quat& target, float marginDeg)
+    {
+        const glm::vec3 axis = glm::normalize(env.twistAxis);
+        const glm::vec3 reference = std::abs(axis.y) < 0.99f
+            ? glm::vec3(0, 1, 0) : glm::vec3(1, 0, 0);
+        const glm::vec3 planeAxis = glm::normalize(
+            glm::cross(axis, reference));
+        const glm::vec3 normalAxis = glm::normalize(
+            glm::cross(axis, planeAxis));
+        const glm::quat basis = glm::normalize(glm::quat_cast(
+            glm::mat3(axis, planeAxis, normalAxis)));
+
+        const float margin = glm::max(marginDeg, 0.0f);
+        const float planeRadius = glm::max(std::sin(glm::radians(glm::clamp(
+            env.swingPlaneDeg - margin, 1.0f, 179.0f)) * 0.5f), 1e-4f);
+        const float normalRadius = glm::max(std::sin(glm::radians(glm::clamp(
+            env.swingNormalDeg - margin, 1.0f, 179.0f)) * 0.5f), 1e-4f);
+        const float middle = (env.twistMinDeg + env.twistMaxDeg) * 0.5f;
+        const float twistMinDeg = glm::min(
+            env.twistMinDeg + margin, middle);
+        const float twistMaxDeg = glm::max(
+            env.twistMaxDeg - margin, middle);
+
+        glm::quat delta = glm::normalize(
+            glm::conjugate(restLocal) * target);
+        glm::quat inBasis = glm::normalize(
+            glm::conjugate(basis) * delta * basis);
+        if (inBasis.w < 0.0f) inBasis = -inBasis;
+        glm::quat twist(inBasis.w, inBasis.x, 0.0f, 0.0f);
+        const float twistLength = glm::length(twist);
+        twist = twistLength > 1e-6f
+            ? twist / twistLength : glm::quat(1, 0, 0, 0);
+        const glm::quat swing = glm::normalize(
+            inBasis * glm::conjugate(twist));
+
+        EnvelopeMeasurement result;
+        result.swingUsage = std::sqrt(
+            (swing.y * swing.y) / (planeRadius * planeRadius)
+            + (swing.z * swing.z) / (normalRadius * normalRadius));
+        result.swingReserve = 1.0f - result.swingUsage;
+        result.twistDeg = glm::degrees(
+            2.0f * std::atan2(twist.x, twist.w));
+        result.twistMarginDeg = glm::min(
+            result.twistDeg - twistMinDeg,
+            twistMaxDeg - result.twistDeg);
+        return result;
     }
 
     static void ResolveLeg(Leg& leg, const std::string& footName,
@@ -516,13 +657,14 @@
         constexpr int kDescent = 5;
         constexpr int kTouchdownWait = 6;
         constexpr int kSettle = 7;
-        constexpr int kTransfer = 8;
-        constexpr int kHold = 9;
-        constexpr int kInterStep = 10;
-        constexpr int kComplete = 11;
-        constexpr int kAbort = 12;
-        constexpr int kStopping = 13;
-        constexpr int kReturnStand = 14;
+        constexpr int kSupportReady = 8;
+        constexpr int kTransfer = 9;
+        constexpr int kHold = 10;
+        constexpr int kInterStep = 11;
+        constexpr int kComplete = 12;
+        constexpr int kAbort = 13;
+        constexpr int kStopping = 14;
+        constexpr int kReturnStand = 15;
         constexpr bool transferEnabled = true;
         constexpr bool continuousEnabled = true;
         constexpr bool multiStepEnabled = true;
@@ -738,6 +880,20 @@
             comp._gaitHeadingTargetRot = glm::angleAxis(
                 targetYaw, glm::vec3(0.0f, 1.0f, 0.0f));
             rag.locomotionTargetRot = comp._gaitHeadingTargetRot;
+
+            // Standing and the temporary large-angle fallback commit immediately. Live
+            // gait turns instead latch their own start/end headings at foothold admission.
+            auto& turnPlan = comp._gaitTurnPlan;
+            turnPlan.committedForward = forward;
+            turnPlan.activeStartForward = forward;
+            turnPlan.activeStartRight = right;
+            turnPlan.activeMidForward = forward;
+            turnPlan.activeMidRight = right;
+            turnPlan.activeEndForward = forward;
+            turnPlan.activeEndRight = right;
+            turnPlan.activeStartRotation = comp._gaitHeadingTargetRot;
+            turnPlan.activeEndRotation = comp._gaitHeadingTargetRot;
+            turnPlan.activeHeadingPlan = false;
         };
         if (!comp._physicalStepBaselineValid) {
             comp._physicalStepSettleTime = settledStanding
@@ -760,9 +916,36 @@
                 comp._physicalStepInitialTilt = tiltDeg;
                 comp._physicalStepPeakTilt = tiltDeg;
                 comp._physicalStepFinalTilt = tiltDeg;
+
+                const float headingYaw = std::atan2(
+                    -comp._physicalStepForward.x,
+                    -comp._physicalStepForward.z);
+                auto& turnPlan = comp._gaitTurnPlan;
+                turnPlan.desiredForward = comp._physicalStepForward;
+                turnPlan.committedForward = comp._physicalStepForward;
+                turnPlan.activeStartForward = comp._physicalStepForward;
+                turnPlan.activeStartRight = comp._physicalStepRight;
+                turnPlan.activeMidForward = comp._physicalStepForward;
+                turnPlan.activeMidRight = comp._physicalStepRight;
+                turnPlan.activeEndForward = comp._physicalStepForward;
+                turnPlan.activeEndRight = comp._physicalStepRight;
+                turnPlan.activeStartRotation = glm::angleAxis(
+                    headingYaw, glm::vec3(0.0f, 1.0f, 0.0f));
+                turnPlan.activeEndRotation = turnPlan.activeStartRotation;
             }
         }
         if (!comp._physicalStepBaselineValid) return;
+
+        // Desired heading remains live, but an admitted active step is immutable. The
+        // next foothold consumes the newest error from the last committed heading.
+        glm::vec3 diagnosticDesired = continuousCommand.desiredForward;
+        diagnosticDesired.y = 0.0f;
+        if (glm::dot(diagnosticDesired, diagnosticDesired) < 1e-8f)
+            diagnosticDesired = comp._gaitTurnPlan.committedForward;
+        diagnosticDesired = glm::normalize(diagnosticDesired);
+        comp._gaitTurnPlan.desiredForward = diagnosticDesired;
+        comp._gaitTurnPlan.desiredHeadingError = signedHeadingDelta(
+            comp._gaitTurnPlan.committedForward, diagnosticDesired);
 
         if (continuousEnabled) {
             if (comp._gaitRunning)
@@ -922,6 +1105,10 @@
             const bool startRightSupport = continuousCommand.startRequested
                 && continuousCommand.initialSupportSide > 0;
             if (startLeftSupport || startRightSupport) {
+                comp._gaitTurnPairPendingInside = false;
+                comp._gaitTurnPairAdvanceScale = 1.0f;
+                comp._gaitTurnPairYawScale = 1.0f;
+                comp._gaitTurnPairYawSign = 0.0f;
                 const glm::quat startHeading = glm::normalize(
                     rag.locomotionTargetRot);
                 const glm::vec3 standingForward = horizontalForward(startHeading);
@@ -938,13 +1125,13 @@
                     standingForward, desiredForward);
                 comp._runtimeDesiredForward = desiredForward;
 
-                // Temporary gameplay turn: ease the complete physical ragdoll around
-                // the settled feet, then leave the gait idle until the next physics step
-                // has refreshed contacts. The ordinary straight gait starts afterward.
-                constexpr float kTurnThresholdDeg = 0.5f;
+                // Slice two admits bounded physical turns through the configured fallback
+                // angle. Larger changes retain the temporary settled whole-ragdoll blend.
+                const float fallbackAngleDeg = glm::clamp(
+                    comp.gaitTurnFallbackDeg, 5.0f, 180.0f);
                 if (gameplayCommand
                     && std::abs(glm::degrees(requestedTurn))
-                        > kTurnThresholdDeg) {
+                        > fallbackAngleDeg + 0.01f) {
                     beginRuntimeTurn(
                         standingForward, desiredForward, "BEGIN");
                     advanceRuntimeTurn(desiredForward);
@@ -954,7 +1141,10 @@
                 comp._physicalStepFootBaselineL = leftFoot;
                 comp._physicalStepFootBaselineR = rightFoot;
                 comp._physicalStepComBaseline = rag._locomotionCOM;
-                setGaitHeading(desiredForward);
+                // Do not snap the heading target to the command. The first admitted
+                // footprint will consume at most gaitMaxTurnStepDeg from this physical
+                // standing basis.
+                setGaitHeading(standingForward);
                 comp._physicalStepSupportTarget = comp._physicalStepComBaseline;
                 comp._physicalStepSupportSide = startLeftSupport ? -1 : 1;
                 comp._runtimeNextSupportSide = -comp._physicalStepSupportSide;
@@ -1162,6 +1352,122 @@
         if (comp._physicalStepPhase > 0) comp._physicalStepPhaseTime += dt;
         if (continuousEnabled && comp._gaitRunning)
             comp._gaitRunTime += dt;
+
+        if (continuousEnabled && comp._gaitRunning
+            && comp._gaitTurnPlan.activeHeadingPlan) {
+            auto& turnPlan = comp._gaitTurnPlan;
+            constexpr float kSwingArrivalT = 0.70f;
+            // Unhandled recovery/stop phases retain the last commanded orientation.
+            // This avoids snapping back to the step-entry heading if an active turn is
+            // cancelled before the dedicated stop/retarget slice is implemented.
+            float turnProgress = turnPlan.plannedTurnProgress;
+            if (comp._physicalStepPhase == kWeightShift
+                || comp._physicalStepPhase == kTakeoff) {
+                turnProgress = 0.0f;
+            } else if (comp._physicalStepPhase == kSwing) {
+                const float swingT = glm::clamp(
+                    comp._physicalStepPhaseTime
+                        / glm::max(cadenceSwingTime, 0.01f),
+                    0.0f, 1.0f);
+                turnProgress = 0.80f * smoothstep(kSwingArrivalT * swingT);
+            } else if (comp._physicalStepPhase == kArrival) {
+                turnProgress = 0.80f * smoothstep(kSwingArrivalT);
+            } else if (comp._physicalStepPhase == kDescent) {
+                const float descentT = glm::clamp(
+                    comp._physicalStepPhaseTime
+                        / glm::max(cadenceDescentTime, 0.01f),
+                    0.0f, 1.0f);
+                const float trajectoryT = glm::mix(
+                    kSwingArrivalT, 1.0f, descentT);
+                turnProgress = 0.80f * smoothstep(trajectoryT);
+            } else if (comp._physicalStepPhase == kTouchdownWait) {
+                turnProgress = 0.80f;
+            } else if (comp._physicalStepPhase == kSettle
+                       || comp._physicalStepPhase == kSupportReady) {
+                // Impact acceptance is not support ownership. Hold the body at its
+                // touchdown heading while the planted sole proves and captures a quiet
+                // center anchor; turning the pelvis here destabilizes that proof.
+                turnProgress = 0.80f;
+            } else if (comp._physicalStepPhase == kTransfer) {
+                const float transferT = glm::clamp(
+                    comp._physicalStepPhaseTime
+                        / glm::max(cadenceTransferTime, 0.04f),
+                    0.0f, 1.0f);
+                turnProgress = 0.80f + 0.20f * smoothstep(transferT);
+            } else if (comp._physicalStepPhase == kHold
+                       || comp._physicalStepPhase == kInterStep) {
+                turnProgress = 1.0f;
+            }
+
+            turnPlan.plannedTurnProgress = glm::clamp(
+                turnProgress, 0.0f, 1.0f);
+            glm::quat endRotation = glm::normalize(
+                turnPlan.activeEndRotation);
+            const glm::quat startRotation = glm::normalize(
+                turnPlan.activeStartRotation);
+            if (glm::dot(startRotation, endRotation) < 0.0f)
+                endRotation = -endRotation;
+            comp._gaitHeadingTargetRot = glm::normalize(glm::slerp(
+                startRotation, endRotation,
+                turnPlan.plannedTurnProgress));
+            rag.locomotionTargetRot = comp._gaitHeadingTargetRot;
+
+            if (std::abs(turnPlan.admittedYaw) > 1e-6f) {
+                const float commandedYaw = turnPlan.admittedYaw
+                    * turnPlan.plannedTurnProgress;
+                turnPlan.achievedYaw = commandedYaw
+                    - glm::radians(comp._gaitHeadingErrorDeg);
+                turnPlan.achievedTurnProgress =
+                    turnPlan.achievedYaw / turnPlan.admittedYaw;
+            } else {
+                turnPlan.achievedYaw = 0.0f;
+                turnPlan.achievedTurnProgress = 0.0f;
+            }
+        }
+
+        // A turning footprint uses an oblique pair: midpoint forward supplies its
+        // translation coefficient while end right supplies its lane coefficient. Keep
+        // that immutable objective frame separate from _physicalStepForward, which remains
+        // the step-entry measurement frame until transfer commits. Zero-yaw and cancelled
+        // steps deliberately retain the exact straight-gait projections.
+        auto hasActiveTurnObjective = [&]() {
+            return continuousEnabled && comp._gaitRunning
+                && comp._gaitCancelMode == 0
+                && comp._gaitTurnPlan.activeHeadingPlan
+                && std::abs(comp._gaitTurnPlan.admittedYaw) > 1e-6f;
+        };
+        auto stepObjectiveForward = [&]() {
+            return hasActiveTurnObjective()
+                ? comp._gaitTurnPlan.activeMidForward
+                : comp._physicalStepForward;
+        };
+        auto stepObjectiveRight = [&]() {
+            return hasActiveTurnObjective()
+                ? comp._gaitTurnPlan.activeMidRight
+                : comp._physicalStepRight;
+        };
+        auto stepObjectiveAdvance = [&](glm::vec3 delta) {
+            delta.y = 0.0f;
+            if (!hasActiveTurnObjective())
+                return glm::dot(delta, comp._physicalStepForward);
+            const auto& turnPlan = comp._gaitTurnPlan;
+            const float denominator = glm::max(glm::dot(
+                turnPlan.activeMidForward,
+                turnPlan.activeEndForward), 1e-4f);
+            return glm::dot(delta, turnPlan.activeEndForward)
+                / denominator;
+        };
+        auto stepObjectiveLateral = [&](glm::vec3 delta) {
+            delta.y = 0.0f;
+            if (!hasActiveTurnObjective())
+                return glm::dot(delta, comp._physicalStepRight);
+            const auto& turnPlan = comp._gaitTurnPlan;
+            const float denominator = glm::max(glm::dot(
+                turnPlan.activeMidRight,
+                turnPlan.activeEndRight), 1e-4f);
+            return glm::dot(delta, turnPlan.activeMidRight)
+                / denominator;
+        };
         if (continuousEnabled) {
             // Keep a small crouch for the whole walking sequence. Planning a grounded
             // foothold at nearly full anatomical extension amplified an 8 mm radial motor
@@ -1221,19 +1527,18 @@
             // baseline and visibly shifting the body a second time.
             supportTarget = comp._gaitCycleSupportTarget;
         }
-        if (continuousEnabled && comp._physicalStepPhase == kSettle
-            && comp._physicalStepTouchdownAccepted) {
-            // A credible touchdown begins accepting weight immediately while plant
-            // acquisition verifies the contact. This short pre-transfer uses immutable
-            // endpoints and hands off continuously to the full support transfer.
-            const float touchdownTransferT = glm::clamp(
-                comp._physicalStepPhaseTime
-                    / glm::max(cadencePlantAcquireTime, 0.04f),
-                0.0f, 1.0f);
-            supportTarget = glm::mix(
-                comp._supportTransferTransferStartTarget,
-                comp._supportTransferTransferEndTarget,
-                smoothstep(touchdownTransferT));
+        const bool awaitingSupportOwnership = continuousEnabled
+            && (comp._physicalStepPhase == kSettle
+                || comp._physicalStepPhase == kSupportReady)
+            && comp._physicalStepTouchdownAccepted;
+        if (awaitingSupportOwnership) {
+            // Touchdown accepts a collision; it does not authorize load transfer. Hold
+            // the exact command present at impact until the material-point pivot has
+            // handed ownership to a quiet sole-center anchor and that anchor has proved
+            // stable in SUPPORT_READY.
+            supportTarget = comp._supportTransferTransferStartTarget;
+            supportVelocity = glm::vec3(0.0f);
+            supportVelocityExplicit = true;
         }
         if (transferEnabled && comp._physicalStepPhase >= kTransfer
             && comp._physicalStepPhase <= kComplete) {
@@ -1283,6 +1588,97 @@
         // the sole settles; plant acquisition C1-reseeds the curve to the full handoff.
         const float configuredSupportMaxSpeed = glm::clamp(
             comp.gaitSupportMaxSpeed, 0.01f, 1.0f);
+        // Command enough geometric reserve that ordinary tracking error and a few
+        // centimetres of live foot motion cannot leave the COM just below the load latch.
+        // The latch remains the physical authority; this is only its command-space target.
+        constexpr float kNewSupportLoadCommandTarget = 0.74f;
+        constexpr float kNewSupportLoadAcquireThreshold = 0.68f;
+        constexpr float kNewSupportLoadReleaseThreshold = 0.64f;
+        auto supportLoadFraction = [](const glm::vec3& point,
+                                      const glm::vec3& oldSupport,
+                                      const glm::vec3& newSupport) {
+            glm::vec3 span = newSupport - oldSupport;
+            span.y = 0.0f;
+            const float spanLengthSq = glm::dot(span, span);
+            if (spanLengthSq <= 1e-6f) return 0.5f;
+            const glm::vec3 offset(
+                point.x - oldSupport.x, 0.0f, point.z - oldSupport.z);
+            return glm::clamp(
+                glm::dot(offset, span) / spanLengthSq, 0.0f, 1.0f);
+        };
+        auto supportCurveEndVelocityForObjective = [&](glm::vec3 start,
+                                                       glm::vec3 end,
+                                                       float duration,
+                                                       bool turning) {
+            glm::vec3 span = end - start;
+            span.y = 0.0f;
+            glm::vec3 direction = comp._physicalStepForward;
+            float distance = glm::max(glm::dot(
+                span, comp._physicalStepForward), 0.0f);
+            if (turning) {
+                distance = glm::length(span);
+                direction = distance > 1e-6f
+                    ? span / distance : stepObjectiveForward();
+            }
+            const float speed = glm::clamp(
+                0.25f * distance / glm::max(duration, 0.01f),
+                0.03f, 0.10f);
+            return direction * speed;
+        };
+        auto supportCurveEndVelocity = [&](glm::vec3 start,
+                                           glm::vec3 end,
+                                           float duration) {
+            return supportCurveEndVelocityForObjective(
+                start, end, duration, hasActiveTurnObjective());
+        };
+        auto evaluateSupportCurveSegment = [](
+                const glm::vec3& start,
+                const glm::vec3& startVelocity,
+                const glm::vec3& end,
+                const glm::vec3& endVelocity,
+                float duration,
+                float queryTime,
+                glm::vec3& position,
+                glm::vec3& velocity) {
+            duration = glm::max(duration, 0.01f);
+            const float curveT = glm::clamp(queryTime / duration, 0.0f, 1.0f);
+            const float t2 = curveT * curveT;
+            const float t3 = t2 * curveT;
+            const float h00 = 2.0f * t3 - 3.0f * t2 + 1.0f;
+            const float h10 = t3 - 2.0f * t2 + curveT;
+            const float h01 = -2.0f * t3 + 3.0f * t2;
+            const float h11 = t3 - t2;
+            position = h00 * start + h10 * duration * startVelocity
+                + h01 * end + h11 * duration * endVelocity;
+
+            const float dh00 = 6.0f * t2 - 6.0f * curveT;
+            const float dh10 = 3.0f * t2 - 4.0f * curveT + 1.0f;
+            const float dh01 = -6.0f * t2 + 6.0f * curveT;
+            const float dh11 = 3.0f * t2 - 2.0f * curveT;
+            velocity = (dh00 * start + dh01 * end) / duration
+                + dh10 * startVelocity + dh11 * endVelocity;
+
+            if (queryTime > duration) {
+                const float cruiseTime = queryTime - duration;
+                position = end + endVelocity * cruiseTime;
+                velocity = endVelocity;
+            }
+            position.y = start.y;
+            velocity.y = 0.0f;
+        };
+        auto evaluateActiveSupportCurveAt = [&](float queryTime,
+                                                 glm::vec3& position,
+                                                 glm::vec3& velocity) {
+            evaluateSupportCurveSegment(
+                comp._gaitSupportCurveStart,
+                comp._gaitSupportCurveStartVelocity,
+                comp._gaitSupportCurveEnd,
+                comp._gaitSupportCurveEndVelocity,
+                comp._gaitSupportCurveDuration,
+                queryTime,
+                position,
+                velocity);
+        };
         bool startedSupportCurveThisFrame = false;
         if (continuousEnabled && comp._gaitRunning
             && comp._gaitCancelMode == 0
@@ -1293,7 +1689,7 @@
                 ? leftFoot : rightFoot;
             const float transferFraction = glm::clamp(
                 comp.transferSupportBias + comp._gaitAdaptiveTransferBiasOffset,
-                0.70f, 0.98f);
+                kNewSupportLoadCommandTarget, 0.98f);
             comp._gaitSupportCurveActive = true;
             comp._gaitSupportCurveStep = comp._stepSequenceStepIndex;
             comp._gaitSupportCurveTime = 0.0f;
@@ -1318,14 +1714,10 @@
             }
             comp._gaitSupportCurveStartVelocity = incomingVelocity;
 
-            const float forwardDistance = glm::max(glm::dot(
-                comp._gaitSupportCurveEnd - comp._gaitSupportCurveStart,
-                comp._physicalStepForward), 0.0f);
-            const float outgoingSpeed = glm::clamp(
-                0.25f * forwardDistance / comp._gaitSupportCurveDuration,
-                0.03f, 0.10f);
-            comp._gaitSupportCurveEndVelocity =
-                comp._physicalStepForward * outgoingSpeed;
+            comp._gaitSupportCurveEndVelocity = supportCurveEndVelocity(
+                comp._gaitSupportCurveStart,
+                comp._gaitSupportCurveEnd,
+                comp._gaitSupportCurveDuration);
             startedSupportCurveThisFrame = true;
             spdlog::info(
                 "[LocomotionGait] SUPPORT_CURVE_BEGIN step={} duration={:.3f}s "
@@ -1344,46 +1736,37 @@
         const bool supportCurveOwnsWalkingTarget = continuousEnabled
             && comp._gaitRunning && comp._gaitSupportCurveActive
             && comp._physicalStepPhase >= kWeightShift
-            && comp._physicalStepPhase <= kInterStep;
+            && comp._physicalStepPhase <= kInterStep
+            && !awaitingSupportOwnership;
         if (supportCurveOwnsWalkingTarget) {
             if (!startedSupportCurveThisFrame)
                 comp._gaitSupportCurveTime += dt;
-            const float duration = glm::max(
-                comp._gaitSupportCurveDuration, 0.01f);
-            const float curveT = glm::clamp(
-                comp._gaitSupportCurveTime / duration, 0.0f, 1.0f);
-            const float t2 = curveT * curveT;
-            const float t3 = t2 * curveT;
-            const float h00 = 2.0f * t3 - 3.0f * t2 + 1.0f;
-            const float h10 = t3 - 2.0f * t2 + curveT;
-            const float h01 = -2.0f * t3 + 3.0f * t2;
-            const float h11 = t3 - t2;
-            glm::vec3 curveTarget = h00 * comp._gaitSupportCurveStart
-                + h10 * duration * comp._gaitSupportCurveStartVelocity
-                + h01 * comp._gaitSupportCurveEnd
-                + h11 * duration * comp._gaitSupportCurveEndVelocity;
+            glm::vec3 curveTarget(0.0f), curveVelocity(0.0f);
+            evaluateActiveSupportCurveAt(
+                comp._gaitSupportCurveTime, curveTarget, curveVelocity);
 
-            const float dh00 = 6.0f * t2 - 6.0f * curveT;
-            const float dh10 = 3.0f * t2 - 4.0f * curveT + 1.0f;
-            const float dh01 = -6.0f * t2 + 6.0f * curveT;
-            const float dh11 = 3.0f * t2 - 2.0f * curveT;
-            glm::vec3 curveVelocity =
-                (dh00 * comp._gaitSupportCurveStart
-                 + dh01 * comp._gaitSupportCurveEnd) / duration
-                + dh10 * comp._gaitSupportCurveStartVelocity
-                + dh11 * comp._gaitSupportCurveEndVelocity;
-
-            if (comp._gaitSupportCurveTime > duration) {
-                // Preserve forward momentum after the lateral transfer finishes. The next
-                // late-swing curve captures this exact position and velocity, so neither
-                // the pelvis nor its feed-forward command stops between steps.
-                const float cruiseTime = comp._gaitSupportCurveTime - duration;
-                curveTarget = comp._gaitSupportCurveEnd
-                    + comp._gaitSupportCurveEndVelocity * cruiseTime;
-                curveVelocity = comp._gaitSupportCurveEndVelocity;
+            if (comp._physicalStepPhase == kTransfer
+                || comp._physicalStepPhase == kHold) {
+                const glm::vec3 liveOldSupport =
+                    comp._physicalStepSupportSide < 0 ? leftFoot : rightFoot;
+                const glm::vec3 liveNewSupport =
+                    comp._physicalStepSupportSide < 0 ? rightFoot : leftFoot;
+                glm::vec3 liveSpan = liveNewSupport - liveOldSupport;
+                liveSpan.y = 0.0f;
+                if (glm::dot(liveSpan, liveSpan) > 1e-6f) {
+                    // The Hermite endpoint is frozen when ownership is acquired, but both
+                    // physical feet can still settle afterward. Correct only the component
+                    // along their live span so the command remains consistent with the load
+                    // fraction used by HOLD. Velocity and acceleration limits below keep this
+                    // feedback C0/C1-safe at the support-controller boundary.
+                    const float curveLoad = supportLoadFraction(
+                        curveTarget, liveOldSupport, liveNewSupport);
+                    if (curveLoad < kNewSupportLoadCommandTarget) {
+                        curveTarget += liveSpan
+                            * (kNewSupportLoadCommandTarget - curveLoad);
+                    }
+                }
             }
-            curveTarget.y = comp._gaitSupportCurveStart.y;
-            curveVelocity.y = 0.0f;
 
             // Hermite endpoint tangents do not bound the polynomial's middle velocity.
             // Track the curve through an explicit command-space speed and acceleration
@@ -1393,7 +1776,8 @@
                 + (curveTarget - comp._physicalStepSupportTarget)
                     * kSupportPositionGain;
             desiredVelocity.y = 0.0f;
-            const bool acquiringPlant = comp._physicalStepPhase == kSettle
+            const bool acquiringPlant = (comp._physicalStepPhase == kSettle
+                    || comp._physicalStepPhase == kSupportReady)
                 && comp._physicalStepTouchdownAccepted
                 && !comp._physicalStepPlantPoseCaptured;
             float maximumSupportSpeed = configuredSupportMaxSpeed;
@@ -1411,16 +1795,18 @@
                 // Do not turn a growing plant slide into a full-body stop. Preserve a
                 // small forward flow while strongly reducing the lateral load ramp that
                 // is pulling the sole away from its world anchor.
+                const glm::vec3 objectiveForward = stepObjectiveForward();
+                const glm::vec3 objectiveRight = stepObjectiveRight();
                 const float forwardSpeed = glm::clamp(glm::dot(
-                    desiredVelocity, comp._physicalStepForward),
+                    desiredVelocity, objectiveForward),
                     -0.08f, 0.10f);
                 const float lateralLimit = glm::mix(
                     0.10f, 0.03f, driftPressure);
                 const float lateralSpeed = glm::clamp(glm::dot(
-                    desiredVelocity, comp._physicalStepRight),
+                    desiredVelocity, objectiveRight),
                     -lateralLimit, lateralLimit);
-                desiredVelocity = comp._physicalStepForward * forwardSpeed
-                    + comp._physicalStepRight * lateralSpeed;
+                desiredVelocity = objectiveForward * forwardSpeed
+                    + objectiveRight * lateralSpeed;
             } else if (comp._physicalStepPhase == kTransfer) {
                 // Once acquisition succeeds, ramp rather than jump from the conservative
                 // plant speed back to the ordinary transfer ceiling.
@@ -1555,17 +1941,10 @@
         const bool swingContactNow = FootContact(
             rag, swing->footIdx, &contactNormal, &contactPoint);
         const bool stanceContactNow = FootContact(rag, stance->footIdx);
-        glm::vec3 supportSpan = swingFoot - stanceFoot;
-        supportSpan.y = 0.0f;
-        const float supportSpanLengthSq = glm::dot(supportSpan, supportSpan);
-        comp._gaitNewSupportLoad = supportSpanLengthSq > 1e-6f
-            ? glm::clamp(glm::dot(
-                glm::vec3(rag._locomotionCOM.x - stanceFoot.x, 0.0f,
-                          rag._locomotionCOM.z - stanceFoot.z),
-                supportSpan) / supportSpanLengthSq, 0.0f, 1.0f)
-            : 0.5f;
-        constexpr float kNewSupportLoadAcquireThreshold = 0.68f;
-        constexpr float kNewSupportLoadReleaseThreshold = 0.64f;
+        comp._gaitNewSupportLoad = supportLoadFraction(
+            rag._locomotionCOM, stanceFoot, swingFoot);
+        const float gaitSupportCommandLoad = supportLoadFraction(
+            comp._physicalStepSupportTarget, stanceFoot, swingFoot);
         const bool loadHandoffPhase = comp._physicalStepPhase >= kTransfer
                                    && comp._physicalStepPhase <= kInterStep;
         if (!continuousEnabled || !loadHandoffPhase) {
@@ -1612,6 +1991,18 @@
                 rag, swing->footIdx, &swingAngularVelocityOk);
         comp._physicalStepPlantAngularSpeed = swingAngularVelocityOk
             ? glm::length(swingAngularVelocity) : 0.0f;
+        if (continuousEnabled && comp._gaitTurnPlan.candidateEvaluated
+            && comp._physicalStepPhase >= kTakeoff
+            && comp._physicalStepPhase <= kTouchdownWait) {
+            comp._gaitTurnPlan.achievedSwingSpeed = glm::max(
+                comp._gaitTurnPlan.achievedSwingSpeed,
+                glm::length(glm::vec2(swingVelocity.x, swingVelocity.z)));
+            if (swingAngularVelocityOk) {
+                comp._gaitTurnPlan.achievedAngularSpeed = glm::max(
+                    comp._gaitTurnPlan.achievedAngularSpeed,
+                    glm::length(swingAngularVelocity));
+            }
+        }
         comp._physicalStepFootUpY = swingRotationOk
             ? (swingRotation * glm::vec3(0.0f, 1.0f, 0.0f)).y : 0.0f;
         comp._physicalStepContactPoint = contactPoint;
@@ -1671,16 +2062,16 @@
             comp._gaitPlantDriftRate = 0.0f;
         }
         comp._physicalStepClearance = swingFoot.y - comp._physicalStepSwingStart.y;
-        comp._physicalStepForwardTravel = glm::dot(
-            swingFoot - comp._physicalStepSwingStart, comp._physicalStepForward);
+        comp._physicalStepForwardTravel = stepObjectiveAdvance(
+            swingFoot - comp._physicalStepSwingStart);
         comp._gaitAchievedSupportAdvance = continuousEnabled
-            ? glm::dot(swingFoot - stanceFoot, comp._physicalStepForward) : 0.0f;
+            ? stepObjectiveAdvance(swingFoot - stanceFoot) : 0.0f;
         if (comp._physicalStepPhase >= kTakeoff) {
             const glm::vec3 targetDelta = swingFoot - comp._physicalStepFoothold;
-            comp._physicalStepForwardTargetError = glm::dot(
-                comp._physicalStepFoothold - swingFoot, comp._physicalStepForward);
-            comp._physicalStepLateralTargetError = glm::dot(
-                targetDelta, comp._physicalStepRight);
+            comp._physicalStepForwardTargetError = stepObjectiveAdvance(
+                comp._physicalStepFoothold - swingFoot);
+            comp._physicalStepLateralTargetError = stepObjectiveLateral(
+                targetDelta);
             comp._physicalStepHorizontalTargetError = glm::length(glm::vec2(
                 targetDelta.x, targetDelta.z));
             comp._physicalStepVerticalTargetError = std::abs(targetDelta.y);
@@ -1754,6 +2145,26 @@
                 rag, leg.ankleIdx, &ankleOk);
             const glm::quat footWorld = Physics::GetRagdollBoneRotation(
                 rag, leg.footIdx, &footOk);
+            leg.segmentGeometryValid = hipOk && kneeOk && ankleOk
+                && glm::dot(upper, upper) > 1e-8f
+                && glm::dot(lower, lower) > 1e-8f;
+            if (leg.segmentGeometryValid) {
+                // Body positions are ragdoll bone origins. Express the constrained
+                // parent-to-child offsets in the corresponding parent frames so both
+                // analytical IK and commanded FK use the exact same physical links.
+                leg.upperSegmentLocal = glm::conjugate(
+                    glm::normalize(leg.referenceHipWorld)) * upper;
+                leg.lowerSegmentLocal = glm::conjugate(
+                    glm::normalize(kneeWorld)) * lower;
+                leg.referenceUpperWorld = glm::normalize(
+                    glm::normalize(leg.referenceHipWorld)
+                        * leg.upperSegmentLocal);
+            } else {
+                leg.upperSegmentLocal =
+                    skeleton.bones[leg.kneeIdx].localT;
+                leg.lowerSegmentLocal =
+                    skeleton.bones[leg.ankleIdx].localT;
+            }
             if (footOk) {
                 leg.plantedFootWorldRotation = footWorld;
                 leg.ankleFromFootLocal = glm::conjugate(footWorld)
@@ -1789,6 +2200,7 @@
             leg.kneeCommand = leg.referenceKneeLocal;
             leg.ankleCommand = leg.referenceAnkleLocal;
             leg.footCommand = leg.referenceFootLocal;
+            leg.kneePlaneSwivelRad = 0.0f;
             leg.commandValid = true;
             leg.plantSolveValid = true;
         };
@@ -1798,6 +2210,48 @@
             comp._physicalStepArcStart = swingFoot;
             comp._physicalStepDesiredFoot = swingFoot;
             captureLegSolveReference(*swing, swingFoot);
+            comp._physicalStepTrajectoryT = 0.0f;
+            comp._gaitSwingCommandSpeed = 0.0f;
+            comp._gaitSwingCommandAngularSpeed = 0.0f;
+            comp._gaitSwingCommandTrackingError = 0.0f;
+            comp._gaitSwingSoleCommandErrorDeg = 0.0f;
+            comp._gaitAnkleCommandAngularSpeed = 0.0f;
+            comp._gaitAnkleCommandDeltaDeg = 0.0f;
+            comp._gaitAnkleParentCompensationDeg = 0.0f;
+            comp._gaitAnkleParentCompensationAppliedDeg = 0.0f;
+            comp._gaitAnkleAchievableResidualDeg = 0.0f;
+            comp._gaitAnkleDiagnosticCooldown = 0.0f;
+            comp._gaitIkAnkleEnvelopeClampDeg = 0.0f;
+            comp._gaitIkExactAnkleClampDeg = 0.0f;
+            comp._gaitIkKneeSwivelRequestedDeg = 0.0f;
+            comp._gaitIkKneeSwivelAppliedDeg = 0.0f;
+            comp._gaitIkOrientationPriority = 1.0f;
+            comp._gaitIkOrientationRelaxedDeg = 0.0f;
+            comp._gaitIkAnkleSwingUsage = 0.0f;
+            comp._gaitIkAnkleSwingReserve = 0.0f;
+            comp._gaitIkAnkleTwistDeg = 0.0f;
+            comp._gaitIkAnkleTwistMarginDeg = 0.0f;
+            comp._gaitCoherentJointScale = 1.0f;
+            comp._gaitCoherentHipDeltaDeg = 0.0f;
+            comp._gaitCoherentKneeDeltaDeg = 0.0f;
+            comp._gaitCoherentAnkleDeltaDeg = 0.0f;
+            comp._gaitFkDesiredPosition = glm::vec3(0.0f);
+            comp._gaitFkCommandPosition = glm::vec3(0.0f);
+            comp._gaitFkPhysicalPosition = glm::vec3(0.0f);
+            comp._gaitFkDesiredToCommand = glm::vec3(0.0f);
+            comp._gaitFkCommandToPhysical = glm::vec3(0.0f);
+            comp._gaitFkDesiredToPhysical = glm::vec3(0.0f);
+            comp._gaitFkDesiredToCommandOrientationDeg = 0.0f;
+            comp._gaitFkCommandToPhysicalOrientationDeg = 0.0f;
+            comp._gaitFkDesiredToPhysicalOrientationDeg = 0.0f;
+            comp._gaitFkDiagnosticCooldown = 0.0f;
+            comp._gaitFkValid = false;
+            comp._gaitSwingPathLength = 0.0f;
+            comp._gaitSwingMinimumDuration = 0.0f;
+            comp._gaitSwingDeadline = 0.0f;
+            comp._gaitSwingSoleCommandWorld = glm::normalize(
+                swing->plantedFootWorldRotation);
+            comp._gaitSwingSoleCommandValid = true;
             swing->planted = false;
         };
         if (continuousEnabled && comp._gaitRunning && stance->planted
@@ -1829,6 +2283,7 @@
                 leg.ankleCommand = glm::normalize(glm::conjugate(kneeWorld) * ankleWorld);
             if (ankleOk && footOk)
                 leg.footCommand = glm::normalize(glm::conjugate(ankleWorld) * footWorld);
+            leg.kneePlaneSwivelRad = 0.0f;
             leg.commandValid = true;
         };
 
@@ -1836,11 +2291,25 @@
         // the ankle. Keep their separation in sole-local space. The settled sole reference
         // is heading-local: pitch/roll remain ground aligned while yaw follows the latched
         // gait frame. The per-step planted rotation is only the continuity endpoint.
-        auto nominalFootWorldRotation = [&](const Leg& leg) {
+        auto footWorldRotationForHeading = [&](const Leg& leg,
+                                                const glm::quat& heading) {
             return continuousEnabled && leg.groundReferenceFootRotationValid
-                ? glm::normalize(comp._gaitHeadingTargetRot
+                ? glm::normalize(glm::normalize(heading)
                     * leg.groundReferenceFootHeadingLocalRotation)
                 : glm::normalize(leg.plantedFootWorldRotation);
+        };
+        auto nominalFootWorldRotation = [&](const Leg& leg) {
+            // A planted sole is a world-space physical fact. Only the released swing
+            // sole follows the admitted end heading; body heading may continue moving
+            // through support transfer without rotating either planted reference.
+            if (continuousEnabled && leg.planted)
+                return glm::normalize(leg.plantedFootWorldRotation);
+            const glm::quat heading = continuousEnabled
+                && &leg == swing
+                && comp._gaitTurnPlan.activeHeadingPlan
+                ? comp._gaitTurnPlan.activeEndRotation
+                : comp._gaitHeadingTargetRot;
+            return footWorldRotationForHeading(leg, heading);
         };
         auto nominalKneePoleWorld = [&](const Leg& leg) {
             glm::vec3 pole = continuousEnabled
@@ -1854,9 +2323,6 @@
         auto ankleFromFootWorld = [&](const Leg& leg,
                                       const glm::quat& footWorldRotation) {
             return glm::normalize(footWorldRotation) * leg.ankleFromFootLocal;
-        };
-        auto nominalAnkleFromFootWorld = [&]() {
-            return ankleFromFootWorld(*swing, nominalFootWorldRotation(*swing));
         };
         auto rotationDifferenceDeg = [](glm::quat a, glm::quat b) {
             const glm::quat difference = glm::normalize(
@@ -1883,6 +2349,253 @@
             : 0.0f;
 
         auto planFoothold = [&]() {
+            auto& turnPlan = comp._gaitTurnPlan;
+            const bool swingFootLeft = swing == &comp._legL;
+            const float swingSide = swingFootLeft ? -1.0f : 1.0f;
+            glm::vec3 committedForward = turnPlan.committedForward;
+            committedForward.y = 0.0f;
+            if (glm::dot(committedForward, committedForward) < 1e-8f)
+                committedForward = comp._physicalStepForward;
+            committedForward = glm::normalize(committedForward);
+
+            glm::vec3 desiredForward = turnPlan.desiredForward;
+            desiredForward.y = 0.0f;
+            if (glm::dot(desiredForward, desiredForward) < 1e-8f)
+                desiredForward = committedForward;
+            desiredForward = glm::normalize(desiredForward);
+
+            const float desiredHeadingError = signedHeadingDelta(
+                committedForward, desiredForward);
+            const float maximumStepYaw = glm::radians(glm::clamp(
+                comp.gaitMaxTurnStepDeg, 0.0f, 20.0f));
+            const float requestedStepYaw = glm::clamp(
+                desiredHeadingError, -maximumStepYaw, maximumStepYaw);
+            const bool requestedOutsideFoot =
+                swingSide * requestedStepYaw > 1e-6f;
+            const bool pairDirectionMatches =
+                comp._gaitTurnPairPendingInside
+                && requestedStepYaw * comp._gaitTurnPairYawSign > 1e-6f;
+            if (comp._gaitTurnPairPendingInside
+                && (!pairDirectionMatches || requestedOutsideFoot
+                    || std::abs(requestedStepYaw) <= 1e-6f)) {
+                // A live retarget, stop, or unexpected role order invalidates the
+                // outside-to-inside contract.  Never carry it into another turn.
+                comp._gaitTurnPairPendingInside = false;
+                comp._gaitTurnPairAdvanceScale = 1.0f;
+                comp._gaitTurnPairYawScale = 1.0f;
+                comp._gaitTurnPairYawSign = 0.0f;
+            }
+            const bool pairBudgetApplied =
+                comp._gaitTurnPairPendingInside
+                && pairDirectionMatches && !requestedOutsideFoot;
+            const float pairAdvanceScale = pairBudgetApplied
+                ? glm::clamp(comp._gaitTurnPairAdvanceScale, 0.25f, 1.0f)
+                : 1.0f;
+            const float pairYawScale = pairBudgetApplied
+                ? glm::clamp(comp._gaitTurnPairYawScale, 0.55f, 1.0f)
+                : 1.0f;
+            const float pairRequestedStepYaw =
+                requestedStepYaw * pairYawScale;
+            const bool controllerYawLimited =
+                std::abs(desiredHeadingError)
+                    > maximumStepYaw + glm::radians(0.01f);
+            const float startYaw = std::atan2(
+                -committedForward.x, -committedForward.z);
+            const glm::quat startRotation = glm::angleAxis(
+                startYaw, glm::vec3(0.0f, 1.0f, 0.0f));
+            // Sole leveling follows a smoothstep, whose peak derivative is 1.5 times
+            // its average. Measure the complete released-sole rotation, not just this
+            // step's heading delta: each anatomical foot normally carries two committed
+            // yaw increments by the time it becomes the swing foot again.
+            constexpr float kSwingAngularSpeedLimit = 2.25f;
+            const float soleLevelTime = glm::max(
+                comp.gaitSoleLevelTime, 0.10f);
+            auto requiredSoleAngularSpeed = [&](float stepYaw) {
+                const glm::quat candidateHeading = glm::normalize(
+                    glm::angleAxis(stepYaw, glm::vec3(0.0f, 1.0f, 0.0f))
+                    * startRotation);
+                const glm::quat candidateFootRotation =
+                    footWorldRotationForHeading(*swing, candidateHeading);
+                return 1.5f * glm::radians(rotationDifferenceDeg(
+                    swing->plantedFootWorldRotation,
+                    candidateFootRotation)) / soleLevelTime;
+            };
+            const float requestedAngularSpeed =
+                requiredSoleAngularSpeed(requestedStepYaw);
+            const float pairRequestedAngularSpeed =
+                requiredSoleAngularSpeed(pairRequestedStepYaw);
+            float admittedStepYaw = pairRequestedStepYaw;
+            const bool angularSpeedLimited =
+                pairRequestedAngularSpeed
+                    > kSwingAngularSpeedLimit + 0.001f;
+            if (angularSpeedLimited) {
+                float admittedScale = 0.0f;
+                float rejectedScale = 1.0f;
+                if (requiredSoleAngularSpeed(0.0f)
+                    <= kSwingAngularSpeedLimit) {
+                    for (int iteration = 0; iteration < 12; ++iteration) {
+                        const float candidateScale =
+                            0.5f * (admittedScale + rejectedScale);
+                        if (requiredSoleAngularSpeed(
+                                pairRequestedStepYaw * candidateScale)
+                            <= kSwingAngularSpeedLimit) {
+                            admittedScale = candidateScale;
+                        } else {
+                            rejectedScale = candidateScale;
+                        }
+                    }
+                }
+                admittedStepYaw = pairRequestedStepYaw * admittedScale;
+            }
+            const glm::quat midRotation = glm::normalize(
+                glm::angleAxis(0.5f * admittedStepYaw,
+                               glm::vec3(0.0f, 1.0f, 0.0f))
+                * startRotation);
+            const glm::quat endRotation = glm::normalize(
+                glm::angleAxis(admittedStepYaw,
+                               glm::vec3(0.0f, 1.0f, 0.0f))
+                * startRotation);
+            auto basisFromRotation = [&](const glm::quat& rotation,
+                                         glm::vec3& right,
+                                         glm::vec3& forward) {
+                forward = horizontalForward(rotation);
+                right = glm::cross(
+                    forward, glm::vec3(0.0f, 1.0f, 0.0f));
+                makeHorizontalBasis(right, forward);
+            };
+
+            turnPlan.desiredHeadingError = desiredHeadingError;
+            turnPlan.activeStartForward = committedForward;
+            basisFromRotation(
+                startRotation, turnPlan.activeStartRight,
+                turnPlan.activeStartForward);
+            basisFromRotation(
+                midRotation, turnPlan.activeMidRight,
+                turnPlan.activeMidForward);
+            basisFromRotation(
+                endRotation, turnPlan.activeEndRight,
+                turnPlan.activeEndForward);
+            auto plannedAdvanceCoefficient = [&](glm::vec3 delta) {
+                delta.y = 0.0f;
+                if (std::abs(admittedStepYaw) <= 1e-6f)
+                    return glm::dot(delta, comp._physicalStepForward);
+                const float denominator = glm::max(glm::dot(
+                    turnPlan.activeMidForward,
+                    turnPlan.activeEndForward), 1e-4f);
+                return glm::dot(delta, turnPlan.activeEndForward)
+                    / denominator;
+            };
+            auto plannedLaneCoefficient = [&](glm::vec3 delta) {
+                delta.y = 0.0f;
+                if (std::abs(admittedStepYaw) <= 1e-6f)
+                    return glm::dot(delta, comp._physicalStepRight);
+                const float denominator = glm::max(glm::dot(
+                    turnPlan.activeMidRight,
+                    turnPlan.activeEndRight), 1e-4f);
+                return glm::dot(delta, turnPlan.activeMidRight)
+                    / denominator;
+            };
+            turnPlan.activeStartRotation = startRotation;
+            turnPlan.activeEndRotation = endRotation;
+            turnPlan.requestedYaw = requestedStepYaw;
+            turnPlan.admittedYaw = admittedStepYaw;
+            turnPlan.achievedYaw = 0.0f;
+            turnPlan.plannedTurnProgress = 0.0f;
+            turnPlan.achievedTurnProgress = 0.0f;
+            turnPlan.planOrigin = stanceFoot;
+            turnPlan.candidateEvaluated = false;
+            turnPlan.candidateAccepted = false;
+            turnPlan.activeHeadingPlan = false;
+            turnPlan.stanceFootRotationAtAdmission =
+                glm::normalize(stance->plantedFootWorldRotation);
+            turnPlan.stanceReferenceRotationDeltaDeg = 0.0f;
+            turnPlan.plantReferenceRotationDeltaDeg = 0.0f;
+            turnPlan.touchdownSoleErrorDeg = 0.0f;
+            turnPlan.touchdownAngularSpeed = 0.0f;
+            turnPlan.touchdownHorizontalSpeed = 0.0f;
+            turnPlan.requestedSwingDistance = 0.0f;
+            turnPlan.admittedSwingDistance = 0.0f;
+            turnPlan.requiredSwingSpeed = 0.0f;
+            turnPlan.admittedSwingSpeed = 0.0f;
+            turnPlan.swingSpeedLimit = 0.0f;
+            turnPlan.requiredAngularSpeed = requestedAngularSpeed;
+            turnPlan.admittedAngularSpeed =
+                requiredSoleAngularSpeed(admittedStepYaw);
+            turnPlan.angularSpeedLimit = kSwingAngularSpeedLimit;
+            turnPlan.achievedSwingSpeed = 0.0f;
+            turnPlan.achievedAngularSpeed = 0.0f;
+            turnPlan.predictedContactHip = glm::vec3(0.0f);
+            turnPlan.actualContactHip = glm::vec3(0.0f);
+            turnPlan.contactHipError = glm::vec3(0.0f);
+            turnPlan.predictedContactSupportVelocity = glm::vec3(0.0f);
+            turnPlan.sampledAnkleClampDeg = 0.0f;
+            turnPlan.admittedKneeSwivelDeg = 0.0f;
+            turnPlan.swingFootLeft = swingFootLeft;
+            turnPlan.outsideFoot = swingSide * admittedStepYaw > 1e-6f;
+            turnPlan.pairAdvanceScale = pairAdvanceScale;
+            turnPlan.pairYawScale = pairYawScale;
+            turnPlan.supportTransportSpeed = 0.0f;
+            turnPlan.arrivalTrajectoryT = 0.70f;
+            turnPlan.pairBudgetApplied = pairBudgetApplied;
+            turnPlan.pairBudgetLatched = false;
+            turnPlan.touchdownReadinessBlockedLogged = false;
+            turnPlan.limitingConstraint = pairBudgetApplied
+                ? Comp::TurnConstraintResult::TurnPairBudget
+                : (angularSpeedLimited
+                ? Comp::TurnConstraintResult::SwingAngularSpeed
+                : (controllerYawLimited
+                    ? Comp::TurnConstraintResult::ControllerYawLimit
+                    : Comp::TurnConstraintResult::NotEvaluated));
+
+            if (continuousEnabled && pairBudgetApplied
+                && std::abs(admittedStepYaw) > 1e-6f) {
+                // The outside step may have spent most of its translational budget
+                // reaching the far lane.  Decelerate the following inside step's
+                // incoming pelvis transport C1-continuously before predicting its hip.
+                glm::vec3 incomingVelocity =
+                    comp._gaitSupportCommandVelocity;
+                incomingVelocity.y = 0.0f;
+                const float incomingSpeed = glm::length(incomingVelocity);
+                if (incomingSpeed > configuredSupportMaxSpeed
+                    && incomingSpeed > 1e-6f) {
+                    incomingVelocity *=
+                        configuredSupportMaxSpeed / incomingSpeed;
+                }
+                constexpr float kInsideSupportTransportSpeed = 0.05f;
+                const glm::vec3 outgoingVelocity =
+                    turnPlan.activeStartForward
+                    * glm::min(kInsideSupportTransportSpeed,
+                               configuredSupportMaxSpeed);
+                comp._gaitSupportCurveActive = true;
+                comp._gaitSupportCurveStart =
+                    comp._physicalStepSupportTarget;
+                comp._gaitSupportCurveStartVelocity = incomingVelocity;
+                comp._gaitSupportCurveTime = 0.0f;
+                comp._gaitSupportCurveDuration = glm::max(
+                    0.10f + cadenceSwingTime
+                        + cadenceArrivalSettleTime,
+                    0.40f);
+                comp._gaitSupportCurveEnd =
+                    comp._gaitSupportCurveStart
+                    + outgoingVelocity * comp._gaitSupportCurveDuration;
+                comp._gaitSupportCurveEnd.y =
+                    comp._gaitSupportCurveStart.y;
+                comp._gaitSupportCurveEndVelocity = outgoingVelocity;
+                turnPlan.supportTransportSpeed =
+                    glm::length(outgoingVelocity);
+                spdlog::info(
+                    "[LocomotionGait] SUPPORT_TRANSPORT_PAIR step={} "
+                    "swing={} role=inside duration={:.3f}s "
+                    "pair=(advance={:.3f},yaw={:.3f}) "
+                    "velocity=({:+.3f},{:+.3f})->({:+.3f},{:+.3f})mps",
+                    comp._stepSequenceStepIndex,
+                    swingFootLeft ? "LEFT" : "RIGHT",
+                    comp._gaitSupportCurveDuration,
+                    pairAdvanceScale, pairYawScale,
+                    incomingVelocity.x, incomingVelocity.z,
+                    outgoingVelocity.x, outgoingVelocity.z);
+            }
+
             const float minimumAdvance = glm::min(
                 comp.gaitMinStepLength, comp.gaitMaxStepLength);
             const float maximumAdvance = glm::max(
@@ -1902,26 +2615,37 @@
                     minimumCommand, maximumAdvance)
                 : glm::clamp(comp.stepLength, 0.15f, 0.25f);
             glm::vec3 requestedTarget;
+            float lateralLane = 0.0f;
+            bool footSeparationLimited = false;
             if (continuousEnabled) {
                 // A limit cycle places the next support relative to the current support,
                 // not relative to where this swing foot happened to land one cycle ago.
                 // Gameplay turns give each anatomical foot a signed lane in the new frame;
                 // a raw projection can change sign during a 90/180-degree reframe and ask
                 // the swing leg to cross through the planted leg.
-                float lateralLane = glm::dot(
+                lateralLane = glm::dot(
                     comp._physicalStepSwingStart - stanceFoot, comp._physicalStepRight);
                 if (gameplayCommand) {
                     constexpr float kMinimumRuntimeLane = 0.10f;
-                    const float laneMagnitude = glm::clamp(
-                        std::abs(lateralLane), kMinimumRuntimeLane, 0.24f);
-                    const float swingSide = swing == &comp._legL ? -1.0f : 1.0f;
-                    lateralLane = swingSide * laneMagnitude;
-                    lateralLane += glm::clamp(
+                    const float requestedLaneMagnitude = glm::max(
+                        std::abs(lateralLane), kMinimumRuntimeLane);
+                    float requestedLane = swingSide * requestedLaneMagnitude;
+                    requestedLane += glm::clamp(
                         comp._gaitAdaptiveLateralOffset, -0.015f, 0.015f);
+                    const float maximumRuntimeLane = glm::max(
+                        comp.gaitMaxFootSeparation, kMinimumRuntimeLane);
+                    turnPlan.rawFootSeparation = std::abs(requestedLane);
+                    turnPlan.maximumFootSeparation = maximumRuntimeLane;
+                    footSeparationLimited =
+                        turnPlan.rawFootSeparation > maximumRuntimeLane + 1e-5f;
+                    lateralLane = swingSide * glm::clamp(
+                        std::abs(requestedLane),
+                        kMinimumRuntimeLane, maximumRuntimeLane);
+                    turnPlan.footSeparationLimited = footSeparationLimited;
                 }
                 requestedTarget = stanceFoot
-                    + comp._physicalStepForward * placementDistance
-                    + comp._physicalStepRight * lateralLane;
+                    + turnPlan.activeMidForward * placementDistance
+                    + turnPlan.activeEndRight * lateralLane;
             } else {
                 requestedTarget = comp._physicalStepSwingStart
                     + comp._physicalStepForward * placementDistance;
@@ -1936,28 +2660,134 @@
                 ? comp._physicalStepSwingStart.y - startGround.point.y : 0.0f;
             requestedTarget.y = targetGround.hit
                 ? targetGround.point.y + soleCenterOffset : comp._physicalStepSwingStart.y;
+            turnPlan.candidateGrounded = targetGround.hit;
 
             const glm::vec3 hip = physicalPosition(swing->hipIdx);
-            glm::vec3 predictedLandingHip = hip;
-            if (continuousEnabled) {
-                // Weight shift waits until the COM is within 1 cm of its stance target.
-                // Include that small remaining horizontal correction when testing the
-                // grounded foothold, so planning and landing use the same expected pelvis
-                // position instead of the pre-takeoff snapshot.
-                glm::vec3 remainingComShift =
-                    comp._physicalStepSupportTarget - rag._locomotionCOM;
-                remainingComShift.y = 0.0f;
-                if (const float remaining = glm::length(remainingComShift);
-                    remaining > 0.015f && remaining > 1e-5f)
-                    remainingComShift *= 0.015f / remaining;
-                predictedLandingHip += remainingComShift;
-            }
-            if (continuousEnabled) {
-                comp._gaitIkPlanHip = predictedLandingHip;
-                comp._gaitIkPlanHipValid = true;
-            }
-            const float legLength = glm::length(skeleton.bones[swing->kneeIdx].localT)
-                                  + glm::length(skeleton.bones[swing->ankleIdx].localT);
+            // Simulate the same curve-following velocity and acceleration limiter used by
+            // the runtime support controller.  This is intentionally candidate-dependent:
+            // the late descent preload is built from the support position and incoming
+            // velocity predicted at the instant that curve will actually be seeded.
+            auto predictLandingHip = [&](const glm::vec3& candidate,
+                                         glm::vec3* contactSupportVelocity) {
+                if (!continuousEnabled) {
+                    if (contactSupportVelocity)
+                        *contactSupportVelocity = glm::vec3(0.0f);
+                    return hip;
+                }
+
+                glm::vec3 simulatedPosition =
+                    comp._physicalStepSupportTarget;
+                glm::vec3 simulatedVelocity =
+                    comp._gaitSupportCommandVelocity;
+                simulatedVelocity.y = 0.0f;
+                constexpr float kPredictionStep = 1.0f / 120.0f;
+                constexpr float kSupportPositionGain = 4.0f;
+                auto advanceSupportPrediction = [&](const glm::vec3& curvePosition,
+                                                    const glm::vec3& curveVelocity,
+                                                    float stepTime) {
+                    glm::vec3 desiredVelocity = curveVelocity
+                        + (curvePosition - simulatedPosition)
+                            * kSupportPositionGain;
+                    desiredVelocity.y = 0.0f;
+                    const float desiredSpeed = glm::length(desiredVelocity);
+                    if (desiredSpeed > configuredSupportMaxSpeed
+                        && desiredSpeed > 1e-6f) {
+                        desiredVelocity *=
+                            configuredSupportMaxSpeed / desiredSpeed;
+                    }
+                    float maximumAcceleration = 1.75f;
+                    if (glm::length(desiredVelocity)
+                        < glm::length(simulatedVelocity)) {
+                        maximumAcceleration = 2.50f;
+                    }
+                    glm::vec3 velocityDelta =
+                        desiredVelocity - simulatedVelocity;
+                    const float maximumDelta =
+                        maximumAcceleration * stepTime;
+                    const float deltaLength = glm::length(velocityDelta);
+                    if (deltaLength > maximumDelta && deltaLength > 1e-6f)
+                        velocityDelta *= maximumDelta / deltaLength;
+                    simulatedVelocity += velocityDelta;
+                    simulatedPosition += simulatedVelocity * stepTime;
+                    simulatedPosition.y =
+                        comp._physicalStepSupportTarget.y;
+                };
+
+                // TAKEOFF is contact-driven rather than duration-driven.  The accepted
+                // gait normally opens the sole in about 100 ms; retaining that explicit
+                // estimate is safer than pretending descent begins at plan admission.
+                constexpr float kPredictedTakeoffTime = 0.10f;
+                const float timeToDescent = kPredictedTakeoffTime
+                    + cadenceSwingTime + cadenceArrivalSettleTime;
+                for (float elapsed = 0.0f; elapsed < timeToDescent;) {
+                    const float stepTime = glm::min(
+                        kPredictionStep, timeToDescent - elapsed);
+                    glm::vec3 curvePosition = simulatedPosition;
+                    glm::vec3 curveVelocity = simulatedVelocity;
+                    if (comp._gaitSupportCurveActive) {
+                        evaluateActiveSupportCurveAt(
+                            comp._gaitSupportCurveTime + elapsed + stepTime,
+                            curvePosition, curveVelocity);
+                    } else {
+                        curvePosition += curveVelocity * stepTime;
+                    }
+                    advanceSupportPrediction(
+                        curvePosition, curveVelocity, stepTime);
+                    elapsed += stepTime;
+                }
+
+                const glm::vec3 preloadStart = simulatedPosition;
+                const glm::vec3 preloadStartVelocity = simulatedVelocity;
+                const float transferFraction = glm::clamp(
+                    comp.transferSupportBias
+                        + comp._gaitAdaptiveTransferBiasOffset,
+                    kNewSupportLoadCommandTarget, 0.98f);
+                const glm::vec3 fullTransferTarget = glm::mix(
+                    stanceFoot, candidate, transferFraction);
+                constexpr float kPreContactSupportFraction = 0.20f;
+                glm::vec3 preloadEnd = glm::mix(
+                    preloadStart, fullTransferTarget,
+                    kPreContactSupportFraction);
+                preloadEnd.y = preloadStart.y;
+                const glm::vec3 preloadEndVelocity =
+                    supportCurveEndVelocityForObjective(
+                        preloadStart, preloadEnd, cadenceDescentTime,
+                        std::abs(admittedStepYaw) > 1e-6f);
+                for (float elapsed = 0.0f; elapsed < cadenceDescentTime;) {
+                    const float stepTime = glm::min(
+                        kPredictionStep, cadenceDescentTime - elapsed);
+                    glm::vec3 curvePosition(0.0f), curveVelocity(0.0f);
+                    evaluateSupportCurveSegment(
+                        preloadStart, preloadStartVelocity,
+                        preloadEnd, preloadEndVelocity,
+                        cadenceDescentTime, elapsed + stepTime,
+                        curvePosition, curveVelocity);
+                    advanceSupportPrediction(
+                        curvePosition, curveVelocity, stepTime);
+                    elapsed += stepTime;
+                }
+
+                if (contactSupportVelocity)
+                    *contactSupportVelocity = simulatedVelocity;
+                glm::vec3 predictedSupportShift =
+                    simulatedPosition - rag._locomotionCOM;
+                predictedSupportShift.y = 0.0f;
+                const glm::quat contactHeading = glm::normalize(glm::slerp(
+                    startRotation, endRotation, 0.80f));
+                const glm::quat headingDelta = glm::normalize(
+                    contactHeading * glm::conjugate(startRotation));
+                glm::vec3 hipFromCom = hip - rag._locomotionCOM;
+                hipFromCom.y = 0.0f;
+                glm::vec3 headingHipShift =
+                    headingDelta * hipFromCom - hipFromCom;
+                headingHipShift.y = 0.0f;
+                return hip + predictedSupportShift + headingHipShift;
+            };
+            const float legLength = swing->segmentGeometryValid
+                ? glm::length(swing->upperSegmentLocal)
+                    + glm::length(swing->lowerSegmentLocal)
+                : glm::length(skeleton.bones[swing->kneeIdx].localT)
+                    + glm::length(skeleton.bones[swing->ankleIdx].localT);
             const float configuredReach = legLength
                 * glm::clamp(comp.maxLegReachFraction, 0.70f, 0.99f);
             const float currentReach = glm::length(
@@ -1982,27 +2812,107 @@
                          glm::max(currentReach, safeAnatomicalReach)),
                 glm::max(currentReach, antiSingularityCeiling));
 
-            auto groundedCandidate = [&](float horizontalScale) {
-                glm::vec3 candidate = glm::mix(
-                    comp._physicalStepSwingStart, requestedTarget,
-                    glm::clamp(horizontalScale, 0.0f, 1.0f));
+            auto groundCandidatePosition = [&](glm::vec3 candidate,
+                                                float fallbackY) {
                 const HitResult ground = Physics::Raycast(
                     candidate + glm::vec3(0, 0.35f, 0),
                     glm::vec3(0, -1, 0), 1.0f, entity, false);
                 candidate.y = ground.hit
-                    ? ground.point.y + soleCenterOffset
-                    : glm::mix(comp._physicalStepSwingStart.y, requestedTarget.y,
-                               glm::clamp(horizontalScale, 0.0f, 1.0f));
+                    ? ground.point.y + soleCenterOffset : fallbackY;
                 return candidate;
             };
+            auto targetAtAdvanceScale = [&](float advanceScale) {
+                if (!continuousEnabled)
+                    return glm::mix(
+                        comp._physicalStepSwingStart, requestedTarget,
+                        glm::clamp(advanceScale, 0.0f, 1.0f));
+                glm::vec3 candidate = stanceFoot
+                    + turnPlan.activeMidForward
+                        * placementDistance
+                        * glm::clamp(advanceScale, 0.0f, 1.0f)
+                    + turnPlan.activeEndRight * lateralLane;
+                return groundCandidatePosition(candidate, requestedTarget.y);
+            };
+            const float swingPathPeakCoefficient = glm::max(
+                1.05f / glm::max(cadenceSwingTime, 0.01f),
+                0.63f / glm::max(cadenceDescentTime, 0.01f));
+            auto requiredSwingTargetSpeed = [&](const glm::vec3& candidate) {
+                return horizontalDistance(
+                    candidate, comp._physicalStepSwingStart)
+                    * swingPathPeakCoefficient;
+            };
+            const bool angularObjective =
+                std::abs(admittedStepYaw) > 1e-6f;
+            // The outer sole travels the longer arc around the turn center and receives
+            // the more conservative target-speed budget.  Straight gait retains its
+            // validated footprint and is not routed through this turning admission gate.
+            constexpr float kInsideTurnSwingSpeedLimit = 0.78f;
+            constexpr float kOutsideTurnSwingSpeedLimit = 0.62f;
+            const float swingSpeedLimit = turnPlan.outsideFoot
+                ? kOutsideTurnSwingSpeedLimit
+                : kInsideTurnSwingSpeedLimit;
+            const float requestedSwingSpeed =
+                requiredSwingTargetSpeed(requestedTarget);
+            const float maximumDynamicAdvanceScale =
+                continuousEnabled && angularObjective
+                ? pairAdvanceScale : 1.0f;
+            glm::vec3 dynamicallyAdmittedTarget =
+                targetAtAdvanceScale(maximumDynamicAdvanceScale);
+            const bool pairAdvanceLimited =
+                maximumDynamicAdvanceScale < 0.999f;
+            bool swingSpeedLimited = false;
+            if (continuousEnabled && angularObjective
+                && requiredSwingTargetSpeed(dynamicallyAdmittedTarget)
+                    > swingSpeedLimit) {
+                float admittedScale = 0.0f;
+                float rejectedScale = maximumDynamicAdvanceScale;
+                for (int iteration = 0; iteration < 12; ++iteration) {
+                    const float candidateScale =
+                        0.5f * (admittedScale + rejectedScale);
+                    const glm::vec3 candidate =
+                        targetAtAdvanceScale(candidateScale);
+                    if (requiredSwingTargetSpeed(candidate)
+                        <= swingSpeedLimit) {
+                        admittedScale = candidateScale;
+                    } else {
+                        rejectedScale = candidateScale;
+                    }
+                }
+                dynamicallyAdmittedTarget =
+                    targetAtAdvanceScale(admittedScale);
+                swingSpeedLimited = true;
+            }
+
+            auto groundedCandidate = [&](float horizontalScale) {
+                glm::vec3 candidate = glm::mix(
+                    comp._physicalStepSwingStart, dynamicallyAdmittedTarget,
+                    glm::clamp(horizontalScale, 0.0f, 1.0f));
+                return groundCandidatePosition(
+                    candidate,
+                    glm::mix(comp._physicalStepSwingStart.y,
+                             dynamicallyAdmittedTarget.y,
+                             glm::clamp(horizontalScale, 0.0f, 1.0f)));
+            };
             auto targetReach = [&](const glm::vec3& candidate) {
-                return glm::length(candidate + nominalAnkleFromFootWorld()
-                    - predictedLandingHip);
+                const glm::quat candidateRotation =
+                    footWorldRotationForHeading(*swing, endRotation);
+                const glm::vec3 candidateAnkle = candidate
+                    + ankleFromFootWorld(*swing, candidateRotation);
+                // Admission must be safe both at the current support pose and at the
+                // predicted contact pose. If support motion happens to move the hip closer,
+                // it must not be used to justify a foothold that is unreachable before that
+                // motion completes.
+                const glm::vec3 candidateLandingHip =
+                    predictLandingHip(candidate, nullptr);
+                return glm::max(
+                    glm::length(candidateAnkle - hip),
+                    glm::length(candidateAnkle - candidateLandingHip));
             };
 
-            glm::vec3 target = requestedTarget;
+            glm::vec3 target = dynamicallyAdmittedTarget;
             const float requestedReach = targetReach(requestedTarget);
-            bool reachClamped = requestedReach > comp._physicalStepReachLimit;
+            bool reachClamped =
+                targetReach(target) > comp._physicalStepReachLimit;
             if (reachClamped) {
                 float reachableScale = 0.0f;
                 float unreachableScale = 1.0f;
@@ -2017,39 +2927,577 @@
                 }
                 target = groundedCandidate(reachableScale);
             }
+
+            // Counterfactual Slice 2j sample. Retain its prediction so the log can compare
+            // the hypothetical settled solve with the live transient, but never use it to
+            // project, reject, or otherwise route a foothold.
+            Envelope admissionHipEnvelope;
+            admissionHipEnvelope.twistAxis = swing->hipTwistAxis;
+            admissionHipEnvelope.swingNormalDeg = swing->hipSwingNormalDeg;
+            admissionHipEnvelope.swingPlaneDeg = swing->hipSwingPlaneDeg;
+            admissionHipEnvelope.twistMinDeg = swing->hipTwistMinDeg;
+            admissionHipEnvelope.twistMaxDeg = swing->hipTwistMaxDeg;
+            Envelope admissionAnkleEnvelope;
+            admissionAnkleEnvelope.twistAxis = swing->ankleAxis;
+            admissionAnkleEnvelope.swingNormalDeg = swing->ankleSwingNormalDeg;
+            admissionAnkleEnvelope.swingPlaneDeg = swing->ankleSwingPlaneDeg;
+            admissionAnkleEnvelope.twistMinDeg = swing->ankleTwistMinDeg;
+            admissionAnkleEnvelope.twistMaxDeg = swing->ankleTwistMaxDeg;
+            const glm::quat admissionParentWorld = ParentWorldRot(
+                rag, skeleton, animator, entityWorld, swing->hipIdx);
+            const glm::vec3 admissionUpperLocal =
+                swing->segmentGeometryValid
+                    ? swing->upperSegmentLocal
+                    : skeleton.bones[swing->kneeIdx].localT;
+            const glm::vec3 admissionLowerLocal =
+                swing->segmentGeometryValid
+                    ? swing->lowerSegmentLocal
+                    : skeleton.bones[swing->ankleIdx].localT;
+            const float admissionUpperLength = glm::length(
+                admissionUpperLocal);
+            const float admissionLowerLength = glm::length(
+                admissionLowerLocal);
+            struct AdmissionOrientationResult {
+                float maximumClampDeg = 0.0f;
+                float contactSwivelDeg = 0.0f;
+                float maximumClosure = 0.0f;
+                bool allSamplesClosed = true;
+            };
+            auto sampleOrientationFeasibility = [&](const glm::vec3& foothold) {
+                AdmissionOrientationResult result;
+                const glm::quat footRotation =
+                    footWorldRotationForHeading(*swing, endRotation);
+                const glm::vec3 landingHip =
+                    predictLandingHip(foothold, nullptr);
+                constexpr float kLateSwingSamples[3] = {
+                    0.60f, 0.80f, 1.00f
+                };
+                for (float trajectoryT : kLateSwingSamples) {
+                    glm::vec3 sampledFoot = glm::mix(
+                        comp._physicalStepSwingStart, foothold,
+                        trajectoryT);
+                    sampledFoot.y += std::sin(glm::pi<float>() * trajectoryT)
+                        * comp.swingHeight;
+                    const glm::vec3 sampledHip = glm::mix(
+                        hip, landingHip, trajectoryT);
+                    const glm::vec3 sampledAnkle = sampledFoot
+                        + ankleFromFootWorld(*swing, footRotation);
+                    const glm::vec3 toSample = sampledAnkle - sampledHip;
+                    const float sampledDistance = glm::length(toSample);
+                    if (sampledDistance <= 1e-4f
+                        || sampledDistance
+                            >= admissionUpperLength
+                                + admissionLowerLength) {
+                        result.maximumClampDeg = glm::max(
+                            result.maximumClampDeg, 180.0f);
+                        continue;
+                    }
+                    const float includedCos = glm::clamp(
+                        (admissionUpperLength * admissionUpperLength
+                         + admissionLowerLength * admissionLowerLength
+                         - sampledDistance * sampledDistance)
+                            / (2.0f * admissionUpperLength
+                                * admissionLowerLength),
+                        -1.0f, 1.0f);
+                    const float kneeBend = glm::pi<float>()
+                        - std::acos(includedCos);
+                    const glm::quat kneeLocal = glm::normalize(
+                        swing->referenceKneeLocal
+                        * glm::angleAxis(
+                            kneeBend - swing->referenceKneeBend,
+                            glm::normalize(swing->kneeHingeAxis)));
+                    const glm::vec3 sampleForward = glm::normalize(toSample);
+                    const glm::vec3 kneePole = nominalKneePoleWorld(*swing);
+                    glm::vec3 sampleBend = kneePole
+                        - sampleForward
+                            * glm::dot(kneePole, sampleForward);
+                    if (glm::dot(sampleBend, sampleBend) < 1e-8f)
+                        sampleBend = comp._physicalStepForward;
+                    sampleBend -= sampleForward
+                        * glm::dot(sampleBend, sampleForward);
+                    if (glm::dot(sampleBend, sampleBend) < 1e-8f)
+                        sampleBend = comp._physicalStepRight;
+                    else
+                        sampleBend = glm::normalize(sampleBend);
+                    const float hipCosine = glm::clamp(
+                        (admissionUpperLength * admissionUpperLength
+                         + sampledDistance * sampledDistance
+                         - admissionLowerLength * admissionLowerLength)
+                            / (2.0f * admissionUpperLength
+                                * sampledDistance),
+                        -1.0f, 1.0f);
+                    const float hipSine = std::sqrt(glm::max(
+                        1.0f - hipCosine * hipCosine, 0.0f));
+                    const glm::quat sampledParentWorld = glm::normalize(
+                        glm::angleAxis(
+                            admittedStepYaw * trajectoryT,
+                            glm::vec3(0.0f, 1.0f, 0.0f))
+                        * admissionParentWorld);
+                    float bestCost = 1e9f;
+                    float bestClamp = 180.0f;
+                    float bestSwivel = 0.0f;
+                    float bestClosure = 1.0f;
+                    for (int swivelSample = 0;
+                         swivelSample < 25; ++swivelSample) {
+                        const float swivel = glm::mix(
+                            glm::radians(-60.0f),
+                            glm::radians(60.0f),
+                            static_cast<float>(swivelSample) / 24.0f);
+                        const glm::vec3 swivelBend = glm::normalize(
+                            glm::angleAxis(swivel, sampleForward)
+                                * sampleBend);
+                        const glm::vec3 upperDirection = glm::normalize(
+                            sampleForward * hipCosine
+                            + swivelBend * hipSine);
+                        const glm::vec3 sampledKnee = sampledHip
+                            + upperDirection * admissionUpperLength;
+                        const glm::vec3 lowerDirection =
+                            sampledAnkle - sampledKnee;
+                        glm::quat rawHipWorld(1, 0, 0, 0);
+                        if (!RotationMatchingVectorPair(
+                                admissionUpperLocal,
+                                kneeLocal * admissionLowerLocal,
+                                upperDirection, lowerDirection,
+                                rawHipWorld)) {
+                            continue;
+                        }
+                        const glm::quat rawHipLocal = glm::normalize(
+                            glm::conjugate(sampledParentWorld)
+                                * rawHipWorld);
+                        const glm::quat boundedHipLocal = ClampToEnvelope(
+                            admissionHipEnvelope,
+                            skeleton.bones[swing->hipIdx].localR,
+                            rawHipLocal, comp.hipLimitMarginDeg);
+                        const glm::quat boundedHipWorld = glm::normalize(
+                            sampledParentWorld * boundedHipLocal);
+                        const glm::quat kneeWorld = glm::normalize(
+                            boundedHipWorld * kneeLocal);
+                        const glm::quat rawAnkleLocal = glm::normalize(
+                            glm::conjugate(kneeWorld) * footRotation
+                                * glm::conjugate(
+                                    swing->referenceFootLocal));
+                        const glm::quat boundedAnkleLocal =
+                            ClampToEnvelope(
+                                admissionAnkleEnvelope,
+                                skeleton.bones[swing->ankleIdx].localR,
+                                rawAnkleLocal,
+                                comp.hipLimitMarginDeg);
+                        const float ankleClamp = rotationDifferenceDeg(
+                            rawAnkleLocal, boundedAnkleLocal);
+                        const float hipClamp = rotationDifferenceDeg(
+                            rawHipLocal, boundedHipLocal);
+                        const glm::vec3 commandedKnee = sampledHip
+                            + boundedHipWorld * admissionUpperLocal;
+                        const glm::vec3 commandedAnkle = commandedKnee
+                            + kneeWorld * admissionLowerLocal;
+                        const glm::quat commandedFootWorld = glm::normalize(
+                            kneeWorld * boundedAnkleLocal
+                                * swing->referenceFootLocal);
+                        const glm::vec3 commandedFoot = commandedAnkle
+                            - commandedFootWorld
+                                * swing->ankleFromFootLocal;
+                        const float positionClosure = glm::length(
+                            commandedFoot - sampledFoot);
+                        constexpr float kPositionClosureTolerance = 0.003f;
+                        if (positionClosure > kPositionClosureTolerance)
+                            continue;
+                        const float cost = ankleClamp * 20.0f
+                            + hipClamp * 4.0f
+                            + std::abs(glm::degrees(swivel)) * 0.002f;
+                        if (cost < bestCost) {
+                            bestCost = cost;
+                            bestClamp = ankleClamp;
+                            bestSwivel = swivel;
+                            bestClosure = positionClosure;
+                        }
+                    }
+                    if (bestCost >= 1e9f) {
+                        result.maximumClampDeg = 180.0f;
+                        result.maximumClosure = glm::max(
+                            result.maximumClosure, bestClosure);
+                        result.allSamplesClosed = false;
+                        continue;
+                    }
+                    result.maximumClampDeg = glm::max(
+                        result.maximumClampDeg, bestClamp);
+                    result.maximumClosure = glm::max(
+                        result.maximumClosure, bestClosure);
+                    if (trajectoryT > 0.99f)
+                        result.contactSwivelDeg =
+                            glm::degrees(bestSwivel);
+                }
+                return result;
+            };
+
+            AdmissionOrientationResult orientationAdmission;
+            if (continuousEnabled && angularObjective)
+                orientationAdmission =
+                    sampleOrientationFeasibility(target);
             comp._physicalStepFoothold = target;
+            glm::vec3 predictedContactSupportVelocity(0.0f);
+            const glm::vec3 predictedLandingHip = predictLandingHip(
+                target, &predictedContactSupportVelocity);
+            if (continuousEnabled) {
+                comp._gaitIkPlanHip = predictedLandingHip;
+                comp._gaitIkPlanHipValid = true;
+            }
             const float requestedForward = glm::dot(
                 requestedTarget - comp._physicalStepSwingStart, comp._physicalStepForward);
             const float plannedForward = glm::dot(
                 target - comp._physicalStepSwingStart, comp._physicalStepForward);
-            const float requestedSupportAdvance = glm::dot(
-                requestedTarget - stanceFoot, comp._physicalStepForward);
-            const float plannedSupportAdvance = glm::dot(
+            const float requestedSupportAdvance = plannedAdvanceCoefficient(
+                requestedTarget - stanceFoot);
+            const float plannedSupportAdvance = plannedAdvanceCoefficient(
+                target - stanceFoot);
+            const float legacyStartFrameAdvance = glm::dot(
                 target - stanceFoot, comp._physicalStepForward);
+
+            const glm::quat candidateRotation =
+                footWorldRotationForHeading(*swing, endRotation);
+            turnPlan.candidateFootPosition = requestedTarget;
+            turnPlan.admittedFootPosition = target;
+            turnPlan.candidateFootRotation = candidateRotation;
+            turnPlan.admittedFootRotation = candidateRotation;
+            turnPlan.requestedAdvance = requestedSupportAdvance;
+            turnPlan.admittedAdvance = plannedSupportAdvance;
+            turnPlan.requestedSwingDistance = horizontalDistance(
+                requestedTarget, comp._physicalStepSwingStart);
+            turnPlan.admittedSwingDistance = horizontalDistance(
+                target, comp._physicalStepSwingStart);
+            turnPlan.requiredSwingSpeed = requestedSwingSpeed;
+            turnPlan.admittedSwingSpeed =
+                requiredSwingTargetSpeed(target);
+            turnPlan.swingSpeedLimit = angularObjective
+                ? swingSpeedLimit : 0.0f;
+            turnPlan.predictedContactHip = predictedLandingHip;
+            turnPlan.predictedContactSupportVelocity =
+                predictedContactSupportVelocity;
+            turnPlan.requestedReach = requestedReach;
+            turnPlan.admittedReach = targetReach(target);
+            turnPlan.reachLimit = comp._physicalStepReachLimit;
+            turnPlan.reachMargin =
+                comp._physicalStepReachLimit - turnPlan.admittedReach;
+            turnPlan.candidateFootSeparation = std::abs(
+                plannedLaneCoefficient(requestedTarget - stanceFoot));
+            turnPlan.admittedFootSeparation = std::abs(
+                plannedLaneCoefficient(target - stanceFoot));
+            turnPlan.sampledAnkleClampDeg =
+                orientationAdmission.maximumClampDeg;
+            turnPlan.admittedKneeSwivelDeg =
+                orientationAdmission.contactSwivelDeg;
+            turnPlan.sampledSwivelClosure =
+                orientationAdmission.maximumClosure;
+            turnPlan.sampledSwivelAccepted =
+                orientationAdmission.allSamplesClosed;
+            turnPlan.candidateEvaluated = true;
+            turnPlan.limitingConstraint = reachClamped
+                ? Comp::TurnConstraintResult::SwingReach
+                : (swingSpeedLimited
+                    ? Comp::TurnConstraintResult::SwingLinearSpeed
+                    : (pairAdvanceLimited || pairBudgetApplied
+                        ? Comp::TurnConstraintResult::TurnPairBudget
+                    : (angularSpeedLimited
+                        ? Comp::TurnConstraintResult::SwingAngularSpeed
+                        : (footSeparationLimited
+                            ? Comp::TurnConstraintResult::FootSeparation
+                        : (controllerYawLimited
+                            ? Comp::TurnConstraintResult::ControllerYawLimit
+                            : Comp::TurnConstraintResult::None)))));
+
             comp._gaitPlannedSupportAdvance = continuousEnabled
                 ? plannedSupportAdvance : 0.0f;
             if (continuousEnabled)
                 comp._gaitReachClampedStep = reachClamped;
             if (continuousEnabled) {
-                const glm::vec3 footholdDelta = target - comp._physicalStepSwingStart;
                 // The settle gate validates achieved support-to-support advance, so admit
                 // the foothold in that same space. The filtered loss is measured from prior
                 // physical landings; ignoring it here admitted plans that were reachable
                 // analytically but already predicted to finish below the 6 cm invariant.
                 const float predictedAchievedAdvance =
                     plannedSupportAdvance - trackingReserve;
-                const float requiredPlannedAdvance =
-                    minimumAdvance + trackingReserve;
-                const bool footholdAccepted = predictedAchievedAdvance + 0.0005f
-                    >= minimumAdvance;
+                const bool requestedAngularObjective =
+                    std::abs(requestedStepYaw) > 1e-6f;
+                const bool dynamicSwingFeasible = !angularObjective
+                    || turnPlan.admittedSwingSpeed
+                        <= swingSpeedLimit + 0.001f;
+                const bool dynamicAngularFeasible =
+                    turnPlan.admittedAngularSpeed
+                        <= turnPlan.angularSpeedLimit + 0.001f;
+                // A turn-dominant step may intentionally spend its entire budget on
+                // angular progress and lane separation.  Its landing is re-planned from
+                // the measured footprint, so the straight six-centimetre advance invariant
+                // is not an admission gate for this objective.
+                const bool footholdAccepted = requestedAngularObjective
+                    ? (turnPlan.candidateGrounded
+                        && dynamicSwingFeasible
+                        && dynamicAngularFeasible
+                        && turnPlan.admittedReach
+                            <= turnPlan.reachLimit + 0.0005f)
+                    : predictedAchievedAdvance + 0.0005f
+                        >= minimumAdvance;
+                turnPlan.candidateAccepted = footholdAccepted;
+                turnPlan.activeHeadingPlan = footholdAccepted;
+                if (!footholdAccepted)
+                    turnPlan.limitingConstraint = requestedAngularObjective
+                        ? (dynamicAngularFeasible
+                            ? Comp::TurnConstraintResult::SwingLinearSpeed
+                            : Comp::TurnConstraintResult::SwingAngularSpeed)
+                        : Comp::TurnConstraintResult::MinimumAdvance;
+                if (footholdAccepted && requestedAngularObjective) {
+                    if (turnPlan.outsideFoot) {
+                        const float admittedAdvanceRatio =
+                            turnPlan.requestedAdvance > 1e-4f
+                            ? turnPlan.admittedAdvance
+                                / turnPlan.requestedAdvance
+                            : 1.0f;
+                        comp._gaitTurnPairAdvanceScale = glm::clamp(
+                            admittedAdvanceRatio, 0.25f, 1.0f);
+                        comp._gaitTurnPairYawScale = glm::clamp(
+                            0.55f
+                                + 0.45f
+                                    * comp._gaitTurnPairAdvanceScale,
+                            0.55f, 1.0f);
+                        comp._gaitTurnPairYawSign =
+                            admittedStepYaw >= 0.0f ? 1.0f : -1.0f;
+                        comp._gaitTurnPairPendingInside = true;
+                        turnPlan.pairAdvanceScale =
+                            comp._gaitTurnPairAdvanceScale;
+                        turnPlan.pairYawScale =
+                            comp._gaitTurnPairYawScale;
+                        turnPlan.pairBudgetLatched = true;
+                    } else if (pairBudgetApplied) {
+                        // Consume exactly once.  An abort below clears the pair as well,
+                        // while a successful inside plan must not constrain the next
+                        // outside foot a second time.
+                        comp._gaitTurnPairPendingInside = false;
+                        comp._gaitTurnPairAdvanceScale = 1.0f;
+                        comp._gaitTurnPairYawScale = 1.0f;
+                        comp._gaitTurnPairYawSign = 0.0f;
+                    }
+                }
+                if (comp.debug) {
+                    spdlog::info(
+                        "[LocomotionTurnPlan] swing={} outside={} desiredError={:+.3f}deg "
+                        "yaw=(requested={:+.3f},admitted={:+.3f},achieved={:+.3f})deg "
+                        "advance=(requested={:.3f},admitted={:.3f},legacyStart={:.3f})m "
+                        "pair=(applied={},latched={},advanceScale={:.3f},"
+                        "yawScale={:.3f},support={:.3f}mps) "
+                        "swingMotion=(distance={:.3f}->{:.3f}m,"
+                        "speed={:.3f}->{:.3f}/{:.3f}mps,angular={:.3f}->{:.3f}/{:.3f}radps) "
+                        "reach=(requested={:.3f},admitted={:.3f},limit={:.3f},margin={:+.3f})m "
+                        "contactHip=(pred=({:+.3f},{:+.3f},{:+.3f}),"
+                        "supportVel=({:+.3f},{:+.3f})) "
+                        "counterfactual=(ankleClamp={:.1f}deg,bestSwivel={:+.1f}deg,"
+                        "closure={:.3f}m,accepted={}) "
+                        "separation=(raw={:.3f},candidate={:.3f},admitted={:.3f},"
+                        "max={:.3f},limited={})m "
+                        "grounded={} accepted={} constraint={}",
+                        comp._gaitTurnPlan.swingFootLeft
+                            ? "LEFT" : "RIGHT",
+                        turnPlan.outsideFoot ? "yes" : "no",
+                        glm::degrees(turnPlan.desiredHeadingError),
+                        glm::degrees(turnPlan.requestedYaw),
+                        glm::degrees(turnPlan.admittedYaw),
+                        glm::degrees(turnPlan.achievedYaw),
+                        turnPlan.requestedAdvance,
+                        turnPlan.admittedAdvance,
+                        legacyStartFrameAdvance,
+                        turnPlan.pairBudgetApplied ? "yes" : "no",
+                        turnPlan.pairBudgetLatched ? "yes" : "no",
+                        turnPlan.pairAdvanceScale,
+                        turnPlan.pairYawScale,
+                        turnPlan.supportTransportSpeed,
+                        turnPlan.requestedSwingDistance,
+                        turnPlan.admittedSwingDistance,
+                        turnPlan.requiredSwingSpeed,
+                        turnPlan.admittedSwingSpeed,
+                        turnPlan.swingSpeedLimit,
+                        turnPlan.requiredAngularSpeed,
+                        turnPlan.admittedAngularSpeed,
+                        turnPlan.angularSpeedLimit,
+                        turnPlan.requestedReach,
+                        turnPlan.admittedReach,
+                        turnPlan.reachLimit,
+                        turnPlan.reachMargin,
+                        turnPlan.predictedContactHip.x,
+                        turnPlan.predictedContactHip.y,
+                        turnPlan.predictedContactHip.z,
+                        turnPlan.predictedContactSupportVelocity.x,
+                        turnPlan.predictedContactSupportVelocity.z,
+                        turnPlan.sampledAnkleClampDeg,
+                        turnPlan.admittedKneeSwivelDeg,
+                        turnPlan.sampledSwivelClosure,
+                        turnPlan.sampledSwivelAccepted ? "yes" : "no",
+                        turnPlan.rawFootSeparation,
+                        turnPlan.candidateFootSeparation,
+                        turnPlan.admittedFootSeparation,
+                        turnPlan.maximumFootSeparation,
+                        turnPlan.footSeparationLimited ? "yes" : "no",
+                        turnPlan.candidateGrounded ? "yes" : "no",
+                        turnPlan.candidateAccepted ? "yes" : "no",
+                        TurnConstraintName(turnPlan.limitingConstraint));
+                }
                 return footholdAccepted;
             }
-            return plannedForward >= 0.149f;
+            const bool footholdAccepted = plannedForward >= 0.149f;
+            turnPlan.candidateAccepted = footholdAccepted;
+            if (!footholdAccepted)
+                turnPlan.limitingConstraint =
+                    Comp::TurnConstraintResult::MinimumAdvance;
+            return footholdAccepted;
+        };
+
+        auto commitActiveTurnHeading = [&]() {
+            auto& turnPlan = comp._gaitTurnPlan;
+            if (!turnPlan.activeHeadingPlan) return;
+
+            const glm::vec3 previousCommitted = turnPlan.committedForward;
+            const float remainingBefore = signedHeadingDelta(
+                previousCommitted, turnPlan.desiredForward);
+            const float remainingAfter = signedHeadingDelta(
+                turnPlan.activeEndForward, turnPlan.desiredForward);
+            if (std::abs(turnPlan.admittedYaw) > 1e-6f) {
+                turnPlan.achievedYaw = turnPlan.admittedYaw
+                    - glm::radians(comp._gaitHeadingErrorDeg);
+                turnPlan.achievedTurnProgress =
+                    turnPlan.achievedYaw / turnPlan.admittedYaw;
+            } else {
+                turnPlan.achievedYaw = 0.0f;
+                turnPlan.achievedTurnProgress = 0.0f;
+            }
+            turnPlan.stanceReferenceRotationDeltaDeg = rotationDifferenceDeg(
+                turnPlan.stanceFootRotationAtAdmission,
+                stance->plantedFootWorldRotation);
+            turnPlan.plantReferenceRotationDeltaDeg = rotationDifferenceDeg(
+                turnPlan.admittedFootRotation,
+                swing->plantedFootWorldRotation);
+            turnPlan.plannedTurnProgress = 1.0f;
+            turnPlan.committedForward = turnPlan.activeEndForward;
+            turnPlan.desiredHeadingError = remainingAfter;
+            turnPlan.activeHeadingPlan = false;
+
+            comp._physicalStepForward = turnPlan.activeEndForward;
+            comp._physicalStepRight = turnPlan.activeEndRight;
+            comp._gaitHeadingTargetRot = glm::normalize(
+                turnPlan.activeEndRotation);
+            rag.locomotionTargetRot = comp._gaitHeadingTargetRot;
+            const float committedYaw = std::atan2(
+                -comp._physicalStepForward.x,
+                -comp._physicalStepForward.z);
+            comp._yaw = committedYaw - glm::radians(comp.facingOffsetDeg);
+            comp._runtimeDesiredForward = turnPlan.desiredForward;
+
+            if (comp.debug) {
+                const bool errorDecreased = comp._gaitStopRequested
+                    || std::abs(remainingAfter)
+                        <= std::abs(remainingBefore) + glm::radians(0.01f);
+                spdlog::info(
+                    "[LocomotionTurnCommit] step={} swing={} outside={} "
+                    "yaw=(admitted={:+.3f},achieved={:+.3f})deg "
+                    "progress={:.3f} remaining=({:+.3f}->{:+.3f})deg "
+                    "decreased={} drift=(stance={:.3f},plant={:.3f})m "
+                    "referenceRotation=(stanceDelta={:.4f},plantDelta={:.4f})deg "
+                    "touchdown=(sole={:.1f}deg,angular={:.3f}radps,"
+                    "horizontal={:.3f}mps) "
+                    "swingPeak=(linear={:.3f},angular={:.3f})",
+                    comp._stepSequenceStepIndex,
+                    turnPlan.swingFootLeft ? "LEFT" : "RIGHT",
+                    turnPlan.outsideFoot ? "yes" : "no",
+                    glm::degrees(turnPlan.admittedYaw),
+                    glm::degrees(turnPlan.achievedYaw),
+                    turnPlan.achievedTurnProgress,
+                    glm::degrees(remainingBefore),
+                    glm::degrees(remainingAfter),
+                    errorDecreased ? "yes" : "NO",
+                    comp._physicalStepMaxStanceDrift,
+                    comp._physicalStepMaxPlantDrift,
+                    turnPlan.stanceReferenceRotationDeltaDeg,
+                    turnPlan.plantReferenceRotationDeltaDeg,
+                    turnPlan.touchdownSoleErrorDeg,
+                    turnPlan.touchdownAngularSpeed,
+                    turnPlan.touchdownHorizontalSpeed,
+                    turnPlan.achievedSwingSpeed,
+                    turnPlan.achievedAngularSpeed);
+            }
+        };
+
+        auto beginCommittedSupportTransport = [&]() {
+            glm::vec3 committedForward =
+                comp._gaitTurnPlan.committedForward;
+            committedForward.y = 0.0f;
+            if (glm::dot(committedForward, committedForward) < 1e-8f)
+                committedForward = comp._physicalStepForward;
+            committedForward = glm::normalize(committedForward);
+
+            glm::vec3 incomingVelocity =
+                comp._gaitSupportCommandVelocity;
+            incomingVelocity.y = 0.0f;
+            const float incomingSpeed = glm::length(incomingVelocity);
+            if (incomingSpeed > configuredSupportMaxSpeed
+                && incomingSpeed > 1e-6f) {
+                incomingVelocity *=
+                    configuredSupportMaxSpeed / incomingSpeed;
+            }
+            const float oldForwardComponent = glm::dot(
+                incomingVelocity, committedForward);
+            const float maximumTransportSpeed = glm::max(
+                glm::min(configuredSupportMaxSpeed, 0.10f), 0.03f);
+            const float transportSpeed = glm::clamp(
+                glm::max(oldForwardComponent,
+                         glm::min(comp.gaitDesiredSpeed, 0.10f)),
+                0.03f,
+                maximumTransportSpeed);
+            const glm::vec3 outgoingVelocity =
+                committedForward * transportSpeed;
+
+            // This segment begins at the exact committed command state. Its start tangent
+            // is therefore C1 with transfer, while its endpoint and cruise tangent are in
+            // the newly committed walking frame instead of the old foot-to-foot chord.
+            comp._gaitSupportCurveActive = true;
+            comp._gaitSupportCurveStep =
+                comp._stepSequenceStepIndex;
+            comp._gaitSupportCurveStart =
+                comp._physicalStepSupportTarget;
+            comp._gaitSupportCurveStartVelocity = incomingVelocity;
+            comp._gaitSupportCurveTime = 0.0f;
+            comp._gaitSupportCurveDuration = glm::max(
+                cadenceSwingTime + cadenceArrivalSettleTime, 0.30f);
+            comp._gaitSupportCurveEnd =
+                comp._gaitSupportCurveStart
+                + outgoingVelocity * comp._gaitSupportCurveDuration;
+            comp._gaitSupportCurveEnd.y =
+                comp._gaitSupportCurveStart.y;
+            comp._gaitSupportCurveEndVelocity = outgoingVelocity;
+
+            const glm::vec3 oldLateral = incomingVelocity
+                - committedForward * oldForwardComponent;
+            spdlog::info(
+                "[LocomotionGait] SUPPORT_TRANSPORT_REBASE step={} "
+                "heading=({:+.3f},{:+.3f}) duration={:.3f}s "
+                "velocity=({:+.3f},{:+.3f})->({:+.3f},{:+.3f})mps "
+                "oldLateral={:.3f}mps",
+                comp._stepSequenceStepIndex,
+                committedForward.x,
+                committedForward.z,
+                comp._gaitSupportCurveDuration,
+                incomingVelocity.x,
+                incomingVelocity.z,
+                outgoingVelocity.x,
+                outgoingVelocity.z,
+                glm::length(oldLateral));
         };
 
         auto abortSequence = [&](const char* reason) {
             if (comp._physicalStepPhase == kAbort || comp._physicalStepPhase == kIdle) return;
             const int abortedPhase = comp._physicalStepPhase;
+            if (continuousEnabled
+                && comp._gaitTurnPlan.candidateEvaluated) {
+                comp._gaitTurnPlan.actualContactHip =
+                    physicalPosition(swing->hipIdx);
+                comp._gaitTurnPlan.contactHipError =
+                    comp._gaitTurnPlan.actualContactHip
+                    - comp._gaitTurnPlan.predictedContactHip;
+            }
             // Once both feet are down, recover around the achieved world-space support
             // point. Returning to the step-entry COM made a successful-looking landing
             // slide backward before the abort became visible to the player.
@@ -2067,6 +3515,11 @@
             comp._physicalStepSettleTime = 0.0f;
             comp._physicalStepAirborneTime = 0.0f;
             if (continuousEnabled) {
+                comp._gaitTurnPlan.activeHeadingPlan = false;
+                comp._gaitTurnPairPendingInside = false;
+                comp._gaitTurnPairAdvanceScale = 1.0f;
+                comp._gaitTurnPairYawScale = 1.0f;
+                comp._gaitTurnPairYawSign = 0.0f;
                 comp._gaitRunning = false;
                 comp._gaitContinuousCycle = false;
                 comp._gaitBypassWeightShift = false;
@@ -2115,14 +3568,107 @@
                 comp._physicalStepContactLocal.x, comp._physicalStepContactLocal.y,
                 comp._physicalStepContactLocal.z, comp._physicalStepStanceDrift,
                 comp._physicalStepPlantDrift, tiltDeg);
+            if (continuousEnabled
+                && comp._gaitTurnPlan.candidateEvaluated) {
+                const auto& turnPlan = comp._gaitTurnPlan;
+                spdlog::warn(
+                    "[LocomotionTurnAbort] phase={} swing={} outside={} "
+                    "yaw={:+.3f}deg constraint={} "
+                    "pair=(applied={},advanceScale={:.3f},yawScale={:.3f},"
+                    "support={:.3f}mps,arrivalT={:.3f}) "
+                    "hip=(pred=({:+.3f},{:+.3f},{:+.3f}),"
+                    "actual=({:+.3f},{:+.3f},{:+.3f}),"
+                    "error=({:+.3f},{:+.3f},{:+.3f}))m "
+                    "swingSpeed=(required={:.3f},admitted={:.3f},"
+                    "limit={:.3f},achievedPeak={:.3f})mps "
+                    "angular=(required={:.3f},admitted={:.3f},limit={:.3f},"
+                    "achievedPeak={:.3f})radps "
+                    "governor=(trajectoryT={:.3f},linear={:.3f}mps,"
+                    "tracking={:.3f}m,angular={:.3f}radps,"
+                    "soleTracking={:.1f}deg,ankleClamp={:.1f}deg) "
+                    "ankle=(parentComp={:.1f}->{:.1f}deg,localStep={:.2f}deg,"
+                    "localRate={:.3f}radps,residual={:.1f}deg) "
+                    "jointAdmission=(scale={:.3f},requested=({:.1f},{:.1f},{:.1f})deg) "
+                    "counterfactual=(planClamp={:.1f}deg,bestClamp={:.1f}deg,"
+                    "bestSwivel={:+.1f}deg,closure={:.3f}m,accepted={},"
+                    "applied={:+.1f}deg,priority={:.2f},relaxed={:.1f}deg,"
+                    "swingReserve={:+.2f},twistMargin={:+.1f}deg) "
+                    "fk=(valid={},ik={:.3f}m/{:.1f}deg,"
+                    "motor={:.3f}m/{:.1f}deg,total={:.3f}m/{:.1f}deg) "
+                    "path=(length={:.3f}m,minimum={:.3f}s,deadline={:.3f}s)",
+                    abortedPhase,
+                    turnPlan.swingFootLeft ? "LEFT" : "RIGHT",
+                    turnPlan.outsideFoot ? "yes" : "no",
+                    glm::degrees(turnPlan.admittedYaw),
+                    TurnConstraintName(turnPlan.limitingConstraint),
+                    turnPlan.pairBudgetApplied ? "yes" : "no",
+                    turnPlan.pairAdvanceScale,
+                    turnPlan.pairYawScale,
+                    turnPlan.supportTransportSpeed,
+                    turnPlan.arrivalTrajectoryT,
+                    turnPlan.predictedContactHip.x,
+                    turnPlan.predictedContactHip.y,
+                    turnPlan.predictedContactHip.z,
+                    turnPlan.actualContactHip.x,
+                    turnPlan.actualContactHip.y,
+                    turnPlan.actualContactHip.z,
+                    turnPlan.contactHipError.x,
+                    turnPlan.contactHipError.y,
+                    turnPlan.contactHipError.z,
+                    turnPlan.requiredSwingSpeed,
+                    turnPlan.admittedSwingSpeed,
+                    turnPlan.swingSpeedLimit,
+                    turnPlan.achievedSwingSpeed,
+                    turnPlan.requiredAngularSpeed,
+                    turnPlan.admittedAngularSpeed,
+                    turnPlan.angularSpeedLimit,
+                    turnPlan.achievedAngularSpeed,
+                    comp._physicalStepTrajectoryT,
+                    comp._gaitSwingCommandSpeed,
+                    comp._gaitSwingCommandTrackingError,
+                    comp._gaitSwingCommandAngularSpeed,
+                    comp._gaitSwingSoleCommandErrorDeg,
+                    comp._gaitIkAnkleEnvelopeClampDeg,
+                    comp._gaitAnkleParentCompensationDeg,
+                    comp._gaitAnkleParentCompensationAppliedDeg,
+                    comp._gaitAnkleCommandDeltaDeg,
+                    comp._gaitAnkleCommandAngularSpeed,
+                    comp._gaitAnkleAchievableResidualDeg,
+                    comp._gaitCoherentJointScale,
+                    comp._gaitCoherentHipDeltaDeg,
+                    comp._gaitCoherentKneeDeltaDeg,
+                    comp._gaitCoherentAnkleDeltaDeg,
+                    turnPlan.sampledAnkleClampDeg,
+                    comp._gaitIkExactAnkleClampDeg,
+                    comp._gaitIkKneeSwivelRequestedDeg,
+                    comp._gaitIkKneeSwivelCandidateClosure,
+                    comp._gaitIkKneeSwivelCandidateAccepted ? "yes" : "no",
+                    comp._gaitIkKneeSwivelAppliedDeg,
+                    comp._gaitIkOrientationPriority,
+                    comp._gaitIkOrientationRelaxedDeg,
+                    comp._gaitIkAnkleSwingReserve,
+                    comp._gaitIkAnkleTwistMarginDeg,
+                    comp._gaitFkValid ? "yes" : "no",
+                    glm::length(comp._gaitFkDesiredToCommand),
+                    comp._gaitFkDesiredToCommandOrientationDeg,
+                    glm::length(comp._gaitFkCommandToPhysical),
+                    comp._gaitFkCommandToPhysicalOrientationDeg,
+                    glm::length(comp._gaitFkDesiredToPhysical),
+                    comp._gaitFkDesiredToPhysicalOrientationDeg,
+                    comp._gaitSwingPathLength,
+                    comp._gaitSwingMinimumDuration,
+                    comp._gaitSwingDeadline);
+            }
             if (continuousEnabled && comp._gaitIkPlanHipValid
-                && abortedPhase >= kTakeoff && abortedPhase <= kSettle) {
+                && abortedPhase >= kTakeoff
+                && abortedPhase <= kSupportReady) {
                 spdlog::warn(
                     "[LocomotionGait] IK_ABORT phase={} "
                     "reach=(requested={:.3f},clamped={:.3f},max={:.3f},physical={:.3f}) "
                     "reachShortfall=({:.3f}m,fwd={:+.3f}m) "
                     "hipMove=(fwd={:+.3f},lat={:+.3f},y={:+.3f})m "
-                    "hipEnvelopeClamp={:.1f}deg commandLag=(hip={:.1f},knee={:.1f})deg "
+                    "envelopeClamp=(hip={:.1f},ankle={:.1f})deg "
+                    "commandLag=(hip={:.1f},knee={:.1f})deg "
                     "kneeBend={:.1f}deg footError=(h={:.3f},fwd={:+.3f},lat={:+.3f})m "
                     "footControl=(corr={:.3f}m,fwd={:+.3f}m,"
                     "targetSpeed={:.3f}m/s,level={:.2f})",
@@ -2137,6 +3683,7 @@
                     comp._gaitIkHipTravelLateral,
                     comp._gaitIkHipTravelVertical,
                     comp._gaitIkHipEnvelopeClampDeg,
+                    comp._gaitIkAnkleEnvelopeClampDeg,
                     comp._gaitIkHipCommandLagDeg,
                     comp._gaitIkKneeCommandLagDeg,
                     comp._gaitIkKneeBendDeg,
@@ -2300,12 +3847,27 @@
             }
         }
 
+        const bool governedInsideTurnSwing = hasActiveTurnObjective()
+            && !comp._gaitTurnPlan.outsideFoot
+            && comp._gaitCancelMode == 0;
         const float takeoffHeight = glm::clamp(
             comp.takeoffHeight, 0.040f,
             glm::max(comp.swingHeight, 0.041f));
         glm::vec3 desiredFoot = comp._physicalStepSwingStart;
         if (comp._physicalStepPhase == kTakeoff) {
-            desiredFoot.y += takeoffHeight;
+            // The governed turn path owns a continuous Cartesian command. Jumping the
+            // sole target directly to takeoffHeight while independently filtering the
+            // three joint targets created 5-12 cm of desired-to-commanded FK error on the
+            // first TAKEOFF frame. Ramp the task-space lift instead; the coherent IK path
+            // below can then solve every intermediate sole pose exactly.
+            constexpr float kCoherentTakeoffRiseTime = 0.12f;
+            const float takeoffLift = governedInsideTurnSwing
+                ? takeoffHeight * smoothstep(glm::clamp(
+                    comp._physicalStepPhaseTime
+                        / kCoherentTakeoffRiseTime,
+                    0.0f, 1.0f))
+                : takeoffHeight;
+            desiredFoot.y += takeoffLift;
             const float releaseClearance = glm::max(0.040f, takeoffHeight * 0.75f);
             const bool recoverableTakeoffContact = continuousEnabled
                 && swingContactNow && comp._physicalStepClearance >= 0.040f;
@@ -2325,7 +3887,12 @@
                 // A high foot center with a live ground manifold means a toe or heel edge
                 // is still down. Keep the command vertical until that edge opens instead of
                 // feeding the contact into the forward swing trajectory.
-                desiredFoot.y += 0.025f;
+                const float recoveryLift = governedInsideTurnSwing
+                    ? 0.025f * smoothstep(glm::clamp(
+                        comp._gaitTakeoffContactRecoveryTime / 0.08f,
+                        0.0f, 1.0f))
+                    : 0.025f;
+                desiredFoot.y += recoveryLift;
             }
             const bool airborneEvidence = !swingContactNow
                 && comp._physicalStepClearance >= releaseClearance;
@@ -2385,6 +3952,120 @@
             return point;
         };
 
+        constexpr float kGovernedCommandAcceleration = 2.50f;
+        const float governedCommandSpeedLimit = glm::min(glm::max(
+            comp._gaitTurnPlan.admittedSwingSpeed, 0.45f), 0.80f);
+        auto sampledTrajectoryLength = [&](float startT, float endT,
+                                            const auto& commandPoint) {
+            constexpr int kSamples = 24;
+            float length = 0.0f;
+            glm::vec3 previous = commandPoint(startT);
+            for (int sample = 1; sample <= kSamples; ++sample) {
+                const float t = glm::mix(
+                    startT, endT,
+                    static_cast<float>(sample)
+                        / static_cast<float>(kSamples));
+                const glm::vec3 point = commandPoint(t);
+                length += glm::length(point - previous);
+                previous = point;
+            }
+            return length;
+        };
+        if (governedInsideTurnSwing) {
+            comp._gaitSwingPathLength = sampledTrajectoryLength(
+                0.0f, kSwingArrivalT, trajectoryPoint);
+            const float accelerationDistance =
+                governedCommandSpeedLimit * governedCommandSpeedLimit
+                / (2.0f * kGovernedCommandAcceleration);
+            comp._gaitSwingMinimumDuration =
+                comp._gaitSwingPathLength <= accelerationDistance
+                    ? std::sqrt(2.0f * comp._gaitSwingPathLength
+                        / kGovernedCommandAcceleration)
+                    : governedCommandSpeedLimit
+                            / kGovernedCommandAcceleration
+                        + (comp._gaitSwingPathLength
+                            - accelerationDistance)
+                            / governedCommandSpeedLimit;
+            // Retain the old safety window, but never make it shorter than the
+            // acceleration-limited time required by the actual 3D arc. The extra
+            // reserve covers tracking-tube deceleration without hiding a stalled foot.
+            const float existingDeadline = cadenceSwingTime
+                + glm::max(comp.arrivalTimeout, 0.25f);
+            const float derivedDeadline =
+                comp._gaitSwingMinimumDuration
+                + glm::max(2.0f * cadenceArrivalSettleTime, 0.08f);
+            comp._gaitSwingDeadline = glm::max(
+                existingDeadline, derivedDeadline);
+        }
+        auto moveScalarToward = [](float current, float target,
+                                   float maximumDelta) {
+            if (current < target)
+                return glm::min(current + maximumDelta, target);
+            return glm::max(current - maximumDelta, target);
+        };
+        auto advanceGovernedSwingCommand = [&](float ceilingT, float brakeT,
+                                                const auto& commandPoint) {
+            const float currentT = glm::clamp(
+                comp._physicalStepTrajectoryT, 0.0f, 1.0f);
+            ceilingT = glm::clamp(ceilingT, currentT, 1.0f);
+            brakeT = glm::clamp(brakeT, ceilingT, 1.0f);
+            const glm::vec3 currentCommand = commandPoint(currentT);
+            const glm::vec3 brakingEndpoint = commandPoint(brakeT);
+
+            // The trajectory clock is subordinate to physical tracking for the inside
+            // foot. Full authority is retained inside 2.5 cm; beyond that, command speed
+            // falls smoothly to zero by 7 cm so the plant is never asked to chase an
+            // ever-receding target.
+            comp._gaitSwingCommandTrackingError = glm::length(
+                swingFoot - currentCommand);
+            constexpr float kTrackingTubeInner = 0.025f;
+            constexpr float kTrackingTubeOuter = 0.070f;
+            const float trackingScale = 1.0f - smoothstep(
+                (comp._gaitSwingCommandTrackingError - kTrackingTubeInner)
+                    / (kTrackingTubeOuter - kTrackingTubeInner));
+
+            const float brakingDistance = glm::length(
+                brakingEndpoint - currentCommand);
+            const float brakingSpeed = std::sqrt(glm::max(
+                2.0f * kGovernedCommandAcceleration
+                    * brakingDistance,
+                0.0f));
+            const float desiredSpeed = glm::min(
+                governedCommandSpeedLimit, brakingSpeed)
+                * trackingScale;
+            comp._gaitSwingCommandSpeed = moveScalarToward(
+                comp._gaitSwingCommandSpeed, desiredSpeed,
+                kGovernedCommandAcceleration * dt);
+
+            const float distanceBudget = glm::max(
+                comp._gaitSwingCommandSpeed * dt, 0.0f);
+            float admittedT = currentT;
+            if (ceilingT > currentT + 1e-6f && distanceBudget > 1e-7f) {
+                if (glm::length(commandPoint(ceilingT) - currentCommand)
+                        <= distanceBudget) {
+                    admittedT = ceilingT;
+                } else {
+                    // Arc length has no closed form for this trajectory. A bounded search
+                    // gives a deterministic parameter increment whose chord cannot exceed
+                    // the acceleration-limited command distance for this frame.
+                    float low = currentT;
+                    float high = ceilingT;
+                    for (int iteration = 0; iteration < 12; ++iteration) {
+                        const float candidateT = 0.5f * (low + high);
+                        const float candidateDistance = glm::length(
+                            commandPoint(candidateT) - currentCommand);
+                        if (candidateDistance <= distanceBudget)
+                            low = candidateT;
+                        else
+                            high = candidateT;
+                    }
+                    admittedT = low;
+                }
+            }
+            comp._physicalStepTrajectoryT = admittedT;
+            return commandPoint(admittedT);
+        };
+
         const float arrivalTolerance = glm::max(
             comp.arrivalTolerance,
             continuousEnabled ? 0.025f : 0.01f);
@@ -2407,6 +4088,20 @@
         auto acceptTouchdown = [&]() {
             comp._physicalStepTouchdownAccepted = true;
             comp._physicalStepTouchdownPlant = swingFoot;
+            auto& turnPlan = comp._gaitTurnPlan;
+            turnPlan.touchdownSoleErrorDeg = comp._gaitSoleAngularErrorDeg;
+            turnPlan.touchdownAngularSpeed = swingAngularVelocityOk
+                ? glm::length(swingAngularVelocity) : 0.0f;
+            turnPlan.touchdownHorizontalSpeed = glm::length(glm::vec2(
+                swingVelocity.x, swingVelocity.z));
+            turnPlan.actualContactHip = physicalPosition(swing->hipIdx);
+            turnPlan.contactHipError =
+                turnPlan.actualContactHip - turnPlan.predictedContactHip;
+            const glm::quat admittedPlantRotation =
+                !continuousEnabled || comp._gaitCancelMode == 1
+                ? glm::normalize(swing->plantedFootWorldRotation)
+                : glm::normalize(comp._gaitTurnPlan.admittedFootRotation);
+            swing->plantedFootWorldRotation = admittedPlantRotation;
             comp._physicalStepTouchdownContactValid = swingContactNow
                 && swingRotationOk
                 && std::isfinite(contactPoint.x)
@@ -2422,7 +4117,7 @@
                 // floor while also holding the body center fixed.
                 swing->plantFoot =
                     comp._physicalStepTouchdownContactWorld
-                    - nominalFootWorldRotation(*swing)
+                    - admittedPlantRotation
                         * comp._physicalStepTouchdownContactLocal;
             } else {
                 swing->plantFoot = swingFoot;
@@ -2477,7 +4172,8 @@
             spdlog::info(
                 "[LocomotionGait] TOUCHDOWN_ANCHOR step={} plant={} valid={} "
                 "contactLocal=({:+.3f},{:+.3f},{:+.3f}) "
-                "centerComp={:.3f}m sole={:.1f}deg",
+                "centerComp={:.3f}m sole={:.1f}deg "
+                "motion=(horizontal={:.3f}mps,angular={:.3f}radps)",
                 comp._stepSequenceStepIndex,
                 comp._physicalStepSupportSide < 0 ? "RIGHT" : "LEFT",
                 comp._physicalStepTouchdownContactValid ? "yes" : "NO",
@@ -2485,7 +4181,80 @@
                 comp._physicalStepTouchdownContactLocal.y,
                 comp._physicalStepTouchdownContactLocal.z,
                 pivotCenterShift,
-                comp._gaitSoleAngularErrorDeg);
+                turnPlan.touchdownSoleErrorDeg,
+                turnPlan.touchdownHorizontalSpeed,
+                turnPlan.touchdownAngularSpeed);
+            if (continuousEnabled && turnPlan.candidateEvaluated) {
+                spdlog::info(
+                    "[LocomotionTurnContact] step={} swing={} outside={} "
+                    "hip=(pred=({:+.3f},{:+.3f},{:+.3f}),"
+                    "actual=({:+.3f},{:+.3f},{:+.3f}),"
+                    "error=({:+.3f},{:+.3f},{:+.3f}))m "
+                    "swingSpeed=(required={:.3f},admitted={:.3f},"
+                    "limit={:.3f},achievedPeak={:.3f},touchdown={:.3f})mps "
+                    "angular=(required={:.3f},admitted={:.3f},limit={:.3f},"
+                    "achievedPeak={:.3f},touchdown={:.3f})radps "
+                    "governor=(linear={:.3f}mps,tracking={:.3f}m,"
+                    "angular={:.3f}radps,soleTracking={:.1f}deg,"
+                    "ankleClamp={:.1f}deg) "
+                    "ankle=(parentComp={:.1f}->{:.1f}deg,localStep={:.2f}deg,"
+                    "localRate={:.3f}radps,residual={:.1f}deg) "
+                    "counterfactual=(planClamp={:.1f}deg,bestClamp={:.1f}deg,"
+                    "bestSwivel={:+.1f}deg,closure={:.3f}m,accepted={},"
+                    "applied={:+.1f}deg,priority={:.2f},relaxed={:.1f}deg,"
+                    "swingReserve={:+.2f},twistMargin={:+.1f}deg) "
+                    "fk=(valid={},ik={:.3f}m/{:.1f}deg,"
+                    "motor={:.3f}m/{:.1f}deg,total={:.3f}m/{:.1f}deg)",
+                    comp._stepSequenceStepIndex,
+                    turnPlan.swingFootLeft ? "LEFT" : "RIGHT",
+                    turnPlan.outsideFoot ? "yes" : "no",
+                    turnPlan.predictedContactHip.x,
+                    turnPlan.predictedContactHip.y,
+                    turnPlan.predictedContactHip.z,
+                    turnPlan.actualContactHip.x,
+                    turnPlan.actualContactHip.y,
+                    turnPlan.actualContactHip.z,
+                    turnPlan.contactHipError.x,
+                    turnPlan.contactHipError.y,
+                    turnPlan.contactHipError.z,
+                    turnPlan.requiredSwingSpeed,
+                    turnPlan.admittedSwingSpeed,
+                    turnPlan.swingSpeedLimit,
+                    turnPlan.achievedSwingSpeed,
+                    turnPlan.touchdownHorizontalSpeed,
+                    turnPlan.requiredAngularSpeed,
+                    turnPlan.admittedAngularSpeed,
+                    turnPlan.angularSpeedLimit,
+                    turnPlan.achievedAngularSpeed,
+                    turnPlan.touchdownAngularSpeed,
+                    comp._gaitSwingCommandSpeed,
+                    comp._gaitSwingCommandTrackingError,
+                    comp._gaitSwingCommandAngularSpeed,
+                    comp._gaitSwingSoleCommandErrorDeg,
+                    comp._gaitIkAnkleEnvelopeClampDeg,
+                    comp._gaitAnkleParentCompensationDeg,
+                    comp._gaitAnkleParentCompensationAppliedDeg,
+                    comp._gaitAnkleCommandDeltaDeg,
+                    comp._gaitAnkleCommandAngularSpeed,
+                    comp._gaitAnkleAchievableResidualDeg,
+                    turnPlan.sampledAnkleClampDeg,
+                    comp._gaitIkExactAnkleClampDeg,
+                    comp._gaitIkKneeSwivelRequestedDeg,
+                    comp._gaitIkKneeSwivelCandidateClosure,
+                    comp._gaitIkKneeSwivelCandidateAccepted ? "yes" : "no",
+                    comp._gaitIkKneeSwivelAppliedDeg,
+                    comp._gaitIkOrientationPriority,
+                    comp._gaitIkOrientationRelaxedDeg,
+                    comp._gaitIkAnkleSwingReserve,
+                    comp._gaitIkAnkleTwistMarginDeg,
+                    comp._gaitFkValid ? "yes" : "no",
+                    glm::length(comp._gaitFkDesiredToCommand),
+                    comp._gaitFkDesiredToCommandOrientationDeg,
+                    glm::length(comp._gaitFkCommandToPhysical),
+                    comp._gaitFkCommandToPhysicalOrientationDeg,
+                    glm::length(comp._gaitFkDesiredToPhysical),
+                    comp._gaitFkDesiredToPhysicalOrientationDeg);
+            }
             comp._supportTransferTransferStartTarget =
                 comp._physicalStepSupportTarget;
             constexpr float kPlantAcquireSupportFraction = 0.20f;
@@ -2497,41 +4266,24 @@
             comp._supportTransferTransferEndTarget.y =
                 comp._physicalStepSupportTarget.y;
             if (continuousEnabled && comp._gaitSupportCurveActive) {
-                // Replace the predicted foothold with a partial-load target around the
-                // actual collision-supported plant. Preserve current position and velocity,
-                // but do not pull the COM through the full handoff until the sole has proved
-                // stable. Plant acquisition performs the second C1 re-seed.
-                glm::vec3 incomingVelocity =
-                    comp._gaitSupportCommandVelocity;
-                incomingVelocity.y = 0.0f;
+                // Freeze the pre-contact preload at its current command. SETTLE owns the
+                // impact pivot and SUPPORT_READY owns the captured sole center; neither
+                // state is allowed to advance load. beginTransfer() performs the next C1
+                // seed only after the explicit ownership proof succeeds.
                 comp._gaitSupportCurveStart =
                     comp._physicalStepSupportTarget;
-                comp._gaitSupportCurveStartVelocity = incomingVelocity;
-                comp._gaitSupportCurveEnd =
-                    comp._supportTransferTransferEndTarget;
-                comp._gaitSupportCurveEnd.y =
-                    comp._gaitSupportCurveStart.y;
+                comp._gaitSupportCurveEnd = comp._gaitSupportCurveStart;
+                comp._gaitSupportCurveStartVelocity = glm::vec3(0.0f);
+                comp._gaitSupportCurveEndVelocity = glm::vec3(0.0f);
+                comp._gaitSupportCommandVelocity = glm::vec3(0.0f);
                 comp._gaitSupportCurveTime = 0.0f;
-                comp._gaitSupportCurveDuration = glm::max(
-                    cadencePlantAcquireTime + cadenceTransferTime * 1.50f,
-                    0.45f);
-                const float remainingForward = glm::max(glm::dot(
-                    comp._gaitSupportCurveEnd - comp._gaitSupportCurveStart,
-                    comp._physicalStepForward), 0.0f);
-                const float outgoingSpeed = glm::clamp(
-                    0.25f * remainingForward
-                        / comp._gaitSupportCurveDuration,
-                    0.03f, 0.10f);
-                comp._gaitSupportCurveEndVelocity =
-                    comp._physicalStepForward * outgoingSpeed;
+                comp._gaitSupportCurveDuration = 0.0f;
                 spdlog::info(
                     "[LocomotionGait] SUPPORT_CURVE_CONTACT step={} "
-                    "mode=plant-acquire fraction={:.2f} duration={:.3f}s "
-                    "incomingSpeed={:.3f} load={:.2f}",
+                    "mode=hold-for-ownership fraction={:.2f} "
+                    "supportSpeed=0.000 load={:.2f}",
                     comp._stepSequenceStepIndex,
                     kPlantAcquireSupportFraction,
-                    comp._gaitSupportCurveDuration,
-                    glm::length(incomingVelocity),
                     comp._gaitNewSupportLoad);
             }
             comp._physicalStepPhase = kSettle;
@@ -2561,11 +4313,48 @@
                 comp._physicalStepHorizontalTargetError <= horizontalTolerance;
             const bool verticalOk =
                 comp._physicalStepVerticalTargetError <= verticalTolerance;
-            const float soleToleranceDeg = continuousEnabled ? 15.0f : 180.0f;
+            const bool turnTouchdown = hasActiveTurnObjective();
+            const float soleToleranceDeg = continuousEnabled
+                ? (turnTouchdown ? 10.0f : 15.0f) : 180.0f;
             const bool soleOk = !continuousEnabled
                 || comp._gaitSoleAngularErrorDeg <= soleToleranceDeg;
+            const float touchdownHorizontalSpeed = glm::length(glm::vec2(
+                swingVelocity.x, swingVelocity.z));
+            const float touchdownAngularSpeed = swingAngularVelocityOk
+                ? glm::length(swingAngularVelocity) : 0.0f;
+            const bool turnAngularReady = !turnTouchdown
+                || (swingAngularVelocityOk
+                    && touchdownAngularSpeed <= 0.75f);
+            const bool turnLinearReady = !turnTouchdown
+                || touchdownHorizontalSpeed <= 0.12f;
+            auto& turnPlan = comp._gaitTurnPlan;
+            turnPlan.touchdownSoleErrorDeg = comp._gaitSoleAngularErrorDeg;
+            turnPlan.touchdownAngularSpeed = touchdownAngularSpeed;
+            turnPlan.touchdownHorizontalSpeed = touchdownHorizontalSpeed;
+            const bool geometricTouchdownReady = progressOk && normalOk
+                && velocityOk && horizontalOk && verticalOk;
+            if (turnTouchdown && geometricTouchdownReady
+                && (!soleOk || !turnAngularReady || !turnLinearReady)
+                && !turnPlan.touchdownReadinessBlockedLogged) {
+                turnPlan.touchdownReadinessBlockedLogged = true;
+                spdlog::info(
+                    "[LocomotionTurnTouchdown] step={} stage={} action=WAIT "
+                    "sole={:.1f}/{:.1f}deg[{}] "
+                    "angular={:.3f}/0.750radps[{}] "
+                    "horizontal={:.3f}/0.120mps[{}]",
+                    comp._stepSequenceStepIndex,
+                    stage,
+                    comp._gaitSoleAngularErrorDeg,
+                    soleToleranceDeg,
+                    soleOk ? "ok" : "BLOCK",
+                    touchdownAngularSpeed,
+                    turnAngularReady ? "ok" : "BLOCK",
+                    touchdownHorizontalSpeed,
+                    turnLinearReady ? "ok" : "BLOCK");
+            }
             if (progressOk && normalOk && velocityOk && horizontalOk
-                && verticalOk && soleOk) {
+                && verticalOk && soleOk
+                && turnAngularReady && turnLinearReady) {
                 acceptTouchdown();
             }
         };
@@ -2577,8 +4366,14 @@
             const float swingProgress = glm::clamp(
                 comp._physicalStepPhaseTime / activeSwingTime,
                 0.0f, 1.0f);
-            comp._physicalStepTrajectoryT = kSwingArrivalT * swingProgress;
-            desiredFoot = trajectoryPoint(comp._physicalStepTrajectoryT);
+            const float swingCeilingT = kSwingArrivalT * swingProgress;
+            if (governedInsideTurnSwing) {
+                desiredFoot = advanceGovernedSwingCommand(
+                    swingCeilingT, 0.82f, trajectoryPoint);
+            } else {
+                comp._physicalStepTrajectoryT = swingCeilingT;
+                desiredFoot = trajectoryPoint(comp._physicalStepTrajectoryT);
+            }
             // Accumulate the arrival confidence during the final approach. A well-tracked
             // step can therefore cross the ARRIVAL milestone without an artificial pose
             // hold; a lagging or misaligned sole still receives the existing bounded wait.
@@ -2607,9 +4402,16 @@
                 if (earlySwingContact)
                     abortSequence("swing contacted before hover arrival");
             }
-            if (comp._physicalStepPhase == kSwing && swingProgress >= 1.0f) {
+            const bool swingTrajectoryComplete = governedInsideTurnSwing
+                ? comp._physicalStepTrajectoryT
+                    >= kSwingArrivalT - 1e-4f
+                : swingProgress >= 1.0f;
+            if (comp._physicalStepPhase == kSwing
+                && swingTrajectoryComplete) {
+                comp._physicalStepTrajectoryT = kSwingArrivalT;
                 comp._physicalStepPhase = kArrival;
                 comp._physicalStepPhaseTime = 0.0f;
+                comp._gaitTurnPlan.arrivalTrajectoryT = kSwingArrivalT;
                 // The shared trajectory has only completed its approach landmark here;
                 // horizontal motion intentionally continues through descent.  Snapping
                 // to hoverTarget moved the foot all the way to the foothold for one frame,
@@ -2617,10 +4419,67 @@
                 // resulting forward/back velocity impulse grew with every planned step
                 // and destabilized the following plant.
                 desiredFoot = trajectoryPoint(kSwingArrivalT);
+            } else if (comp._physicalStepPhase == kSwing
+                       && governedInsideTurnSwing
+                       && comp._physicalStepPhaseTime
+                            >= comp._gaitSwingDeadline) {
+                spdlog::warn(
+                    "[LocomotionTurnGovernor] step={} stage=SWING action=TIMEOUT "
+                    "trajectoryT={:.3f}/{:.3f} commandSpeed={:.3f}mps "
+                    "trackingError={:.3f}m path={:.3f}m "
+                    "minimum={:.3f}s deadline={:.3f}s",
+                    comp._stepSequenceStepIndex,
+                    comp._physicalStepTrajectoryT,
+                    kSwingArrivalT,
+                    comp._gaitSwingCommandSpeed,
+                    comp._gaitSwingCommandTrackingError,
+                    comp._gaitSwingPathLength,
+                    comp._gaitSwingMinimumDuration,
+                    comp._gaitSwingDeadline);
+                abortSequence(
+                    "inside-turn swing command could not reach arrival landmark");
             }
         } else if (comp._physicalStepPhase == kArrival) {
-            comp._physicalStepTrajectoryT = kSwingArrivalT;
-            desiredFoot = trajectoryPoint(comp._physicalStepTrajectoryT);
+            const bool insideTurnArrival =
+                hasActiveTurnObjective()
+                && !comp._gaitTurnPlan.outsideFoot
+                && comp._gaitCancelMode == 0;
+            if (insideTurnArrival) {
+                // ARRIVAL used to pin a lagging inside sole at t=0.70 while the
+                // pelvis kept moving.  Crawl a bounded additional 12 percent of
+                // the horizontal path at hover height so convergence keeps making
+                // progress without turning the timeout into extra free time.
+                const float arrivalWindow = glm::max(
+                    comp.arrivalTimeout, 0.25f);
+                // Reach the crawl endpoint before the unchanged timeout so the full-pose
+                // gate has time to accumulate its required quiet interval. Previously the
+                // ceiling first reached t=0.82 on the same frame that timeout fired.
+                const float stabilityReserve = glm::max(
+                    cadenceArrivalSettleTime + 2.0f * dt, 0.06f);
+                const float crawlBudget = glm::max(
+                    arrivalWindow - stabilityReserve, 0.05f);
+                const float crawlProgress = smoothstep(glm::clamp(
+                    comp._physicalStepPhaseTime
+                        / glm::max(crawlBudget, 0.01f),
+                    0.0f, 1.0f));
+                const float crawlCeilingT = glm::mix(
+                    kSwingArrivalT, 0.82f, crawlProgress);
+                auto hoverTrajectoryPoint = [&](float t) {
+                    glm::vec3 point = trajectoryPoint(t);
+                    point.y = hoverTarget.y;
+                    return point;
+                };
+                desiredFoot = advanceGovernedSwingCommand(
+                    crawlCeilingT, 0.82f, hoverTrajectoryPoint);
+                comp._gaitTurnPlan.arrivalTrajectoryT =
+                    comp._physicalStepTrajectoryT;
+            } else {
+                comp._gaitTurnPlan.arrivalTrajectoryT = kSwingArrivalT;
+                comp._physicalStepTrajectoryT =
+                    comp._gaitTurnPlan.arrivalTrajectoryT;
+                desiredFoot = trajectoryPoint(
+                    comp._physicalStepTrajectoryT);
+            }
             const float arrivalVerticalError = std::abs(
                 swingFoot.y - hoverTarget.y);
             const bool soleAligned = !continuousEnabled
@@ -2652,10 +4511,13 @@
                 }
                 comp._gaitSwingRecontactTime = 0.0f;
             }
-            const bool arrivalMilestoneReady = continuousEnabled
-                ? soleAligned
-                : comp._physicalStepArrivalStableTime
-                    >= cadenceArrivalSettleTime;
+            const bool arrivalMilestoneReady = insideTurnArrival
+                ? comp._physicalStepArrivalStableTime
+                    >= cadenceArrivalSettleTime
+                : (continuousEnabled
+                    ? soleAligned
+                    : comp._physicalStepArrivalStableTime
+                        >= cadenceArrivalSettleTime);
             if (comp._physicalStepPhase == kArrival && !swingContactNow
                 && arrivalMilestoneReady) {
                 // The ordinary gait keeps one immutable trajectory through descent, so
@@ -2667,6 +4529,7 @@
                 comp._physicalStepPhase = kDescent;
                 comp._physicalStepPhaseTime = 0.0f;
             } else if (comp._physicalStepPhase == kArrival && !swingContactNow
+                       && !hasActiveTurnObjective()
                        && comp._physicalStepPhaseTime >= glm::max(
                            cadenceArrivalSettleTime, 0.03f)
                        && comp._physicalStepClearance >= 0.040f) {
@@ -2679,11 +4542,13 @@
                 comp._physicalStepPhaseTime = 0.0f;
             } else if (comp._physicalStepPhase == kArrival && !swingContactNow
                        && comp._physicalStepPhaseTime >= glm::max(
-                           comp.arrivalTimeout, 0.10f)) {
+                           comp.arrivalTimeout,
+                           hasActiveTurnObjective() ? 0.25f : 0.10f)) {
                 spdlog::warn(
                     "[LocomotionStep] ARRIVAL_CHECK result=FAIL horizontal={:.3f}/{:.3f}[{}] "
                     "hoverY={:.3f}/0.025[{}] stable={:.3f}/{:.3f}s[{}] "
-                    "soleError={:.1f}/{:.1f}[{}] fwd={:+.3f} lat={:+.3f}",
+                    "soleError={:.1f}/{:.1f}[{}] fwd={:+.3f} lat={:+.3f} "
+                    "trajectoryT={:.3f} pairApplied={}",
                     comp._physicalStepHorizontalTargetError, arrivalTolerance,
                     comp._physicalStepHorizontalTargetError <= arrivalTolerance ? "ok" : "FAIL",
                     arrivalVerticalError,
@@ -2696,20 +4561,55 @@
                     kSoleArrivalToleranceDeg,
                     soleAligned ? "ok" : "FAIL",
                     comp._physicalStepForwardTargetError,
-                    comp._physicalStepLateralTargetError);
+                    comp._physicalStepLateralTargetError,
+                    comp._gaitTurnPlan.arrivalTrajectoryT,
+                    comp._gaitTurnPlan.pairBudgetApplied ? "yes" : "no");
                 abortSequence("swing foot could not retain safe clearance before descent");
             }
         } else if (comp._physicalStepPhase == kDescent) {
-            const float descentProgress = glm::clamp(
+            const float descentClockProgress = glm::clamp(
                 comp._physicalStepPhaseTime / cadenceDescentTime,
                 0.0f, 1.0f);
-            comp._physicalStepTrajectoryT = kSwingArrivalT
-                + (1.0f - kSwingArrivalT) * descentProgress;
-            desiredFoot = comp._gaitCancelMode != 0
-                ? glm::mix(comp._physicalStepArcStart,
-                           comp._physicalStepFoothold,
-                           smoothstep(descentProgress))
-                : trajectoryPoint(comp._physicalStepTrajectoryT);
+            const bool insideTurnDescent =
+                hasActiveTurnObjective()
+                && !comp._gaitTurnPlan.outsideFoot
+                && comp._gaitCancelMode == 0;
+            const float descentStartT = insideTurnDescent
+                ? glm::clamp(comp._gaitTurnPlan.arrivalTrajectoryT,
+                             kSwingArrivalT, 0.82f)
+                : kSwingArrivalT;
+            if (insideTurnDescent) {
+                auto descentTrajectoryPoint = [&](float t) {
+                    glm::vec3 point = trajectoryPoint(t);
+                    const float progress = glm::clamp(
+                        (t - descentStartT)
+                            / glm::max(1.0f - descentStartT, 1e-4f),
+                        0.0f, 1.0f);
+                    point.y = glm::mix(
+                        hoverTarget.y,
+                        comp._physicalStepFoothold.y,
+                        smoothstep(progress));
+                    return point;
+                };
+                const float descentCeilingT = glm::mix(
+                    descentStartT, 1.0f, descentClockProgress);
+                desiredFoot = advanceGovernedSwingCommand(
+                    descentCeilingT, 1.0f, descentTrajectoryPoint);
+            } else {
+                comp._physicalStepTrajectoryT = descentStartT
+                    + (1.0f - descentStartT) * descentClockProgress;
+                desiredFoot = comp._gaitCancelMode != 0
+                    ? glm::mix(comp._physicalStepArcStart,
+                               comp._physicalStepFoothold,
+                               smoothstep(descentClockProgress))
+                    : trajectoryPoint(comp._physicalStepTrajectoryT);
+            }
+            const float descentProgress = insideTurnDescent
+                ? glm::clamp(
+                    (comp._physicalStepTrajectoryT - descentStartT)
+                        / glm::max(1.0f - descentStartT, 1e-4f),
+                    0.0f, 1.0f)
+                : descentClockProgress;
             if (swingContactNow) {
                 // Solver contact is reported before the newly landed sole has dissipated
                 // its approach velocity. Keep validating on subsequent frames instead of
@@ -2721,6 +4621,21 @@
                 comp._physicalStepPhase = kTouchdownWait;
                 comp._physicalStepPhaseTime = 0.0f;
                 desiredFoot = comp._physicalStepFoothold;
+            } else if (comp._physicalStepPhase == kDescent
+                       && insideTurnDescent
+                       && comp._physicalStepPhaseTime
+                            >= cadenceDescentTime
+                                + glm::max(comp.plantTimeout, 0.25f)) {
+                spdlog::warn(
+                    "[LocomotionTurnGovernor] step={} stage=DESCENT action=TIMEOUT "
+                    "trajectoryT={:.3f}/1.000 commandSpeed={:.3f}mps "
+                    "trackingError={:.3f}m",
+                    comp._stepSequenceStepIndex,
+                    comp._physicalStepTrajectoryT,
+                    comp._gaitSwingCommandSpeed,
+                    comp._gaitSwingCommandTrackingError);
+                abortSequence(
+                    "inside-turn descent command could not reach foothold");
             }
         } else if (comp._physicalStepPhase == kTouchdownWait) {
             comp._physicalStepTrajectoryT = 1.0f;
@@ -2730,7 +4645,65 @@
             }
             if (comp._physicalStepPhase == kTouchdownWait
                 && comp._physicalStepPhaseTime
-                    >= glm::max(comp.plantTimeout, 0.10f)) {
+                    >= glm::max(comp.plantTimeout,
+                        hasActiveTurnObjective() ? 0.25f : 0.10f)) {
+                if (hasActiveTurnObjective()) {
+                    const float minNormalY = glm::clamp(
+                        comp.touchdownMinNormalY, 0.35f, 1.0f);
+                    const float maxVerticalSpeed = glm::max(
+                        comp.touchdownMaxVerticalSpeed, 0.30f);
+                    const float horizontalTolerance = glm::max(
+                        comp.footTargetTolerance,
+                        glm::max(comp.gaitMaxFootCorrection, 0.01f));
+                    constexpr float kVerticalTolerance = 0.035f;
+                    constexpr float kSoleToleranceDeg = 10.0f;
+                    const float finalHorizontalSpeed = glm::length(glm::vec2(
+                        swingVelocity.x, swingVelocity.z));
+                    const float finalAngularSpeed = swingAngularVelocityOk
+                        ? glm::length(swingAngularVelocity) : 0.0f;
+                    spdlog::warn(
+                        "[LocomotionTurnTouchdown] step={} stage=TOUCHDOWN_WAIT "
+                        "action=TIMEOUT role={} pairApplied={} "
+                        "gates=(contact={};normal={:.3f}/{:.3f}[{}];"
+                        "verticalSpeed={:+.3f}/{:.3f}[{}];"
+                        "targetHorizontal={:.3f}/{:.3f}[{}];"
+                        "targetVertical={:.3f}/{:.3f}[{}];"
+                        "sole={:.1f}/{:.1f}[{}];"
+                        "angular={:.3f}/0.750[{}];"
+                        "linear={:.3f}/0.120[{}])",
+                        comp._stepSequenceStepIndex,
+                        comp._gaitTurnPlan.outsideFoot
+                            ? "outside" : "inside",
+                        comp._gaitTurnPlan.pairBudgetApplied ? "yes" : "no",
+                        swingContactNow ? "yes" : "NO",
+                        contactNormal.y, minNormalY,
+                        contactNormal.y >= minNormalY ? "ok" : "BLOCK",
+                        swingVelocity.y, maxVerticalSpeed,
+                        std::abs(swingVelocity.y) <= maxVerticalSpeed
+                            ? "ok" : "BLOCK",
+                        comp._physicalStepHorizontalTargetError,
+                        horizontalTolerance,
+                        comp._physicalStepHorizontalTargetError
+                                <= horizontalTolerance
+                            ? "ok" : "BLOCK",
+                        comp._physicalStepVerticalTargetError,
+                        kVerticalTolerance,
+                        comp._physicalStepVerticalTargetError
+                                <= kVerticalTolerance
+                            ? "ok" : "BLOCK",
+                        comp._gaitSoleAngularErrorDeg,
+                        kSoleToleranceDeg,
+                        comp._gaitSoleAngularErrorDeg
+                                <= kSoleToleranceDeg
+                            ? "ok" : "BLOCK",
+                        finalAngularSpeed,
+                        swingAngularVelocityOk
+                                && finalAngularSpeed <= 0.75f
+                            ? "ok" : "BLOCK",
+                        finalHorizontalSpeed,
+                        finalHorizontalSpeed <= 0.12f
+                            ? "ok" : "BLOCK");
+                }
                 abortSequence("touchdown contact timed out");
             }
         } else if (comp._physicalStepPhase >= kSettle
@@ -2788,13 +4761,16 @@
         comp._physicalStepPlantUnsafeTime = growingUnacquiredPlantSlip
             ? comp._physicalStepPlantUnsafeTime + dt : 0.0f;
 
-        if (comp._physicalStepPhase >= kTakeoff && comp._physicalStepPhase <= kSettle
+        if (comp._physicalStepPhase >= kTakeoff
+            && comp._physicalStepPhase <= kSupportReady
             && !stanceContactNow) {
             abortSequence("stance contact was lost");
-        } else if (comp._physicalStepPhase >= kTakeoff && comp._physicalStepPhase <= kSettle
+        } else if (comp._physicalStepPhase >= kTakeoff
+                   && comp._physicalStepPhase <= kSupportReady
                    && comp._physicalStepStanceDrift > 0.040f) {
             abortSequence("stance foot exceeded 4 cm drift");
-        } else if (comp._physicalStepPhase >= kTakeoff && comp._physicalStepPhase <= kSettle
+        } else if (comp._physicalStepPhase >= kTakeoff
+                   && comp._physicalStepPhase <= kSupportReady
                    && tiltDeg >= 30.0f) {
             abortSequence("tilt reached 30 degrees");
         } else if (comp._physicalStepPhase == kSwing
@@ -2823,7 +4799,8 @@
                 comp._gaitPlantCorrectionPeakApplied,
                 comp._gaitPlantCorrectionSaturated ? "yes" : "no");
             abortSequence("new plant remained beyond 4 cm while still sliding");
-        } else if (comp._physicalStepPhase == kSettle
+        } else if ((comp._physicalStepPhase == kSettle
+                    || comp._physicalStepPhase == kSupportReady)
                    && comp._physicalStepPlantPoseCaptured
                    && comp._physicalStepPlantDrift > 0.040f) {
             abortSequence("new plant exceeded 4 cm drift");
@@ -2902,7 +4879,11 @@
         // deepest point can migrate from heel to toe; continuing to pull the original
         // material point back to the impact patch is positive feedback for rocking.
         constexpr float kPlantPivotQuietTime = 0.08f;
-        constexpr float kPlantPivotSoleToleranceDeg = 8.0f;
+        // A quiet 9-11 degree sole was already accepted as loaded support below, but the
+        // impact-pivot stage required 8 degrees and therefore had no legal path to that
+        // accepted state. Use one ownership angle throughout the handoff. Contact, angular
+        // speed, linear speed, and the full quiet interval remain independent requirements.
+        constexpr float kPlantOwnershipSoleToleranceDeg = 12.0f;
         constexpr float kPlantPivotAngularSpeedLimit = 0.75f;
         constexpr float kPlantPivotLinearSpeedLimit = 0.12f;
         constexpr float kPlantPivotReleaseTriggerTime = 0.032f;
@@ -2919,7 +4900,7 @@
             && !comp._physicalStepPlantCenterAnchorActive;
         const bool pivotContactReady = swingContactNow && stanceContactNow;
         const bool pivotSoleReady = comp._gaitSoleAngularErrorDeg
-            <= kPlantPivotSoleToleranceDeg;
+            <= kPlantOwnershipSoleToleranceDeg;
         const bool pivotAngularReady = swingAngularVelocityOk
             && comp._physicalStepPlantAngularSpeed
                 <= kPlantPivotAngularSpeedLimit;
@@ -3040,7 +5021,7 @@
                     comp._physicalStepPlantPivotMaxStableTime,
                     kPlantPivotQuietTime,
                     comp._gaitSoleAngularErrorDeg,
-                    kPlantPivotSoleToleranceDeg,
+                    kPlantOwnershipSoleToleranceDeg,
                     glm::dot(swingAngularVelocity, comp._physicalStepRight),
                     glm::dot(swingAngularVelocity, comp._physicalStepForward),
                     swingAngularVelocity.y,
@@ -3133,7 +5114,7 @@
                 "pivotRelease={:.2f} blend={:.3f}s centerShift={:.3f}m "
                 "maxQuiet={:.3f}s blocked=(contact={:.3f},sole={:.3f},"
                 "angular={:.3f},linear={:.3f})s "
-                "deadlineProtectedUntil={:.3f}s",
+                "supportReadyBudget={:.3f}s",
                 comp._stepSequenceStepIndex,
                 comp._physicalStepSupportSide < 0 ? "RIGHT" : "LEFT",
                 comp._physicalStepPlantPivotReleaseLatched
@@ -3152,9 +5133,26 @@
                 comp._physicalStepPlantPivotSoleBlockedTime,
                 comp._physicalStepPlantPivotAngularBlockedTime,
                 comp._physicalStepPlantPivotLinearBlockedTime,
-                comp._physicalStepPlantAnchorHandoffPhaseTime
-                    + cadencePlantAcquireTime
+                kPlantCenterBlendDuration + cadencePlantAcquireTime
                     + kPostHandoffAcquireMargin);
+
+            // The impact pivot has completed its job. Enter a separate state that owns
+            // the center anchor and proves it under a stationary support command before
+            // load transfer is allowed to begin.
+            if (continuousEnabled && comp._physicalStepPhase == kSettle) {
+                comp._physicalStepPhase = kSupportReady;
+                comp._physicalStepPhaseTime = 0.0f;
+                comp._physicalStepPlantAcquireStableTime = 0.0f;
+                spdlog::info(
+                    "[LocomotionGait] SUPPORT_OWNERSHIP_BEGIN step={} plant={} "
+                    "anchor=center blend={:.3f}/{:.3f}s "
+                    "requiredStable={:.3f}s supportAction=hold",
+                    comp._stepSequenceStepIndex,
+                    comp._physicalStepSupportSide < 0 ? "RIGHT" : "LEFT",
+                    comp._physicalStepPlantCenterBlendTime,
+                    kPlantCenterBlendDuration,
+                    cadencePlantAcquireTime);
+            }
         }
         if (comp._physicalStepPlantCenterAnchorActive) {
             comp._physicalStepPlantCenterBlendTime = glm::min(
@@ -3207,6 +5205,10 @@
                               const glm::vec3& targetFoot,
                               bool movingFoot) {
             glm::vec3 controlledFoot = targetFoot;
+            const bool coherentInsideTurnSolve = governedInsideTurnSwing
+                && movingFoot && &controlledLeg == swing
+                && comp._physicalStepPhase >= kTakeoff
+                && comp._physicalStepPhase <= kTouchdownWait;
             if (movingFoot) {
                 comp._gaitFootCorrection = 0.0f;
                 comp._gaitFootCorrectionForward = 0.0f;
@@ -3214,7 +5216,9 @@
             }
             if (continuousEnabled && movingFoot
                 && comp._physicalStepPhase >= kSwing
-                && comp._physicalStepPhase <= kDescent) {
+                && (comp._physicalStepPhase <= kDescent
+                    || (governedInsideTurnSwing
+                        && comp._physicalStepPhase <= kTouchdownWait))) {
                 // Joint-space motors are closed-loop, but the sole previously had no
                 // horizontal task-space feedback. _physicalStepDesiredFoot still contains the
                 // previous frame here, so lead the moving target by its actual velocity
@@ -3229,10 +5233,12 @@
                     targetVelocity = (targetFoot - comp._physicalStepDesiredFoot) / dt;
                     targetVelocity.y = 0.0f;
                 }
-                glm::vec3 footCorrection = positionError
-                    * glm::clamp(comp.gaitFootPositionGain, 0.0f, 1.0f)
-                    + targetVelocity
+                const glm::vec3 positionCorrection = positionError
+                    * glm::clamp(comp.gaitFootPositionGain, 0.0f, 1.0f);
+                const glm::vec3 velocityCorrection = targetVelocity
                     * glm::max(comp.gaitFootVelocityLeadTime, 0.0f);
+                glm::vec3 footCorrection = positionCorrection
+                    + velocityCorrection;
                 const float maximumCorrection = glm::max(
                     comp.gaitMaxFootCorrection, 0.0f);
                 const float correctionLength = glm::length(footCorrection);
@@ -3247,7 +5253,24 @@
                     (comp._physicalStepTrajectoryT - kSwingArrivalT)
                         / (1.0f - kSwingArrivalT),
                     0.0f, 1.0f);
-                footCorrection *= 1.0f - smoothstep(descentProgress);
+                if (governedInsideTurnSwing) {
+                    // Proportional error has the foothold itself as its equilibrium and
+                    // is still needed while the physical inside foot brakes. Fade only
+                    // feed-forward; removing all feedback at t=1 caused the final 7-9 cm
+                    // error to survive into touchdown wait.
+                    footCorrection = positionCorrection
+                        + velocityCorrection
+                            * (1.0f - smoothstep(descentProgress));
+                    const float governedCorrectionLength =
+                        glm::length(footCorrection);
+                    if (governedCorrectionLength > maximumCorrection
+                        && governedCorrectionLength > 1e-6f) {
+                        footCorrection *= maximumCorrection
+                            / governedCorrectionLength;
+                    }
+                } else {
+                    footCorrection *= 1.0f - smoothstep(descentProgress);
+                }
                 controlledFoot += footCorrection;
                 comp._gaitFootCorrection = glm::length(footCorrection);
                 comp._gaitFootCorrectionForward = glm::dot(
@@ -3273,9 +5296,80 @@
             }
             if (movingFoot)
                 comp._gaitSoleLevelBlend = soleLevelBlend;
-            const glm::quat desiredFootWorld = glm::normalize(glm::slerp(
+            const glm::quat desiredFootWorldTarget = glm::normalize(glm::slerp(
                 glm::normalize(controlledLeg.plantedFootWorldRotation),
                 nominalFootWorldRotation(controlledLeg), soleLevelBlend));
+            glm::quat desiredFootWorld = desiredFootWorldTarget;
+            const bool governInsideSole = coherentInsideTurnSolve
+                && comp._physicalStepPhase >= kSwing
+                && comp._physicalStepPhase <= kTouchdownWait;
+            if (governInsideSole) {
+                if (!comp._gaitSwingSoleCommandValid) {
+                    comp._gaitSwingSoleCommandWorld =
+                        physicalSwingFootRotationOk
+                            ? glm::normalize(physicalSwingFootWorld)
+                            : glm::normalize(
+                                controlledLeg.plantedFootWorldRotation);
+                    comp._gaitSwingSoleCommandValid = true;
+                    comp._gaitSwingCommandAngularSpeed = 0.0f;
+                }
+                glm::quat command = glm::normalize(
+                    comp._gaitSwingSoleCommandWorld);
+                glm::quat target = desiredFootWorldTarget;
+                if (glm::dot(command, target) < 0.0f)
+                    target = -target;
+
+                comp._gaitSwingSoleCommandErrorDeg =
+                    physicalSwingFootRotationOk
+                        ? rotationDifferenceDeg(
+                            physicalSwingFootWorld, command)
+                        : 0.0f;
+                constexpr float kSoleTrackingInnerDeg = 8.0f;
+                constexpr float kSoleTrackingOuterDeg = 20.0f;
+                const float soleTrackingScale = 1.0f - smoothstep(
+                    (comp._gaitSwingSoleCommandErrorDeg
+                        - kSoleTrackingInnerDeg)
+                        / (kSoleTrackingOuterDeg
+                            - kSoleTrackingInnerDeg));
+                constexpr float kAngularCommandAcceleration = 12.0f;
+                const float angularSpeedLimit = glm::clamp(
+                    glm::max(
+                        comp._gaitTurnPlan.admittedAngularSpeed, 0.75f),
+                    0.75f, 2.25f);
+                const float remainingAngle = glm::radians(
+                    rotationDifferenceDeg(command, target));
+                const float brakingSpeed = std::sqrt(glm::max(
+                    2.0f * kAngularCommandAcceleration
+                        * remainingAngle,
+                    0.0f));
+                const float desiredAngularSpeed = glm::min(
+                    angularSpeedLimit, brakingSpeed)
+                    * soleTrackingScale;
+                comp._gaitSwingCommandAngularSpeed = moveScalarToward(
+                    comp._gaitSwingCommandAngularSpeed,
+                    desiredAngularSpeed,
+                    kAngularCommandAcceleration * dt);
+                if (remainingAngle > 1e-6f) {
+                    const float interpolation = glm::clamp(
+                        comp._gaitSwingCommandAngularSpeed * dt
+                            / remainingAngle,
+                        0.0f, 1.0f);
+                    command = glm::normalize(glm::slerp(
+                        command, target, interpolation));
+                } else {
+                    command = target;
+                }
+                comp._gaitSwingSoleCommandWorld = command;
+                desiredFootWorld = command;
+            } else if (movingFoot && !governedInsideTurnSwing) {
+                comp._gaitSwingCommandAngularSpeed = 0.0f;
+                comp._gaitSwingSoleCommandErrorDeg = 0.0f;
+                comp._gaitSwingSoleCommandValid = false;
+            }
+            const bool allocateTurnOrientation = coherentInsideTurnSolve;
+            const glm::quat exactAllocatedFootWorld = desiredFootWorld;
+            float orientationPriority = 1.0f;
+            float relaxedOrientationDeg = 0.0f;
             const bool touchdownPivotOwnsPlant = continuousEnabled
                 && !movingFoot && &controlledLeg == swing
                 && comp._physicalStepTouchdownContactValid;
@@ -3347,10 +5441,16 @@
             const glm::vec3 requestedAnkle = desiredAnkle;
             glm::vec3 toTarget = desiredAnkle - hipPosition;
             const float requestedReach = glm::length(toTarget);
-            const float upperLength = glm::length(
-                skeleton.bones[controlledLeg.kneeIdx].localT);
-            const float lowerLength = glm::length(
-                skeleton.bones[controlledLeg.ankleIdx].localT);
+            const glm::vec3 upperSegmentLocal =
+                controlledLeg.segmentGeometryValid
+                    ? controlledLeg.upperSegmentLocal
+                    : skeleton.bones[controlledLeg.kneeIdx].localT;
+            const glm::vec3 lowerSegmentLocal =
+                controlledLeg.segmentGeometryValid
+                    ? controlledLeg.lowerSegmentLocal
+                    : skeleton.bones[controlledLeg.ankleIdx].localT;
+            const float upperLength = glm::length(upperSegmentLocal);
+            const float lowerLength = glm::length(lowerSegmentLocal);
             const float configuredReach = (upperLength + lowerLength)
                 * glm::clamp(comp.maxLegReachFraction, 0.70f, 0.99f);
             const float maxReach = comp._physicalStepReachLimit > 1e-4f
@@ -3416,79 +5516,664 @@
                  - lowerLength * lowerLength)
                 / (2.0f * upperLength * distance), -1.0f, 1.0f);
             const float hipSin = std::sqrt(glm::max(1.0f - hipCos * hipCos, 0.0f));
-            const glm::vec3 desiredUpper = glm::normalize(
-                worldForward * hipCos + worldBend * hipSin);
-            const glm::quat hipWorld = glm::normalize(
-                RotationBetween(controlledLeg.referenceUpperWorld, desiredUpper)
-                * controlledLeg.referenceHipWorld);
             const glm::quat parentWorld = ParentWorldRot(
                 rag, skeleton, animator, entityWorld, controlledLeg.hipIdx);
-            glm::quat hipTarget = glm::normalize(glm::conjugate(parentWorld) * hipWorld);
-            const glm::quat unconstrainedHipTarget = hipTarget;
             Envelope hipEnvelope;
             hipEnvelope.twistAxis = controlledLeg.hipTwistAxis;
             hipEnvelope.swingNormalDeg = controlledLeg.hipSwingNormalDeg;
             hipEnvelope.swingPlaneDeg = controlledLeg.hipSwingPlaneDeg;
             hipEnvelope.twistMinDeg = controlledLeg.hipTwistMinDeg;
             hipEnvelope.twistMaxDeg = controlledLeg.hipTwistMaxDeg;
-            hipTarget = ClampToEnvelope(hipEnvelope,
-                skeleton.bones[controlledLeg.hipIdx].localR, hipTarget,
-                comp.hipLimitMarginDeg);
-
-            // The sole is terminal; preserving its old local pose lets pelvis/knee motion
-            // rotate the entire foot away from the world-space foothold. Counter-rotate at
-            // the powered ankle instead. The reference terminal relation remains fixed,
-            // while the ankle target makes that relation produce the captured sole world
-            // orientation after the commanded hip/knee solve.
-            const glm::quat commandedHipWorld = glm::normalize(
-                parentWorld * hipTarget);
-            const glm::quat commandedKneeWorld = glm::normalize(
-                commandedHipWorld * kneeTarget);
-            bool physicalKneeWorldOk = false;
-            const glm::quat measuredKneeWorld =
-                Physics::GetRagdollBoneRotation(
-                    rag, controlledLeg.kneeIdx, &physicalKneeWorldOk);
-            // The ankle is a local motor beneath the physical knee. Building its target
-            // under the commanded knee assumes upstream tracking is perfect and turns
-            // knee lag into world-space sole pitch. Close that chain against the measured
-            // parent so the local target still asks for the intended world-space sole.
-            const glm::quat ankleParentWorld = continuousEnabled
-                && physicalKneeWorldOk
-                ? glm::normalize(measuredKneeWorld)
-                : commandedKneeWorld;
-            glm::quat ankleTarget = glm::normalize(
-                glm::conjugate(ankleParentWorld)
-                * desiredFootWorld
-                * glm::conjugate(controlledLeg.referenceFootLocal));
             Envelope ankleEnvelope;
             ankleEnvelope.twistAxis = controlledLeg.ankleAxis;
             ankleEnvelope.swingNormalDeg = controlledLeg.ankleSwingNormalDeg;
             ankleEnvelope.swingPlaneDeg = controlledLeg.ankleSwingPlaneDeg;
             ankleEnvelope.twistMinDeg = controlledLeg.ankleTwistMinDeg;
             ankleEnvelope.twistMaxDeg = controlledLeg.ankleTwistMaxDeg;
+            const float poseResponse = movingFoot
+                ? glm::max(comp.standingPoseResponse, 0.01f)
+                : glm::min(glm::max(
+                    comp.standingPoseResponse, 0.01f), 0.05f);
+            const float alpha = 1.0f - std::exp(-dt / poseResponse);
+
+            // A two-bone position solve has one redundant knee-plane degree of freedom.
+            // Slice 2m uses it continuously so turn orientation is shared by the whole
+            // leg instead of being assigned entirely to the terminal ankle.
+            struct WholeLegCandidate {
+                float swivelRad = 0.0f;
+                glm::quat unconstrainedHip { 1, 0, 0, 0 };
+                glm::quat hip { 1, 0, 0, 0 };
+                glm::quat kneeWorld { 1, 0, 0, 0 };
+                glm::quat ankle { 1, 0, 0, 0 };
+                float hipClampDeg = 0.0f;
+                float ankleClampDeg = 0.0f;
+                float positionClosure = 1.0f;
+                float orientationClosureDeg = 180.0f;
+                float cost = 0.0f;
+                bool positionClosed = false;
+            };
+            auto evaluateWholeLeg = [&](float swivelRad,
+                                        const glm::quat& footWorld) {
+                WholeLegCandidate candidate;
+                candidate.swivelRad = swivelRad;
+                const glm::vec3 swivelBend = glm::normalize(
+                    glm::angleAxis(swivelRad, worldForward) * worldBend);
+                const glm::vec3 candidateUpper = glm::normalize(
+                    worldForward * hipCos + swivelBend * hipSin);
+                const glm::vec3 candidateAnkle = controlledFoot
+                    + ankleFromFootWorld(controlledLeg, footWorld);
+                const glm::vec3 candidateKnee = hipPosition
+                    + candidateUpper * upperLength;
+                const glm::vec3 candidateLower =
+                    candidateAnkle - candidateKnee;
+                glm::quat candidateHipWorld(1, 0, 0, 0);
+                if (!RotationMatchingVectorPair(
+                        upperSegmentLocal,
+                        kneeTarget * lowerSegmentLocal,
+                        candidateUpper, candidateLower,
+                        candidateHipWorld)) {
+                    candidate.cost = 1e9f;
+                    return candidate;
+                }
+                candidate.unconstrainedHip = glm::normalize(
+                    glm::conjugate(parentWorld) * candidateHipWorld);
+                candidate.hip = ClampToEnvelope(
+                    hipEnvelope,
+                    skeleton.bones[controlledLeg.hipIdx].localR,
+                    candidate.unconstrainedHip,
+                    comp.hipLimitMarginDeg);
+                const glm::quat candidateHipCommand =
+                    coherentInsideTurnSolve
+                        ? candidate.hip
+                        : glm::normalize(glm::slerp(
+                            controlledLeg.hipCommand,
+                            candidate.hip, alpha));
+                const glm::quat candidateKneeCommand =
+                    coherentInsideTurnSolve
+                        ? kneeTarget
+                        : glm::normalize(glm::slerp(
+                            controlledLeg.kneeCommand,
+                            kneeTarget, alpha));
+                const glm::quat resolvedHipWorld = glm::normalize(
+                    parentWorld * candidateHipCommand);
+                candidate.kneeWorld = glm::normalize(
+                    resolvedHipWorld * candidateKneeCommand);
+                const glm::quat requestedAnkleLocal = glm::normalize(
+                    glm::conjugate(candidate.kneeWorld)
+                    * footWorld
+                    * glm::conjugate(controlledLeg.referenceFootLocal));
+                const glm::quat boundedAnkleLocal = ClampToEnvelope(
+                    ankleEnvelope,
+                    skeleton.bones[controlledLeg.ankleIdx].localR,
+                    requestedAnkleLocal,
+                    comp.hipLimitMarginDeg);
+                candidate.ankle = boundedAnkleLocal;
+                candidate.hipClampDeg = rotationDifferenceDeg(
+                    candidate.unconstrainedHip, candidate.hip);
+                candidate.ankleClampDeg = rotationDifferenceDeg(
+                    requestedAnkleLocal, boundedAnkleLocal);
+                const glm::vec3 commandedKneePosition = hipPosition
+                    + resolvedHipWorld * upperSegmentLocal;
+                const glm::vec3 commandedAnklePosition =
+                    commandedKneePosition
+                    + candidate.kneeWorld * lowerSegmentLocal;
+                const glm::quat commandedFootWorld = glm::normalize(
+                    candidate.kneeWorld * boundedAnkleLocal
+                    * controlledLeg.referenceFootLocal);
+                const glm::vec3 commandedFootPosition =
+                    commandedAnklePosition
+                    - commandedFootWorld
+                        * controlledLeg.ankleFromFootLocal;
+                candidate.positionClosure = glm::length(
+                    commandedFootPosition - controlledFoot);
+                candidate.orientationClosureDeg = rotationDifferenceDeg(
+                    commandedFootWorld, footWorld);
+                constexpr float kPositionClosureTolerance = 0.003f;
+                candidate.positionClosed =
+                    candidate.positionClosure <= kPositionClosureTolerance;
+                const float branchMotionDeg = std::abs(glm::degrees(
+                    swivelRad - controlledLeg.kneePlaneSwivelRad));
+                candidate.cost = candidate.positionClosed
+                    ? candidate.ankleClampDeg * 20.0f
+                    + candidate.hipClampDeg * 4.0f
+                    + branchMotionDeg * 0.025f
+                    + std::abs(glm::degrees(swivelRad)) * 0.002f
+                    : 1e9f + candidate.positionClosure * 1000.0f;
+                return candidate;
+            };
+            auto selectWholeLeg = [&](const glm::quat& footWorld) {
+                WholeLegCandidate best = evaluateWholeLeg(
+                    controlledLeg.kneePlaneSwivelRad, footWorld);
+                constexpr int kSwivelSamples = 25;
+                constexpr float kMaximumSwivelRad =
+                    glm::radians(60.0f);
+                for (int sample = 0; sample < kSwivelSamples; ++sample) {
+                    const float u = static_cast<float>(sample)
+                        / static_cast<float>(kSwivelSamples - 1);
+                    const float swivel = glm::mix(
+                        -kMaximumSwivelRad, kMaximumSwivelRad, u);
+                    const WholeLegCandidate candidate =
+                        evaluateWholeLeg(swivel, footWorld);
+                    if (candidate.positionClosed
+                        && candidate.cost < best.cost)
+                        best = candidate;
+                }
+                float refinementRadius = glm::radians(2.5f);
+                for (int refinement = 0; refinement < 2; ++refinement) {
+                    for (int offset = -2; offset <= 2; ++offset) {
+                        const float swivel = glm::clamp(
+                            best.swivelRad
+                                + static_cast<float>(offset)
+                                    * refinementRadius,
+                            -kMaximumSwivelRad, kMaximumSwivelRad);
+                        const WholeLegCandidate candidate =
+                            evaluateWholeLeg(swivel, footWorld);
+                        if (candidate.positionClosed
+                            && candidate.cost < best.cost)
+                            best = candidate;
+                    }
+                    refinementRadius *= 0.5f;
+                }
+                return best;
+            };
+
+            WholeLegCandidate exactCandidate = evaluateWholeLeg(
+                0.0f, exactAllocatedFootWorld);
+            WholeLegCandidate selectedCandidate = exactCandidate;
+            if (allocateTurnOrientation) {
+                const WholeLegCandidate counterfactualCandidate = selectWholeLeg(
+                    exactAllocatedFootWorld);
+                // Correct two-vector swivel candidates are retained counterfactually until
+                // the zero-swivel runtime path passes mirrored physical validation. The
+                // previous one-vector construction moved the sole laterally by 4-12 cm.
+                // No sampled swivel may affect a joint target in this corrective slice.
+                exactCandidate = counterfactualCandidate;
+                controlledLeg.kneePlaneSwivelRad = 0.0f;
+                selectedCandidate = evaluateWholeLeg(
+                    0.0f, desiredFootWorld);
+                comp._gaitIkKneeSwivelRequestedDeg = glm::degrees(
+                    exactCandidate.swivelRad);
+                comp._gaitIkKneeSwivelCandidateClosure =
+                    exactCandidate.positionClosure;
+                comp._gaitIkKneeSwivelCandidateAccepted =
+                    exactCandidate.positionClosed;
+            } else {
+                controlledLeg.kneePlaneSwivelRad = 0.0f;
+                selectedCandidate = evaluateWholeLeg(
+                    0.0f, desiredFootWorld);
+                comp._gaitIkKneeSwivelRequestedDeg = 0.0f;
+                comp._gaitIkKneeSwivelCandidateClosure =
+                    selectedCandidate.positionClosure;
+                comp._gaitIkKneeSwivelCandidateAccepted =
+                    selectedCandidate.positionClosed;
+            }
+            glm::quat hipTarget = selectedCandidate.hip;
+            const glm::quat unconstrainedHipTarget =
+                selectedCandidate.unconstrainedHip;
+            if (continuousEnabled && movingFoot) {
+                comp._gaitIkExactAnkleClampDeg =
+                    exactCandidate.ankleClampDeg;
+                comp._gaitIkKneeSwivelAppliedDeg = glm::degrees(
+                    controlledLeg.kneePlaneSwivelRad);
+                comp._gaitIkOrientationPriority = orientationPriority;
+                comp._gaitIkOrientationRelaxedDeg =
+                    relaxedOrientationDeg;
+            }
+
+            // A governed Cartesian sole command is already acceleration/rate limited and
+            // advances only while the physical foot remains inside its tracking tube.
+            // Filtering hip and knee again in joint space destroys the two-bone closure:
+            // the three commands no longer describe the sole pose the governor admitted.
+            // On this route, write the coherent analytical pair. Other locomotion paths
+            // retain their established response filter.
+            const glm::quat previousHipCommand = glm::normalize(
+                controlledLeg.hipCommand);
+            const glm::quat previousKneeCommand = glm::normalize(
+                controlledLeg.kneeCommand);
+            const glm::quat previousAnkleCommand = glm::normalize(
+                controlledLeg.ankleCommand);
+            const glm::quat nextHipCommand = coherentInsideTurnSolve
+                ? glm::normalize(hipTarget)
+                : glm::normalize(glm::slerp(
+                    controlledLeg.hipCommand, hipTarget, alpha));
+            const glm::quat nextKneeCommand = coherentInsideTurnSolve
+                ? glm::normalize(kneeTarget)
+                : glm::normalize(glm::slerp(
+                    controlledLeg.kneeCommand, kneeTarget, alpha));
+
+            // The sole is terminal; preserving its old local pose lets pelvis/knee motion
+            // rotate the entire foot away from the world-space foothold. Counter-rotate at
+            // the powered ankle instead. The reference terminal relation remains fixed,
+            // while the ankle target makes that relation produce the captured sole world
+            // orientation after the commanded hip/knee solve.
+            glm::quat commandedHipWorld = glm::normalize(
+                parentWorld * nextHipCommand);
+            glm::quat commandedKneeWorld = glm::normalize(
+                commandedHipWorld * nextKneeCommand);
+            bool physicalKneeWorldOk = false;
+            const glm::quat measuredKneeWorld =
+                Physics::GetRagdollBoneRotation(
+                    rag, controlledLeg.kneeIdx, &physicalKneeWorldOk);
+            // A commanded-parent target is smooth but inherits upstream tracking error;
+            // an exact measured-parent target cancels that error but can move abruptly as
+            // the powered knee oscillates. For the governed inside sole, retain only a
+            // bounded amount of that measured compensation and rate-limit the final local
+            // motor command below. Other gait paths keep their previous exact target.
+            const glm::quat measuredAnkleParentWorld = continuousEnabled
+                && physicalKneeWorldOk
+                ? glm::normalize(measuredKneeWorld)
+                : commandedKneeWorld;
+            const glm::quat nominalAnkleTarget = glm::normalize(
+                glm::conjugate(commandedKneeWorld)
+                * desiredFootWorld
+                * glm::conjugate(controlledLeg.referenceFootLocal));
+            glm::quat measuredCompensatedAnkleTarget = glm::normalize(
+                glm::conjugate(measuredAnkleParentWorld)
+                * desiredFootWorld
+                * glm::conjugate(controlledLeg.referenceFootLocal));
+            if (glm::dot(nominalAnkleTarget,
+                         measuredCompensatedAnkleTarget) < 0.0f) {
+                measuredCompensatedAnkleTarget =
+                    -measuredCompensatedAnkleTarget;
+            }
+            // The physical parent is feedback for the outer task-space governor, not a
+            // second source of joint commands. Cancelling measured knee error here made
+            // the ankle chase a moving physical parent while hip/knee chased their own
+            // filtered targets. The coherent route derives the ankle from the exact
+            // commanded parent so all three joint commands encode one chain pose.
+            glm::quat ankleTarget = coherentInsideTurnSolve
+                ? nominalAnkleTarget
+                : measuredCompensatedAnkleTarget;
+            if (coherentInsideTurnSolve) {
+                comp._gaitAnkleParentCompensationDeg =
+                    rotationDifferenceDeg(
+                        nominalAnkleTarget,
+                        measuredCompensatedAnkleTarget);
+                comp._gaitAnkleParentCompensationAppliedDeg = 0.0f;
+            } else if (governInsideSole) {
+                constexpr float kMaximumParentCompensationDeg = 6.0f;
+                comp._gaitAnkleParentCompensationDeg =
+                    rotationDifferenceDeg(
+                        nominalAnkleTarget,
+                        measuredCompensatedAnkleTarget);
+                comp._gaitAnkleParentCompensationAppliedDeg = glm::min(
+                    comp._gaitAnkleParentCompensationDeg,
+                    kMaximumParentCompensationDeg);
+                const float compensationBlend =
+                    comp._gaitAnkleParentCompensationDeg > 1e-4f
+                        ? comp._gaitAnkleParentCompensationAppliedDeg
+                            / comp._gaitAnkleParentCompensationDeg
+                        : 0.0f;
+                ankleTarget = glm::normalize(glm::slerp(
+                    nominalAnkleTarget,
+                    measuredCompensatedAnkleTarget,
+                    compensationBlend));
+            } else if (movingFoot) {
+                comp._gaitAnkleParentCompensationDeg = 0.0f;
+                comp._gaitAnkleParentCompensationAppliedDeg = 0.0f;
+                comp._gaitAnkleCommandDeltaDeg = 0.0f;
+                comp._gaitAnkleAchievableResidualDeg = 0.0f;
+                comp._gaitAnkleCommandAngularSpeed = 0.0f;
+                comp._gaitAnkleDiagnosticCooldown = 0.0f;
+            }
+            const glm::quat unconstrainedAnkleTarget = ankleTarget;
             ankleTarget = ClampToEnvelope(ankleEnvelope,
                 skeleton.bones[controlledLeg.ankleIdx].localR, ankleTarget,
                 comp.hipLimitMarginDeg);
 
-            if (continuousEnabled && movingFoot)
+            if (continuousEnabled && movingFoot) {
                 comp._gaitIkHipEnvelopeClampDeg = rotationDifferenceDeg(
                     unconstrainedHipTarget, hipTarget);
+                comp._gaitIkAnkleEnvelopeClampDeg = rotationDifferenceDeg(
+                    unconstrainedAnkleTarget, ankleTarget);
+                const EnvelopeMeasurement ankleMeasurement = MeasureEnvelope(
+                    ankleEnvelope,
+                    skeleton.bones[controlledLeg.ankleIdx].localR,
+                    unconstrainedAnkleTarget,
+                    comp.hipLimitMarginDeg);
+                comp._gaitIkAnkleSwingUsage =
+                    ankleMeasurement.swingUsage;
+                comp._gaitIkAnkleSwingReserve =
+                    ankleMeasurement.swingReserve;
+                comp._gaitIkAnkleTwistDeg =
+                    ankleMeasurement.twistDeg;
+                comp._gaitIkAnkleTwistMarginDeg =
+                    ankleMeasurement.twistMarginDeg;
+            }
 
-            const float poseResponse = movingFoot
-                ? glm::max(comp.standingPoseResponse, 0.01f)
-                : glm::min(glm::max(comp.standingPoseResponse, 0.01f), 0.05f);
-            const float alpha = 1.0f - std::exp(-dt / poseResponse);
-            controlledLeg.hipCommand = glm::normalize(
-                glm::slerp(controlledLeg.hipCommand, hipTarget, alpha));
-            controlledLeg.kneeCommand = glm::normalize(
-                glm::slerp(controlledLeg.kneeCommand, kneeTarget, alpha));
-            controlledLeg.ankleCommand = glm::normalize(
-                glm::slerp(controlledLeg.ankleCommand, ankleTarget, alpha));
+            if (coherentInsideTurnSolve) {
+                // Admit one fraction of the complete joint target. Independent joint
+                // filters let the ankle race ahead to cancel a parent that had not moved
+                // yet; one shared fraction keeps the whole chain on a single temporal
+                // manifold. The residual is intentional, reported by FK, and causes the
+                // outer measured-state governor to wait rather than commanding a snap.
+                comp._gaitCoherentHipDeltaDeg = rotationDifferenceDeg(
+                    previousHipCommand, nextHipCommand);
+                comp._gaitCoherentKneeDeltaDeg = rotationDifferenceDeg(
+                    previousKneeCommand, nextKneeCommand);
+                comp._gaitCoherentAnkleDeltaDeg = rotationDifferenceDeg(
+                    previousAnkleCommand, ankleTarget);
+                constexpr float kHipCommandRateDeg = 240.0f;
+                constexpr float kKneeCommandRateDeg = 300.0f;
+                constexpr float kAnkleCommandRateDeg = 240.0f;
+                auto jointAdmission = [&](float requestedDeg,
+                                          float rateDeg) {
+                    return requestedDeg > 1e-5f
+                        ? glm::clamp(rateDeg * dt / requestedDeg,
+                            0.0f, 1.0f)
+                        : 1.0f;
+                };
+                comp._gaitCoherentJointScale = glm::min(
+                    jointAdmission(comp._gaitCoherentHipDeltaDeg,
+                                   kHipCommandRateDeg),
+                    glm::min(
+                        jointAdmission(comp._gaitCoherentKneeDeltaDeg,
+                                       kKneeCommandRateDeg),
+                        jointAdmission(comp._gaitCoherentAnkleDeltaDeg,
+                                       kAnkleCommandRateDeg)));
+                controlledLeg.hipCommand = glm::normalize(glm::slerp(
+                    previousHipCommand, nextHipCommand,
+                    comp._gaitCoherentJointScale));
+                controlledLeg.kneeCommand = glm::normalize(glm::slerp(
+                    previousKneeCommand, nextKneeCommand,
+                    comp._gaitCoherentJointScale));
+                controlledLeg.ankleCommand = glm::normalize(glm::slerp(
+                    previousAnkleCommand, ankleTarget,
+                    comp._gaitCoherentJointScale));
+                comp._gaitAnkleCommandDeltaDeg = rotationDifferenceDeg(
+                    previousAnkleCommand, controlledLeg.ankleCommand);
+                comp._gaitAnkleCommandAngularSpeed = dt > 1e-6f
+                    ? glm::radians(comp._gaitAnkleCommandDeltaDeg) / dt
+                    : 0.0f;
+
+                commandedHipWorld = glm::normalize(
+                    parentWorld * controlledLeg.hipCommand);
+                commandedKneeWorld = glm::normalize(
+                    commandedHipWorld * controlledLeg.kneeCommand);
+                const glm::quat achievableFootWorld = glm::normalize(
+                    commandedKneeWorld
+                    * controlledLeg.ankleCommand
+                    * controlledLeg.referenceFootLocal);
+                comp._gaitAnkleAchievableResidualDeg =
+                    rotationDifferenceDeg(
+                        achievableFootWorld, desiredFootWorld);
+                comp._gaitSwingSoleCommandWorld = achievableFootWorld;
+                comp._gaitSwingSoleCommandValid = true;
+                comp._gaitSwingSoleCommandErrorDeg =
+                    physicalSwingFootRotationOk
+                        ? rotationDifferenceDeg(
+                            physicalSwingFootWorld,
+                            achievableFootWorld)
+                        : 0.0f;
+
+                comp._gaitAnkleDiagnosticCooldown = glm::max(
+                    comp._gaitAnkleDiagnosticCooldown - dt, 0.0f);
+                const bool commandClosureLarge =
+                    comp._gaitAnkleAchievableResidualDeg > 1.0f;
+                const bool physicalParentDisagreement =
+                    comp._gaitAnkleParentCompensationDeg > 6.0f;
+                if ((commandClosureLarge || physicalParentDisagreement)
+                    && comp._gaitAnkleDiagnosticCooldown <= 0.0f) {
+                    comp._gaitAnkleDiagnosticCooldown = 0.10f;
+                    spdlog::info(
+                        "[LocomotionTurnAnkle] step={} phase={} swing={} "
+                        "controller=coherent parentFeedback={:.1f}deg "
+                        "appliedParentFeedback=0.0deg jointScale={:.3f} "
+                        "jointDelta=({:.1f},{:.1f},{:.1f})deg localStep={:.2f}deg "
+                        "localRate={:.3f}radps worldResidual={:.1f}deg "
+                        "soleTracking={:.1f}deg envelopeClamp={:.1f}deg",
+                        comp._stepSequenceStepIndex,
+                        comp._physicalStepPhase,
+                        comp._gaitTurnPlan.swingFootLeft
+                            ? "LEFT" : "RIGHT",
+                        comp._gaitAnkleParentCompensationDeg,
+                        comp._gaitCoherentJointScale,
+                        comp._gaitCoherentHipDeltaDeg,
+                        comp._gaitCoherentKneeDeltaDeg,
+                        comp._gaitCoherentAnkleDeltaDeg,
+                        comp._gaitAnkleCommandDeltaDeg,
+                        comp._gaitAnkleCommandAngularSpeed,
+                        comp._gaitAnkleAchievableResidualDeg,
+                        comp._gaitSwingSoleCommandErrorDeg,
+                        comp._gaitIkAnkleEnvelopeClampDeg);
+                }
+            } else if (governInsideSole) {
+                controlledLeg.hipCommand = nextHipCommand;
+                controlledLeg.kneeCommand = nextKneeCommand;
+                glm::quat currentAnkleCommand = glm::normalize(
+                    controlledLeg.ankleCommand);
+                glm::quat boundedAnkleTarget = ankleTarget;
+                if (glm::dot(currentAnkleCommand, boundedAnkleTarget) < 0.0f)
+                    boundedAnkleTarget = -boundedAnkleTarget;
+
+                constexpr float kLocalAnkleAcceleration = 20.0f;
+                const float localAnkleSpeedLimit = glm::clamp(
+                    glm::max(comp._gaitTurnPlan.admittedAngularSpeed,
+                             0.75f) + 1.0f,
+                    1.75f, 3.25f);
+                const float remainingLocalAngle = glm::radians(
+                    rotationDifferenceDeg(
+                        currentAnkleCommand, boundedAnkleTarget));
+                const float brakingLocalSpeed = std::sqrt(glm::max(
+                    2.0f * kLocalAnkleAcceleration
+                        * remainingLocalAngle,
+                    0.0f));
+                const float desiredLocalSpeed = glm::min(
+                    localAnkleSpeedLimit, brakingLocalSpeed);
+                comp._gaitAnkleCommandAngularSpeed = moveScalarToward(
+                    comp._gaitAnkleCommandAngularSpeed,
+                    desiredLocalSpeed,
+                    kLocalAnkleAcceleration * dt);
+                const float localStepAngle = glm::min(
+                    remainingLocalAngle,
+                    comp._gaitAnkleCommandAngularSpeed * dt);
+                const float localInterpolation = remainingLocalAngle > 1e-6f
+                    ? localStepAngle / remainingLocalAngle : 1.0f;
+                glm::quat nextAnkleCommand = glm::normalize(glm::slerp(
+                    currentAnkleCommand,
+                    boundedAnkleTarget,
+                    localInterpolation));
+                nextAnkleCommand = ClampToEnvelope(
+                    ankleEnvelope,
+                    skeleton.bones[controlledLeg.ankleIdx].localR,
+                    nextAnkleCommand,
+                    comp.hipLimitMarginDeg);
+                comp._gaitAnkleCommandDeltaDeg = rotationDifferenceDeg(
+                    currentAnkleCommand, nextAnkleCommand);
+                controlledLeg.ankleCommand = nextAnkleCommand;
+
+                // Publish what the bounded local motor can actually ask the physical
+                // chain to produce. The outer world-space governor continues from this
+                // reachable orientation next frame instead of integrating through an
+                // ankle-envelope boundary that the motor can never cross.
+                const glm::quat achievableFootWorld = glm::normalize(
+                    measuredAnkleParentWorld
+                    * controlledLeg.ankleCommand
+                    * controlledLeg.referenceFootLocal);
+                comp._gaitAnkleAchievableResidualDeg =
+                    rotationDifferenceDeg(
+                        achievableFootWorld, desiredFootWorld);
+                comp._gaitSwingSoleCommandWorld = achievableFootWorld;
+                comp._gaitSwingSoleCommandValid = true;
+                comp._gaitSwingSoleCommandErrorDeg =
+                    physicalSwingFootRotationOk
+                        ? rotationDifferenceDeg(
+                            physicalSwingFootWorld,
+                            achievableFootWorld)
+                        : 0.0f;
+
+                comp._gaitAnkleDiagnosticCooldown = glm::max(
+                    comp._gaitAnkleDiagnosticCooldown - dt, 0.0f);
+                const bool compensationLimited =
+                    comp._gaitAnkleParentCompensationDeg
+                        > comp._gaitAnkleParentCompensationAppliedDeg + 0.1f;
+                const bool envelopeLimited =
+                    comp._gaitIkAnkleEnvelopeClampDeg > 1.0f;
+                const bool reachableResidualLarge =
+                    comp._gaitAnkleAchievableResidualDeg > 8.0f;
+                if ((compensationLimited || envelopeLimited
+                     || reachableResidualLarge)
+                    && comp._gaitAnkleDiagnosticCooldown <= 0.0f) {
+                    comp._gaitAnkleDiagnosticCooldown = 0.10f;
+                    spdlog::info(
+                        "[LocomotionTurnAnkle] step={} phase={} swing={} "
+                        "parentComp={:.1f}->{:.1f}deg envelopeClamp={:.1f}deg "
+                        "localStep={:.2f}deg localRate={:.3f}radps "
+                        "worldResidual={:.1f}deg soleTracking={:.1f}deg "
+                        "counterfactual=(bestClamp={:.1f}deg,bestSwivel={:+.1f}deg,"
+                        "closure={:.3f}m,accepted={},applied={:+.1f}deg,"
+                        "priority={:.2f},relaxed={:.1f}deg) "
+                        "envelope=(swingUsage={:.2f},reserve={:+.2f},"
+                        "twist={:+.1f}deg,margin={:+.1f}deg)",
+                        comp._stepSequenceStepIndex,
+                        comp._physicalStepPhase,
+                        comp._gaitTurnPlan.swingFootLeft
+                            ? "LEFT" : "RIGHT",
+                        comp._gaitAnkleParentCompensationDeg,
+                        comp._gaitAnkleParentCompensationAppliedDeg,
+                        comp._gaitIkAnkleEnvelopeClampDeg,
+                        comp._gaitAnkleCommandDeltaDeg,
+                        comp._gaitAnkleCommandAngularSpeed,
+                        comp._gaitAnkleAchievableResidualDeg,
+                        comp._gaitSwingSoleCommandErrorDeg,
+                        comp._gaitIkExactAnkleClampDeg,
+                        comp._gaitIkKneeSwivelRequestedDeg,
+                        comp._gaitIkKneeSwivelCandidateClosure,
+                        comp._gaitIkKneeSwivelCandidateAccepted ? "yes" : "no",
+                        comp._gaitIkKneeSwivelAppliedDeg,
+                        comp._gaitIkOrientationPriority,
+                        comp._gaitIkOrientationRelaxedDeg,
+                        comp._gaitIkAnkleSwingUsage,
+                        comp._gaitIkAnkleSwingReserve,
+                        comp._gaitIkAnkleTwistDeg,
+                        comp._gaitIkAnkleTwistMarginDeg);
+                }
+            } else {
+                controlledLeg.hipCommand = nextHipCommand;
+                controlledLeg.kneeCommand = nextKneeCommand;
+                controlledLeg.ankleCommand = glm::normalize(glm::slerp(
+                    controlledLeg.ankleCommand, ankleTarget, alpha));
+            }
             if (continuousEnabled && movingFoot) {
                 comp._gaitIkHipCommandLagDeg = rotationDifferenceDeg(
                     controlledLeg.hipCommand, hipTarget);
                 comp._gaitIkKneeCommandLagDeg = rotationDifferenceDeg(
                     controlledLeg.kneeCommand, kneeTarget);
+            }
+            if (continuousEnabled && movingFoot
+                && &controlledLeg == swing) {
+                // Forward-kinematics closure diagnostic. Reconstruct the sole pose from
+                // the exact joint commands written below, then split total physical error
+                // into desired->commanded (IK/composition) and commanded->physical
+                // (powered-ragdoll tracking). This is deliberately read-only.
+                const glm::vec3 commandedKneePosition = hipPosition
+                    + commandedHipWorld
+                        * upperSegmentLocal;
+                const glm::vec3 commandedAnklePosition =
+                    commandedKneePosition
+                    + commandedKneeWorld
+                        * lowerSegmentLocal;
+                const glm::quat commandedFootWorld = glm::normalize(
+                    commandedKneeWorld
+                    * controlledLeg.ankleCommand
+                    * controlledLeg.referenceFootLocal);
+                const glm::vec3 commandedFootPosition =
+                    commandedAnklePosition
+                    - commandedFootWorld
+                        * controlledLeg.ankleFromFootLocal;
+                bool physicalFootWorldOk = false;
+                const glm::quat measuredFootWorld =
+                    Physics::GetRagdollBoneRotation(
+                        rag, controlledLeg.footIdx,
+                        &physicalFootWorldOk);
+
+                comp._gaitFkDesiredPosition = controlledFoot;
+                comp._gaitFkCommandPosition = commandedFootPosition;
+                comp._gaitFkPhysicalPosition = measuredFoot;
+                comp._gaitFkDesiredToCommand =
+                    commandedFootPosition - controlledFoot;
+                comp._gaitFkCommandToPhysical =
+                    measuredFoot - commandedFootPosition;
+                comp._gaitFkDesiredToPhysical =
+                    measuredFoot - controlledFoot;
+                comp._gaitFkDesiredToCommandOrientationDeg =
+                    rotationDifferenceDeg(
+                        desiredFootWorld, commandedFootWorld);
+                comp._gaitFkCommandToPhysicalOrientationDeg =
+                    physicalFootWorldOk
+                        ? rotationDifferenceDeg(
+                            commandedFootWorld, measuredFootWorld)
+                        : 0.0f;
+                comp._gaitFkDesiredToPhysicalOrientationDeg =
+                    physicalFootWorldOk
+                        ? rotationDifferenceDeg(
+                            desiredFootWorld, measuredFootWorld)
+                        : 0.0f;
+                comp._gaitFkValid = physicalFootWorldOk;
+                comp._gaitFkDiagnosticCooldown = glm::max(
+                    comp._gaitFkDiagnosticCooldown - dt, 0.0f);
+                if (governedInsideTurnSwing
+                    && comp._gaitFkDiagnosticCooldown <= 0.0f) {
+                    comp._gaitFkDiagnosticCooldown = 0.10f;
+                    spdlog::info(
+                        "[LocomotionTurnFK] step={} phase={} swing={} controller={} "
+                        "position=(desired=({:+.3f},{:+.3f},{:+.3f}),"
+                        "command=({:+.3f},{:+.3f},{:+.3f}),"
+                        "physical=({:+.3f},{:+.3f},{:+.3f}))m "
+                        "closure=(ik=({:+.3f},{:+.3f},{:+.3f})|{:.3f}m,"
+                        "motor=({:+.3f},{:+.3f},{:+.3f})|{:.3f}m,"
+                        "total=({:+.3f},{:+.3f},{:+.3f})|{:.3f}m) "
+                        "orientation=(ik={:.1f}deg,motor={:.1f}deg,total={:.1f}deg) "
+                        "jointAdmission=(scale={:.3f},requested=({:.1f},{:.1f},{:.1f})deg) "
+                        "geometry=({},{:.3f},{:.3f})m "
+                        "counterfactual=(planClamp={:.1f}deg,"
+                        "bestSwivel={:+.1f}deg,bestClamp={:.1f}deg,"
+                        "closure={:.3f}m,accepted={}) "
+                        "appliedSwivel={:+.1f}deg runtimeSwivel=disabled",
+                        comp._stepSequenceStepIndex,
+                        comp._physicalStepPhase,
+                        comp._gaitTurnPlan.swingFootLeft
+                            ? "LEFT" : "RIGHT",
+                        coherentInsideTurnSolve ? "coherent" : "legacy",
+                        comp._gaitFkDesiredPosition.x,
+                        comp._gaitFkDesiredPosition.y,
+                        comp._gaitFkDesiredPosition.z,
+                        comp._gaitFkCommandPosition.x,
+                        comp._gaitFkCommandPosition.y,
+                        comp._gaitFkCommandPosition.z,
+                        comp._gaitFkPhysicalPosition.x,
+                        comp._gaitFkPhysicalPosition.y,
+                        comp._gaitFkPhysicalPosition.z,
+                        comp._gaitFkDesiredToCommand.x,
+                        comp._gaitFkDesiredToCommand.y,
+                        comp._gaitFkDesiredToCommand.z,
+                        glm::length(comp._gaitFkDesiredToCommand),
+                        comp._gaitFkCommandToPhysical.x,
+                        comp._gaitFkCommandToPhysical.y,
+                        comp._gaitFkCommandToPhysical.z,
+                        glm::length(comp._gaitFkCommandToPhysical),
+                        comp._gaitFkDesiredToPhysical.x,
+                        comp._gaitFkDesiredToPhysical.y,
+                        comp._gaitFkDesiredToPhysical.z,
+                        glm::length(comp._gaitFkDesiredToPhysical),
+                        comp._gaitFkDesiredToCommandOrientationDeg,
+                        comp._gaitFkCommandToPhysicalOrientationDeg,
+                        comp._gaitFkDesiredToPhysicalOrientationDeg,
+                        comp._gaitCoherentJointScale,
+                        comp._gaitCoherentHipDeltaDeg,
+                        comp._gaitCoherentKneeDeltaDeg,
+                        comp._gaitCoherentAnkleDeltaDeg,
+                        controlledLeg.segmentGeometryValid
+                            ? "ragdoll" : "skeleton-fallback",
+                        upperLength,
+                        lowerLength,
+                        comp._gaitTurnPlan.sampledAnkleClampDeg,
+                        comp._gaitIkKneeSwivelRequestedDeg,
+                        comp._gaitIkExactAnkleClampDeg,
+                        comp._gaitIkKneeSwivelCandidateClosure,
+                        comp._gaitIkKneeSwivelCandidateAccepted ? "yes" : "no",
+                        comp._gaitIkKneeSwivelAppliedDeg);
+                }
             }
             controlledLeg.footCommand = controlledLeg.referenceFootLocal;
         };
@@ -3559,6 +6244,45 @@
         auto beginStopping = [&]() {
             capturePhysicalLocalPose(*swing);
             capturePhysicalLocalPose(*stance);
+            comp._gaitSwingCommandSpeed = 0.0f;
+            comp._gaitSwingCommandAngularSpeed = 0.0f;
+            comp._gaitSwingCommandTrackingError = 0.0f;
+            comp._gaitSwingSoleCommandErrorDeg = 0.0f;
+            comp._gaitAnkleCommandAngularSpeed = 0.0f;
+            comp._gaitAnkleCommandDeltaDeg = 0.0f;
+            comp._gaitAnkleParentCompensationDeg = 0.0f;
+            comp._gaitAnkleParentCompensationAppliedDeg = 0.0f;
+            comp._gaitAnkleAchievableResidualDeg = 0.0f;
+            comp._gaitAnkleDiagnosticCooldown = 0.0f;
+            comp._gaitIkAnkleEnvelopeClampDeg = 0.0f;
+            comp._gaitIkExactAnkleClampDeg = 0.0f;
+            comp._gaitIkKneeSwivelRequestedDeg = 0.0f;
+            comp._gaitIkKneeSwivelAppliedDeg = 0.0f;
+            comp._gaitIkOrientationPriority = 1.0f;
+            comp._gaitIkOrientationRelaxedDeg = 0.0f;
+            comp._gaitIkAnkleSwingUsage = 0.0f;
+            comp._gaitIkAnkleSwingReserve = 0.0f;
+            comp._gaitIkAnkleTwistDeg = 0.0f;
+            comp._gaitIkAnkleTwistMarginDeg = 0.0f;
+            comp._gaitFkDesiredPosition = glm::vec3(0.0f);
+            comp._gaitFkCommandPosition = glm::vec3(0.0f);
+            comp._gaitFkPhysicalPosition = glm::vec3(0.0f);
+            comp._gaitFkDesiredToCommand = glm::vec3(0.0f);
+            comp._gaitFkCommandToPhysical = glm::vec3(0.0f);
+            comp._gaitFkDesiredToPhysical = glm::vec3(0.0f);
+            comp._gaitFkDesiredToCommandOrientationDeg = 0.0f;
+            comp._gaitFkCommandToPhysicalOrientationDeg = 0.0f;
+            comp._gaitFkDesiredToPhysicalOrientationDeg = 0.0f;
+            comp._gaitFkDiagnosticCooldown = 0.0f;
+            comp._gaitFkValid = false;
+            comp._gaitSwingPathLength = 0.0f;
+            comp._gaitSwingMinimumDuration = 0.0f;
+            comp._gaitSwingDeadline = 0.0f;
+            comp._gaitSwingSoleCommandValid = false;
+            comp._gaitTurnPairPendingInside = false;
+            comp._gaitTurnPairAdvanceScale = 1.0f;
+            comp._gaitTurnPairYawScale = 1.0f;
+            comp._gaitTurnPairYawSign = 0.0f;
             comp._gaitStopStartTarget = comp._physicalStepSupportTarget;
             comp._gaitStopEndTarget = comp._gaitStopStartTarget;
             comp._gaitStopFootTargetL = leftFoot;
@@ -3583,7 +6307,7 @@
         auto beginTransfer = [&]() {
             const float transferFraction = glm::clamp(
                 comp.transferSupportBias + comp._gaitAdaptiveTransferBiasOffset,
-                0.70f, 0.98f);
+                kNewSupportLoadCommandTarget, 0.98f);
             glm::vec3 comStart = rag._locomotionCOM;
             glm::vec3 newPlant = swingFoot;
             comStart.y = comp._physicalStepSupportTarget.y;
@@ -3624,15 +6348,12 @@
                 comp._gaitSupportCurveTime = 0.0f;
                 comp._gaitSupportCurveDuration = glm::max(
                     cadenceTransferTime * 1.50f, 0.30f);
-                const float remainingForward = glm::max(glm::dot(
-                    comp._gaitSupportCurveEnd - comp._gaitSupportCurveStart,
-                    comp._physicalStepForward), 0.0f);
-                const float outgoingSpeed = glm::clamp(
-                    0.25f * remainingForward
-                        / comp._gaitSupportCurveDuration,
-                    0.03f, 0.10f);
-                comp._gaitSupportCurveEndVelocity =
-                    comp._physicalStepForward * outgoingSpeed;
+                comp._gaitSupportCurveEndVelocity = supportCurveEndVelocity(
+                    comp._gaitSupportCurveStart,
+                    comp._gaitSupportCurveEnd,
+                    comp._gaitSupportCurveDuration);
+                const float outgoingSpeed = glm::length(
+                    comp._gaitSupportCurveEndVelocity);
                 spdlog::info(
                     "[LocomotionGait] SUPPORT_CURVE_ACQUIRED step={} "
                     "plant={} duration={:.3f}s speed={:.3f}->{:.3f} "
@@ -3793,7 +6514,8 @@
             const float transferCorrectionLimit = glm::min(
                 0.060f,
                 glm::max(0.98f - glm::clamp(
-                    comp.transferSupportBias, 0.70f, 0.98f), 0.0f));
+                    comp.transferSupportBias,
+                    kNewSupportLoadCommandTarget, 0.98f), 0.0f));
             const bool strideDriftCorrectionSaturated =
                 maxStrideCorrection <= 1e-4f
                 || comp._gaitAdaptiveStrideOffset
@@ -3857,9 +6579,9 @@
                            && rag.locomotionFootLockWeights[1] <= 0.001f
                            && rag._locomotionFootLockForce[0] <= 0.5f
                            && rag._locomotionFootLockForce[1] <= 0.5f;
-        constexpr float kLoadedSoleToleranceDeg = 12.0f;
         const bool loadedSoleReady = !continuousEnabled
-            || comp._gaitSoleAngularErrorDeg <= kLoadedSoleToleranceDeg;
+            || comp._gaitSoleAngularErrorDeg
+                <= kPlantOwnershipSoleToleranceDeg;
         const bool landingMotionReady = continuousEnabled
             ? glm::length(swingVelocity) < 0.18f
                 && horizontalSpeed < 0.35f
@@ -3884,10 +6606,13 @@
                 ? comp._gaitLandingStableTime + dt : 0.0f;
         }
 
-        if (comp._physicalStepPhase == kSettle) {
+        if (comp._physicalStepPhase == kSettle
+            || comp._physicalStepPhase == kSupportReady) {
             const float minimumSupportAdvance = glm::min(
                 comp.gaitMinStepLength, comp.gaitMaxStepLength);
             if (!comp._physicalStepPlantPoseCaptured) {
+                const bool provingSupportOwnership =
+                    comp._physicalStepPhase == kSupportReady;
                 const char* incomingPlantSide =
                     comp._physicalStepSupportSide < 0 ? "RIGHT" : "LEFT";
                 const float plantSpeed = glm::length(swingVelocity);
@@ -3901,6 +6626,7 @@
                 constexpr float kSettledOffsetSpeedLimit = 0.030f;
                 constexpr float kSettledOffsetTime = 0.10f;
                 const bool settledOffsetCandidate = continuousEnabled
+                    && !provingSupportOwnership
                     && !comp._physicalStepPlantAnchorRebased
                     && !comp._physicalStepPlantCenterAnchorActive
                     && !comp._physicalStepPlantPivotReleaseLatched
@@ -3977,12 +6703,16 @@
                 const bool plantDriftNoLongerGrowing = !continuousEnabled
                     || comp._gaitPlantDriftRate
                         <= kPlantAcquireGrowthLimit;
-                // Once the impact pivot has been released as an active recovery, the
-                // quiet center capture is mandatory. A merely slow foot must not start
-                // support transfer while ownership is still fading away from the edge.
+                // Impact stability and support ownership are deliberately different
+                // invariants. SETTLE may manipulate the material-point pivot, but only
+                // SUPPORT_READY with a completed center blend can prove the load-bearing
+                // anchor that TRANSFER will consume.
                 const bool plantAnchorOwnershipReady = !continuousEnabled
-                    || !comp._physicalStepPlantPivotReleaseLatched
-                    || comp._physicalStepPlantCenterAnchorActive;
+                    || (provingSupportOwnership
+                        && phaseAtFrameStart == kSupportReady
+                        && comp._physicalStepPlantCenterAnchorActive
+                        && comp._physicalStepPlantCenterBlendTime
+                            >= kPlantCenterBlendDuration);
                 const bool acquisitionKinematicallyStable =
                     swingContactNow && stanceContactNow
                     && plantSpeed <= maxAcquireSpeed
@@ -4016,14 +6746,10 @@
                 const float ordinaryAcquireTimeout = baseAcquireTimeout
                     + (recoverableAcquireGrace
                         ? kRecoverableAcquireGraceTime : 0.0f);
-                // A center handoff changes the drift invariant and intentionally resets
-                // the stable proof. A handoff near the old absolute timeout must receive
-                // enough bounded time to prove that new invariant; otherwise the state
-                // transition itself deterministically causes an abort a few frames later.
-                const float postHandoffAcquireDeadline =
-                    comp._physicalStepPlantAnchorHandoffPhaseTime >= 0.0f
-                    ? comp._physicalStepPlantAnchorHandoffPhaseTime
-                        + cadencePlantAcquireTime
+                // SUPPORT_READY owns a fresh clock. Its bounded deadline includes the
+                // immutable center blend plus an independent stability proof.
+                const float postHandoffAcquireDeadline = provingSupportOwnership
+                    ? kPlantCenterBlendDuration + cadencePlantAcquireTime
                         + kPostHandoffAcquireMargin
                     : 0.0f;
                 const float activeAcquireTimeout = glm::max(
@@ -4083,6 +6809,8 @@
                             0.03f, comp._gaitPlannedSupportAdvance
                                 - glm::max(comp.footTargetTolerance, 0.01f)));
                     constexpr float kLandingAdvanceHysteresis = 0.010f;
+                    const bool angularLandingObjective =
+                        hasActiveTurnObjective();
                     const bool retainsMinimumAdvance = !continuousEnabled
                         || comp._gaitAchievedSupportAdvance
                             + kLandingAdvanceHysteresis >= requiredAdvance;
@@ -4097,41 +6825,78 @@
                             kLandingAdvanceHysteresis);
                     }
                     if (!retainsMinimumAdvance) {
-                        spdlog::warn(
-                            "[LocomotionGait] LANDING_ADVANCE_CHECK result=RECOVER "
-                            "planned={:.3f} retainedFromTarget={:.3f} "
-                            "achieved={:.3f}/{:.3f} forwardError={:+.3f} "
-                            "stanceDrift={:.3f}",
-                            comp._gaitPlannedSupportAdvance,
-                            retainedFromTarget,
-                            comp._gaitAchievedSupportAdvance,
-                            requiredAdvance,
-                            comp._physicalStepForwardTargetError,
-                            comp._physicalStepStanceDrift);
-                        // Finish this contact safely and stop; held input can start again
-                        // automatically once standing, without a mandatory key release.
-                        comp._gaitStopRequested = true;
-                        comp._gaitCancelMode = 2;
+                        if (angularLandingObjective) {
+                            // A center-owned, quiet turning footprint remains useful even
+                            // when impact tracking loses more forward advance than the
+                            // straight gait permits. Preserve the physical plant and let the
+                            // next plan originate from the measured feet. The completed
+                            // transfer still has to satisfy load, contact, sole, drift, tilt,
+                            // heading, and saturation before yaw can commit.
+                            spdlog::warn(
+                                "[LocomotionGait] LANDING_ADVANCE_CHECK "
+                                "result=TURN_REPLAN planned={:.3f} "
+                                "retainedFromTarget={:.3f} achieved={:.3f}/{:.3f} "
+                                "forwardError={:+.3f} yaw={:+.3f}deg "
+                                "stanceDrift={:.3f} action=accept-actual-footprint",
+                                comp._gaitPlannedSupportAdvance,
+                                retainedFromTarget,
+                                comp._gaitAchievedSupportAdvance,
+                                requiredAdvance,
+                                comp._physicalStepForwardTargetError,
+                                glm::degrees(
+                                    comp._gaitTurnPlan.admittedYaw),
+                                comp._physicalStepStanceDrift);
+                        } else {
+                            spdlog::warn(
+                                "[LocomotionGait] LANDING_ADVANCE_CHECK result=RECOVER "
+                                "planned={:.3f} retainedFromTarget={:.3f} "
+                                "achieved={:.3f}/{:.3f} forwardError={:+.3f} "
+                                "stanceDrift={:.3f}",
+                                comp._gaitPlannedSupportAdvance,
+                                retainedFromTarget,
+                                comp._gaitAchievedSupportAdvance,
+                                requiredAdvance,
+                                comp._physicalStepForwardTargetError,
+                                comp._physicalStepStanceDrift);
+                            // Straight translation still requires a meaningful forward
+                            // support change. Finish this contact safely and stop so a held
+                            // command can restart from a valid baseline.
+                            comp._gaitStopRequested = true;
+                            comp._gaitCancelMode = 2;
+                        }
                     }
                     if (!continuousEnabled)
                         capturePhysicalLocalPose(*swing);
-                    // The two-stage plant has now captured either the quiet sole center or,
-                    // as a fallback, a credible settled contact. Keep solving the planted
-                    // leg while the pelvis passes over that world-space support.
+                    // TRANSFER consumes only the center-owned anchor proved in the explicit
+                    // SUPPORT_READY state. A quiet impact pivot is never promoted directly.
                     comp._physicalStepPlantPoseCaptured = true;
                     comp._physicalStepSettleTime = 0.0f;
                     comp._gaitLandingVerificationPending = true;
                     comp._gaitLandingStableTime = 0.0f;
+                    spdlog::info(
+                        "[LocomotionGait] SUPPORT_OWNERSHIP_READY step={} plant={} "
+                        "stable={:.3f}/{:.3f}s centerBlend={:.3f}/{:.3f}s "
+                        "drift={:.3f}m speed={:.3f}mps sole={:.1f}deg "
+                        "supportAction=release-transfer",
+                        comp._stepSequenceStepIndex,
+                        incomingPlantSide,
+                        comp._physicalStepPlantAcquireStableTime,
+                        cadencePlantAcquireTime,
+                        comp._physicalStepPlantCenterBlendTime,
+                        kPlantCenterBlendDuration,
+                        comp._physicalStepPlantDrift,
+                        plantSpeed,
+                        comp._gaitSoleAngularErrorDeg);
 
-                    // Transfer and landing verification now run together. An early-return
-                    // cancellation has no new support foot, so it verifies in place and
-                    // enters the standing transition directly.
+                    // Landing verification can continue alongside transfer now that
+                    // support ownership itself is established. An early-return
+                    // cancellation verifies in place and enters standing directly.
                     if (comp._gaitCancelMode != 1 && transferEnabled)
                         beginTransfer();
                 } else if (comp._physicalStepPhaseTime
                                >= activeAcquireTimeout) {
                     spdlog::warn(
-                        "[LocomotionStep] PLANT_ACQUIRE result=FAIL plant={} contact={} "
+                        "[LocomotionStep] PLANT_ACQUIRE result=FAIL state={} plant={} contact={} "
                         "stance={} speed={:.3f}/{:.3f} stable={:.3f}/{:.3f}s "
                         "timeout={:.3f}/{:.3f}s forward={:.3f} "
                         "anchorDrift={:.3f}/{:.3f} centerTravel={:.3f} "
@@ -4144,6 +6909,7 @@
                         "linear={:.3f})s "
                         "angularSpeed={:.3f}radps pivotQuiet={:.3f}s "
                         "settled={:.3f}s",
+                        provingSupportOwnership ? "SUPPORT_READY" : "SETTLE",
                         incomingPlantSide,
                         swingContactNow ? "yes" : "no",
                         stanceContactNow ? "yes" : "no",
@@ -4159,7 +6925,7 @@
                         comp._gaitPlantDriftRate,
                         kPlantAcquireGrowthLimit,
                         comp._gaitSoleAngularErrorDeg,
-                        kLoadedSoleToleranceDeg,
+                        kPlantOwnershipSoleToleranceDeg,
                         loadedSoleReady ? "ok" : "FAIL",
                         comp._gaitPlantCorrectionPeakRequested,
                         comp._gaitPlantCorrectionPeakApplied,
@@ -4181,7 +6947,9 @@
                         comp._physicalStepPlantAngularSpeed,
                         comp._physicalStepPlantPivotStableTime,
                         comp._physicalStepPlantSettledOffsetTime);
-                    abortSequence("new plant did not settle before acquisition timeout");
+                    abortSequence(provingSupportOwnership
+                        ? "center-owned support did not stabilize before readiness timeout"
+                        : "impact pivot did not reach center ownership before settle timeout");
                 }
             }
             if (comp._gaitCancelMode == 1
@@ -4236,19 +7004,31 @@
                 : glm::length(leftVelocity) < 0.15f
                     && glm::length(rightVelocity) < 0.15f
                     && comp._supportTransferComHorizontalSpeed < 0.15f;
+            const bool transferContactReady =
+                swingContactNow && stanceContactNow;
+            const bool stanceDriftReady = continuousEnabled
+                || comp._physicalStepStanceDrift <= 0.040f;
+            const bool plantDriftReady =
+                comp._physicalStepPlantDrift <= 0.040f;
+            const bool transferTiltReady = tiltDeg < 30.0f;
+            const bool supportAuthorityReady =
+                !rag._locomotionSupportSaturated;
+            const bool liftReleased = rag.locomotionLiftBone < 0
+                && rag._locomotionLiftForce <= 0.5f;
+            const bool transferMotorReady =
+                !comp._physicalStepMotorSaturated;
             const bool stableTransfer = transferPositionReady
-                && swingContactNow && stanceContactNow
+                && transferContactReady
                 && oldLegUnloaded
                 && loadedSoleReady
                 && transferMotionReady
-                && (continuousEnabled || comp._physicalStepStanceDrift <= 0.040f)
-                && comp._physicalStepPlantDrift <= 0.040f
-                && tiltDeg < 30.0f
-                && !rag._locomotionSupportSaturated
-                && rag.locomotionLiftBone < 0
-                && rag._locomotionLiftForce <= 0.5f
+                && stanceDriftReady
+                && plantDriftReady
+                && transferTiltReady
+                && supportAuthorityReady
+                && liftReleased
                 && locksOff
-                && !comp._physicalStepMotorSaturated;
+                && transferMotorReady;
             comp._supportTransferHoldStableTime = stableTransfer
                 ? comp._supportTransferHoldStableTime + dt : 0.0f;
 
@@ -4261,9 +7041,12 @@
                 && comp._supportTransferHoldStableTime
                     >= requiredTransferHoldTime) {
                 comp._gaitLandingVerificationPending = false;
-                if (comp._gaitCancelMode == 0)
+                const bool completedAngularObjective =
+                    hasActiveTurnObjective();
+                if (comp._gaitCancelMode == 0
+                    && !completedAngularObjective)
                     updateGaitAdaptation();
-                if (continuousEnabled) {
+                if (continuousEnabled && !completedAngularObjective) {
                     const float settledLoss = glm::max(
                         comp._gaitPlannedSupportAdvance
                             - comp._gaitAchievedSupportAdvance,
@@ -4288,7 +7071,7 @@
                             comp._gaitAchievedSupportAdvance;
                         const float comAdvance = glm::dot(
                             rag._locomotionCOM - comp._gaitStepStartCom,
-                            comp._physicalStepForward);
+                            stepObjectiveForward());
                         comp._gaitMeasuredSpeed = comAdvance
                             / comp._gaitLastStepPeriod;
                         const float stepDrift =
@@ -4300,11 +7083,15 @@
                         comp._gaitMaxMotorRatio = glm::max(
                             comp._gaitMaxMotorRatio, comp._physicalStepMaxMotorRatio);
 
+                        if (comp._gaitCancelMode == 0)
+                            commitActiveTurnHeading();
+
                         const bool shouldStop = comp._gaitStopRequested;
 
                         if (shouldStop) {
                             beginStopping();
                         } else {
+                            beginCommittedSupportTransport();
                             comp._physicalStepPhase = kInterStep;
                             comp._physicalStepPhaseTime = 0.0f;
                             comp._stepSequenceInterStepStableTime = 0.0f;
@@ -4367,16 +7154,21 @@
                 spdlog::warn(
                     "[LocomotionGait] TRANSFER_CHECK result=FAIL "
                     "endpointErr={:.3f}/{:.3f} commandErr={:.3f}/{:.3f}[{}] "
-                    "newRegion={:.3f}/{:.3f}[{}] "
-                    "newLoad={:.2f}/{:.2f}[{}] "
+                    "newDistance={:.3f}/{:.3f}[{};telemetry] "
+                    "load=(actual={:.3f},command={:.3f},target={:.2f},latch={:.2f})[{}] "
                     "contact=({},{}) speed={:.3f} drift=({:.3f},{:.3f}) "
-                    "tilt={:.1f}/30 supportSat={} motorSat={} stable={:.3f}/{:.3f}s",
+                    "tilt={:.1f}/30 stable={:.3f}/{:.3f}s "
+                    "gates=(position={},contact={},load={},sole={},motion={},"
+                    "stanceDrift={},plantDrift={},tilt={},support={},lift={},"
+                    "locks={},motor={},landing={})",
                     comp._supportTransferComError, comTolerance,
                     liveSupportError, liveSupportTolerance,
                     transferPositionReady ? "ok" : "FAIL",
                     comp._supportTransferComToNewSupport, newSupportRadius,
-                    insideNewSupport ? "ok" : "FAIL",
+                    insideNewSupport ? "near" : "far",
                     comp._gaitNewSupportLoad,
+                    gaitSupportCommandLoad,
+                    kNewSupportLoadCommandTarget,
                     kNewSupportLoadAcquireThreshold,
                     oldLegUnloaded ? "ok" : "FAIL",
                     comp._physicalStepContactL ? "L" : "-",
@@ -4384,10 +7176,21 @@
                     comp._supportTransferComHorizontalSpeed,
                     comp._physicalStepStanceDrift, comp._physicalStepPlantDrift,
                     tiltDeg,
-                    rag._locomotionSupportSaturated ? "YES" : "no",
-                    comp._physicalStepMotorSaturated ? "YES" : "no",
                     comp._supportTransferHoldStableTime,
-                    cadenceTransferHoldTime);
+                    requiredTransferHoldTime,
+                    transferPositionReady ? "ok" : "FAIL",
+                    transferContactReady ? "ok" : "FAIL",
+                    oldLegUnloaded ? "ok" : "FAIL",
+                    loadedSoleReady ? "ok" : "FAIL",
+                    transferMotionReady ? "ok" : "FAIL",
+                    stanceDriftReady ? "ok" : "FAIL",
+                    plantDriftReady ? "ok" : "FAIL",
+                    transferTiltReady ? "ok" : "FAIL",
+                    supportAuthorityReady ? "ok" : "FAIL",
+                    liftReleased ? "ok" : "FAIL",
+                    locksOff ? "ok" : "FAIL",
+                    transferMotorReady ? "ok" : "FAIL",
+                    landingVerified ? "ok" : "FAIL");
                 abortSequence("support transfer did not settle before hold timeout");
             }
         } else if (comp._physicalStepPhase == kInterStep) {
@@ -4833,6 +7636,7 @@
                     case kDescent:       return "DESCENT";
                     case kTouchdownWait: return "TOUCHDOWN_WAIT";
                     case kSettle:        return "SETTLE";
+                    case kSupportReady:  return "SUPPORT_READY";
                     case kTransfer:      return "TRANSFER";
                     case kHold:          return "HOLD";
                     case kInterStep:     return "INTER_STEP";
@@ -4849,11 +7653,12 @@
                     case kSwing:       return cadenceSwingTime;
                     case kArrival:     return cadenceArrivalSettleTime;
                     case kDescent:     return cadenceDescentTime;
-                    case kSettle:      return cadencePlantAcquireTime;
-                    case kTransfer:    return cadenceTransferTime;
-                    case kHold:        return cadenceTransferHoldTime;
-                    case kInterStep:   return cadenceInterStepTime;
-                    default:           return 0.0f;
+                    case kSettle:       return cadenceLandingVerifyTime;
+                    case kSupportReady: return cadencePlantAcquireTime;
+                    case kTransfer:     return cadenceTransferTime;
+                    case kHold:         return cadenceTransferHoldTime;
+                    case kInterStep:    return cadenceInterStepTime;
+                    default:            return 0.0f;
                 }
             };
             const float dwell = phaseTimeAtFrameStart + dt;
@@ -4903,6 +7708,71 @@
             DebugDraw::Sphere(comp._physicalStepFoothold, 0.045f, {0.2f, 1.0f, 0.2f});
             DebugDraw::Sphere(desiredFoot, 0.035f, {1.0f, 0.4f, 0.1f});
             DebugDraw::Line(swingFoot, desiredFoot, {1.0f, 0.4f, 0.1f});
+            if (comp._gaitFkValid
+                && comp._physicalStepPhase >= kTakeoff
+                && comp._physicalStepPhase <= kTouchdownWait) {
+                // Magenta is the sole position encoded by the admitted joint command.
+                // The two error segments make command-space closure (orange->magenta)
+                // distinct from powered-ragdoll tracking (magenta->physical cyan).
+                DebugDraw::Sphere(
+                    comp._gaitFkCommandPosition, 0.022f,
+                    {1.0f, 0.15f, 0.95f});
+                DebugDraw::Line(
+                    comp._gaitFkDesiredPosition,
+                    comp._gaitFkCommandPosition,
+                    {1.0f, 0.15f, 0.95f});
+                DebugDraw::Sphere(
+                    comp._gaitFkPhysicalPosition, 0.018f,
+                    {0.15f, 0.95f, 1.0f});
+                DebugDraw::Line(
+                    comp._gaitFkCommandPosition,
+                    comp._gaitFkPhysicalPosition,
+                    {0.15f, 0.95f, 1.0f});
+            }
+            if (comp._gaitTurnPlan.candidateEvaluated) {
+                const auto& turnPlan = comp._gaitTurnPlan;
+                const glm::vec3 startOrigin =
+                    turnPlan.planOrigin + glm::vec3(0.0f, 0.025f, 0.0f);
+                const glm::vec3 endOrigin =
+                    turnPlan.planOrigin + glm::vec3(0.0f, 0.050f, 0.0f);
+                DebugDraw::Line(
+                    startOrigin,
+                    startOrigin + turnPlan.activeStartForward * 0.18f,
+                    {0.1f, 0.8f, 1.0f});
+                DebugDraw::Line(
+                    startOrigin,
+                    startOrigin + turnPlan.activeStartRight * 0.12f,
+                    {0.1f, 0.45f, 1.0f});
+                DebugDraw::Line(
+                    endOrigin,
+                    endOrigin + turnPlan.activeEndForward * 0.18f,
+                    {1.0f, 0.2f, 0.8f});
+                DebugDraw::Line(
+                    endOrigin,
+                    endOrigin + turnPlan.activeEndRight * 0.12f,
+                    {1.0f, 0.55f, 0.8f});
+
+                const glm::vec3 candidateOrigin =
+                    turnPlan.candidateFootPosition
+                    + glm::vec3(0.0f, 0.015f, 0.0f);
+                const glm::vec3 candidateRight =
+                    turnPlan.candidateFootRotation * glm::vec3(1.0f, 0.0f, 0.0f);
+                const glm::vec3 candidateUp =
+                    turnPlan.candidateFootRotation * glm::vec3(0.0f, 1.0f, 0.0f);
+                const glm::vec3 candidateForward =
+                    turnPlan.candidateFootRotation * glm::vec3(0.0f, 0.0f, -1.0f);
+                DebugDraw::Sphere(
+                    candidateOrigin, 0.025f, {1.0f, 0.75f, 0.1f});
+                DebugDraw::Line(
+                    candidateOrigin, candidateOrigin + candidateRight * 0.08f,
+                    {1.0f, 0.25f, 0.2f});
+                DebugDraw::Line(
+                    candidateOrigin, candidateOrigin + candidateUp * 0.06f,
+                    {0.2f, 1.0f, 0.3f});
+                DebugDraw::Line(
+                    candidateOrigin, candidateOrigin + candidateForward * 0.10f,
+                    {0.2f, 0.55f, 1.0f});
+            }
             if (comp._physicalStepPhase >= kSwing && comp._physicalStepPhase <= kComplete) {
                 glm::vec3 previous = trajectoryPoint(0.0f);
                 for (int i = 1; i <= 12; ++i) {
