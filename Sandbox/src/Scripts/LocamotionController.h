@@ -27,7 +27,6 @@
 struct LocamotionControllerComponent
 {
     float maxSpeed        = 1.0f;
-    float runtimeTurnSpeedDeg = 540.0f;
     float deadzone        = 0.2f;
     float minWalkSpeed    = 0.15f;
     float facingOffsetDeg = 90.0f;
@@ -98,7 +97,6 @@ struct LocamotionControllerComponent
     float gaitHeadingDamping = 50.0f;
     float gaitHeadingMaxTorque = 80.0f;
     float gaitMaxTurnStepDeg = 5.0f;
-    float gaitTurnFallbackDeg = 90.0f;
     float gaitTurnFullAdvanceDeg = 15.0f;
     float gaitTurnZeroAdvanceDeg = 45.0f;
     float gaitMaxFootSeparation = 0.18f;
@@ -291,6 +289,30 @@ struct LocamotionControllerComponent
     float _gaitTurnPairYawScale = 1.0f;
     float _gaitTurnPairYawSign = 0.0f;
     bool _gaitTurnExitBlendPending = false;
+    // A large physical direction change remains a step-planner objective until it
+    // converges. Exact opposites have no unique atan2 sign, so latch the direction
+    // selected by the first available outside foot instead of allowing frame noise to
+    // alternate between clockwise and counter-clockwise plans.
+    bool _gaitPhysicalReversalActive = false;
+    bool _gaitReversalSideLatched = false;
+    float _gaitReversalYawSign = 0.0f;
+    glm::vec3 _gaitReversalTargetForward { 0.0f, 0.0f, -1.0f };
+    int _gaitReversalStepCount = 0;
+    // Live intent is independent of the immutable admitted step. Retarget telemetry
+    // compares against this accumulated reference so slowly moving analog input still
+    // produces one meaningful record after crossing the angular notice threshold.
+    glm::vec3 _gaitRetargetReferenceForward { 0.0f, 0.0f, -1.0f };
+    bool _gaitRetargetReferenceValid = false;
+    int _gaitRetargetSequence = 0;
+    // An early released swing returns to its old plant while the body-heading target
+    // smoothly unwinds from the command already issued this frame to the step-entry
+    // heading. The immutable admitted plan remains intact for diagnostics.
+    bool _gaitTurnCancellationUnwindActive = false;
+    glm::quat _gaitTurnCancellationStartRotation { 1.0f, 0.0f, 0.0f, 0.0f };
+    glm::quat _gaitTurnCancellationEndRotation { 1.0f, 0.0f, 0.0f, 0.0f };
+    glm::vec3 _gaitTurnCancellationStartForward { 0.0f, 0.0f, -1.0f };
+    glm::vec3 _gaitTurnCancellationEndForward { 0.0f, 0.0f, -1.0f };
+    float _gaitTurnCancellationProgress = 0.0f;
 
     struct LegState {
         int footIdx = -1, ankleIdx = -1, kneeIdx = -1, hipIdx = -1;
@@ -617,17 +639,15 @@ struct LocamotionControllerComponent
     bool _gaitEnabled = false;
     bool _runtimeWalkIntent = false;
     bool _runtimeRestartBlocked = false;
+    // A rejected physical reversal completes the validated stop but cannot restart
+    // against the identical command forever. Release or a meaningful direction change
+    // clears this target-specific block.
+    bool _runtimeRestartBlockForwardValid = false;
+    glm::vec3 _runtimeRestartBlockForward { 0.0f, 0.0f, -1.0f };
     int _runtimeAutoRetryCount = 0;
     float _runtimeRecoveryCooldown = 0.0f;
     float _runtimeRecoveryStableTime = 0.0f;
-    bool _runtimeTurnActive = false;
     int _runtimeNextSupportSide = -1;
-    float _runtimeTurnElapsed = 0.0f;
-    float _runtimeTurnDuration = 0.0f;
-    float _runtimeTurnTotalYaw = 0.0f;
-    float _runtimeTurnAppliedYaw = 0.0f;
-    glm::vec3 _runtimeDesiredForward { 0.0f, 0.0f, -1.0f };
-    glm::vec3 _runtimeTurnTargetForward { 0.0f, 0.0f, -1.0f };
     glm::vec3 _gaitStartCom { 0.0f };
     glm::vec3 _gaitStepStartCom { 0.0f };
     glm::vec3 _gaitIkPlanHip { 0.0f };
@@ -648,7 +668,6 @@ inline void DrawComponentInspector<LocamotionControllerComponent>(LocamotionCont
 #define LOCO_DRAG(label, name, speed, low, high, format) ImGui::DragFloat(label, &c.name, speed, low, high, format)
     if (ImGui::CollapsingHeader("Movement", ImGuiTreeNodeFlags_DefaultOpen)) {
         LOCO_DRAG("Max Speed", maxSpeed, 0.05f, 0.0f, 10.0f, "%.2f m/s");
-        LOCO_DRAG("Turn Speed", runtimeTurnSpeedDeg, 10.0f, 90.0f, 1080.0f, "%.0f deg/s");
         LOCO_DRAG("Input Deadzone", deadzone, 0.01f, 0.0f, 0.9f, "%.2f");
         LOCO_DRAG("Minimum Walk Speed", minWalkSpeed, 0.01f, 0.0f, 2.0f, "%.2f m/s");
         LOCO_DRAG("Facing Offset", facingOffsetDeg, 1.0f, -180.0f, 180.0f, "%.0f deg");
@@ -719,7 +738,6 @@ inline void DrawComponentInspector<LocamotionControllerComponent>(LocamotionCont
         LOCO_DRAG("Heading Damping", gaitHeadingDamping, 2.0f, 0.0f, 300.0f, "%.0f");
         LOCO_DRAG("Heading Max Torque", gaitHeadingMaxTorque, 5.0f, 0.0f, 1000.0f, "%.0f");
         LOCO_DRAG("Maximum Turn Per Step", gaitMaxTurnStepDeg, 0.25f, 0.0f, 20.0f, "%.2f deg");
-        LOCO_DRAG("Turn Fallback Threshold", gaitTurnFallbackDeg, 1.0f, 5.0f, 180.0f, "%.1f deg");
         LOCO_DRAG("Turn Full Advance Through", gaitTurnFullAdvanceDeg, 1.0f, 0.0f, 90.0f, "%.1f deg");
         LOCO_DRAG("Turn Zero Advance At", gaitTurnZeroAdvanceDeg, 1.0f, 0.0f, 180.0f, "%.1f deg");
         LOCO_DRAG("Maximum Foot Separation", gaitMaxFootSeparation, 0.005f, 0.10f, 0.30f, "%.3f m");
@@ -760,7 +778,7 @@ inline std::string SerializeComponent<LocamotionControllerComponent>(const Locam
 {
     nlohmann::json j;
 #define LOCO_SAVE(name) j[#name] = c.name
-    LOCO_SAVE(maxSpeed); LOCO_SAVE(runtimeTurnSpeedDeg); LOCO_SAVE(deadzone); LOCO_SAVE(minWalkSpeed);
+    LOCO_SAVE(maxSpeed); LOCO_SAVE(deadzone); LOCO_SAVE(minWalkSpeed);
     LOCO_SAVE(facingOffsetDeg); LOCO_SAVE(groundRayLength); LOCO_SAVE(consciousness);
     LOCO_SAVE(postPoweredGrace); LOCO_SAVE(gaitBlendTime); LOCO_SAVE(weightShiftDuration);
     LOCO_SAVE(supportFrequency); LOCO_SAVE(supportMaxAcceleration); LOCO_SAVE(supportBias);
@@ -784,7 +802,7 @@ inline std::string SerializeComponent<LocamotionControllerComponent>(const Locam
     LOCO_SAVE(gaitInterStepRecenterTime); LOCO_SAVE(gaitUprightStiffness);
     LOCO_SAVE(gaitUprightDamping); LOCO_SAVE(gaitUprightMaxTorque); LOCO_SAVE(gaitHeadingStiffness);
     LOCO_SAVE(gaitHeadingDamping); LOCO_SAVE(gaitHeadingMaxTorque);
-    LOCO_SAVE(gaitMaxTurnStepDeg); LOCO_SAVE(gaitTurnFallbackDeg);
+    LOCO_SAVE(gaitMaxTurnStepDeg);
     LOCO_SAVE(gaitTurnFullAdvanceDeg); LOCO_SAVE(gaitTurnZeroAdvanceDeg);
     LOCO_SAVE(gaitMaxFootSeparation); LOCO_SAVE(gaitInterStepTiltLimit);
     LOCO_SAVE(gaitInterStepHeadingLimit); LOCO_SAVE(gaitStopTime); LOCO_SAVE(gaitStopHoldTime);
@@ -802,7 +820,7 @@ inline void DeserializeComponent<LocamotionControllerComponent>(LocamotionContro
     const auto j = nlohmann::json::parse(data);
 #define LOCO_LOAD(name) c.name = j.value(#name, c.name)
 #define LOCO_MIGRATE(name, legacy) c.name = j.value(#name, j.value(legacy, c.name))
-    LOCO_LOAD(maxSpeed); LOCO_LOAD(runtimeTurnSpeedDeg); LOCO_LOAD(deadzone); LOCO_LOAD(minWalkSpeed);
+    LOCO_LOAD(maxSpeed); LOCO_LOAD(deadzone); LOCO_LOAD(minWalkSpeed);
     LOCO_LOAD(facingOffsetDeg); LOCO_LOAD(groundRayLength); LOCO_LOAD(consciousness);
     LOCO_LOAD(postPoweredGrace); LOCO_LOAD(gaitBlendTime);
     LOCO_MIGRATE(weightShiftDuration, "test2ShiftTime");
@@ -847,7 +865,7 @@ inline void DeserializeComponent<LocamotionControllerComponent>(LocamotionContro
     LOCO_MIGRATE(gaitHeadingStiffness, "test7HeadingStiffness");
     LOCO_MIGRATE(gaitHeadingDamping, "test7HeadingDamping");
     LOCO_MIGRATE(gaitHeadingMaxTorque, "test7HeadingMaxTorque");
-    LOCO_LOAD(gaitMaxTurnStepDeg); LOCO_LOAD(gaitTurnFallbackDeg);
+    LOCO_LOAD(gaitMaxTurnStepDeg);
     LOCO_LOAD(gaitTurnFullAdvanceDeg); LOCO_LOAD(gaitTurnZeroAdvanceDeg);
     LOCO_LOAD(gaitMaxFootSeparation);
     LOCO_MIGRATE(gaitInterStepTiltLimit, "test7InterStepTiltLimit");
@@ -940,8 +958,41 @@ public:
             const bool wantsToWalk = comp._runtimeWalkIntent;
             comp._runtimeRecoveryCooldown = glm::max(
                 comp._runtimeRecoveryCooldown - dt, 0.0f);
+            if (wantsToWalk && comp._runtimeRestartBlocked
+                && comp._runtimeRestartBlockForwardValid
+                && glm::dot(moveDirection, moveDirection) > 1e-8f) {
+                glm::vec3 blockedForward = comp._runtimeRestartBlockForward;
+                blockedForward.y = 0.0f;
+                if (glm::dot(blockedForward, blockedForward) > 1e-8f) {
+                    blockedForward = glm::normalize(blockedForward);
+                    constexpr float kRestartDirectionChangeDeg = 0.5f;
+                    const float directionDot = glm::clamp(
+                        glm::dot(moveDirection, blockedForward), -1.0f, 1.0f);
+                    if (directionDot < std::cos(glm::radians(
+                            kRestartDirectionChangeDeg))) {
+                        comp._runtimeRestartBlocked = false;
+                        comp._runtimeRestartBlockForwardValid = false;
+                        comp._runtimeAutoRetryCount = 0;
+                        comp._runtimeRecoveryCooldown = 0.0f;
+                        comp._runtimeRecoveryStableTime = 0.0f;
+                        if (comp.debug) {
+                            spdlog::info(
+                                "[LocoRuntime] RESTART_UNBLOCKED "
+                                "reason=direction-change delta>{:.1f}deg",
+                                kRestartDirectionChangeDeg);
+                        }
+                    }
+                }
+            }
             if (!wantsToWalk) {
+                if (comp.debug && comp._runtimeRestartBlocked
+                    && comp._runtimeRestartBlockForwardValid) {
+                    spdlog::info(
+                        "[LocoRuntime] RESTART_UNBLOCKED "
+                        "reason=input-release");
+                }
                 comp._runtimeRestartBlocked = false;
+                comp._runtimeRestartBlockForwardValid = false;
                 comp._runtimeAutoRetryCount = 0;
                 comp._runtimeRecoveryCooldown = 0.0f;
                 comp._runtimeRecoveryStableTime = 0.0f;
@@ -1093,21 +1144,12 @@ private:
         GaitCommand command;
         command.enabled = true;
 
-        const bool directionExceedsPhysicalTurn = wantsToWalk && comp._gaitRunning
-            && glm::dot(moveDirection, moveDirection) > 1e-8f
-            && glm::dot(comp._gaitTurnPlan.committedForward,
-                        comp._gaitTurnPlan.committedForward) > 1e-8f
-            && glm::dot(glm::normalize(moveDirection),
-                        glm::normalize(comp._gaitTurnPlan.committedForward))
-                < std::cos(glm::radians(glm::clamp(
-                    comp.gaitTurnFallbackDeg, 5.0f, 180.0f))) - 1e-5f;
         command.startRequested = wantsToWalk && !comp._gaitRunning
             && !comp._runtimeRestartBlocked
             && comp._runtimeRecoveryCooldown <= 0.0f
             && (comp._runtimeAutoRetryCount == 0
                 || comp._runtimeRecoveryStableTime >= 0.25f);
-        command.stopRequested = comp._gaitRunning
-            && (!wantsToWalk || directionExceedsPhysicalTurn);
+        command.stopRequested = comp._gaitRunning && !wantsToWalk;
         command.initialSupportSide = comp._runtimeNextSupportSide;
         command.desiredForward = moveDirection;
 
@@ -1132,16 +1174,12 @@ private:
         c._poseBlend = 0.0f;
         c._runtimeWalkIntent = false;
         c._runtimeRestartBlocked = false;
+        c._runtimeRestartBlockForwardValid = false;
+        c._runtimeRestartBlockForward = glm::vec3(0.0f, 0.0f, -1.0f);
         c._runtimeAutoRetryCount = 0;
         c._runtimeRecoveryCooldown = 0.0f;
         c._runtimeRecoveryStableTime = 0.0f;
-        c._runtimeTurnActive = false;
         c._runtimeNextSupportSide = -1;
-        c._runtimeTurnElapsed = 0.0f;
-        c._runtimeTurnDuration = 0.0f;
-        c._runtimeTurnTotalYaw = 0.0f;
-        c._runtimeTurnAppliedYaw = 0.0f;
-        c._runtimeTurnTargetForward = glm::vec3(0.0f, 0.0f, -1.0f);
         c._desiredVelocity = glm::vec3(0.0f);
         c._legL = {};
         c._legR = {};

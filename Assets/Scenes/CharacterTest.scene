@@ -543,7 +543,6 @@
           "poseWeight": 1.0,
           "postPoweredGrace": 0.4000000059604645,
           "rightFootBone": "leg_joint_R_5",
-          "runtimeTurnSpeedDeg": 540.0,
           "safeReachFraction": 0.9900000095367432,
           "standingPoseResponse": 0.10000000149011612,
           "stepLength": 0.22499999403953552,

@@ -1361,12 +1361,12 @@ state, and enters the validated standing return. It does not invoke the settled 
    directions, including changes requested during weight shift, swing, descent, transfer, and
    inter-step. No case may abort solely because a deliberate turn produced less than the straight-
    gait minimum forward advance.
-5. **CURRENT — Retarget, stop, and reversal behavior.** Allow the desired heading to change at any time while
+5. **Accepted (2026-08-05) — Retarget, stop, and reversal behavior.** Allow the desired heading to change at any time while
    keeping the admitted active step immutable after its commit point. Test left-to-right retargets,
    input release in every major phase, and 180-degree requests. Initially, 180 degrees may use the
    validated controlled stop if multi-step turn admission cannot retain separation or joint margin;
    enable full physical multi-step reversal only after both turn directions pass symmetrically.
-6. **Remove the temporary blend and run regressions.** Disable ordinary `TURN_BLEND` routing, remove
+6. **Accepted (2026-08-05) — Remove the temporary blend and run regressions.** Disable ordinary `TURN_BLEND` routing, remove
    dead state only after no caller remains, and repeat the accepted 44-step straight run. Then run
    at least 20 completed plants on a constant left arc and 20 on a constant right arc, followed by
    the phase-by-phase 45/90-degree matrix and controlled stops. Only after this gate may cadence,
@@ -2253,7 +2253,118 @@ objective-relative landing policy, and settled tracking-reserve ownership, not s
 the final test process while a straight step was active did expose a Vulkan Memory Allocator assertion
 for unfreed dedicated allocations after `HealthSystem::OnDestroy`. Track that shutdown/resource-
 cleanup defect separately; it did not occur in locomotion control and does not block Slice 4's runtime
-acceptance. The active roadmap focus advances to Slice 5 retarget, stop, and reversal behavior.
+acceptance. Slice 5 subsequently accepted retarget, stop, and physical reversal behavior, and Slice 6
+removed the fallback before closing the full regression matrix.
+
+**Slice 5 retarget, stop handoff, and physical reversal (2026-08-05): accepted.** Live desired-heading
+changes now retain an accumulated 0.5-degree telemetry reference and
+emit `[LocomotionRetarget]` records containing the gait phase, immutable-active-step status, routing
+decision, old/new desired headings, committed-heading error, admitted yaw, and turn progress. A
+retarget remains queued for the next foothold when a step is already admitted, regardless of its
+angle. Commands above 90 degrees no longer synthesize a stop request, and fresh large-angle starts no
+longer enter `TURN_BLEND`; both remain in the physical step planner under the accepted per-step yaw,
+contact, tracking, reach, lane, separation, and support limits.
+
+Input release now has an explicit heading handoff. Release during `WEIGHT_SHIFT` or `INTER_STEP`
+enters the controlled stop directly without admitting another foothold. Release during `TAKEOFF` or
+the first half of `SWING` returns the released foot to its exact previous plant pose while a separate
+smooth heading curve unwinds continuously from the target already issued to the immutable step-entry
+heading. Release in the second half of `SWING`, `ARRIVAL`, or `DESCENT` retains the admitted late-step
+yaw while using the existing shortened safe landing. Later contact and transfer phases finish their
+already-admitted step. Every route publishes the final motor-owned heading as the new standing and
+committed basis before `STOPPING`, clears turn-pair/exit/cancellation state, and emits
+`[LocomotionTurnHandoff]`; it never rotates a planted reference or calls `RotateRagdollYaw`.
+
+Dependency-inclusive Debug builds pass for `Sandbox` and `Runtime`, and `git diff --check` is clean.
+Runtime acceptance now requires release and sub-90-degree retargets in both turn directions during
+`WEIGHT_SHIFT`, early/late `SWING`, `ARRIVAL`/`DESCENT`, `TOUCHDOWN_WAIT`/`SETTLE`, `TRANSFER`/`HOLD`,
+and `INTER_STEP`. Each release must produce exactly one stop rebase, reach `IDLE` without retry or
+restart blocking, and restart from the rebased heading. Each live retarget must leave the admitted
+foot pose unchanged and make the following plan consume the newest desired heading. Only after this
+matrix passes should exact-180 turn-side latching and physical reversal admission be enabled.
+
+The completed release matrix exercised `WEIGHT_SHIFT`, `TAKEOFF`, early and late `SWING`, `ARRIVAL`,
+`DESCENT`, `SETTLE`, `TRANSFER`, `HOLD`, and `INTER_STEP`. The two hard-to-hit double-support routes
+were repeated with temporary one-shot phase triggers. Both `WEIGHT_SHIFT` attempts immediately
+published `mode=double-support` and completed with 0-1 mm stop-settle drift; both `INTER_STEP`
+attempts did the same with 0-1 mm drift. All four reported correct contact edges, 1.1-1.3-degree
+final tilt, at most 0.08 motor ratio, and `ready=IDLE`. Across the matrix there were zero locomotion
+aborts, automatic retries, restart blocks, stop-check failures, stop-completion failures, or
+`TURN_BLEND` calls. The temporary trigger state, inspector controls, command injection, and trigger
+telemetry were removed after acceptance; the ordinary retarget and heading-handoff telemetry remains
+for reversal validation.
+
+Exact opposites now latch one deterministic yaw sign from the first available outside foot. The latch
+survives until the requested target changes or heading converges, removing the `atan2` sign ambiguity
+at 180 degrees without changing the immutable admitted-step contract. `[LocomotionReversal]` reports
+physical-route begin, exact-opposite latch, every committed yaw-bearing step, convergence, and any
+fallback transition. With the accepted 5-degree cap, an exact reversal requires 36 yaw-bearing
+commits, plus any conditioned inside-first or zero-yaw exit step required by the existing planner.
+
+During Slice 5 the temporary settled `TURN_BLEND` remained only as a guarded recovery. If the
+authoritative planner rejected a foothold while a large-angle physical reversal was active, logical
+ownership of the not-yet-released swing sole was restored and the validated double-support stop ran
+before that fallback. Shadow envelope feasibility remained diagnostic and could not request it.
+Slice 6 removes this last direct-rotation recovery path entirely.
+
+The acceptance run changed a live command by exactly 180 degrees during `TRANSFER`. The pending input-
+release stop canceled cleanly, the reversal selected `CW` with `LEFT` as the first outside swing, and
+37 yaw-bearing commits reduced remaining error monotonically from -180 to 0 degrees. Thirty-three
+commits admitted the full 5-degree cap; tracking and pair conditioning reduced three late commits to
+4.122, 4.206, and 1.672 degrees. Every commit reported decreasing error and satisfied its angular
+objective, followed by the conditioned zero-yaw exit step and continued straight walking.
+
+Across the reversal there were zero fallbacks, `TURN_BLEND` calls, locomotion aborts, automatic
+retries, restart blocks, feasibility mismatches, or saturation failures. Minimum foot separation was
+0.100 m, minimum reach reserve was 0.031 m, maximum stance/plant drift was 0.018/0.035 m, and maximum
+touchdown horizontal speed was 0.119 m/s. Twenty-seven `TURN_REPLAN` records accepted the actual
+turn-dominant footprint, and three `OBJECTIVE_CLOSURE` records accepted stable contact; these are the
+intended objective-relative reconciliation paths, not recovery failures. Together with the previously
+accepted mirrored 45/90-degree, retarget, and phase-by-phase release matrices, this closes Slice 5.
+The opposite exact-180 initial latch and representative mirrored 135-degree commands remain explicit
+Slice 6 regression cases rather than Slice 5 blockers.
+
+**Slice 6 fallback removal and final regression (2026-08-05): accepted.** The
+settled-turn executor, `RotateRagdollYaw` physics API, runtime turn timing/target state, inspector speed,
+serialized tuning, scene value, and reversal-fallback target state have been removed. Exact-180
+latching and large-reversal telemetry now use a fixed 90-degree classification boundary and remain
+part of the physical planner; no removed fallback setting controls physical admission.
+
+An authoritative reversal-plan rejection now restores the captured swing sole to its existing plant,
+logs `[LocomotionReversal] event=PLAN_REJECT`, and enters the validated double-support stop. The
+rejected desired direction is recorded as a restart guard: the gait cannot repeatedly retry the same
+unadmittable held command after reaching `IDLE`. Releasing input or changing direction by at least
+0.5 degrees clears that target-specific guard. If the stop itself aborts, the same guard remains in
+force instead of degrading into an automatic retry loop. Ordinary non-reversal abort recovery keeps
+its existing bounded retry policy.
+
+Dependency-inclusive Debug builds pass for `Sandbox` and `Runtime`, and `git diff --check` is clean.
+Final runtime acceptance required the 44-step straight/controlled-stop regression, at least 20 plants
+on each constant arc, mirrored 45/90-degree changes, the opposite exact-180 latch, mirrored 135-degree
+changes, and representative phase retarget/releases. No session may emit `TURN_BLEND` or call direct
+ragdoll rotation; the code no longer contains either route. A real planner rejection, if encountered,
+must stop once and remain idle for the unchanged command until input release or direction change.
+
+The final regression ran 156 committed steps over 244.61 seconds. It included a live exact-180
+reversal, a positive 90-degree turn, and two negative 135-degree reversals, for 19 positive and 95
+negative yaw-bearing commits. The exact reversal latched `CW` with the left foot outside first and
+converged in 37 yaw-bearing commits. Both 135-degree sequences converged in 28 commits. All three
+large reversals emitted monotonic `PROGRESS`, reached `heading-converged`, consumed their conditioned
+zero-yaw exit, and continued walking. Retargets exercised `HOLD`, `SETTLE`, and `DESCENT`; three
+release-to-new-direction transitions canceled their pending stops cleanly before the final commanded
+release completed the standing return.
+
+There were zero `PLAN_REJECT` records, locomotion aborts, automatic retries, restart blocks, stop
+failures, feasibility mismatches, `TURN_BLEND` calls, or fallback records. Every angular objective
+passed and every heading commit reported decreasing remaining error. Seventy-three `TURN_REPLAN`
+records accepted the actual turn-dominant footprint. One combined step reported translation closure
+shortfall, emitted the intended `COMBINED_REPLAN`, retained its successful 5-degree angular progress,
+and recovered translation on the following step without adaptation or stability failure. Minimum
+foot separation remained 0.100 m and minimum reach reserve remained 0.018 m.
+
+`STOP_COMPLETE` reported correct contact edges, converged step length and period, 0.014 m stop-settle
+drift, 0.018 m historical relevant drift, 3.7-degree peak tilt, 0.07 peak motor ratio, and 1.5-degree
+final tilt at `IDLE`. This closes Slice 6 and the bounded continuous-turning implementation plan.
 
 Each slice records requested/admitted/achieved yaw, remaining heading error, candidate/admitted/
 actual sole pose, swing and stance joint margins, minimum foot separation, support-target position
@@ -2268,6 +2379,8 @@ support-speed limits.
   attributable to zero-yaw planning;
 - ordinary direction changes through 90 degrees remain in the physical gait instead of stopping,
   rotating the complete ragdoll, and restarting;
+- ordinary 135- and 180-degree changes likewise remain physical, with exact opposites selecting one
+  deterministic outside-first direction and making bounded per-step progress;
 - completed-step heading error converges monotonically apart from a logged live retarget;
 - left and right turns preserve anatomical lane sign and minimum foot separation with no crossover;
 - stance material anchors remain fixed in world space until their existing ownership handoff;
@@ -2279,6 +2392,8 @@ support-speed limits.
   adaptation;
 - release or retarget during every major gait phase reaches either continued stable walking or the
   validated standing return without a restart loop;
+- a real reversal admission failure restores double-support ownership, completes the validated stop,
+  and uses at most one guarded settled fallback for the still-matching target;
 - the ordinary turn path contains no direct ragdoll transform rotation and requires no physics-
   engine change.
 

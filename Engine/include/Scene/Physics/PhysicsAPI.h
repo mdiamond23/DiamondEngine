@@ -182,13 +182,6 @@ namespace Physics {
     glm::vec3 GetRagdollBonePosition(const RagdollComponent& rag, int boneIndex, bool* ok = nullptr);
     glm::vec3 GetRagdollBoneLinearVelocity(const RagdollComponent& rag, int boneIndex, bool* ok = nullptr);
 
-    // Atomically yaw every live body of a built ragdoll around a world-space pivot.
-    // Relative body transforms, joint geometry, and momentum are preserved; the contact
-    // cache is invalidated so the next physics step rebuilds floor contacts at the new
-    // placement. Intended for discrete gameplay reorientation while the rig is settled,
-    // not for continuous turning or collision-aware movement. Returns false if unavailable.
-    bool RotateRagdollYaw(RagdollComponent& rag, glm::vec3 worldPivot, float yawRadians);
-
     // Start a procedural get-up: the rig heaves itself upright by driving its motors
     // toward the bind/stand pose (cones opened, strength ramping up with wobble), then
     // hands back to Animated. Works from Limp (the usual trigger) or any built ragdoll.

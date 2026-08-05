@@ -8,6 +8,20 @@
         c._gaitTurnPairYawScale = 1.0f;
         c._gaitTurnPairYawSign = 0.0f;
         c._gaitTurnExitBlendPending = false;
+        c._gaitPhysicalReversalActive = false;
+        c._gaitReversalSideLatched = false;
+        c._gaitReversalYawSign = 0.0f;
+        c._gaitReversalTargetForward = glm::vec3(0.0f, 0.0f, -1.0f);
+        c._gaitReversalStepCount = 0;
+        c._gaitRetargetReferenceForward = glm::vec3(0.0f, 0.0f, -1.0f);
+        c._gaitRetargetReferenceValid = false;
+        c._gaitRetargetSequence = 0;
+        c._gaitTurnCancellationUnwindActive = false;
+        c._gaitTurnCancellationStartRotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+        c._gaitTurnCancellationEndRotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+        c._gaitTurnCancellationStartForward = glm::vec3(0.0f, 0.0f, -1.0f);
+        c._gaitTurnCancellationEndForward = glm::vec3(0.0f, 0.0f, -1.0f);
+        c._gaitTurnCancellationProgress = 0.0f;
         c._physicalStepBaselineValid = false;
         c._physicalStepContactL = c._physicalStepContactR = false;
         c._physicalStepPrevSwingContact = false;
@@ -263,13 +277,6 @@
         c._legL.planted = c._legR.planted = false;
         c._legL.plantSolveValid = c._legR.plantSolveValid = false;
         c._legL.plantFoot = c._legR.plantFoot = glm::vec3(0.0f);
-        c._runtimeTurnActive = false;
-        c._runtimeTurnElapsed = 0.0f;
-        c._runtimeTurnDuration = 0.0f;
-        c._runtimeTurnTotalYaw = 0.0f;
-        c._runtimeTurnAppliedYaw = 0.0f;
-        c._runtimeDesiredForward = glm::vec3(0.0f, 0.0f, -1.0f);
-        c._runtimeTurnTargetForward = glm::vec3(0.0f, 0.0f, -1.0f);
         c._gaitStartCom = glm::vec3(0.0f);
         c._gaitStepStartCom = glm::vec3(0.0f);
         c._gaitIkPlanHip = glm::vec3(0.0f);
@@ -870,6 +877,120 @@
             return std::atan2(glm::cross(from, to).y,
                               glm::clamp(glm::dot(from, to), -1.0f, 1.0f));
         };
+        auto resolvedHeadingDelta = [&](glm::vec3 from, glm::vec3 to) {
+            const float rawDelta = signedHeadingDelta(from, to);
+            if (!comp._gaitReversalSideLatched)
+                return rawDelta;
+
+            const float targetDelta = signedHeadingDelta(
+                comp._gaitReversalTargetForward, to);
+            const bool sameTarget = std::abs(glm::degrees(targetDelta)) < 0.5f;
+            const bool directionAmbiguous =
+                std::abs(glm::degrees(rawDelta)) >= 179.5f;
+            return sameTarget && directionAmbiguous
+                ? comp._gaitReversalYawSign * std::abs(rawDelta)
+                : rawDelta;
+        };
+        auto clearPhysicalReversal = [&](const char* reason) {
+            if (comp.debug && (comp._gaitPhysicalReversalActive
+                               || comp._gaitReversalSideLatched)) {
+                spdlog::info(
+                    "[LocomotionReversal] event=CLEAR reason={} steps={} "
+                    "heading=({:+.3f},{:+.3f})",
+                    reason, comp._gaitReversalStepCount,
+                    comp._gaitTurnPlan.committedForward.x,
+                    comp._gaitTurnPlan.committedForward.z);
+            }
+            comp._gaitPhysicalReversalActive = false;
+            comp._gaitReversalSideLatched = false;
+            comp._gaitReversalYawSign = 0.0f;
+            comp._gaitReversalStepCount = 0;
+        };
+        auto updatePhysicalReversalIntent = [&](glm::vec3 from, glm::vec3 to,
+                                                int supportSide,
+                                                const char* source) {
+            from.y = to.y = 0.0f;
+            if (glm::dot(from, from) < 1e-8f
+                || glm::dot(to, to) < 1e-8f)
+                return signedHeadingDelta(from, to);
+            from = glm::normalize(from);
+            to = glm::normalize(to);
+
+            const bool hadTarget = comp._gaitPhysicalReversalActive
+                || comp._gaitReversalSideLatched;
+            const bool targetChanged = hadTarget
+                && std::abs(glm::degrees(signedHeadingDelta(
+                    comp._gaitReversalTargetForward, to))) >= 0.5f;
+            if (targetChanged)
+                clearPhysicalReversal("live-retarget");
+
+            const float rawDelta = signedHeadingDelta(from, to);
+            const float errorDeg = std::abs(glm::degrees(rawDelta));
+            constexpr float kPhysicalReversalNoticeDeg = 90.0f;
+            const bool largeDirectionChange = errorDeg >= 179.5f
+                || errorDeg > kPhysicalReversalNoticeDeg + 0.01f;
+            if (!comp._gaitPhysicalReversalActive && largeDirectionChange) {
+                comp._gaitPhysicalReversalActive = true;
+                comp._gaitReversalTargetForward = to;
+                comp._gaitReversalStepCount = 0;
+                if (comp.debug) {
+                    spdlog::info(
+                        "[LocomotionReversal] event=BEGIN source={} "
+                        "error={:.3f}deg target=({:+.3f},{:+.3f}) "
+                        "route=physical-steps",
+                        source, errorDeg, to.x, to.z);
+                }
+            }
+
+            if (largeDirectionChange && errorDeg >= 179.5f
+                && !comp._gaitReversalSideLatched) {
+                // supportSide < 0 releases the right (+1) foot; supportSide > 0
+                // releases the left (-1) foot. Choosing that sign makes the first
+                // available swing the outside foot and removes the exact-180 tie.
+                if (supportSide == 0)
+                    supportSide = comp._runtimeNextSupportSide;
+                const float firstSwingSide = supportSide < 0 ? 1.0f : -1.0f;
+                comp._gaitReversalSideLatched = true;
+                comp._gaitReversalYawSign = firstSwingSide;
+                comp._gaitReversalTargetForward = to;
+                if (comp.debug) {
+                    spdlog::info(
+                        "[LocomotionReversal] event=LATCH source={} "
+                        "direction={} firstSwing={} target=({:+.3f},{:+.3f})",
+                        source,
+                        firstSwingSide > 0.0f ? "CCW" : "CW",
+                        firstSwingSide > 0.0f ? "RIGHT" : "LEFT",
+                        to.x, to.z);
+                }
+            }
+
+            const float resolvedDelta = resolvedHeadingDelta(from, to);
+            if (comp._gaitPhysicalReversalActive
+                && !targetChanged && errorDeg < 0.5f)
+                clearPhysicalReversal("heading-converged");
+            return resolvedDelta;
+        };
+        auto gaitPhaseName = [&](int phase) {
+            switch (phase) {
+                case kIdle:          return "IDLE";
+                case kWeightShift:   return "WEIGHT_SHIFT";
+                case kTakeoff:       return "TAKEOFF";
+                case kSwing:         return "SWING";
+                case kArrival:       return "ARRIVAL";
+                case kDescent:       return "DESCENT";
+                case kTouchdownWait: return "TOUCHDOWN_WAIT";
+                case kSettle:        return "SETTLE";
+                case kSupportReady:  return "SUPPORT_READY";
+                case kTransfer:      return "TRANSFER";
+                case kHold:          return "HOLD";
+                case kInterStep:     return "INTER_STEP";
+                case kComplete:      return "COMPLETE";
+                case kAbort:         return "ABORT";
+                case kStopping:      return "STOPPING";
+                case kReturnStand:   return "RETURN_STAND";
+                default:             return "UNKNOWN";
+            }
+        };
         auto setGaitHeading = [&](glm::vec3 forward) {
             forward.y = 0.0f;
             if (glm::dot(forward, forward) < 1e-8f)
@@ -947,9 +1068,74 @@
         if (glm::dot(diagnosticDesired, diagnosticDesired) < 1e-8f)
             diagnosticDesired = comp._gaitTurnPlan.committedForward;
         diagnosticDesired = glm::normalize(diagnosticDesired);
+        const bool liveDesiredHeading = glm::dot(
+            continuousCommand.desiredForward,
+            continuousCommand.desiredForward) > 1e-8f;
+        if (continuousEnabled && gameplayCommand && liveDesiredHeading
+            && comp._gaitRunning && !comp._gaitStopRequested
+            && comp._physicalStepPhase < kStopping) {
+            int nextAdmissionSupportSide = comp._physicalStepSupportSide;
+            if (comp._gaitTurnPlan.activeHeadingPlan)
+                nextAdmissionSupportSide = -nextAdmissionSupportSide;
+            comp._gaitTurnPlan.desiredHeadingError =
+                updatePhysicalReversalIntent(
+                    comp._gaitTurnPlan.committedForward,
+                    diagnosticDesired,
+                    nextAdmissionSupportSide,
+                    "live-command");
+        } else {
+            comp._gaitTurnPlan.desiredHeadingError = resolvedHeadingDelta(
+                comp._gaitTurnPlan.committedForward, diagnosticDesired);
+        }
         comp._gaitTurnPlan.desiredForward = diagnosticDesired;
-        comp._gaitTurnPlan.desiredHeadingError = signedHeadingDelta(
-            comp._gaitTurnPlan.committedForward, diagnosticDesired);
+
+        if (continuousEnabled && gameplayCommand && comp._gaitRunning
+            && liveDesiredHeading) {
+            if (!comp._gaitRetargetReferenceValid) {
+                comp._gaitRetargetReferenceForward = diagnosticDesired;
+                comp._gaitRetargetReferenceValid = true;
+            } else {
+                constexpr float kRetargetNoticeDeg = 0.5f;
+                const float retargetDelta = signedHeadingDelta(
+                    comp._gaitRetargetReferenceForward, diagnosticDesired);
+                if (std::abs(glm::degrees(retargetDelta))
+                    >= kRetargetNoticeDeg) {
+                    const glm::vec3 previousDesired =
+                        comp._gaitRetargetReferenceForward;
+                    const float previousError = resolvedHeadingDelta(
+                        comp._gaitTurnPlan.committedForward, previousDesired);
+                    const float newError = resolvedHeadingDelta(
+                        comp._gaitTurnPlan.committedForward, diagnosticDesired);
+                    comp._gaitRetargetReferenceForward = diagnosticDesired;
+                    ++comp._gaitRetargetSequence;
+                    if (comp.debug) {
+                        spdlog::info(
+                            "[LocomotionRetarget] sequence={} event=RETARGET "
+                            "phase={} step={} activeCommitted={} route={} "
+                            "desired=(({:+.3f},{:+.3f})->({:+.3f},{:+.3f})) "
+                            "delta={:+.3f}deg committedError=({:+.3f}->{:+.3f})deg "
+                            "activeYaw={:+.3f}deg progress={:.3f}",
+                            comp._gaitRetargetSequence,
+                            gaitPhaseName(comp._physicalStepPhase),
+                            comp._stepSequenceStepIndex,
+                            comp._gaitTurnPlan.activeHeadingPlan ? "yes" : "no",
+                            (continuousCommand.stopRequested
+                             || comp._gaitStopRequested
+                             || comp._physicalStepPhase >= kStopping)
+                                ? "after-stop"
+                                : (comp._gaitTurnPlan.activeHeadingPlan
+                                    ? "next-step" : "current-admission"),
+                            previousDesired.x, previousDesired.z,
+                            diagnosticDesired.x, diagnosticDesired.z,
+                            glm::degrees(retargetDelta),
+                            glm::degrees(previousError),
+                            glm::degrees(newError),
+                            glm::degrees(comp._gaitTurnPlan.admittedYaw),
+                            comp._gaitTurnPlan.plannedTurnProgress);
+                    }
+                }
+            }
+        }
 
         if (continuousEnabled) {
             if (comp._gaitRunning)
@@ -976,6 +1162,22 @@
             && comp._physicalStepPhase != kReturnStand
             && !comp._gaitStopRequested) {
             comp._gaitStopRequested = true;
+            clearPhysicalReversal("input-release");
+            if (gameplayCommand && comp.debug) {
+                spdlog::info(
+                    "[LocomotionRetarget] sequence={} event=STOP_REQUEST "
+                    "cause={} phase={} step={} activeCommitted={} "
+                    "activeYaw={:+.3f}deg progress={:.3f} "
+                    "committedError={:+.3f}deg",
+                    comp._gaitRetargetSequence,
+                    "input-release",
+                    gaitPhaseName(comp._physicalStepPhase),
+                    comp._stepSequenceStepIndex,
+                    comp._gaitTurnPlan.activeHeadingPlan ? "yes" : "no",
+                    glm::degrees(comp._gaitTurnPlan.admittedYaw),
+                    comp._gaitTurnPlan.plannedTurnProgress,
+                    glm::degrees(comp._gaitTurnPlan.desiredHeadingError));
+            }
         } else if (gameplayCommand && comp._gaitRunning
                    && comp._gaitStopRequested
                    && !continuousCommand.stopRequested
@@ -987,124 +1189,26 @@
             // Keep walking instead of carrying a stale stop request into the next step.
             comp._gaitStopRequested = false;
             comp._gaitLandingObjectiveStopRequested = false;
+            if (comp.debug) {
+                spdlog::info(
+                    "[LocomotionRetarget] sequence={} event=STOP_CANCEL "
+                    "phase={} step={} action=continue-current-gait",
+                    comp._gaitRetargetSequence,
+                    gaitPhaseName(comp._physicalStepPhase),
+                    comp._stepSequenceStepIndex);
+            }
         }
 
         auto commitRuntimeStandingHeading = [&](glm::vec3 forward) {
             setGaitHeading(forward);
             const float targetYaw = std::atan2(
                 -comp._physicalStepForward.x, -comp._physicalStepForward.z);
-            // This is the source used by the general standing controller at the start
-            // of the next update, so the eased physical turn and its target cannot fight.
+            // Publish the physical handoff heading to the general standing controller
+            // so a completed stop cannot restart from a stale pre-cancellation frame.
             comp._yaw = targetYaw - glm::radians(comp.facingOffsetDeg);
-        };
-        auto rotateRuntimeReferences = [&](const glm::vec3& pivot,
-                                           const glm::quat& turn) {
-            auto rotatePoint = [&](glm::vec3 point) {
-                return pivot + turn * (point - pivot);
-            };
-            comp._physicalStepFootBaselineL = rotatePoint(comp._physicalStepFootBaselineL);
-            comp._physicalStepFootBaselineR = rotatePoint(comp._physicalStepFootBaselineR);
-            comp._physicalStepComBaseline = rotatePoint(comp._physicalStepComBaseline);
-            comp._physicalStepSupportTarget = rotatePoint(comp._physicalStepSupportTarget);
-        };
-        auto beginRuntimeTurn = [&](glm::vec3 from, glm::vec3 to,
-                                    const char* action) {
-            from.y = to.y = 0.0f;
-            from = glm::normalize(from);
-            to = glm::normalize(to);
-            comp._runtimeTurnActive = true;
-            comp._runtimeTurnElapsed = 0.0f;
-            comp._runtimeTurnAppliedYaw = 0.0f;
-            comp._runtimeTurnTotalYaw = signedHeadingDelta(from, to);
-            comp._runtimeTurnTargetForward = to;
-            comp._runtimeDesiredForward = to;
-            const float turnDegrees = std::abs(
-                glm::degrees(comp._runtimeTurnTotalYaw));
-            const float turnSpeed = glm::max(
-                comp.runtimeTurnSpeedDeg, 90.0f);
-            comp._runtimeTurnDuration = glm::clamp(
-                turnDegrees / turnSpeed, 0.12f, 0.40f);
-            spdlog::info(
-                "[LocoRuntime] TURN_BLEND {} yaw={:+.1f}deg duration={:.3f}s "
-                "speed={:.0f}deg/s from=({:+.2f},{:+.2f}) "
-                "to=({:+.2f},{:+.2f})",
-                action, glm::degrees(comp._runtimeTurnTotalYaw),
-                comp._runtimeTurnDuration, turnSpeed,
-                from.x, from.z, to.x, to.z);
-        };
-        auto advanceRuntimeTurn = [&](glm::vec3 desiredForward) {
-            constexpr float kTurnThresholdDeg = 0.5f;
-            desiredForward.y = 0.0f;
-            if (glm::dot(desiredForward, desiredForward) > 1e-8f)
-                desiredForward = glm::normalize(desiredForward);
-            else
-                desiredForward = comp._runtimeTurnTargetForward;
-
-            if (std::abs(glm::degrees(signedHeadingDelta(
-                    comp._runtimeTurnTargetForward, desiredForward)))
-                    > kTurnThresholdDeg) {
-                beginRuntimeTurn(comp._physicalStepForward, desiredForward, "RETARGET");
-            }
-
-            comp._runtimeTurnElapsed = glm::min(
-                comp._runtimeTurnElapsed + dt, comp._runtimeTurnDuration);
-            const float linearT = comp._runtimeTurnDuration > 1e-6f
-                ? comp._runtimeTurnElapsed / comp._runtimeTurnDuration : 1.0f;
-            const float easedT = linearT * linearT * (3.0f - 2.0f * linearT);
-            const float desiredAppliedYaw =
-                comp._runtimeTurnTotalYaw * easedT;
-            const float deltaYaw = desiredAppliedYaw
-                - comp._runtimeTurnAppliedYaw;
-
-            if (std::abs(deltaYaw) > 1e-7f) {
-                const glm::vec3 pivot = 0.5f * (leftFoot + rightFoot);
-                const glm::quat turn = glm::angleAxis(
-                    deltaYaw, glm::vec3(0.0f, 1.0f, 0.0f));
-                if (!Physics::RotateRagdollYaw(rag, pivot, deltaYaw)) {
-                    comp._runtimeTurnActive = false;
-                    comp._runtimeRestartBlocked = true;
-                    spdlog::error(
-                        "[LocoRuntime] TURN_BLEND FAIL applied={:+.1f}deg "
-                        "action=block-restart-until-input-release",
-                        glm::degrees(comp._runtimeTurnAppliedYaw));
-                    return;
-                }
-                rotateRuntimeReferences(pivot, turn);
-                commitRuntimeStandingHeading(
-                    turn * comp._physicalStepForward);
-                comp._runtimeTurnAppliedYaw = desiredAppliedYaw;
-            }
-
-            comp._physicalStepPreviousSwingFootValid = false;
-            if (linearT >= 1.0f) {
-                comp._runtimeTurnActive = false;
-                commitRuntimeStandingHeading(
-                    comp._runtimeTurnTargetForward);
-                spdlog::info(
-                    "[LocoRuntime] TURN_BLEND COMPLETE yaw={:+.1f}deg "
-                    "duration={:.3f}s heading=({:+.2f},{:+.2f}) "
-                    "action=refresh-one-physics-step",
-                    glm::degrees(comp._runtimeTurnTotalYaw),
-                    comp._runtimeTurnElapsed,
-                    comp._physicalStepForward.x, comp._physicalStepForward.z);
-            }
         };
 
         if (comp._physicalStepPhase == kIdle) {
-            if (gameplayCommand && comp._runtimeTurnActive) {
-                if (!continuousCommand.startRequested) {
-                    comp._runtimeTurnActive = false;
-                    comp._runtimeDesiredForward = comp._physicalStepForward;
-                    spdlog::info(
-                        "[LocoRuntime] TURN_BLEND CANCELED applied={:+.1f}deg "
-                        "heading=({:+.2f},{:+.2f}) reason=input-release",
-                        glm::degrees(comp._runtimeTurnAppliedYaw),
-                        comp._physicalStepForward.x, comp._physicalStepForward.z);
-                } else {
-                    advanceRuntimeTurn(continuousCommand.desiredForward);
-                }
-                return;
-            }
             const bool startLeftSupport = continuousCommand.startRequested
                 && continuousCommand.initialSupportSide < 0;
             const bool startRightSupport = continuousCommand.startRequested
@@ -1114,6 +1218,8 @@
                 comp._gaitTurnPairAdvanceScale = 1.0f;
                 comp._gaitTurnPairYawScale = 1.0f;
                 comp._gaitTurnPairYawSign = 0.0f;
+                comp._gaitTurnCancellationUnwindActive = false;
+                comp._gaitTurnCancellationProgress = 0.0f;
                 const glm::quat startHeading = glm::normalize(
                     rag.locomotionTargetRot);
                 const glm::vec3 standingForward = horizontalForward(startHeading);
@@ -1126,23 +1232,16 @@
                     desiredForward = standingForward;
                 desiredForward = glm::normalize(desiredForward);
 
-                const float requestedTurn = signedHeadingDelta(
-                    standingForward, desiredForward);
-                comp._runtimeDesiredForward = desiredForward;
+                comp._gaitRetargetReferenceForward = desiredForward;
+                comp._gaitRetargetReferenceValid = true;
+                comp._gaitRetargetSequence = 0;
 
-                // Slice four admits turn-dominant physical steps through the configured
-                // fallback angle. Larger changes retain the temporary settled blend until
-                // reversal and fallback removal are validated in later slices.
-                const float fallbackAngleDeg = glm::clamp(
-                    comp.gaitTurnFallbackDeg, 5.0f, 180.0f);
-                if (gameplayCommand
-                    && std::abs(glm::degrees(requestedTurn))
-                        > fallbackAngleDeg + 0.01f) {
-                    beginRuntimeTurn(
-                        standingForward, desiredForward, "BEGIN");
-                    advanceRuntimeTurn(desiredForward);
-                    return;
-                }
+                const int initialSupportSide = startLeftSupport ? -1 : 1;
+                const float resolvedRequestedTurn =
+                    updatePhysicalReversalIntent(
+                        standingForward, desiredForward,
+                        initialSupportSide, "gait-start");
+                comp._gaitTurnPlan.desiredHeadingError = resolvedRequestedTurn;
 
                 comp._physicalStepFootBaselineL = leftFoot;
                 comp._physicalStepFootBaselineR = rightFoot;
@@ -1152,7 +1251,7 @@
                 // standing basis.
                 setGaitHeading(standingForward);
                 comp._physicalStepSupportTarget = comp._physicalStepComBaseline;
-                comp._physicalStepSupportSide = startLeftSupport ? -1 : 1;
+                comp._physicalStepSupportSide = initialSupportSide;
                 comp._runtimeNextSupportSide = -comp._physicalStepSupportSide;
                 comp._physicalStepPhase = kWeightShift;
                 comp._physicalStepPhaseTime = 0.0f;
@@ -1361,6 +1460,48 @@
             comp._gaitRunTime += dt;
 
         if (continuousEnabled && comp._gaitRunning
+            && comp._gaitTurnCancellationUnwindActive) {
+            constexpr float kCancellationSwingHeadingShare = 0.80f;
+            float cancellationProgress =
+                comp._gaitTurnCancellationProgress;
+            if (comp._physicalStepPhase == kTakeoff) {
+                cancellationProgress = 0.0f;
+            } else if (comp._physicalStepPhase == kSwing) {
+                const float cancellationSwingTime = glm::max(
+                    0.18f, cadenceSwingTime * 0.65f);
+                const float swingT = glm::clamp(
+                    comp._physicalStepPhaseTime
+                        / cancellationSwingTime,
+                    0.0f, 1.0f);
+                cancellationProgress = kCancellationSwingHeadingShare
+                    * smoothstep(swingT);
+            } else if (comp._physicalStepPhase == kArrival) {
+                cancellationProgress = kCancellationSwingHeadingShare;
+            } else if (comp._physicalStepPhase == kDescent) {
+                const float descentT = glm::clamp(
+                    comp._physicalStepPhaseTime
+                        / glm::max(cadenceDescentTime, 0.01f),
+                    0.0f, 1.0f);
+                cancellationProgress = kCancellationSwingHeadingShare
+                    + (1.0f - kCancellationSwingHeadingShare)
+                        * smoothstep(descentT);
+            } else if (comp._physicalStepPhase >= kTouchdownWait) {
+                cancellationProgress = 1.0f;
+            }
+
+            comp._gaitTurnCancellationProgress = glm::clamp(
+                cancellationProgress, 0.0f, 1.0f);
+            glm::quat cancellationEnd = glm::normalize(
+                comp._gaitTurnCancellationEndRotation);
+            const glm::quat cancellationStart = glm::normalize(
+                comp._gaitTurnCancellationStartRotation);
+            if (glm::dot(cancellationStart, cancellationEnd) < 0.0f)
+                cancellationEnd = -cancellationEnd;
+            comp._gaitHeadingTargetRot = glm::normalize(glm::slerp(
+                cancellationStart, cancellationEnd,
+                comp._gaitTurnCancellationProgress));
+            rag.locomotionTargetRot = comp._gaitHeadingTargetRot;
+        } else if (continuousEnabled && comp._gaitRunning
             && comp._gaitTurnPlan.activeHeadingPlan) {
             auto& turnPlan = comp._gaitTurnPlan;
             constexpr float kSwingArrivalT = 0.70f;
@@ -2336,6 +2477,12 @@
             // through support transfer without rotating either planted reference.
             if (continuousEnabled && leg.planted)
                 return glm::normalize(leg.plantedFootWorldRotation);
+            if (continuousEnabled && &leg == swing
+                && comp._gaitCancelMode == 1) {
+                // An early cancellation returns to the exact old sole pose while the
+                // separately owned heading target unwinds continuously above.
+                return glm::normalize(leg.plantedFootWorldRotation);
+            }
             const glm::quat heading = continuousEnabled
                 && &leg == swing
                 && comp._gaitTurnPlan.activeHeadingPlan
@@ -2396,7 +2543,7 @@
                 desiredForward = committedForward;
             desiredForward = glm::normalize(desiredForward);
 
-            const float desiredHeadingError = signedHeadingDelta(
+            const float desiredHeadingError = resolvedHeadingDelta(
                 committedForward, desiredForward);
             const float maximumStepYaw = glm::radians(glm::clamp(
                 comp.gaitMaxTurnStepDeg, 0.0f, 20.0f));
@@ -4123,9 +4270,9 @@
             if (!turnPlan.activeHeadingPlan) return;
 
             const glm::vec3 previousCommitted = turnPlan.committedForward;
-            const float remainingBefore = signedHeadingDelta(
+            const float remainingBefore = resolvedHeadingDelta(
                 previousCommitted, turnPlan.desiredForward);
-            const float remainingAfter = signedHeadingDelta(
+            const float remainingAfter = resolvedHeadingDelta(
                 turnPlan.activeEndForward, turnPlan.desiredForward);
             if (std::abs(turnPlan.admittedYaw) > 1e-6f) {
                 turnPlan.achievedYaw = turnPlan.admittedYaw
@@ -4164,7 +4311,22 @@
                 -comp._physicalStepForward.x,
                 -comp._physicalStepForward.z);
             comp._yaw = committedYaw - glm::radians(comp.facingOffsetDeg);
-            comp._runtimeDesiredForward = turnPlan.desiredForward;
+            if (comp._gaitPhysicalReversalActive
+                && std::abs(turnPlan.admittedYaw) > 1e-6f) {
+                ++comp._gaitReversalStepCount;
+                if (comp.debug) {
+                    spdlog::info(
+                        "[LocomotionReversal] event=PROGRESS step={} count={} "
+                        "swing={} yaw={:+.3f}deg remaining={:+.3f}deg",
+                        comp._stepSequenceStepIndex,
+                        comp._gaitReversalStepCount,
+                        turnPlan.swingFootLeft ? "LEFT" : "RIGHT",
+                        glm::degrees(turnPlan.admittedYaw),
+                        glm::degrees(remainingAfter));
+                }
+                if (std::abs(glm::degrees(remainingAfter)) < 0.5f)
+                    clearPhysicalReversal("heading-converged");
+            }
 
             if (comp.debug) {
                 const bool errorDecreased = comp._gaitStopRequested
@@ -4262,7 +4424,7 @@
                          glm::min(comp.gaitDesiredSpeed, 0.10f)),
                 0.03f,
                 maximumTransportSpeed);
-            const float remainingHeadingError = signedHeadingDelta(
+            const float remainingHeadingError = resolvedHeadingDelta(
                 committedForward, comp._gaitTurnPlan.desiredForward);
             const float headingAdvanceScale =
                 turnAdvanceScaleForHeadingError(remainingHeadingError);
@@ -4344,6 +4506,9 @@
                 comp._gaitTurnPairAdvanceScale = 1.0f;
                 comp._gaitTurnPairYawScale = 1.0f;
                 comp._gaitTurnPairYawSign = 0.0f;
+                comp._gaitTurnCancellationUnwindActive = false;
+                comp._gaitTurnCancellationProgress = 0.0f;
+                comp._gaitRetargetReferenceValid = false;
                 comp._gaitRunning = false;
                 comp._gaitContinuousCycle = false;
                 comp._gaitBypassWeightShift = false;
@@ -4351,28 +4516,38 @@
                 comp._gaitSupportCurveActive = false;
                 comp._gaitSupportCurveStep = -1;
                 comp._gaitSupportCommandVelocity = glm::vec3(0.0f);
+                clearPhysicalReversal("step-abort");
             }
             if (gameplayCommand) {
                 constexpr int kMaximumAutomaticRetries = 2;
                 constexpr float kAutomaticRetryCooldown = 0.35f;
-                ++comp._runtimeAutoRetryCount;
-                comp._runtimeRecoveryCooldown = kAutomaticRetryCooldown;
                 comp._runtimeRecoveryStableTime = 0.0f;
-                comp._runtimeRestartBlocked =
-                    comp._runtimeAutoRetryCount > kMaximumAutomaticRetries;
-                if (comp._runtimeRestartBlocked) {
+                if (comp._runtimeRestartBlockForwardValid) {
+                    comp._runtimeRestartBlocked = true;
+                    comp._runtimeRecoveryCooldown = 0.0f;
                     spdlog::warn(
-                        "[LocoRuntime] RESTART_BLOCKED reason=retry-limit "
-                        "attempts={} action=release-movement-before-retry",
-                        comp._runtimeAutoRetryCount);
+                        "[LocoRuntime] RESTART_BLOCKED "
+                        "reason=rejected-direction-stop-abort "
+                        "action=release-or-change-direction-before-retry");
                 } else {
-                    spdlog::warn(
-                        "[LocoRuntime] AUTO_RETRY_QUEUED attempt={}/{} "
-                        "cooldown={:.2f}s stableGate=0.25s "
-                        "action=resume-held-intent-after-recovery",
-                        comp._runtimeAutoRetryCount,
-                        kMaximumAutomaticRetries,
-                        kAutomaticRetryCooldown);
+                    ++comp._runtimeAutoRetryCount;
+                    comp._runtimeRecoveryCooldown = kAutomaticRetryCooldown;
+                    comp._runtimeRestartBlocked =
+                        comp._runtimeAutoRetryCount > kMaximumAutomaticRetries;
+                    if (comp._runtimeRestartBlocked) {
+                        spdlog::warn(
+                            "[LocoRuntime] RESTART_BLOCKED reason=retry-limit "
+                            "attempts={} action=release-movement-before-retry",
+                            comp._runtimeAutoRetryCount);
+                    } else {
+                        spdlog::warn(
+                            "[LocoRuntime] AUTO_RETRY_QUEUED attempt={}/{} "
+                            "cooldown={:.2f}s stableGate=0.25s "
+                            "action=resume-held-intent-after-recovery",
+                            comp._runtimeAutoRetryCount,
+                            kMaximumAutomaticRetries,
+                            kAutomaticRetryCooldown);
+                    }
                 }
             }
             spdlog::warn(
@@ -4573,6 +4748,51 @@
             }
         };
 
+        auto requestRejectedReversalStop = [&](const char* admissionSite) {
+            auto& turnPlan = comp._gaitTurnPlan;
+            if (!continuousEnabled || !gameplayCommand
+                || !comp._gaitPhysicalReversalActive
+                || !turnPlan.candidateEvaluated
+                || turnPlan.candidateAccepted)
+                return false;
+
+            comp._gaitStopRequested = true;
+            comp._gaitLandingObjectiveStopRequested = false;
+            comp._runtimeRestartBlocked = true;
+            comp._runtimeRestartBlockForwardValid = true;
+            comp._runtimeRestartBlockForward = turnPlan.desiredForward;
+
+            // captureSwing only released logical ownership; takeoff has not happened.
+            // Restore the measured sole to its existing plant so the double-support stop
+            // begins from two owned contacts instead of an artificial airborne leg.
+            swing->planted = true;
+            comp._physicalStepDesiredFoot = swingFoot;
+            comp._gaitSwingSoleCommandValid = false;
+            turnPlan.activeHeadingPlan = false;
+            comp._gaitTurnPairPendingInside = false;
+            comp._gaitTurnPairAdvanceScale = 1.0f;
+            comp._gaitTurnPairYawScale = 1.0f;
+            comp._gaitTurnPairYawSign = 0.0f;
+
+            spdlog::warn(
+                "[LocomotionReversal] event=PLAN_REJECT site={} "
+                "step={} swing={} requestedYaw={:+.3f}deg "
+                "constraint={} swingSpeed={:.3f}/{:.3f}mps "
+                "angularSpeed={:.3f}/{:.3f}radps "
+                "action=controlled-stop-block-unchanged-input",
+                admissionSite,
+                comp._stepSequenceStepIndex,
+                turnPlan.swingFootLeft ? "LEFT" : "RIGHT",
+                glm::degrees(turnPlan.requestedYaw),
+                TurnConstraintName(turnPlan.limitingConstraint),
+                turnPlan.requiredSwingSpeed,
+                turnPlan.swingSpeedLimit,
+                turnPlan.requiredAngularSpeed,
+                turnPlan.angularSpeedLimit);
+            clearPhysicalReversal("planner-rejection");
+            return true;
+        };
+
         const float comError = comp._physicalStepTargetLateral - comp._physicalStepComLateral;
         const float forwardComError = glm::dot(
             comp._physicalStepSupportTarget - rag._locomotionCOM,
@@ -4602,6 +4822,7 @@
         if (continuousEnabled
             && comp._physicalStepPhase == kWeightShift
             && comp._gaitBypassWeightShift
+            && !comp._gaitStopRequested
             && stanceContactNow && swingContactNow) {
             // TRANSFER already moved the COM over the new stance foot and verified load
             // ownership. Re-plan the released old foot immediately; do not settle and
@@ -4624,10 +4845,13 @@
                     releasedAnchorError,
                     comp._gaitNewSupportLoad);
             } else {
-                abortSequence(
-                    "continuous handoff foothold lacked tracking reserve");
+                if (!requestRejectedReversalStop("continuous-handoff")) {
+                    abortSequence(
+                        "continuous handoff foothold lacked tracking reserve");
+                }
             }
         } else if (comp._physicalStepPhase == kWeightShift
+            && (!continuousEnabled || !comp._gaitStopRequested)
             && weightShiftCommandReady
             && weightShiftLateralReady
             && weightShiftForwardReady
@@ -4644,9 +4868,11 @@
                 if (continuousEnabled) {
                 }
             } else {
-                abortSequence(continuousEnabled
-                    ? "latched foothold lacked support-advance tracking reserve"
-                    : "latched foothold fell below 15 cm after reach clamp");
+                if (!requestRejectedReversalStop("weight-shift")) {
+                    abortSequence(continuousEnabled
+                        ? "latched foothold lacked support-advance tracking reserve"
+                        : "latched foothold fell below 15 cm after reach clamp");
+                }
             }
         } else if (continuousEnabled
                    && comp._physicalStepPhase == kWeightShift
@@ -4689,6 +4915,20 @@
             const bool returnToPlant = comp._physicalStepPhase == kTakeoff
                 || (inSwing && swingProgress < 0.50f);
             if (returnToPlant) {
+                const auto& turnPlan = comp._gaitTurnPlan;
+                comp._gaitTurnCancellationUnwindActive =
+                    turnPlan.activeHeadingPlan;
+                comp._gaitTurnCancellationStartRotation = glm::normalize(
+                    comp._gaitHeadingTargetRot);
+                comp._gaitTurnCancellationEndRotation =
+                    turnPlan.activeHeadingPlan
+                    ? glm::normalize(turnPlan.activeStartRotation)
+                    : comp._gaitTurnCancellationStartRotation;
+                comp._gaitTurnCancellationStartForward = horizontalForward(
+                    comp._gaitTurnCancellationStartRotation);
+                comp._gaitTurnCancellationEndForward = horizontalForward(
+                    comp._gaitTurnCancellationEndRotation);
+                comp._gaitTurnCancellationProgress = 0.0f;
                 comp._gaitCancelMode = 1;
                 comp._physicalStepArcStart = swingFoot;
                 comp._physicalStepFoothold = comp._physicalStepSwingStart;
@@ -4698,6 +4938,24 @@
                 comp._physicalStepTrajectoryT = 0.0f;
                 comp._physicalStepArrivalStableTime = 0.0f;
                 comp._gaitSwingRecontactTime = 0.0f;
+                if (comp.debug) {
+                    spdlog::info(
+                        "[LocomotionTurnHandoff] event=CANCEL_BEGIN mode=early-return "
+                        "phase={} step={} activeCommitted={} progress={:.3f} "
+                        "heading=(({:+.3f},{:+.3f})->({:+.3f},{:+.3f})) "
+                        "unwind={:+.3f}deg action=return-old-plant",
+                        gaitPhaseName(phaseAtFrameStart),
+                        comp._stepSequenceStepIndex,
+                        turnPlan.activeHeadingPlan ? "yes" : "no",
+                        turnPlan.plannedTurnProgress,
+                        comp._gaitTurnCancellationStartForward.x,
+                        comp._gaitTurnCancellationStartForward.z,
+                        comp._gaitTurnCancellationEndForward.x,
+                        comp._gaitTurnCancellationEndForward.z,
+                        glm::degrees(signedHeadingDelta(
+                            comp._gaitTurnCancellationStartForward,
+                            comp._gaitTurnCancellationEndForward)));
+                }
             } else {
                 comp._gaitCancelMode = 2;
                 const float plannedAdvance = glm::dot(
@@ -4719,6 +4977,17 @@
                 } else if (comp._physicalStepPhase == kArrival) {
                     comp._physicalStepPhase = kDescent;
                     comp._physicalStepPhaseTime = 0.0f;
+                }
+                if (comp.debug) {
+                    spdlog::info(
+                        "[LocomotionTurnHandoff] event=CANCEL_BEGIN mode=late-finish "
+                        "phase={} step={} activeCommitted={} progress={:.3f} "
+                        "activeYaw={:+.3f}deg action=finish-admitted-heading",
+                        gaitPhaseName(phaseAtFrameStart),
+                        comp._stepSequenceStepIndex,
+                        comp._gaitTurnPlan.activeHeadingPlan ? "yes" : "no",
+                        comp._gaitTurnPlan.plannedTurnProgress,
+                        glm::degrees(comp._gaitTurnPlan.admittedYaw));
                 }
             }
         }
@@ -7118,6 +7387,57 @@
             writeLegPose(*stance);
 
         auto beginStopping = [&]() {
+            auto& turnPlan = comp._gaitTurnPlan;
+            const int handoffPhase = comp._physicalStepPhase;
+            const bool hadActiveHeading = turnPlan.activeHeadingPlan;
+            const float admittedYaw = turnPlan.admittedYaw;
+            const float admittedProgress = turnPlan.plannedTurnProgress;
+            const float cancellationProgress =
+                comp._gaitTurnCancellationProgress;
+            const glm::vec3 desiredForward = turnPlan.desiredForward;
+            const glm::vec3 handoffForward = horizontalForward(
+                comp._gaitHeadingTargetRot);
+            const float issuedYaw = signedHeadingDelta(
+                turnPlan.activeStartForward, handoffForward);
+            const float remainingToDesired = resolvedHeadingDelta(
+                handoffForward, desiredForward);
+
+            // A stop establishes a new standing heading without moving any body directly.
+            // Early return has already unwound toward the step-entry target; a late finish
+            // has completed the immutable admitted target through transfer. Publish the
+            // target actually owned by the heading motor so the next run cannot restart
+            // from a stale pre-cancellation frame.
+            commitRuntimeStandingHeading(handoffForward);
+            comp._gaitTurnCancellationUnwindActive = false;
+            comp._gaitTurnCancellationProgress = 0.0f;
+            clearPhysicalReversal(
+                comp._runtimeRestartBlockForwardValid
+                    ? "planner-rejection-stop" : "controlled-stop");
+
+            if (comp.debug) {
+                const char* mode = comp._gaitCancelMode == 1
+                    ? "early-return"
+                    : (comp._gaitCancelMode == 2
+                        ? "late-finish"
+                        : (handoffPhase == kWeightShift
+                            || handoffPhase == kInterStep
+                            ? "double-support" : "post-transfer"));
+                spdlog::info(
+                    "[LocomotionTurnHandoff] event=STOP_REBASE mode={} "
+                    "phase={} step={} activeCommitted={} "
+                    "admittedYaw={:+.3f}deg issuedYaw={:+.3f}deg "
+                    "progress=(active={:.3f},cancel={:.3f}) "
+                    "heading=({:+.3f},{:+.3f}) remainingDesired={:+.3f}deg "
+                    "action=publish-standing-heading",
+                    mode, gaitPhaseName(handoffPhase),
+                    comp._stepSequenceStepIndex,
+                    hadActiveHeading ? "yes" : "no",
+                    glm::degrees(admittedYaw),
+                    glm::degrees(issuedYaw),
+                    admittedProgress, cancellationProgress,
+                    handoffForward.x, handoffForward.z,
+                    glm::degrees(remainingToDesired));
+            }
             capturePhysicalLocalPose(*swing);
             capturePhysicalLocalPose(*stance);
             comp._gaitSwingCommandSpeed = 0.0f;
@@ -7180,6 +7500,16 @@
             comp._physicalStepPhase = kStopping;
             comp._physicalStepPhaseTime = 0.0f;
         };
+
+        if (continuousEnabled && comp._gaitStopRequested
+            && comp._gaitCancelMode == 0
+            && (comp._physicalStepPhase == kWeightShift
+                || comp._physicalStepPhase == kInterStep)) {
+            // Both soles are still owned in these phases, so no swing cancellation is
+            // necessary. Enter the validated stop directly instead of admitting a throwaway
+            // foothold or starting another role swap.
+            beginStopping();
+        }
 
         auto beginTransfer = [&]() {
             const float transferFraction = glm::clamp(
