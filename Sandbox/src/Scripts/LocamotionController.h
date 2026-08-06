@@ -492,6 +492,8 @@ struct LocamotionControllerComponent
     float _gaitSwingPathLength = 0.0f;
     float _gaitSwingMinimumDuration = 0.0f;
     float _gaitSwingDeadline = 0.0f;
+    float _gaitSwingWatchdogProgress = 0.0f;
+    float _gaitSwingNoProgressTime = 0.0f;
     glm::quat _gaitSwingSoleCommandWorld { 1.0f, 0.0f, 0.0f, 0.0f };
     bool _gaitSwingSoleCommandValid = false;
     // Center rise is useful trajectory telemetry, but it is not ground clearance when
