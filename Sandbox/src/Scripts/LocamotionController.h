@@ -57,6 +57,10 @@ struct LocamotionControllerComponent
     float plantAcquireTimeout = 0.60f;
     float contactSettleDuration = 0.30f;
     float touchdownMaxVerticalSpeed = 0.25f;
+    float touchdownMaxHorizontalSpeed = 0.65f;
+    float touchdownMaxAngularSpeed = 3.00f;
+    float touchdownMaxCommandSpeed = 0.25f;
+    float touchdownMinTrajectoryProgress = 0.92f;
     float touchdownMinNormalY = 0.70f;
     float footTargetTolerance = 0.04f;
     float safeReachFraction = 0.99f;
@@ -72,7 +76,16 @@ struct LocamotionControllerComponent
     // proportionally compressed to this budget while retaining small physical safety
     // floors. Set to zero to use the individual phase durations verbatim.
     float gaitTargetStepPeriod = 1.20f;
+    // Multiplies the physical safety floor of every cadence-bearing phase. Values below
+    // one permit faster limb/support motion while preserving their relative envelope.
+    float gaitCadenceFloorScale = 1.0f;
+    // Validation phases can overlap motion and therefore use a smaller independent floor
+    // without demanding that the physical foot swing or COM transfer unrealistically fast.
+    float gaitValidationFloorScale = 1.0f;
     float gaitSupportMaxSpeed = 0.30f;
+    // Forward support transport is intentionally separate from the general support cap:
+    // the latter must still have authority for lateral load transfer and recovery.
+    float gaitSupportTransportSpeed = 0.10f;
     bool gaitAdaptationEnabled = true;
     float gaitAdaptationResponse = 0.25f;
     float gaitMaxStrideCorrection = 0.020f;
@@ -89,6 +102,13 @@ struct LocamotionControllerComponent
     float gaitFootPositionGain = 0.45f;
     float gaitFootVelocityLeadTime = 0.08f;
     float gaitMaxFootCorrection = 0.045f;
+    // Straight walking uses the same measured-foot command governor as turning.
+    // These limits bound the Cartesian sole command rather than the joint motors.
+    float gaitSwingSpeedLimit = 2.00f;
+    float gaitSwingAcceleration = 18.0f;
+    float gaitSoleAngularSpeedLimit = 3.25f;
+    float gaitSoleAngularAcceleration = 18.0f;
+    float gaitLandingLinearDampingTime = 0.08f;
     float gaitInterStepRecenterTime = 0.35f;
     float gaitUprightStiffness = 700.0f;
     float gaitUprightDamping = 100.0f;
@@ -99,6 +119,11 @@ struct LocamotionControllerComponent
     float gaitMaxTurnStepDeg = 5.0f;
     float gaitTurnFullAdvanceDeg = 15.0f;
     float gaitTurnZeroAdvanceDeg = 45.0f;
+    float gaitTurnInsideSwingSpeedLimit = 0.78f;
+    float gaitTurnOutsideSwingSpeedLimit = 0.62f;
+    float gaitTurnAngularSpeedLimit = 2.25f;
+    float gaitTurnLinearAcceleration = 2.50f;
+    float gaitTurnAngularAcceleration = 12.0f;
     float gaitMaxFootSeparation = 0.18f;
     float gaitInterStepTiltLimit = 15.0f;
     float gaitInterStepHeadingLimit = 8.0f;
@@ -414,6 +439,10 @@ struct LocamotionControllerComponent
     glm::vec3 _physicalStepPlantCenterAnchorStart { 0.0f };
     glm::vec3 _physicalStepPlantCenterAnchorTarget { 0.0f };
     float _physicalStepTrajectoryT = 0.0f;
+    // The landing brake is a one-way state: readiness must remain true briefly
+    // before descent is released, and can never pull an admitted trajectory back.
+    float _gaitLandingBrakeReadyTime = 0.0f;
+    bool _gaitLandingBrakeReleased = false;
     // Slice 2g: the inside turn owns a measured-state trajectory governor.
     // Position and world-space sole commands retain their rates across phase
     // boundaries so ARRIVAL and DESCENT cannot reintroduce an impulse.
@@ -465,6 +494,13 @@ struct LocamotionControllerComponent
     float _gaitSwingDeadline = 0.0f;
     glm::quat _gaitSwingSoleCommandWorld { 1.0f, 0.0f, 0.0f, 0.0f };
     bool _gaitSwingSoleCommandValid = false;
+    // Center rise is useful trajectory telemetry, but it is not ground clearance when
+    // the box-shaped sole pitches. Capture the physics-computed lowest sole point at
+    // release and track its actual rise independently.
+    float _physicalStepSoleStartMinY = 0.0f;
+    float _physicalStepSoleClearance = 0.0f;
+    float _physicalStepContactPenetration = 0.0f;
+    bool _physicalStepSoleReferenceValid = false;
     float _physicalStepClearance = 0.0f;
     float _physicalStepForwardTravel = 0.0f;
     float _physicalStepTargetError = 0.0f;
@@ -530,6 +566,14 @@ struct LocamotionControllerComponent
     bool _gaitLandingObjectiveStopRequested = false;
     float _gaitRunTime = 0.0f;
     float _gaitStepStartTime = 0.0f;
+    float _gaitLastLaunchTime = 0.0f;
+    float _gaitLastLaunchPeriod = 0.0f;
+    float _gaitStepRecontactPauseTime = 0.0f;
+    float _gaitStepMaxSoleErrorDeg = 0.0f;
+    float _gaitStepMaxSwingAngularSpeed = 0.0f;
+    int _gaitStepSpeculativeContacts = 0;
+    bool _gaitLastLaunchValid = false;
+    bool _gaitSpeculativeContactActive = false;
     float _gaitLastStepPeriod = 0.0f;
     float _gaitPreviousStepPeriod = 0.0f;
     float _gaitMeasuredSpeed = 0.0f;
@@ -699,6 +743,10 @@ inline void DrawComponentInspector<LocamotionControllerComponent>(LocamotionCont
         LOCO_DRAG("Plant Acquire Timeout", plantAcquireTimeout, 0.01f, 0.05f, 2.0f, "%.2f s");
         LOCO_DRAG("Contact Settle", contactSettleDuration, 0.01f, 0.0f, 1.5f, "%.2f s");
         LOCO_DRAG("Touchdown Max Y Speed", touchdownMaxVerticalSpeed, 0.01f, 0.0f, 2.0f, "%.2f m/s");
+        LOCO_DRAG("Touchdown Max Horizontal", touchdownMaxHorizontalSpeed, 0.01f, 0.05f, 2.0f, "%.2f m/s");
+        LOCO_DRAG("Touchdown Max Angular", touchdownMaxAngularSpeed, 0.05f, 0.25f, 10.0f, "%.2f rad/s");
+        LOCO_DRAG("Touchdown Max Command", touchdownMaxCommandSpeed, 0.01f, 0.05f, 1.0f, "%.2f m/s");
+        LOCO_DRAG("Touchdown Min Trajectory", touchdownMinTrajectoryProgress, 0.01f, 0.45f, 1.0f, "%.2f");
         ImGui::SliderFloat("Touchdown Min Normal Y", &c.touchdownMinNormalY, 0.0f, 1.0f);
         LOCO_DRAG("Foot Target Tolerance", footTargetTolerance, 0.002f, 0.002f, 0.2f, "%.3f m");
         ImGui::SliderFloat("Safe Reach Fraction", &c.safeReachFraction, 0.5f, 1.0f);
@@ -706,7 +754,10 @@ inline void DrawComponentInspector<LocamotionControllerComponent>(LocamotionCont
     if (ImGui::CollapsingHeader("Gait", ImGuiTreeNodeFlags_DefaultOpen)) {
         LOCO_DRAG("Target Gait Speed", gaitDesiredSpeed, 0.005f, 0.0f, 2.0f, "%.3f m/s");
         LOCO_DRAG("Target Step Period", gaitTargetStepPeriod, 0.01f, 0.0f, 4.0f, "%.2f s");
+        LOCO_DRAG("Motion Safety Floor Scale", gaitCadenceFloorScale, 0.01f, 0.20f, 1.50f, "%.2fx");
+        LOCO_DRAG("Validation Floor Scale", gaitValidationFloorScale, 0.01f, 0.20f, 1.50f, "%.2fx");
         LOCO_DRAG("Support Motion Speed Cap", gaitSupportMaxSpeed, 0.01f, 0.01f, 1.0f, "%.2f m/s");
+        LOCO_DRAG("Support Transport Speed", gaitSupportTransportSpeed, 0.01f, 0.03f, 1.0f, "%.2f m/s");
         ImGui::Checkbox("Online Gait Adaptation", &c.gaitAdaptationEnabled);
         LOCO_DRAG("Adaptation Response", gaitAdaptationResponse, 0.01f, 0.01f, 1.0f, "%.2f");
         LOCO_DRAG("Max Stride Correction", gaitMaxStrideCorrection, 0.002f, 0.0f, 0.10f, "%.3f m");
@@ -730,6 +781,11 @@ inline void DrawComponentInspector<LocamotionControllerComponent>(LocamotionCont
         LOCO_DRAG("Foot Position Gain", gaitFootPositionGain, 0.01f, 0.0f, 4.0f, "%.2f");
         LOCO_DRAG("Foot Velocity Lead", gaitFootVelocityLeadTime, 0.01f, 0.0f, 0.5f, "%.2f s");
         LOCO_DRAG("Max Foot Correction", gaitMaxFootCorrection, 0.002f, 0.0f, 0.2f, "%.3f m");
+        LOCO_DRAG("Walk Foot Speed", gaitSwingSpeedLimit, 0.05f, 0.25f, 4.0f, "%.2f m/s");
+        LOCO_DRAG("Walk Foot Accel", gaitSwingAcceleration, 0.5f, 1.0f, 30.0f, "%.1f m/s^2");
+        LOCO_DRAG("Walk Sole Angular Speed", gaitSoleAngularSpeedLimit, 0.05f, 0.25f, 8.0f, "%.2f rad/s");
+        LOCO_DRAG("Walk Sole Angular Accel", gaitSoleAngularAcceleration, 0.5f, 1.0f, 40.0f, "%.1f rad/s^2");
+        LOCO_DRAG("Landing Linear Damping", gaitLandingLinearDampingTime, 0.005f, 0.0f, 0.25f, "%.3f s");
         LOCO_DRAG("Inter-Step Recenter", gaitInterStepRecenterTime, 0.01f, 0.01f, 2.0f, "%.2f s");
         LOCO_DRAG("Upright Stiffness", gaitUprightStiffness, 10.0f, 0.0f, 3000.0f, "%.0f");
         LOCO_DRAG("Upright Damping", gaitUprightDamping, 5.0f, 0.0f, 500.0f, "%.0f");
@@ -737,9 +793,14 @@ inline void DrawComponentInspector<LocamotionControllerComponent>(LocamotionCont
         LOCO_DRAG("Heading Stiffness", gaitHeadingStiffness, 5.0f, 0.0f, 1000.0f, "%.0f");
         LOCO_DRAG("Heading Damping", gaitHeadingDamping, 2.0f, 0.0f, 300.0f, "%.0f");
         LOCO_DRAG("Heading Max Torque", gaitHeadingMaxTorque, 5.0f, 0.0f, 1000.0f, "%.0f");
-        LOCO_DRAG("Maximum Turn Per Step", gaitMaxTurnStepDeg, 0.25f, 0.0f, 20.0f, "%.2f deg");
+        LOCO_DRAG("Maximum Turn Per Step", gaitMaxTurnStepDeg, 0.25f, 0.0f, 45.0f, "%.2f deg");
         LOCO_DRAG("Turn Full Advance Through", gaitTurnFullAdvanceDeg, 1.0f, 0.0f, 90.0f, "%.1f deg");
         LOCO_DRAG("Turn Zero Advance At", gaitTurnZeroAdvanceDeg, 1.0f, 0.0f, 180.0f, "%.1f deg");
+        LOCO_DRAG("Inside Turn Foot Speed", gaitTurnInsideSwingSpeedLimit, 0.01f, 0.10f, 2.0f, "%.2f m/s");
+        LOCO_DRAG("Outside Turn Foot Speed", gaitTurnOutsideSwingSpeedLimit, 0.01f, 0.10f, 2.0f, "%.2f m/s");
+        LOCO_DRAG("Turn Foot Angular Speed", gaitTurnAngularSpeedLimit, 0.05f, 0.25f, 8.0f, "%.2f rad/s");
+        LOCO_DRAG("Turn Foot Linear Accel", gaitTurnLinearAcceleration, 0.10f, 0.25f, 10.0f, "%.2f m/s^2");
+        LOCO_DRAG("Turn Foot Angular Accel", gaitTurnAngularAcceleration, 0.50f, 1.0f, 40.0f, "%.1f rad/s^2");
         LOCO_DRAG("Maximum Foot Separation", gaitMaxFootSeparation, 0.005f, 0.10f, 0.30f, "%.3f m");
         LOCO_DRAG("Inter-Step Tilt Gate", gaitInterStepTiltLimit, 0.5f, 0.0f, 45.0f, "%.1f deg");
         LOCO_DRAG("Inter-Step Heading Gate", gaitInterStepHeadingLimit, 0.5f, 0.0f, 45.0f, "%.1f deg");
@@ -787,11 +848,15 @@ inline std::string SerializeComponent<LocamotionControllerComponent>(const Locam
     LOCO_SAVE(arrivalTolerance); LOCO_SAVE(arrivalSettleDuration); LOCO_SAVE(arrivalTimeout);
     LOCO_SAVE(descentDuration); LOCO_SAVE(plantTimeout); LOCO_SAVE(plantAcquireDuration);
     LOCO_SAVE(plantAcquireMaxSpeed); LOCO_SAVE(plantAcquireTimeout); LOCO_SAVE(contactSettleDuration);
-    LOCO_SAVE(touchdownMaxVerticalSpeed); LOCO_SAVE(touchdownMinNormalY);
+    LOCO_SAVE(touchdownMaxVerticalSpeed); LOCO_SAVE(touchdownMaxHorizontalSpeed);
+    LOCO_SAVE(touchdownMaxAngularSpeed); LOCO_SAVE(touchdownMaxCommandSpeed);
+    LOCO_SAVE(touchdownMinTrajectoryProgress); LOCO_SAVE(touchdownMinNormalY);
     LOCO_SAVE(footTargetTolerance); LOCO_SAVE(safeReachFraction); LOCO_SAVE(transferDuration);
     LOCO_SAVE(transferSupportBias); LOCO_SAVE(transferComTolerance); LOCO_SAVE(transferHoldDuration);
     LOCO_SAVE(transferTimeout); LOCO_SAVE(interStepDuration); LOCO_SAVE(driftGrowthTolerance);
-    LOCO_SAVE(gaitDesiredSpeed); LOCO_SAVE(gaitTargetStepPeriod); LOCO_SAVE(gaitSupportMaxSpeed);
+    LOCO_SAVE(gaitDesiredSpeed); LOCO_SAVE(gaitTargetStepPeriod); LOCO_SAVE(gaitCadenceFloorScale);
+    LOCO_SAVE(gaitValidationFloorScale);
+    LOCO_SAVE(gaitSupportMaxSpeed); LOCO_SAVE(gaitSupportTransportSpeed);
     LOCO_SAVE(gaitAdaptationEnabled); LOCO_SAVE(gaitAdaptationResponse);
     LOCO_SAVE(gaitMaxStrideCorrection); LOCO_SAVE(gaitMaxPeriodSlowdown);
     LOCO_SAVE(gaitStressStopThreshold);
@@ -799,11 +864,17 @@ inline std::string SerializeComponent<LocamotionControllerComponent>(const Locam
     LOCO_SAVE(gaitMaxStepLength); LOCO_SAVE(gaitReachCrouch); LOCO_SAVE(gaitCrouchTime);
     LOCO_SAVE(gaitUsableReachFraction); LOCO_SAVE(gaitSoleLevelTime); LOCO_SAVE(gaitFootPositionGain);
     LOCO_SAVE(gaitFootVelocityLeadTime); LOCO_SAVE(gaitMaxFootCorrection);
+    LOCO_SAVE(gaitSwingSpeedLimit); LOCO_SAVE(gaitSwingAcceleration);
+    LOCO_SAVE(gaitSoleAngularSpeedLimit); LOCO_SAVE(gaitSoleAngularAcceleration);
+    LOCO_SAVE(gaitLandingLinearDampingTime);
     LOCO_SAVE(gaitInterStepRecenterTime); LOCO_SAVE(gaitUprightStiffness);
     LOCO_SAVE(gaitUprightDamping); LOCO_SAVE(gaitUprightMaxTorque); LOCO_SAVE(gaitHeadingStiffness);
     LOCO_SAVE(gaitHeadingDamping); LOCO_SAVE(gaitHeadingMaxTorque);
     LOCO_SAVE(gaitMaxTurnStepDeg);
     LOCO_SAVE(gaitTurnFullAdvanceDeg); LOCO_SAVE(gaitTurnZeroAdvanceDeg);
+    LOCO_SAVE(gaitTurnInsideSwingSpeedLimit); LOCO_SAVE(gaitTurnOutsideSwingSpeedLimit);
+    LOCO_SAVE(gaitTurnAngularSpeedLimit); LOCO_SAVE(gaitTurnLinearAcceleration);
+    LOCO_SAVE(gaitTurnAngularAcceleration);
     LOCO_SAVE(gaitMaxFootSeparation); LOCO_SAVE(gaitInterStepTiltLimit);
     LOCO_SAVE(gaitInterStepHeadingLimit); LOCO_SAVE(gaitStopTime); LOCO_SAVE(gaitStopHoldTime);
     LOCO_SAVE(maxLegReachFraction); LOCO_SAVE(standingPoseResponse); LOCO_SAVE(hipLimitMarginDeg);
@@ -839,6 +910,8 @@ inline void DeserializeComponent<LocamotionControllerComponent>(LocamotionContro
     LOCO_MIGRATE(plantAcquireTimeout, "test4PlantAcquireTimeout");
     LOCO_MIGRATE(contactSettleDuration, "test4ContactSettleTime");
     LOCO_MIGRATE(touchdownMaxVerticalSpeed, "test4TouchdownMaxVerticalSpeed");
+    LOCO_LOAD(touchdownMaxHorizontalSpeed); LOCO_LOAD(touchdownMaxAngularSpeed);
+    LOCO_LOAD(touchdownMaxCommandSpeed); LOCO_LOAD(touchdownMinTrajectoryProgress);
     LOCO_MIGRATE(touchdownMinNormalY, "test4TouchdownMinNormalY");
     LOCO_MIGRATE(footTargetTolerance, "test4TargetTolerance");
     LOCO_MIGRATE(safeReachFraction, "test4SafeReachFraction");
@@ -847,7 +920,9 @@ inline void DeserializeComponent<LocamotionControllerComponent>(LocamotionContro
     LOCO_MIGRATE(transferTimeout, "test5HoldTimeout"); LOCO_MIGRATE(interStepDuration, "test6InterStepTime");
     LOCO_MIGRATE(driftGrowthTolerance, "test6DriftGrowthTolerance");
     LOCO_MIGRATE(gaitDesiredSpeed, "test7DesiredSpeed"); LOCO_LOAD(gaitTargetStepPeriod);
+    LOCO_LOAD(gaitCadenceFloorScale); LOCO_LOAD(gaitValidationFloorScale);
     LOCO_LOAD(gaitSupportMaxSpeed);
+    LOCO_LOAD(gaitSupportTransportSpeed);
     LOCO_LOAD(gaitAdaptationEnabled); LOCO_LOAD(gaitAdaptationResponse);
     LOCO_LOAD(gaitMaxStrideCorrection); LOCO_LOAD(gaitMaxPeriodSlowdown);
     LOCO_LOAD(gaitStressStopThreshold);
@@ -858,6 +933,9 @@ inline void DeserializeComponent<LocamotionControllerComponent>(LocamotionContro
     LOCO_MIGRATE(gaitSoleLevelTime, "test7SoleLevelTime"); LOCO_MIGRATE(gaitFootPositionGain, "test7FootPositionGain");
     LOCO_MIGRATE(gaitFootVelocityLeadTime, "test7FootVelocityLeadTime");
     LOCO_MIGRATE(gaitMaxFootCorrection, "test7MaxFootCorrection");
+    LOCO_LOAD(gaitSwingSpeedLimit); LOCO_LOAD(gaitSwingAcceleration);
+    LOCO_LOAD(gaitSoleAngularSpeedLimit); LOCO_LOAD(gaitSoleAngularAcceleration);
+    LOCO_LOAD(gaitLandingLinearDampingTime);
     LOCO_MIGRATE(gaitInterStepRecenterTime, "test7InterStepRecenterTime");
     LOCO_MIGRATE(gaitUprightStiffness, "test7UprightStiffness");
     LOCO_MIGRATE(gaitUprightDamping, "test7UprightDamping");
@@ -867,6 +945,9 @@ inline void DeserializeComponent<LocamotionControllerComponent>(LocamotionContro
     LOCO_MIGRATE(gaitHeadingMaxTorque, "test7HeadingMaxTorque");
     LOCO_LOAD(gaitMaxTurnStepDeg);
     LOCO_LOAD(gaitTurnFullAdvanceDeg); LOCO_LOAD(gaitTurnZeroAdvanceDeg);
+    LOCO_LOAD(gaitTurnInsideSwingSpeedLimit); LOCO_LOAD(gaitTurnOutsideSwingSpeedLimit);
+    LOCO_LOAD(gaitTurnAngularSpeedLimit); LOCO_LOAD(gaitTurnLinearAcceleration);
+    LOCO_LOAD(gaitTurnAngularAcceleration);
     LOCO_LOAD(gaitMaxFootSeparation);
     LOCO_MIGRATE(gaitInterStepTiltLimit, "test7InterStepTiltLimit");
     LOCO_MIGRATE(gaitInterStepHeadingLimit, "test7InterStepHeadingLimit");
