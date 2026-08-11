@@ -2705,6 +2705,47 @@ exactly zero assisted rotation.
 
 **Behavior change:** enable the 0.45-0.55-second cadence overlay for 15-90-degree turns.
 
+**Accepted for progression (2026-08-11); visual polish deferred.** Eligible
+assisted turns now receive exactly one tracked physical turn beat. A command issued before foothold
+admission shapes the next step; a command issued after takeoff conservatively attaches the already
+immutable in-flight step instead of rewriting its target. The latter is intentionally a bounded
+handoff rather than the full active-phase policy reserved for Slice 6.
+
+The beat target period and forward advance are continuous functions of command magnitude. A
+smoothstep from 15 to 90 degrees blends the period from 0.45 to 0.55 seconds and the forward scale
+from 1.0 to 0.10. Scheduled assistance remains the only angular owner, so the physical foothold
+continues to carry zero additional yaw after `FOOTHOLD_REBASE`; the beat flag only selects cadence,
+advance, and turn-dominant admission. Nearly in-place 90-degree footholds may therefore bypass the
+straight six-centimetre advance invariant while retaining the existing grounded-pose, swing-speed,
+angular-speed, reach, separation, touchdown, contact, load, drift, tilt, and motor checks.
+
+For a newly shaped beat, the existing 20-percent pre-contact support curve begins at foothold
+admission and spans the turn-beat target period. It starts from the current commanded support state
+with the existing bounded incoming velocity. The stance foot remains the pivot, and normal touchdown
+and transfer predicates still own contact acceptance and load handoff. A beat becomes complete only
+after the ordinary landing verification and stable-transfer gates succeed. `GAIT_READY` now requires
+both heading completion and beat completion; after the one beat lands, inter-step admission is held
+until that combined proof passes, preventing an unintended second primary turn step.
+
+`TURN_BEAT_ATTACH`, `TURN_BEAT_ADMIT`, and `TURN_BEAT_COMPLETE` telemetry identify the selected step,
+swing side, outside-foot result, shaped/inherited source, advance scale, target and measured period,
+planned/achieved advance, contacts, load, drift, tilt, and motor use. The dependency-inclusive Debug
+build passes and `git diff --check` is clean. The accepted runtime trace reached 45-degree headings
+in 0.258-0.287 seconds, 85-90-degree headings in 0.463-0.491 seconds, and a 59.5-degree heading in
+0.341 seconds, with no Slice 4 abort, retry, restart block, failed safety gate, or motor saturation.
+Completed beats retained two contacts and measured 1-3 mm drift, 1.9-3.0-degree tilt, and
+0.062-0.077 peak motor ratios.
+
+This is an acceptance for progression, not a final animation-quality claim. Fourteen of fifteen
+completed beats inherited an already immutable ordinary walking step, and seven of fifteen were not
+outside-foot-directed. Those inherited beats retained roughly 11.5-14.8 cm of forward advance while
+the body rotated, explaining the responsive but mechanically ordinary visual result. The fresh
+shaped 90-degree start also reached gait-ready in 1.791 seconds because admission waited 0.805
+seconds and the beat then required 0.978 seconds against its 0.550-second target. Outside-foot
+selection, inherited-stride shaping, pelvis/torso lead-lag, and the remaining cadence gap are retained
+as explicit visual/active-phase debt for the post-Slice-6 realism pass. A clean mirrored 15-degree
+matrix remains deferred regression coverage.
+
 Use one outside-directed turn step. Begin support preparation as the global heading starts, continue
 the support curve through swing and landing, and allow existing touchdown/load validation to overlap.
 The stance foot remains the assisted pivot until the normal load-handoff predicate transfers
@@ -2719,6 +2760,129 @@ major phase must remain bounded.
 
 **Behavior change:** extend the same scheduler and assistance to large direction changes.
 
+**Implementation status (2026-08-11): accepted with one non-blocking landing follow-up.** Assisted
+scheduling and the cadence overlay now remain authoritative through 180 degrees. Requests above
+90.25 degrees require two tracked physical beats at the existing 0.55-second large-turn target and
+10-percent forward-advance scale. The command record publishes `beats=2`; ordinary 15-90-degree
+behavior retains one beat unchanged.
+
+The first runtime trace exposed two presentation defects in that implementation: a command received
+during the preceding transfer could allow the heading to rotate before either turn beat was admitted,
+and the two-segment clock then remained exactly at 90 degrees until the complete outside-foot settle
+and load proof. A tested 179.74-degree command therefore performed an ordinary role-exchange step,
+held at 89.87 degrees for roughly 1.9 seconds, and resumed its second half only after the following
+outside beat. Its nominal 0.899-second curve took 2.853 seconds to finish and 3.391 seconds to become
+gait-ready. The physical result was safe, but the visible turn-step-pause-turn sequence is not an
+acceptable large-turn presentation.
+
+The refinement keeps the two physical beats and their full safety proof but gives heading one
+continuous clock. For large turns that clock remains at zero until the outside foothold has actually
+been admitted; it then advances monotonically across the complete requested angle without a midpoint
+freeze. Touchdown, landing verification, stable transfer, measured load, contacts, drift, tilt, and
+motor limits still determine beat completion and final gait readiness. The schedule is therefore free
+to finish before the closing inside contact, but the controller cannot resume ordinary forward gait
+until both beats pass.
+
+During pre-admission double support, the controller selects the support side that releases the
+anatomical outside foot. It now repeats or swaps support as necessary at the measured inter-step
+boundary, reported by `TURN_BEAT_ROLE_SELECT`, rather than consuming an ordinary in-place step to
+reach the requested role. Exact opposites retain the existing reversal sign latch, making mirrored
+180-degree choices deterministic. Beat one must remain outside and beat two inside; a
+`TURN_BEAT_ROLE_WAIT` is retained only as diagnostic evidence that an unexpected path bypassed the
+safe role-selection boundary. `TURN_SUPPORT_HANDOFF` records the verified first contact and enables
+inside-foot admission without controlling or restarting the heading clock.
+
+The pelvis continues to own physical root heading. During an assisted beat the powered torso receives
+a presentation-only yaw lead that rises and falls smoothly with curve progress and scheduled angular
+rate, is magnitude-scaled for small turns, and is capped at 18 degrees. It returns to zero before the
+heading completes. This creates visible pelvis/chest lead-lag while preserving the leg IK owners,
+planted-foot constraints, global heading target, and all support predicates. `SAMPLE` reports the
+current `torsoLead` for runtime verification.
+
+The first refinement matrix completed five of six 180-degree reversals. The lone failure was the
+closing inside step: its zero per-foot yaw correctly kept angular ownership in the global scheduler,
+but also routed it through the ordinary walking governor. That command stopped at trajectory 0.829,
+one integration step below the 0.83 landing-brake landmark, while grounded, 7 mm from its horizontal
+target, 51 mm above its vertical target, and clear of reach, joint-envelope, drift, tilt, and motor
+limits. The generic descent deadline then aborted before the brake could release.
+
+A closing assisted beat may now receive one 120 ms landing-brake grace window, reported by
+`CLOSING_TURN_BEAT_GRACE`. Eligibility requires the final inside beat, trajectory within 0.015 of the
+brake, grounded state plus retained stance contact, at most 20 mm horizontal/65 mm vertical/20 mm
+tracking error, at most 15 degrees sole error, bounded command/linear/angular/vertical speed, no motor
+saturation, and at most the existing inter-step tilt limit capped at 15 degrees. The window creates no
+contact and bypasses no touchdown predicate. Losing any gate or exhausting the window retains the
+original descent timeout and abort. The Debug build and `git diff --check` pass; runtime confirmation
+of the formerly failing case remains pending.
+
+The next runtime matrix removed that closing failure but exposed a separate presentation delay before
+the outside beat: fresh large turns spent 0.78-0.87 seconds in `WEIGHT_SHIFT` because the ordinary
+walking start applied the full 5-8.5 cm stance target and then required forward COM speed below
+0.01 m/s. The first accelerated-start attempt eased only 20 percent of that target over 150 ms. Two
+reversals succeeded, but the partial target also admitted three starts through the ordinary predicate
+before the new 120 ms gate, left another candidate 4 mm beyond its reach limit, and snapped 4-5.5 cm
+at 4.58-6.67 m/s when input released. Four starts therefore produced planner rejection and controlled
+stops. No locomotion abort, retry, or fall occurred, but the implementation was rejected.
+
+The corrected standing-start path smoothsteps from the live baseline to the complete stance target
+over 200 ms and exclusively owns admission until the outside beat succeeds or the normal weight-shift
+timeout fires. It may probe the foothold after 120 ms while moving when both contacts, the completed
+support-side command, lateral and forward COM errors no greater than 25 mm, horizontal COM speed no
+greater than 0.15 m/s, no more than 0.02 m/s motion away from support, the existing inter-step tilt
+limit, and no motor saturation are present. A marginal reach, grounding, or dynamic candidate is
+restored to double-support ownership and retried after 50 ms while preload continues; it does not
+request a reversal stop or restart block. Releasing input retains the current preload for the final
+`WEIGHT_SHIFT` update so `STOPPING` captures a continuous support target. The path remains explicitly
+limited to a new two-beat turn on step one out of double-support idle; ordinary walking and mid-gait
+retargets do not inherit it. `TURN_START_PRELOAD_BEGIN`, `TURN_START_DEFER`, and `TURN_START_ADMIT`
+report the target, constraint/reach result, final timing, scale, and deferral count. The dependency-
+inclusive Debug build and `git diff --check` pass; runtime confirmation is pending.
+
+The startup continuity polish preserves the exact support position and velocity published on the last
+standing frame, validates that inherited target against the measured COM, and uses it as the start of
+a 200 ms cubic Hermite segment to a once-latched full-stance endpoint. This replaces the previous
+COM-baseline rebase, so the support controller sees neither a position jump nor a finite-difference
+velocity spike. Both planted legs now capture world-anchor IK references and remain solved throughout
+the double-support preload; the future swing leg changes ownership only when foothold admission
+deliberately releases it. Controller direction uses the same radial deadzone as speed, ignores changes
+within 2.5 degrees, and publishes a larger in-gait change only after it remains within 1.25 degrees for
+60 ms. New starts remain immediate. `TURN_START_PRELOAD_BEGIN` reports inherited origin displacement
+and speed so runtime tests can verify the seam directly. The dependency-inclusive Debug build and
+`git diff --check` pass; visual/runtime confirmation remains pending.
+
+Controller direction reversals may cross the radial deadzone for a few frames. While a gait is active,
+an input release therefore receives a 120 ms grace window that holds the last valid direction and
+speed; input returning inside that window continues or retargets the gait without emitting
+`STOP_REQUEST`. A sustained release follows the unchanged validated stop path. Runtime telemetry uses
+`INPUT_RELEASE_GRACE_BEGIN`, `INPUT_RELEASE_GRACE_CANCEL`, and `INPUT_RELEASE_GRACE_EXPIRE` to make
+that routing explicit. Standing-start support inheritance now also requires the preceding support
+target to have been active and within 5 cm of the measured COM. Otherwise the Hermite preload begins
+at measured COM with zero velocity, preventing an inactive 13-15 cm target retained by idle gait state
+from lengthening the visible startup.
+
+`TURN_BEAT_ADMIT` and `TURN_BEAT_COMPLETE` report `beat=N/2`, and the latter marks only the
+second beat as final. Heading completion may precede final contact, but `GAIT_READY` and forward
+step admission remain blocked until both beats, the final heading stability proof, two contacts, and
+the ordinary load/motor/phase gates pass. No contact, separation, reach, touchdown, drift, tilt,
+load, or saturation threshold changed. Dependency-inclusive Debug builds pass for `Sandbox` and
+`Runtime`, and `git diff --check` is clean after the refinement. The mirrored 120/135/180-degree
+matrix below was the original formal target; the final practical acceptance and its explicit scope are
+recorded next.
+
+The final Slice 5 controller run is accepted as the practical large-turn gate. A 172.19-degree command
+completed the required outside/inside sequence with exactly two tracked turn beats. Beat completion
+retained two contacts, measured load ownership, low tilt and motor use, and bounded drift; the largest
+reported turn-beat drift was 30 mm, inside the existing 40 mm limit. No turn-plan rejection,
+assistance rejection, crossover, fall, or standing restart occurred. The new release grace also caught
+a 24 ms controller deadzone crossing and continued the active gait without emitting `STOP_REQUEST`,
+confirming that a rapid reversal no longer enters the multi-second stop/return-to-stand path.
+
+The same unconstrained controller run produced one later descent timeout and automatic retry after a
+subsequent small retarget. It did not invalidate the already completed two-beat turn and is recorded as
+a non-blocking landing follow-up for Slice 6/7. Large commands issued or repeatedly changed during an
+active gait also remain outside the strict Slice 5 timing claim: their phase-continuous ownership and
+latency belong to Slice 6. With those boundaries explicit, Slice 5 is complete.
+
 Use the existing exact-opposite sign latch and outside-foot selection. The first beat places the
 outside foot while heading advances toward the midpoint of the global curve. After measured load
 ownership transfers to that foot, pivot ownership moves continuously to it and the inside foot closes
@@ -2728,7 +2892,8 @@ support state; it is not derived by adding another per-step yaw to the assisted 
 The controller may finish heading before the closing contact settles. It may not start forward
 acceleration in the new direction until `gait ready` passes.
 
-**Pass gate:** mirrored 120/135/180-degree commands complete with two primary contacts, reach heading
+**Original target gate (carried forward as a Slice 6/7 optimization matrix):** mirrored
+120/135/180-degree commands complete with two primary contacts, reach heading
 within 0.70/0.75/0.90 seconds, and become gait-ready within 1.20 seconds. Exact reversals retain one
 direction, no turn uses more than two primary contacts, and no run emits plan rejection, abort,
 automatic retry, crossover, or a standing restart.
@@ -2736,6 +2901,33 @@ automatic retry, crossover, or a standing restart.
 #### Slice 6 - active-phase handoff, release, and retarget
 
 **Behavior change:** allow the unified schedule to begin from every gait phase.
+
+**Implementation status (2026-08-11): PASSED; accepted for progression.** The global heading
+clock now starts at command receipt in every active phase, including `WEIGHT_SHIFT`, `INTER_STEP`,
+and the bounded standing preload. Root heading consumes that schedule even when no per-foot heading
+plan is active, while foothold admission, contact completion, and gait readiness remain separately
+physical.
+
+A command received after foothold admission inherits that immutable step as its first physical beat
+for every angle band, including commands above 90 degrees. A two-beat retarget closes with the foot
+opposite the inherited swing side rather than blindly requesting the nominal inside foot; this keeps
+the active contact plus one closing contact as an alternating pair and prevents a stale-role wait or
+double-applied beat. Boundary commands with no admitted foothold continue to shape the next plan.
+`ACTIVE_PHASE_HANDOFF` reports the phase, inherited-beat decision, and boundary/early/late/contact
+policy.
+
+Release no longer destroys the schedule record. It preserves the original angular basis and measured
+progress, rebases the abandoned target to the achieved physical heading, disables direct assistance,
+and eases the reported measured angular rate to zero over a bounded 60-200 ms handoff. The existing
+phase-safe foot routes remain authoritative: double support stops directly, early swing returns to
+the old plant, and late swing or contact/load phases finish their immutable foothold. A live retarget
+still creates exactly one new schedule from the current measured physical heading without entering
+the stop/restart path. `RELEASE_HANDOFF` exposes the achieved heading, incoming rate, phase, and
+deceleration interval.
+
+The dependency-inclusive Debug build passes for `Sandbox` and `Runtime`, and `git diff --check` is
+clean. The practical runtime review covered the phase handoffs below, including deterministic
+mirrored `ARRIVAL` retargets, and accepted the slice for progression.
 
 - `WEIGHT_SHIFT` and `INTER_STEP` enter the schedule immediately;
 - early swing retains the existing safe return while scheduled yaw decelerates or retargets from the
@@ -2745,6 +2937,44 @@ automatic retry, crossover, or a standing restart.
   measured load ownership changes;
 - release decelerates to the achieved heading, while a live direction change constructs one new
   schedule without a stop/restart cycle.
+
+**2026-08-11 phase-coverage and closing-beat follow-up: accepted.** `ARRIVAL` deliberately remains a
+one-update milestone because its stability proof begins during late swing. The non-serialized
+Assisted Turn Diagnostics panel now provides a deterministic
+`Retarget at next ARRIVAL` arm: it changes desired heading at an actual `ARRIVAL` frame, holds that
+target until gameplay input changes or releases, and then uses the normal retarget path. This avoids
+slowing production cadence merely to make an 8 ms phase manually targetable.
+
+A zero-foot-yaw assisted closing beat is still a turn-ownership contact even after the global heading
+has completed. It no longer enters straight walking's parallel support handoff before center ownership.
+Maintained support now accepts a grounded, already-admitted manifold by its surface-relative
+penetration instead of rejecting it solely because turn leveling changed sole-start clearance, and an
+acquisition grace deadline cannot shrink after it has been granted. The generic angular, drift, slip,
+stance-contact, and tilt safety limits remain unchanged.
+
+The first follow-up run exposed one policy coupling in `TOUCHDOWN_WAIT`: a zero-yaw assisted beat
+correctly selected conservative `hold-for-ownership`, but that same flag had also been used to decide
+whether the retained walking-governor speed should brake. The physical foot became grounded and
+motionless while the stale command remained at 0.256 m/s, just above the unchanged 0.250 m/s landing
+gate, until timeout. All touchdown waits now brake retained linear command state toward zero because
+their target is already fixed at the admitted foothold; support ownership policy no longer controls
+that bookkeeping convergence. No touchdown tolerance or timeout was relaxed.
+
+The mirrored `ARRIVAL` coverage run then exposed a second zero-yaw classification boundary. The
+right sole was admitted under ordinary walking's 25-degree touchdown envelope at 17.6 degrees, but
+the conservative assisted-beat handoff correctly required the unchanged 12-degree ownership limit.
+That released the moving sole governor into a state the impact pivot could never accept. Assisted
+turn beats now use the existing 12-degree ownership angle at touchdown even when their per-foot yaw
+is zero, keeping the measured-state sole governor active until the downstream ownership invariant is
+already satisfied. Yaw-bearing turns retain their stricter 10-degree touchdown gate and ordinary
+translation retains 25 degrees.
+
+The final review completed mirrored `ARRIVAL` retarget coverage, large assisted turns, continued
+walking, and the 44-step controlled-stop regression without a visible locomotion defect. One early
+plant-acquisition abort and automatic retry coincided with the application losing focus and did not
+recur in the subsequent coverage. It is retained as a non-blocking regression observation rather
+than treated as a Slice 6 locomotion failure. With the walking feel accepted in gameplay, Slice 6 is
+closed and work may proceed to Slice 7.
 
 **Pass gate:** mirrored release and retarget tests in every major phase produce one continuous heading
 record, no double-applied yaw, no stale pivot, no target jump, and either continued stable gait or the
@@ -2758,9 +2988,8 @@ Do not tune the 20-degree footprint ceiling, foot angular-speed limit, heading t
 cap in isolation. A parameter increase requires telemetry showing that its corresponding limit is the
 active cause of lateness and that physical reserve remains.
 
-After physical timing passes, an optional presentation-only refinement may lead the pelvis by a small
-torso/head target. It must not own root heading, foot placement, or support and is not required for the
-first accepted implementation.
+The presentation-only torso lead introduced during Slice 5 may be tuned here and optionally extended
+to the head/shoulders. It must not own root heading, foot placement, or support.
 
 **Final acceptance matrix:**
 

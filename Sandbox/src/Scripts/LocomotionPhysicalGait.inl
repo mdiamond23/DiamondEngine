@@ -4,7 +4,7 @@
     // a turn-conditioned foothold. The ordinary heading motor can still settle a
     // completed turn without turning microscopic residuals into role swaps or
     // shortened strides.
-    static constexpr float kAssistedTurnCommandNoticeDeg = 1.0f;
+    static constexpr float kAssistedTurnCommandNoticeDeg = 2.5f;
     static constexpr float kMeaningfulFootholdTurnDeg = 1.0f;
 
     static void ResetPhysicalGait(Comp& c)
@@ -13,6 +13,11 @@
         c._assistedTurnPlan = {};
         c._assistedTurnDiagnosticRequested = false;
         c._assistedTurnDiagnostic = {};
+        c._assistedTurnArrivalRetargetArmed = false;
+        c._assistedTurnPhaseRetargetOverrideActive = false;
+        c._assistedTurnPhaseRetargetForward = glm::vec3(0.0f, 0.0f, -1.0f);
+        c._assistedTurnPhaseRetargetSourceForward =
+            glm::vec3(0.0f, 0.0f, -1.0f);
         c._gaitTurnPairPendingInside = false;
         c._gaitTurnPairAdvanceScale = 1.0f;
         c._gaitTurnPairYawScale = 1.0f;
@@ -51,6 +56,7 @@
         c._physicalStepPlantAcquireStableTime = 0.0f;
         c._physicalStepPlantSettledOffsetTime = 0.0f;
         c._physicalStepPlantUnsafeTime = 0.0f;
+        c._physicalStepPlantAcquireGraceLatched = false;
         c._physicalStepPlantAnchorRebased = false;
         c._physicalStepPlantCenterAnchorActive = false;
         c._physicalStepPlantContactMigrationLogged = false;
@@ -110,6 +116,7 @@
         c._gaitSwingDeadline = 0.0f;
         c._gaitSwingWatchdogProgress = 0.0f;
         c._gaitSwingNoProgressTime = 0.0f;
+        c._gaitTurnBeatLandingGraceActive = false;
         c._gaitSwingSoleCommandWorld = glm::quat(
             1.0f, 0.0f, 0.0f, 0.0f);
         c._gaitSwingSoleCommandValid = false;
@@ -300,6 +307,9 @@
         c._gaitSupportCurveStartVelocity = glm::vec3(0.0f);
         c._gaitSupportCurveEndVelocity = glm::vec3(0.0f);
         c._gaitSupportCommandVelocity = glm::vec3(0.0f);
+        c._gaitStartSupportTarget = glm::vec3(0.0f);
+        c._gaitStartSupportVelocity = glm::vec3(0.0f);
+        c._gaitStartSupportInherited = false;
         c._legL.planted = c._legR.planted = false;
         c._legL.plantSolveValid = c._legR.plantSolveValid = false;
         c._legL.plantFoot = c._legR.plantFoot = glm::vec3(0.0f);
@@ -416,6 +426,8 @@
         rotateVector(c._gaitSupportCurveStartVelocity);
         rotateVector(c._gaitSupportCurveEndVelocity);
         rotateVector(c._gaitSupportCommandVelocity);
+        rotatePoint(c._gaitStartSupportTarget);
+        rotateVector(c._gaitStartSupportVelocity);
         rotatePoint(c._gaitStartCom);
         rotatePoint(c._gaitStepStartCom);
         rotatePoint(c._gaitIkPlanHip);
@@ -924,8 +936,15 @@
             + glm::max(comp.transferDuration, 0.05f)
             + glm::max(comp.transferHoldDuration, 0.0f)
             + glm::max(comp.interStepDuration, 0.0f);
-        const float effectiveTargetStepPeriod = glm::max(
+        const float ordinaryTargetStepPeriod = glm::max(
             comp.gaitTargetStepPeriod + comp._gaitAdaptivePeriodOffset, 0.0f);
+        const bool assistedTurnCadenceActive =
+            comp._assistedTurnPlan.active
+            && comp._assistedTurnPlan.cadenceEligible
+            && !comp._assistedTurnPlan.turnBeatComplete;
+        const float effectiveTargetStepPeriod = assistedTurnCadenceActive
+            ? comp._assistedTurnPlan.turnBeatTargetPeriod
+            : ordinaryTargetStepPeriod;
         const float cadenceScale = continuousEnabled
             && comp.gaitTargetStepPeriod > 0.0f
             ? glm::clamp(effectiveTargetStepPeriod
@@ -1292,6 +1311,8 @@
                 comp._physicalStepFootBaselineL = leftFoot;
                 comp._physicalStepFootBaselineR = rightFoot;
                 comp._physicalStepComBaseline = rag._locomotionCOM;
+                comp._gaitStartSupportTarget = comp._physicalStepComBaseline;
+                comp._gaitStartSupportVelocity = glm::vec3(0.0f);
                 comp._physicalStepRight = glm::normalize(right);
                 comp._physicalStepForward = glm::normalize(forward);
                 comp._physicalStepSupportTarget = comp._physicalStepComBaseline;
@@ -1328,6 +1349,58 @@
         const bool liveDesiredHeading = glm::dot(
             continuousCommand.desiredForward,
             continuousCommand.desiredForward) > 1e-8f;
+        // ARRIVAL intentionally lasts as little as one physics update because its
+        // confidence clock begins during late SWING. Human input cannot target that
+        // window reliably, so this debug-only arm injects one ordinary desired-heading
+        // change at frame start and then holds it. Moving or releasing the gameplay
+        // input cancels the override; all scheduling and foothold work below remains the
+        // production retarget path.
+        constexpr float kPhaseRetargetInputReleaseDeg = 0.5f;
+        if (comp._assistedTurnPhaseRetargetOverrideActive) {
+            const bool sourceInputChanged = !liveDesiredHeading
+                || std::abs(glm::degrees(signedHeadingDelta(
+                    comp._assistedTurnPhaseRetargetSourceForward,
+                    diagnosticDesired))) >= kPhaseRetargetInputReleaseDeg;
+            if (continuousCommand.stopRequested || sourceInputChanged
+                || !comp._gaitRunning) {
+                comp._assistedTurnPhaseRetargetOverrideActive = false;
+                if (comp.debug) {
+                    spdlog::info(
+                        "[LocomotionPhaseRetargetTest] event=RELEASE "
+                        "phase={} reason={}",
+                        gaitPhaseName(phaseAtFrameStart),
+                        continuousCommand.stopRequested || !liveDesiredHeading
+                            ? "input-release" : (sourceInputChanged
+                                ? "input-change" : "gait-ended"));
+                }
+            } else {
+                diagnosticDesired =
+                    comp._assistedTurnPhaseRetargetForward;
+            }
+        }
+        if (comp._assistedTurnArrivalRetargetArmed
+            && phaseAtFrameStart == kArrival
+            && comp._gaitRunning && liveDesiredHeading
+            && !continuousCommand.stopRequested) {
+            const float requestedYawDeg = glm::clamp(
+                comp.assistedTurnDiagnosticYawDeg, -20.0f, 20.0f);
+            comp._assistedTurnPhaseRetargetSourceForward = diagnosticDesired;
+            comp._assistedTurnPhaseRetargetForward = glm::normalize(
+                glm::angleAxis(glm::radians(requestedYawDeg),
+                               glm::vec3(0.0f, 1.0f, 0.0f))
+                * diagnosticDesired);
+            comp._assistedTurnPhaseRetargetOverrideActive = true;
+            comp._assistedTurnArrivalRetargetArmed = false;
+            diagnosticDesired = comp._assistedTurnPhaseRetargetForward;
+            spdlog::info(
+                "[LocomotionPhaseRetargetTest] event=TRIGGER phase=ARRIVAL "
+                "requested={:+.3f}deg source=({:+.3f},{:+.3f}) "
+                "target=({:+.3f},{:+.3f}) action=normal-retarget-path",
+                requestedYawDeg,
+                comp._assistedTurnPhaseRetargetSourceForward.x,
+                comp._assistedTurnPhaseRetargetSourceForward.z,
+                diagnosticDesired.x, diagnosticDesired.z);
+        }
         if (continuousEnabled && gameplayCommand && liveDesiredHeading
             && comp._gaitRunning && !comp._gaitStopRequested
             && comp._physicalStepPhase < kStopping) {
@@ -1503,6 +1576,35 @@
                 comp._physicalStepFootBaselineL = leftFoot;
                 comp._physicalStepFootBaselineR = rightFoot;
                 comp._physicalStepComBaseline = rag._locomotionCOM;
+                // Preserve only a support command that was actually active on the
+                // preceding frame and still lies near the measured COM. Idle gait state
+                // retains its last world-space target, so distance alone cannot identify
+                // a live standing command.
+                comp._gaitStartSupportTarget = rag.locomotionSupportTarget;
+                glm::vec3 inheritedSupportDelta =
+                    comp._gaitStartSupportTarget - comp._physicalStepComBaseline;
+                inheritedSupportDelta.y = 0.0f;
+                const bool inheritedSupportFinite = std::isfinite(
+                    comp._gaitStartSupportTarget.x)
+                    && std::isfinite(comp._gaitStartSupportTarget.y)
+                    && std::isfinite(comp._gaitStartSupportTarget.z);
+                constexpr float kActiveSupportInheritanceRadius = 0.05f;
+                comp._gaitStartSupportInherited =
+                    comp._gaitSupportTargetWasActive
+                    && inheritedSupportFinite
+                    && glm::length(inheritedSupportDelta)
+                        <= kActiveSupportInheritanceRadius;
+                if (!comp._gaitStartSupportInherited) {
+                    comp._gaitStartSupportTarget = comp._physicalStepComBaseline;
+                }
+                comp._gaitStartSupportVelocity = rag.locomotionSupportTargetVel;
+                comp._gaitStartSupportVelocity.y = 0.0f;
+                if (!comp._gaitStartSupportInherited
+                    || !std::isfinite(comp._gaitStartSupportVelocity.x)
+                    || !std::isfinite(comp._gaitStartSupportVelocity.z)
+                    || glm::length(comp._gaitStartSupportVelocity) > 1.0f) {
+                    comp._gaitStartSupportVelocity = glm::vec3(0.0f);
+                }
                 // Do not snap the heading target to the command. The first admitted
                 // footprint will consume at most gaitMaxTurnStepDeg from this physical
                 // standing basis.
@@ -1521,6 +1623,7 @@
                 comp._physicalStepPlantAcquireStableTime = 0.0f;
                 comp._physicalStepPlantSettledOffsetTime = 0.0f;
                 comp._physicalStepPlantUnsafeTime = 0.0f;
+                comp._physicalStepPlantAcquireGraceLatched = false;
                 comp._physicalStepPlantAnchorRebased = false;
                 comp._physicalStepPlantCenterAnchorActive = false;
                 comp._physicalStepPlantContactMigrationLogged = false;
@@ -1745,9 +1848,9 @@
         if (continuousEnabled && comp._gaitRunning)
             comp._gaitRunTime += dt;
 
-        // Unified assisted-turn schedule. Slice 3 consumes its signed residual only
-        // for eligible turns through 90 degrees; larger turns retain the Slice 1
-        // shadow-only measurement path. Foothold admission remains physical.
+        // Unified assisted-turn schedule. Slice 5 extends scheduled assistance through
+        // 180 degrees. Slice 6 runs the same global clock from command receipt in every
+        // active gait phase while foothold admission and gait readiness remain physical.
         {
             constexpr float kHeadingCompleteToleranceDeg = 2.0f;
             constexpr float kHeadingCompleteRateDegPerSecond = 30.0f;
@@ -1780,6 +1883,7 @@
                     ? plan.retargetSequence + 1 : 0;
                 plan = {};
                 plan.active = true;
+                plan.commandPhase = comp._physicalStepPhase;
                 plan.startForward = physicalForward;
                 plan.desiredForward = desiredForward;
                 plan.scheduledForward = physicalForward;
@@ -1790,7 +1894,76 @@
                     0.15f, 0.90f);
                 plan.assistanceEligible = comp.gaitAssistedTurnEnabled
                     && comp.gaitAssistedTurnStrength > 0.0f
-                    && std::abs(glm::degrees(requestedYaw)) <= 90.25f;
+                    && std::abs(glm::degrees(requestedYaw)) <= 180.25f;
+                const float requestedMagnitudeDeg = std::abs(
+                    glm::degrees(requestedYaw));
+                plan.cadenceEligible = plan.assistanceEligible
+                    && requestedMagnitudeDeg >= 15.0f
+                    && requestedMagnitudeDeg <= 180.25f;
+                plan.twoBeatCadence = plan.cadenceEligible
+                    && requestedMagnitudeDeg > 90.25f;
+                plan.turnBeatRequiredCount = plan.twoBeatCadence ? 2 : 1;
+                plan.standingStart = !retarget
+                    && plan.twoBeatCadence
+                    && comp._physicalStepPhase == kWeightShift
+                    && comp._stepSequenceStepIndex == 1
+                    && comp._physicalStepContactL
+                    && comp._physicalStepContactR
+                    && !comp._gaitTurnPlan.activeHeadingPlan;
+                const float cadenceBlend = smoothstep(glm::clamp(
+                    (requestedMagnitudeDeg - 15.0f) / 75.0f,
+                    0.0f, 1.0f));
+                plan.turnBeatAdvanceScale = glm::mix(
+                    1.0f, 0.10f, cadenceBlend);
+                plan.turnBeatTargetPeriod = glm::mix(
+                    0.45f, 0.55f, cadenceBlend);
+                plan.turnStartSupportOrigin = comp._gaitStartSupportTarget;
+                plan.turnStartSupportOriginVelocity =
+                    comp._gaitStartSupportVelocity;
+                plan.turnStartSupportInherited =
+                    comp._gaitStartSupportInherited;
+
+                // Before a large turn has admitted a foothold, double support may choose
+                // which foot releases first. Select the anatomical outside foot here.
+                // Exact 180-degree requests already arrive with the reversal latch's
+                // sign, so the same rule preserves that deterministic choice.
+                if (plan.twoBeatCadence
+                    && comp._physicalStepPhase == kWeightShift
+                    && comp._physicalStepContactL
+                    && comp._physicalStepContactR
+                    && !comp._gaitTurnPlan.activeHeadingPlan) {
+                    const int outsideSwingSide = requestedYaw < 0.0f ? -1 : 1;
+                    comp._physicalStepSupportSide = -outsideSwingSide;
+                    comp._runtimeNextSupportSide = outsideSwingSide;
+                }
+                const float startSupportFraction = glm::clamp(
+                    comp.supportBias, 0.0f, 1.0f);
+                const float startLeftAvailable = glm::dot(
+                    comp._physicalStepFootBaselineL
+                        - comp._physicalStepComBaseline,
+                    comp._physicalStepRight);
+                const float startRightAvailable = glm::dot(
+                    comp._physicalStepFootBaselineR
+                        - comp._physicalStepComBaseline,
+                    comp._physicalStepRight);
+                const float startLateralOffset =
+                    comp._physicalStepSupportSide < 0
+                    ? glm::min(startLeftAvailable, 0.0f)
+                        * startSupportFraction
+                    : glm::max(startRightAvailable, 0.0f)
+                        * startSupportFraction;
+                const glm::vec3 startStanceSupport =
+                    comp._physicalStepSupportSide < 0
+                    ? comp._physicalStepFootBaselineL
+                    : comp._physicalStepFootBaselineR;
+                constexpr float kTurnStartForwardStanceFraction = 0.90f;
+                const float startForwardOffset = glm::dot(
+                    startStanceSupport - comp._physicalStepComBaseline,
+                    comp._physicalStepForward)
+                    * kTurnStartForwardStanceFraction;
+                plan.turnStartSupportEnd = comp._physicalStepComBaseline
+                    + comp._physicalStepRight * startLateralOffset
+                    + comp._physicalStepForward * startForwardOffset;
                 plan.commandTimestamp = glm::max(
                     0.0f, comp._gaitRunTime - glm::max(dt, 0.0f));
                 plan.nextSampleTimestamp = kTelemetryPeriod;
@@ -1799,12 +1972,55 @@
                 plan.currentSupportSide = comp._physicalStepSupportSide;
                 plan.turnSequence = turnSequence;
                 plan.retargetSequence = retargetSequence;
+                if (plan.standingStart && comp.debug) {
+                    spdlog::info(
+                        "[LocomotionAssistedTurn] turn={} retarget={} "
+                        "event=TURN_START_PRELOAD_BEGIN gaitTime={:.3f}s "
+                        "duration={:.3f}s target=full-stance support={} contacts=2 "
+                        "originDelta={:.3f}m originSpeed={:.3f}mps "
+                        "originSource={}",
+                        plan.turnSequence, plan.retargetSequence,
+                        plan.commandTimestamp, 0.20f,
+                        supportName(plan.supportSideAtStart),
+                        glm::length(glm::vec2(
+                            plan.turnStartSupportOrigin.x
+                                - comp._physicalStepComBaseline.x,
+                            plan.turnStartSupportOrigin.z
+                                - comp._physicalStepComBaseline.z)),
+                        glm::length(plan.turnStartSupportOriginVelocity),
+                        plan.turnStartSupportInherited
+                            ? "active-target" : "measured-com");
+                }
+                // Once a foothold is admitted it is immutable, but it is still the
+                // physical contact accompanying this command. Inherit it for every
+                // angle band so a large active-phase retarget cannot wait forever for
+                // an "outside first" beat while its global schedule is gated at zero.
+                // WEIGHT_SHIFT is included only after foothold admission; an ordinary
+                // boundary command still shapes the next plan normally.
+                const bool activePhysicalBeat = plan.cadenceEligible
+                    && ((comp._physicalStepPhase == kWeightShift
+                         && comp._gaitTurnPlan.activeHeadingPlan)
+                        || (comp._physicalStepPhase >= kTakeoff
+                            && comp._physicalStepPhase <= kHold));
+                if (activePhysicalBeat) {
+                    plan.turnBeatAdmitted = true;
+                    plan.turnBeatInherited = true;
+                    plan.turnBeatStepIndex = comp._stepSequenceStepIndex;
+                    plan.turnBeatSwingSide =
+                        comp._physicalStepSupportSide == 0
+                        ? 0 : -comp._physicalStepSupportSide;
+                    plan.turnBeatOutside = plan.turnBeatSwingSide != 0
+                        && static_cast<float>(plan.turnBeatSwingSide)
+                            * requestedYaw > 0.0f;
+                    plan.turnBeatActiveIndex = 1;
+                    plan.turnBeatAdmittedTimestamp = plan.commandTimestamp;
+                }
                 if (comp.debug) {
                     spdlog::info(
                         "[LocomotionAssistedTurn] turn={} retarget={} event={} "
                         "gaitTime={:.3f}s requested={:+.3f}deg duration={:.3f}s "
                         "start=({:+.3f},{:+.3f}) desired=({:+.3f},{:+.3f}) "
-                        "phase={} support={} contacts={} mode={}",
+                        "phase={} support={} contacts={} mode={} beats={}",
                         plan.turnSequence, plan.retargetSequence,
                         retarget ? "RETARGET" : "COMMAND",
                         plan.commandTimestamp,
@@ -1816,7 +2032,49 @@
                         supportName(plan.supportSideAtStart),
                         static_cast<int>(comp._physicalStepContactL)
                             + static_cast<int>(comp._physicalStepContactR),
-                        plan.assistanceEligible ? "assisted" : "shadow");
+                        plan.assistanceEligible ? "assisted" : "shadow",
+                        plan.turnBeatRequiredCount);
+                    if (plan.cadenceEligible && plan.turnBeatAdmitted) {
+                        spdlog::info(
+                            "[LocomotionAssistedTurn] turn={} retarget={} "
+                            "event=TURN_BEAT_ATTACH gaitTime={:.3f}s beat={}/{} step={} "
+                            "swing={} outside={} advanceScale={:.3f} "
+                            "targetPeriod={:.3f}s phase={}",
+                            plan.turnSequence, plan.retargetSequence,
+                            plan.turnBeatAdmittedTimestamp,
+                            plan.turnBeatActiveIndex,
+                            plan.turnBeatRequiredCount,
+                            plan.turnBeatStepIndex,
+                            plan.turnBeatSwingSide < 0 ? "LEFT"
+                                : (plan.turnBeatSwingSide > 0
+                                    ? "RIGHT" : "NONE"),
+                            plan.turnBeatOutside ? "yes" : "no",
+                            plan.turnBeatAdvanceScale,
+                            plan.turnBeatTargetPeriod,
+                            gaitPhaseName(comp._physicalStepPhase));
+                    }
+                    const char* handoffPolicy =
+                        comp._physicalStepPhase == kWeightShift
+                            || comp._physicalStepPhase == kInterStep
+                        ? "boundary-admit"
+                        : (comp._physicalStepPhase == kTakeoff
+                           || (comp._physicalStepPhase == kSwing
+                               && comp._physicalStepPhaseTime
+                                   < cadenceSwingTime * 0.50f))
+                            ? "early-immutable"
+                            : (comp._physicalStepPhase <= kDescent
+                                ? "late-immutable"
+                                : "contact-handoff");
+                    spdlog::info(
+                        "[LocomotionAssistedTurn] turn={} retarget={} "
+                        "event=ACTIVE_PHASE_HANDOFF gaitTime={:.3f}s "
+                        "phase={} policy={} inheritedBeat={} "
+                        "scheduleOrigin=measured-heading",
+                        plan.turnSequence, plan.retargetSequence,
+                        plan.commandTimestamp,
+                        gaitPhaseName(comp._physicalStepPhase),
+                        handoffPolicy,
+                        plan.turnBeatInherited ? "yes" : "no");
                 }
             };
 
@@ -1854,7 +2112,7 @@
                             requestedYaw, false);
                     }
                 }
-            } else if (assistedPlan.active) {
+            } else if (assistedPlan.active && !assistedPlan.releasing) {
                 if (comp.debug) {
                     spdlog::info(
                         "[LocomotionAssistedTurn] turn={} retarget={} event=RELEASE "
@@ -1874,28 +2132,115 @@
                         assistedPlan.assistanceEligible
                             ? "assisted" : "shadow");
                 }
-                assistedPlan.active = false;
+
+                // Keep one observable turn record through the existing physical stop
+                // handoff. The target is the heading actually achieved at release, so
+                // neither the motor nor direct assistance can chase the abandoned input
+                // target. The rate field eases to zero for deterministic release
+                // telemetry while the phase-specific foot policy below remains owner.
+                constexpr float kReleaseAngularDecelerationDeg = 720.0f;
+                constexpr float kMinimumReleaseDuration = 0.06f;
+                constexpr float kMaximumReleaseDuration = 0.20f;
+                assistedPlan.releasing = true;
+                assistedPlan.releaseElapsed = 0.0f;
+                assistedPlan.releaseInitialAngularVelocity =
+                    assistedPlan.physicalAngularVelocity;
+                assistedPlan.releaseDuration = glm::clamp(
+                    std::abs(glm::degrees(
+                        assistedPlan.releaseInitialAngularVelocity))
+                        / kReleaseAngularDecelerationDeg,
+                    kMinimumReleaseDuration, kMaximumReleaseDuration);
+                // Preserve the original angular basis and cumulative physical yaw so
+                // the RELEASE sample joins the preceding schedule without a zero-angle
+                // discontinuity. Only the abandoned target is replaced.
+                assistedPlan.desiredForward = physicalForward;
+                assistedPlan.scheduledForward = physicalForward;
+                assistedPlan.previousPhysicalForward = physicalForward;
+                assistedPlan.scheduledYaw = assistedPlan.physicalYaw;
+                assistedPlan.residualYaw = 0.0f;
+                assistedPlan.scheduleComplete = false;
+                assistedPlan.headingComplete = false;
+                assistedPlan.headingStableTime = 0.0f;
+                assistedPlan.gaitReady = false;
+                assistedPlan.assistanceEligible = false;
+                assistedPlan.cadenceEligible = false;
+                assistedPlan.twoBeatCadence = false;
+                assistedPlan.turnBeatComplete = true;
+                assistedPlan.torsoLeadYaw = 0.0f;
+                if (comp.debug) {
+                    spdlog::info(
+                        "[LocomotionAssistedTurn] turn={} retarget={} "
+                        "event=RELEASE_HANDOFF gaitTime={:.3f}s "
+                        "phase={} achieved=({:+.3f},{:+.3f}) "
+                        "rate={:+.3f}deg/s decelTime={:.3f}s "
+                        "action=measured-heading-safe-stop",
+                        assistedPlan.turnSequence,
+                        assistedPlan.retargetSequence,
+                        comp._gaitRunTime,
+                        gaitPhaseName(comp._physicalStepPhase),
+                        physicalForward.x, physicalForward.z,
+                        glm::degrees(
+                            assistedPlan.releaseInitialAngularVelocity),
+                        assistedPlan.releaseDuration);
+                }
             }
 
             if (assistedPlan.active) {
                 const float safeDt = glm::max(dt, 0.0f);
                 assistedPlan.elapsed += safeDt;
-                const float linearProgress = glm::clamp(
-                    assistedPlan.elapsed
-                        / glm::max(assistedPlan.scheduledDuration, 1e-4f),
-                    0.0f, 1.0f);
-                assistedPlan.easedProgress = linearProgress * linearProgress
-                    * (3.0f - 2.0f * linearProgress);
-                assistedPlan.scheduledYaw = assistedPlan.requestedYaw
-                    * assistedPlan.easedProgress;
-                assistedPlan.scheduledAngularVelocity =
-                    assistedPlan.requestedYaw
-                    * (6.0f * linearProgress * (1.0f - linearProgress))
-                    / glm::max(assistedPlan.scheduledDuration, 1e-4f);
-                assistedPlan.scheduledForward = glm::normalize(
-                    glm::angleAxis(assistedPlan.scheduledYaw,
-                                   glm::vec3(0.0f, 1.0f, 0.0f))
-                    * assistedPlan.startForward);
+                if (assistedPlan.releasing) {
+                    assistedPlan.releaseElapsed += safeDt;
+                    const float linearProgress = glm::clamp(
+                        assistedPlan.releaseElapsed
+                            / glm::max(assistedPlan.releaseDuration, 1e-4f),
+                        0.0f, 1.0f);
+                    const float easedReleaseProgress = linearProgress
+                        * linearProgress * (3.0f - 2.0f * linearProgress);
+                    assistedPlan.scheduledAngularVelocity =
+                        assistedPlan.releaseInitialAngularVelocity
+                        * (1.0f - easedReleaseProgress);
+                } else if (assistedPlan.twoBeatCadence) {
+                    // A large turn begins with the admitted outside-foot beat, then
+                    // follows one continuous global curve. Slice 6 starts this clock at
+                    // command receipt in every gait phase, including the bounded standing
+                    // preload; the physical beat still owns gait-ready completion.
+                    assistedPlan.turnBeatScheduleElapsed += safeDt;
+                    const float linearProgress = glm::clamp(
+                        assistedPlan.turnBeatScheduleElapsed
+                            / glm::max(
+                                assistedPlan.scheduledDuration, 1e-4f),
+                        0.0f, 1.0f);
+                    assistedPlan.easedProgress = linearProgress
+                        * linearProgress * (3.0f - 2.0f * linearProgress);
+                    assistedPlan.scheduledAngularVelocity =
+                        assistedPlan.requestedYaw
+                        * (6.0f * linearProgress
+                            * (1.0f - linearProgress))
+                        / glm::max(
+                            assistedPlan.scheduledDuration, 1e-4f);
+                } else {
+                    const float linearProgress = glm::clamp(
+                        assistedPlan.elapsed
+                            / glm::max(
+                                assistedPlan.scheduledDuration, 1e-4f),
+                        0.0f, 1.0f);
+                    assistedPlan.easedProgress = linearProgress * linearProgress
+                        * (3.0f - 2.0f * linearProgress);
+                    assistedPlan.scheduledAngularVelocity =
+                        assistedPlan.requestedYaw
+                        * (6.0f * linearProgress
+                            * (1.0f - linearProgress))
+                        / glm::max(
+                            assistedPlan.scheduledDuration, 1e-4f);
+                }
+                if (!assistedPlan.releasing) {
+                    assistedPlan.scheduledYaw = assistedPlan.requestedYaw
+                        * assistedPlan.easedProgress;
+                    assistedPlan.scheduledForward = glm::normalize(
+                        glm::angleAxis(assistedPlan.scheduledYaw,
+                                       glm::vec3(0.0f, 1.0f, 0.0f))
+                        * assistedPlan.startForward);
+                }
 
                 const float physicalIncrement = signedHeadingDelta(
                     assistedPlan.previousPhysicalForward, physicalForward);
@@ -1908,8 +2253,14 @@
                 assistedPlan.currentSupportSide = comp._physicalStepSupportSide;
 
                 const bool wasScheduleComplete = assistedPlan.scheduleComplete;
-                assistedPlan.scheduleComplete =
-                    assistedPlan.elapsed >= assistedPlan.scheduledDuration;
+                assistedPlan.scheduleComplete = assistedPlan.releasing
+                    ? assistedPlan.releaseElapsed
+                        >= assistedPlan.releaseDuration
+                    : (assistedPlan.twoBeatCadence
+                        ? assistedPlan.turnBeatScheduleElapsed
+                            >= assistedPlan.scheduledDuration
+                        : assistedPlan.elapsed
+                            >= assistedPlan.scheduledDuration);
                 const int contactCount =
                     static_cast<int>(comp._physicalStepContactL)
                     + static_cast<int>(comp._physicalStepContactR);
@@ -1952,6 +2303,9 @@
                 else if (assistedPlan.headingStableTime
                          < kHeadingCompleteStableTime)
                     gaitReadyConstraint = "heading-settle";
+                else if (assistedPlan.cadenceEligible
+                         && !assistedPlan.turnBeatComplete)
+                    gaitReadyConstraint = "turn-beat";
                 else if (contactCount < 2)
                     gaitReadyConstraint = "contact-count";
                 else if (comp._physicalStepMotorSaturated)
@@ -2061,6 +2415,8 @@
 
                 if (!assistedPlan.gaitReady
                     && assistedPlan.headingComplete
+                    && (!assistedPlan.cadenceEligible
+                        || assistedPlan.turnBeatComplete)
                     && contactCount == 2
                     && !comp._physicalStepMotorSaturated
                     && loadReady && phaseAllowsAdmission) {
@@ -2104,7 +2460,7 @@
                         "physicalRate={:+.3f}deg/s residual={:+.3f}deg "
                         "headingError={:.3f}deg phase={} support={} contacts={} "
                         "gaitReadyConstraint={} mode={} assisted={:+.3f}deg "
-                        "lastAssist={:+.3f}deg assistCalls={}",
+                        "lastAssist={:+.3f}deg assistCalls={} torsoLead={:+.3f}deg",
                         assistedPlan.turnSequence,
                         assistedPlan.retargetSequence,
                         comp._gaitRunTime, assistedPlan.elapsed,
@@ -2123,7 +2479,8 @@
                             ? "assisted" : "shadow",
                         glm::degrees(assistedPlan.assistedYaw),
                         glm::degrees(assistedPlan.lastAssistedYaw),
-                        assistedPlan.assistanceApplications);
+                        assistedPlan.assistanceApplications,
+                        glm::degrees(assistedPlan.torsoLeadYaw));
                     do {
                         assistedPlan.nextSampleTimestamp += kTelemetryPeriod;
                     } while (assistedPlan.nextSampleTimestamp
@@ -2269,6 +2626,31 @@
             }
         }
 
+        // The global schedule owns root heading even at a phase boundary where no
+        // per-foot heading plan is active. Previously WEIGHT_SHIFT and INTER_STEP only
+        // received a target after the first direct correction, so a well-tracking motor
+        // could stall below the assistance threshold until the next foothold. Release
+        // handoffs deliberately disable assistance and therefore leave the safe-stop
+        // cancellation target above untouched.
+        const bool scheduledAssistanceOwnsGlobalHeading =
+            comp._assistedTurnPlan.active
+            && comp._assistedTurnPlan.assistanceEligible
+            && !comp._assistedTurnPlan.releasing
+            && comp.gaitAssistedTurnEnabled
+            && comp.gaitAssistedTurnStrength > 0.0f
+            && comp._gaitRunning
+            && !comp._gaitStopRequested
+            && comp._physicalStepPhase < kStopping;
+        if (scheduledAssistanceOwnsGlobalHeading) {
+            const glm::vec3 scheduledForward =
+                comp._assistedTurnPlan.scheduledForward;
+            const float scheduledHeadingYaw = std::atan2(
+                -scheduledForward.x, -scheduledForward.z);
+            comp._gaitHeadingTargetRot = glm::angleAxis(
+                scheduledHeadingYaw, glm::vec3(0.0f, 1.0f, 0.0f));
+            rag.locomotionTargetRot = comp._gaitHeadingTargetRot;
+        }
+
         // A turning footprint uses an oblique pair: midpoint forward supplies its
         // translation coefficient while end right supplies its lane coefficient. Keep
         // that immutable objective frame separate from _physicalStepForward, which remains
@@ -2279,7 +2661,8 @@
                 && comp._gaitCancelMode == 0
                 && comp._gaitTurnPlan.activeHeadingPlan
                 && (std::abs(comp._gaitTurnPlan.admittedYaw) > 1e-6f
-                    || comp._gaitTurnPlan.turnExitBlendApplied);
+                    || comp._gaitTurnPlan.turnExitBlendApplied
+                    || comp._gaitTurnPlan.assistedTurnBeat);
         };
         auto hasYawBearingTurnStep = [&]() {
             return hasTurnConditionedStep()
@@ -2330,8 +2713,15 @@
                 0.0f, 1.0f);
             return 1.0f - smoothstep(blend);
         };
+        // A closing assisted beat intentionally carries zero per-foot yaw after the
+        // global heading has completed, but it is still a turn-ownership contact. Do
+        // not classify it as straight walking and start the aggressive parallel support
+        // curve before its new sole owns a center anchor.
+        const bool assistedTurnOwnershipBeat = hasTurnConditionedStep()
+            && comp._gaitTurnPlan.assistedTurnBeat;
         const bool walkingOverlapHandoff = continuousEnabled
-            && !hasYawBearingTurnStep();
+            && !hasYawBearingTurnStep()
+            && !assistedTurnOwnershipBeat;
         const bool straightStartupSupport = walkingOverlapHandoff
             && comp._stepSequenceStepIndex <= 1;
         if (continuousEnabled) {
@@ -2358,6 +2748,27 @@
             comp._physicalStepComCommand, desiredComCommand,
             dt / cadenceWeightShiftTime);
 
+        // Smooth the full stance-side target into a large turn out of idle. The first
+        // implementation stopped at 20%, which could leave the outside-foot candidate
+        // beyond anatomical reach and also made the ordinary settled gate pass against
+        // the wrong target. A full smoothstep retains the required unload geometry
+        // without the original one-frame 5-8 cm command jump.
+        constexpr float kTurnStartPreloadDuration = 0.20f;
+        const bool assistedTurnStartPreloading = continuousEnabled
+            && comp._physicalStepPhase == kWeightShift
+            && comp._assistedTurnPlan.standingStart
+            // Keep the last scaled command for the release frame so STOPPING can
+            // capture it continuously, but do not let stale completed-plan state own
+            // a later ordinary walking start.
+            && (comp._assistedTurnPlan.active
+                || comp._gaitStopRequested)
+            && !comp._assistedTurnPlan.turnBeatAdmitted
+            && comp._assistedTurnPlan.turnBeatCompletedCount == 0;
+        const float turnStartPreloadScale = assistedTurnStartPreloading
+            ? smoothstep(glm::clamp(
+                comp._physicalStepPhaseTime / kTurnStartPreloadDuration,
+                0.0f, 1.0f))
+            : 1.0f;
         const float fraction = glm::clamp(comp.supportBias, 0.0f, 1.0f);
         const float leftAvailable = glm::dot(
             comp._physicalStepFootBaselineL - comp._physicalStepComBaseline, comp._physicalStepRight);
@@ -2367,7 +2778,8 @@
             ? -comp._physicalStepComCommand * glm::min(leftAvailable, 0.0f) * fraction
             :  comp._physicalStepComCommand * glm::max(rightAvailable, 0.0f) * fraction;
         glm::vec3 supportTarget = comp._physicalStepComBaseline
-                                + comp._physicalStepRight * lateralOffset;
+                                + comp._physicalStepRight
+                                    * lateralOffset;
         glm::vec3 supportVelocity(0.0f);
         bool supportVelocityExplicit = false;
         float gaitStanceForwardTarget = 0.0f;
@@ -2383,7 +2795,38 @@
             gaitStanceForwardTarget = glm::dot(
                 stanceSupport - comp._physicalStepComBaseline,
                 comp._physicalStepForward) * kForwardStanceFraction;
-            supportTarget += comp._physicalStepForward * gaitStanceForwardTarget;
+            supportTarget += comp._physicalStepForward
+                * gaitStanceForwardTarget;
+        }
+        if (assistedTurnStartPreloading) {
+            // Cubic Hermite interpolation preserves both position and velocity at the
+            // ownership boundary. The endpoint is the full stance target, so admission
+            // retains the unloading geometry validated by the turn planner.
+            const float u = glm::clamp(
+                comp._physicalStepPhaseTime / kTurnStartPreloadDuration,
+                0.0f, 1.0f);
+            const float u2 = u * u;
+            const float u3 = u2 * u;
+            const float h00 = 2.0f * u3 - 3.0f * u2 + 1.0f;
+            const float h10 = u3 - 2.0f * u2 + u;
+            const float h01 = -2.0f * u3 + 3.0f * u2;
+            const glm::vec3 start =
+                comp._assistedTurnPlan.turnStartSupportOrigin;
+            const glm::vec3 startVelocity =
+                comp._assistedTurnPlan.turnStartSupportOriginVelocity;
+            const glm::vec3 end =
+                comp._assistedTurnPlan.turnStartSupportEnd;
+            supportTarget = h00 * start
+                + h10 * kTurnStartPreloadDuration * startVelocity
+                + h01 * end;
+
+            const float dh00 = 6.0f * u2 - 6.0f * u;
+            const float dh10 = 3.0f * u2 - 4.0f * u + 1.0f;
+            const float dh01 = -6.0f * u2 + 6.0f * u;
+            supportVelocity = (dh00 * start
+                + dh10 * kTurnStartPreloadDuration * startVelocity
+                + dh01 * end) / kTurnStartPreloadDuration;
+            supportVelocityExplicit = true;
         }
         if (continuousEnabled && comp._gaitContinuousCycle
             && comp._physicalStepPhase >= kWeightShift
@@ -2892,8 +3335,18 @@
         const float maintainedSupportClearance = hasYawBearingTurnStep()
             ? kTurnFinalContactClearance
             : kMaintainedSupportClearance;
+        // After touchdown, manifold separation is relative to the accepted physical
+        // surface. Sole-start clearance is not: leveling a tilted turn sole can raise
+        // that value even while the same manifold remains grounded. Preserve an already
+        // accepted support across that harmless representation change.
+        const bool nearAcceptedContactManifold =
+            comp._physicalStepTouchdownAccepted
+            && rawSwingContact
+            && FootGrounded(rag, swing->footIdx)
+            && rawContactPenetration >= -maintainedSupportClearance;
         const bool nearCapturedSupportSurface = measuredSoleClearance
-            <= maintainedSupportClearance;
+                <= maintainedSupportClearance
+            || nearAcceptedContactManifold;
         const bool quietGroundProximity = comp._physicalStepTouchdownAccepted
             && FootGrounded(rag, swing->footIdx)
             && nearCapturedSupportSurface
@@ -3285,11 +3738,17 @@
             comp._gaitSwingDeadline = 0.0f;
             comp._gaitSwingWatchdogProgress = 0.0f;
             comp._gaitSwingNoProgressTime = 0.0f;
+            comp._gaitTurnBeatLandingGraceActive = false;
             comp._gaitSwingSoleCommandWorld = glm::normalize(
                 swing->plantedFootWorldRotation);
             comp._gaitSwingSoleCommandValid = true;
             swing->planted = false;
         };
+        const bool doubleSupportTurnPreload = continuousEnabled
+            && comp._gaitRunning
+            && comp._assistedTurnPlan.standingStart
+            && !comp._assistedTurnPlan.turnBeatAdmitted
+            && comp._physicalStepPhase == kWeightShift;
         if (continuousEnabled && comp._gaitRunning && stance->planted
             && !stance->plantSolveValid
             && comp._physicalStepPhase >= kWeightShift
@@ -3298,6 +3757,13 @@
             // world-anchor solve explicitly. Waiting until step two left the first rear
             // foot as an unsolved local pose while the pelvis shifted over it.
             captureLegSolveReference(*stance, stanceFoot);
+        }
+        if (doubleSupportTurnPreload && swing->planted
+            && !swing->plantSolveValid) {
+            // Both feet own fixed world anchors until admission deliberately releases
+            // the swing foot. Solving only the selected stance leg caused the other leg
+            // to remain in the authored standing pose, then twitch when ownership changed.
+            captureLegSolveReference(*swing, swingFoot);
         }
 
         auto capturePhysicalLocalPose = [&](Leg& leg) {
@@ -3418,7 +3884,7 @@
                 desiredForward = committedForward;
             desiredForward = glm::normalize(desiredForward);
 
-            const auto& assistedPlan = comp._assistedTurnPlan;
+            auto& assistedPlan = comp._assistedTurnPlan;
             const bool scheduledAssistanceOwnsFootholdHeading =
                 assistedPlan.active
                 && assistedPlan.assistanceEligible
@@ -3473,6 +3939,55 @@
                             swingFootLeft ? "LEFT" : "RIGHT");
                     }
                 }
+            }
+
+            // Slice 4 gives a 15-90 degree command one physical beat; Slice 5 gives a
+            // larger command an outside/inside pair. If no immutable in-flight step was
+            // inherited, the next role-correct foothold owns the pending beat. Global
+            // heading is still supplied by the assisted schedule, so these flags change
+            // cadence and forward advance without planning yaw twice.
+            const bool assistedTurnBeatPending =
+                assistedPlan.active
+                && assistedPlan.cadenceEligible
+                && !assistedPlan.turnBeatAdmitted;
+            const int assistedTurnBeatIndex =
+                assistedPlan.turnBeatCompletedCount + 1;
+            const bool assistedTurnBeatOutside =
+                assistedTurnBeatPending
+                && swingSide * assistedPlan.requestedYaw > 0.0f;
+            const int assistedTurnClosingSwingSide =
+                assistedPlan.turnBeatCompletedSwingSide != 0
+                    ? -assistedPlan.turnBeatCompletedSwingSide
+                    : (assistedPlan.requestedYaw < 0.0f ? 1 : -1);
+            const bool assistedTurnBeatRoleMatches =
+                !assistedPlan.twoBeatCadence
+                || (assistedTurnBeatIndex == 1
+                    ? assistedTurnBeatOutside
+                    : static_cast<int>(swingSide)
+                        == assistedTurnClosingSwingSide);
+            const bool assistedTurnBeatAdmission =
+                assistedTurnBeatPending
+                && assistedTurnBeatRoleMatches;
+            const float assistedTurnAdvanceScale =
+                assistedTurnBeatAdmission
+                ? assistedPlan.turnBeatAdvanceScale : 1.0f;
+
+            if (comp.debug && assistedTurnBeatPending
+                && !assistedTurnBeatRoleMatches) {
+                spdlog::info(
+                    "[LocomotionAssistedTurn] turn={} retarget={} "
+                    "event=TURN_BEAT_ROLE_WAIT beat={}/{} step={} "
+                    "swing={} expected={} action=fallback-role-exchange",
+                    assistedPlan.turnSequence,
+                    assistedPlan.retargetSequence,
+                    assistedTurnBeatIndex,
+                    assistedPlan.turnBeatRequiredCount,
+                    comp._stepSequenceStepIndex,
+                    swingFootLeft ? "LEFT" : "RIGHT",
+                    assistedTurnBeatIndex == 1
+                        ? "outside"
+                        : (assistedTurnClosingSwingSide < 0
+                            ? "opposite-left" : "opposite-right"));
             }
 
             const float desiredHeadingError = resolvedHeadingDelta(
@@ -3699,6 +4214,8 @@
             turnPlan.swingSpeedLaneFloorExceeded = false;
             turnPlan.turnInitiationDeferred = turnInitiationDeferred;
             turnPlan.turnExitBlendApplied = turnExitBlendApplied;
+            turnPlan.assistedTurnBeat = assistedTurnBeatAdmission;
+            turnPlan.assistedTurnBeatOutside = assistedTurnBeatOutside;
             turnPlan.touchdownReadinessBlockedLogged = false;
             turnPlan.limitingConstraint = pairBudgetApplied
                 ? Comp::TurnConstraintResult::TurnPairBudget
@@ -3796,6 +4313,7 @@
                 : glm::clamp(comp.stepLength, 0.15f, 0.25f);
             const float placementDistance = continuousEnabled
                 ? nominalPlacementDistance * headingAdvanceScale
+                    * assistedTurnAdvanceScale
                 : nominalPlacementDistance;
             turnPlan.nominalAdvance = nominalPlacementDistance;
             glm::vec3 requestedTarget;
@@ -4841,7 +5359,8 @@
             const bool admittedTranslationObjective =
                 plannedSupportAdvance >= minimumUsefulTranslationObjective;
             const bool requestedAngularObjective =
-                std::abs(admittedStepYaw) > 1e-6f;
+                std::abs(admittedStepYaw) > 1e-6f
+                || assistedTurnBeatAdmission;
             turnPlan.objective = turnInitiationDeferred
                 ? Comp::TurnStepObjective::None
                 : (requestedAngularObjective
@@ -4951,7 +5470,8 @@
                             ? Comp::TurnConstraintResult::SwingLinearSpeed
                             : Comp::TurnConstraintResult::SwingAngularSpeed)
                         : Comp::TurnConstraintResult::MinimumAdvance;
-                if (footholdAccepted && requestedAngularObjective) {
+                if (footholdAccepted
+                    && std::abs(admittedStepYaw) > 1e-6f) {
                     if (turnPlan.outsideFoot) {
                         const float admittedAdvanceRatio =
                             turnPlan.requestedAdvance > 1e-4f
@@ -4990,6 +5510,81 @@
                         comp._gaitTurnPairAdvanceScale = 1.0f;
                         comp._gaitTurnPairYawScale = 1.0f;
                         comp._gaitTurnPairYawSign = 0.0f;
+                    }
+                }
+                if (footholdAccepted && assistedTurnBeatAdmission) {
+                    assistedPlan.turnBeatAdmitted = true;
+                    assistedPlan.turnBeatInherited = false;
+                    assistedPlan.turnBeatOutside = assistedTurnBeatOutside;
+                    assistedPlan.turnBeatStepIndex =
+                        comp._stepSequenceStepIndex;
+                    assistedPlan.turnBeatSwingSide =
+                        swingFootLeft ? -1 : 1;
+                    assistedPlan.turnBeatActiveIndex =
+                        assistedTurnBeatIndex;
+                    assistedPlan.turnBeatAdmittedTimestamp =
+                        comp._gaitRunTime;
+
+                    // Start the ordinary support handoff curve at admission instead of
+                    // waiting for descent. The old stance remains the pivot; only the
+                    // same bounded 20% preload used by normal gait is spread across the
+                    // full turn beat, and touchdown/transfer still own the load handoff.
+                    const float transferFraction = glm::clamp(
+                        comp.transferSupportBias
+                            + comp._gaitAdaptiveTransferBiasOffset,
+                        kNewSupportLoadCommandTarget, 0.98f);
+                    const glm::vec3 fullTransferTarget = glm::mix(
+                        stanceFoot, target, transferFraction);
+                    constexpr float kTurnBeatPreloadFraction = 0.20f;
+                    comp._gaitSupportCurveActive = true;
+                    comp._gaitSupportCurveStep =
+                        comp._stepSequenceStepIndex;
+                    comp._gaitSupportCurveTime = 0.0f;
+                    comp._gaitSupportCurveDuration = glm::max(
+                        assistedPlan.turnBeatTargetPeriod, 0.18f);
+                    comp._gaitSupportCurveStart =
+                        comp._physicalStepSupportTarget;
+                    comp._gaitSupportCurveEnd = glm::mix(
+                        comp._gaitSupportCurveStart, fullTransferTarget,
+                        kTurnBeatPreloadFraction);
+                    comp._gaitSupportCurveEnd.y =
+                        comp._gaitSupportCurveStart.y;
+                    glm::vec3 incomingVelocity =
+                        comp._gaitSupportCommandVelocity;
+                    incomingVelocity.y = 0.0f;
+                    const float incomingSpeed = glm::length(incomingVelocity);
+                    if (incomingSpeed > configuredSupportMaxSpeed
+                        && incomingSpeed > 1e-6f) {
+                        incomingVelocity *=
+                            configuredSupportMaxSpeed / incomingSpeed;
+                    }
+                    comp._gaitSupportCurveStartVelocity = incomingVelocity;
+                    comp._gaitSupportCurveEndVelocity =
+                        supportCurveEndVelocity(
+                            comp._gaitSupportCurveStart,
+                            comp._gaitSupportCurveEnd,
+                            comp._gaitSupportCurveDuration);
+
+                    if (comp.debug) {
+                        spdlog::info(
+                            "[LocomotionAssistedTurn] turn={} retarget={} "
+                            "event=TURN_BEAT_ADMIT gaitTime={:.3f}s beat={}/{} step={} "
+                            "swing={} outside={} advanceScale={:.3f} "
+                            "advance=({:.3f}->{:.3f})m targetPeriod={:.3f}s "
+                            "preload={:.2f}",
+                            assistedPlan.turnSequence,
+                            assistedPlan.retargetSequence,
+                            assistedPlan.turnBeatAdmittedTimestamp,
+                            assistedPlan.turnBeatActiveIndex,
+                            assistedPlan.turnBeatRequiredCount,
+                            assistedPlan.turnBeatStepIndex,
+                            swingFootLeft ? "LEFT" : "RIGHT",
+                            assistedTurnBeatOutside ? "yes" : "NO",
+                            assistedTurnAdvanceScale,
+                            nominalPlacementDistance,
+                            placementDistance,
+                            assistedPlan.turnBeatTargetPeriod,
+                            kTurnBeatPreloadFraction);
                     }
                 }
                 if (comp.debug) {
@@ -5865,6 +6460,10 @@
             comp._physicalStepForward);
         const float forwardComSpeed = glm::dot(
             rag._locomotionCOMVel, comp._physicalStepForward);
+        const float lateralComSpeed = glm::dot(
+            rag._locomotionCOMVel, comp._physicalStepRight);
+        const float horizontalComSpeed = glm::length(glm::vec2(
+            rag._locomotionCOMVel.x, rag._locomotionCOMVel.z));
         constexpr float kWeightShiftForwardTolerance = 0.015f;
         constexpr float kWeightShiftForwardSpeedTolerance = 0.010f;
         const float weightShiftMinimumTime = cadenceWeightShiftTime;
@@ -5885,6 +6484,38 @@
             comp._physicalStepContactL && comp._physicalStepContactR;
         const bool weightShiftTimeReady =
             comp._physicalStepPhaseTime >= weightShiftMinimumTime;
+        // Large turns may overlap the remainder of their safe double-support shift
+        // with TAKEOFF. Require motion toward the selected support and a broad, bounded
+        // stability envelope, but do not serialize the beat behind a 1 cm/s full stop.
+        constexpr float kTurnStartAdmissionTime = 0.12f;
+        constexpr float kTurnStartComTolerance = 0.025f;
+        constexpr float kTurnStartHorizontalSpeedLimit = 0.15f;
+        constexpr float kTurnStartWrongWaySpeedLimit = 0.02f;
+        const float directedLateralComSpeed = lateralComSpeed
+            * static_cast<float>(comp._physicalStepSupportSide);
+        const bool assistedTurnStartAdmissionReady =
+            assistedTurnStartPreloading
+            && comp._assistedTurnPlan.active
+            && comp._physicalStepPhaseTime >= kTurnStartAdmissionTime
+            && comp._physicalStepPhaseTime
+                >= comp._assistedTurnPlan.turnStartNextPlanTime
+            && weightShiftCommandReady
+            && std::abs(comError) <= kTurnStartComTolerance
+            && std::abs(forwardComError) <= kTurnStartComTolerance
+            && horizontalComSpeed <= kTurnStartHorizontalSpeedLimit
+            && directedLateralComSpeed >= -kTurnStartWrongWaySpeedLimit
+            && weightShiftContactsReady
+            && std::abs(tiltDeg) <= glm::max(
+                comp.gaitInterStepTiltLimit, 5.0f)
+            && !comp._physicalStepMotorSaturated;
+        const bool ordinaryWeightShiftAdmissionReady =
+            !assistedTurnStartPreloading
+            && weightShiftCommandReady
+            && weightShiftLateralReady
+            && weightShiftForwardReady
+            && weightShiftForwardSpeedReady
+            && weightShiftContactsReady
+            && weightShiftTimeReady;
         if (continuousEnabled
             && comp._physicalStepPhase == kWeightShift
             && comp._gaitBypassWeightShift
@@ -5918,14 +6549,30 @@
             }
         } else if (comp._physicalStepPhase == kWeightShift
             && (!continuousEnabled || !comp._gaitStopRequested)
-            && weightShiftCommandReady
-            && weightShiftLateralReady
-            && weightShiftForwardReady
-            && weightShiftForwardSpeedReady
-            && weightShiftContactsReady
-            && weightShiftTimeReady) {
+            && (assistedTurnStartAdmissionReady
+                || ordinaryWeightShiftAdmissionReady)) {
             captureSwing();
             if (planFoothold()) {
+                if (assistedTurnStartAdmissionReady && comp.debug) {
+                    spdlog::info(
+                        "[LocomotionAssistedTurn] turn={} retarget={} "
+                        "event=TURN_START_ADMIT gaitTime={:.3f}s "
+                        "preloadTime={:.3f}s preloadScale={:.3f} "
+                        "error=(lateral={:+.3f},forward={:+.3f})m "
+                        "speed=(horizontal={:.3f},towardSupport={:+.3f})m/s "
+                        "reachMargin={:+.3f}m tilt={:.1f}deg contacts=2 "
+                        "deferrals={}",
+                        comp._assistedTurnPlan.turnSequence,
+                        comp._assistedTurnPlan.retargetSequence,
+                        comp._gaitRunTime,
+                        comp._physicalStepPhaseTime,
+                        turnStartPreloadScale,
+                        comError, forwardComError,
+                        horizontalComSpeed, directedLateralComSpeed,
+                        comp._gaitTurnPlan.reachMargin,
+                        tiltDeg,
+                        comp._assistedTurnPlan.turnStartPlanDeferrals);
+                }
                 comp._physicalStepPhase = kTakeoff;
                 comp._physicalStepPhaseTime = 0.0f;
                 comp._physicalStepPrevSwingContact = true;
@@ -5934,7 +6581,44 @@
                 if (continuousEnabled) {
                 }
             } else {
-                if (!requestRejectedReversalStop("weight-shift")) {
+                if (assistedTurnStartAdmissionReady) {
+                    // Planning is a feasibility probe while both soles are still owned.
+                    // A marginal reach/grounding result is allowed to improve as the
+                    // full preload continues; it is not a reversal rejection and must
+                    // not enter the stop/restart-block path.
+                    swing->planted = true;
+                    comp._physicalStepDesiredFoot = swingFoot;
+                    comp._gaitSwingSoleCommandValid = false;
+                    comp._gaitTurnPlan.activeHeadingPlan = false;
+                    constexpr float kTurnStartPlanRetryPeriod = 0.05f;
+                    comp._assistedTurnPlan.turnStartNextPlanTime =
+                        comp._physicalStepPhaseTime
+                            + kTurnStartPlanRetryPeriod;
+                    ++comp._assistedTurnPlan.turnStartPlanDeferrals;
+                    if (comp.debug) {
+                        spdlog::info(
+                            "[LocomotionAssistedTurn] turn={} retarget={} "
+                            "event=TURN_START_DEFER gaitTime={:.3f}s "
+                            "preloadTime={:.3f}s preloadScale={:.3f} "
+                            "constraint={} grounded={} reachMargin={:+.3f}m "
+                            "error=(lateral={:+.3f},forward={:+.3f})m "
+                            "speed={:.3f}m/s retryIn={:.3f}s deferrals={}",
+                            comp._assistedTurnPlan.turnSequence,
+                            comp._assistedTurnPlan.retargetSequence,
+                            comp._gaitRunTime,
+                            comp._physicalStepPhaseTime,
+                            turnStartPreloadScale,
+                            TurnConstraintName(
+                                comp._gaitTurnPlan.limitingConstraint),
+                            comp._gaitTurnPlan.candidateGrounded
+                                ? "yes" : "NO",
+                            comp._gaitTurnPlan.reachMargin,
+                            comError, forwardComError,
+                            horizontalComSpeed,
+                            kTurnStartPlanRetryPeriod,
+                            comp._assistedTurnPlan.turnStartPlanDeferrals);
+                    }
+                } else if (!requestRejectedReversalStop("weight-shift")) {
                     abortSequence(continuousEnabled
                         ? "latched foothold lacked support-advance tracking reserve"
                         : "latched foothold fell below 15 cm after reach clamp");
@@ -6467,6 +7151,7 @@
             comp._gaitPlantRecoveryLogged = false;
             comp._physicalStepPlantSettledOffsetTime = 0.0f;
             comp._physicalStepPlantUnsafeTime = 0.0f;
+            comp._physicalStepPlantAcquireGraceLatched = false;
             comp._physicalStepPlantAnchorRebased = false;
             comp._physicalStepPlantCenterAnchorActive = false;
             comp._physicalStepPlantContactMigrationLogged = false;
@@ -6695,9 +7380,19 @@
                 comp._physicalStepHorizontalTargetError <= horizontalTolerance;
             const bool verticalOk =
                 comp._physicalStepVerticalTargetError <= verticalTolerance;
-            const bool turnTouchdown = hasYawBearingTurnStep();
+            // Assisted turn beats can carry zero per-foot yaw after the global heading
+            // schedule has already done the angular work. They still enter the strict
+            // turn-ownership path after contact, so admitting them under the ordinary
+            // 25-degree walking gate can create an impossible 25 -> 12 degree boundary:
+            // the moving sole governor is released before ownership can begin. Require
+            // the existing ownership angle while that governor still controls the foot.
+            const bool yawBearingTurnTouchdown = hasYawBearingTurnStep();
+            const bool assistedOwnershipTouchdown =
+                assistedTurnOwnershipBeat;
             const float soleToleranceDeg = continuousEnabled
-                ? (turnTouchdown ? 10.0f : 25.0f) : 180.0f;
+                ? (yawBearingTurnTouchdown ? 10.0f
+                    : (assistedOwnershipTouchdown ? 12.0f : 25.0f))
+                : 180.0f;
             const bool soleOk = !continuousEnabled
                 || comp._gaitSoleAngularErrorDeg <= soleToleranceDeg;
             const float touchdownHorizontalSpeed = glm::length(glm::vec2(
@@ -7407,24 +8102,121 @@
                         comp._gaitSoleAngularErrorDeg,
                         kDescentHandoffSoleToleranceDeg);
                 } else {
-                    spdlog::warn(
-                        "[LocomotionSwingGovernor] step={} stage=DESCENT action=TIMEOUT "
-                        "trajectoryT={:.3f}/1.000 commandSpeed={:.3f}mps "
-                        "trackingError={:.3f}m",
-                        comp._stepSequenceStepIndex,
-                        comp._physicalStepTrajectoryT,
-                        comp._gaitSwingCommandSpeed,
-                        comp._gaitSwingCommandTrackingError);
-                    abortSequence(
-                        "descent command could not reach foothold");
+                    // Assisted turns intentionally carry zero per-foot yaw, so their
+                    // closing beat uses the ordinary walking governor. A frame can land
+                    // just below its t=.83 brake threshold while already grounded,
+                    // centered, aligned, and dynamically quiet. Give only that verified
+                    // state a short chance to cross the brake and continue descending.
+                    // No contact is synthesized and every normal touchdown gate remains.
+                    const auto& assistedPlan = comp._assistedTurnPlan;
+                    const bool closingAssistedTurnBeat =
+                        comp._gaitTurnPlan.assistedTurnBeat
+                        && !comp._gaitTurnPlan.assistedTurnBeatOutside
+                        && assistedPlan.active
+                        && assistedPlan.twoBeatCadence
+                        && assistedPlan.turnBeatActiveIndex
+                            == assistedPlan.turnBeatRequiredCount;
+                    constexpr float kClosingBeatBrakeReserveT = 0.015f;
+                    constexpr float kClosingBeatHorizontalTolerance = 0.020f;
+                    constexpr float kClosingBeatVerticalTolerance = 0.065f;
+                    constexpr float kClosingBeatTrackingTolerance = 0.020f;
+                    constexpr float kClosingBeatSoleToleranceDeg = 15.0f;
+                    constexpr float kClosingBeatVerticalSpeedLimit = 0.15f;
+                    constexpr float kClosingBeatLandingGrace = 0.12f;
+                    const float closingBeatHorizontalSpeed = glm::length(glm::vec2(
+                        swingVelocity.x, swingVelocity.z));
+                    const float closingBeatAngularSpeed = swingAngularVelocityOk
+                        ? glm::length(swingAngularVelocity) : 0.0f;
+                    const float closingBeatCommandSpeedLimit = glm::clamp(
+                        comp.touchdownMaxCommandSpeed, 0.05f, 1.0f);
+                    const float descentDeadline = activeCadenceDescentTime()
+                        + glm::max(comp.plantTimeout, 0.25f);
+                    const bool safeClosingBeatGrace =
+                        closingAssistedTurnBeat
+                        && comp._physicalStepTrajectoryT
+                            >= activeSwingLandingBrakeT
+                                - kClosingBeatBrakeReserveT
+                        && FootGrounded(rag, swing->footIdx)
+                        && stanceContactNow
+                        && comp._physicalStepHorizontalTargetError
+                            <= kClosingBeatHorizontalTolerance
+                        && comp._physicalStepVerticalTargetError
+                            <= kClosingBeatVerticalTolerance
+                        && comp._gaitSwingCommandTrackingError
+                            <= kClosingBeatTrackingTolerance
+                        && comp._gaitSoleAngularErrorDeg
+                            <= kClosingBeatSoleToleranceDeg
+                        && comp._gaitSwingCommandSpeed
+                            <= closingBeatCommandSpeedLimit
+                        && std::abs(swingVelocity.y)
+                            <= kClosingBeatVerticalSpeedLimit
+                        && closingBeatHorizontalSpeed
+                            <= landingBrakeHorizontalSpeedLimit()
+                        && swingAngularVelocityOk
+                        && closingBeatAngularSpeed
+                            <= landingBrakeAngularSpeedLimit()
+                        && !comp._physicalStepMotorSaturated
+                        && tiltDeg <= glm::min(
+                            glm::max(comp.gaitInterStepTiltLimit, 1.0f),
+                            15.0f);
+                    const bool withinClosingBeatGrace =
+                        comp._physicalStepPhaseTime
+                            < descentDeadline + kClosingBeatLandingGrace;
+                    if (safeClosingBeatGrace && withinClosingBeatGrace) {
+                        if (!comp._gaitTurnBeatLandingGraceActive) {
+                            comp._gaitTurnBeatLandingGraceActive = true;
+                            spdlog::info(
+                                "[LocomotionSwingGovernor] step={} stage=DESCENT "
+                                "action=CLOSING_TURN_BEAT_GRACE duration={:.3f}s "
+                                "trajectoryT={:.3f}/{:.3f} "
+                                "error=(horizontal={:.3f}/{:.3f},"
+                                "vertical={:.3f}/{:.3f},tracking={:.3f}/{:.3f})m "
+                                "motion=(horizontal={:.3f},vertical={:+.3f},"
+                                "angular={:.3f}) sole={:.1f}/{:.1f}deg",
+                                comp._stepSequenceStepIndex,
+                                kClosingBeatLandingGrace,
+                                comp._physicalStepTrajectoryT,
+                                activeSwingLandingBrakeT,
+                                comp._physicalStepHorizontalTargetError,
+                                kClosingBeatHorizontalTolerance,
+                                comp._physicalStepVerticalTargetError,
+                                kClosingBeatVerticalTolerance,
+                                comp._gaitSwingCommandTrackingError,
+                                kClosingBeatTrackingTolerance,
+                                closingBeatHorizontalSpeed,
+                                swingVelocity.y,
+                                closingBeatAngularSpeed,
+                                comp._gaitSoleAngularErrorDeg,
+                                kClosingBeatSoleToleranceDeg);
+                        }
+                    } else {
+                        spdlog::warn(
+                            "[LocomotionSwingGovernor] step={} stage=DESCENT action=TIMEOUT "
+                            "trajectoryT={:.3f}/1.000 commandSpeed={:.3f}mps "
+                            "trackingError={:.3f}m closingBeat={} grace={} "
+                            "graceSafe={}",
+                            comp._stepSequenceStepIndex,
+                            comp._physicalStepTrajectoryT,
+                            comp._gaitSwingCommandSpeed,
+                            comp._gaitSwingCommandTrackingError,
+                            closingAssistedTurnBeat ? "yes" : "no",
+                            comp._gaitTurnBeatLandingGraceActive
+                                ? "active" : "inactive",
+                            safeClosingBeatGrace ? "yes" : "no");
+                        abortSequence(
+                            "descent command could not reach foothold");
+                    }
                 }
             }
         } else if (comp._physicalStepPhase == kTouchdownWait) {
             comp._physicalStepTrajectoryT = 1.0f;
-            // Cancellation disables governedWalkingSwing, but touchdown still validates
-            // this retained command speed. Always brake it on the straight path so a
-            // released input cannot freeze a stale 0.7 m/s command until timeout.
-            if (walkingOverlapHandoff) {
+            // TOUCHDOWN_WAIT fixes the target at the admitted foothold, so every swing
+            // governor must converge its retained linear command to zero here. Support
+            // ownership policy is independent: zero-yaw assisted beats deliberately use
+            // hold-for-ownership, but still carry the ordinary walking governor state.
+            // Conditioning this brake on parallel handoff left such a beat permanently
+            // 0.006 m/s above the touchdown command limit despite a motionless plant.
+            if (continuousEnabled) {
                 comp._gaitSwingCommandSpeed = moveScalarToward(
                     comp._gaitSwingCommandSpeed, 0.0f,
                     governedCommandAcceleration * dt);
@@ -7436,7 +8228,8 @@
             if (comp._physicalStepPhase == kTouchdownWait
                 && comp._physicalStepPhaseTime
                     >= glm::max(comp.plantTimeout,
-                        hasYawBearingTurnStep() ? 0.25f : 0.10f)) {
+                        hasYawBearingTurnStep() || assistedTurnOwnershipBeat
+                            ? 0.25f : 0.10f)) {
                 if (continuousEnabled) {
                     const float minNormalY = glm::clamp(
                         comp.touchdownMinNormalY, 0.35f, 1.0f);
@@ -7447,7 +8240,8 @@
                         glm::max(comp.gaitMaxFootCorrection, 0.01f));
                     constexpr float kVerticalTolerance = 0.035f;
                     const float soleToleranceDeg = hasYawBearingTurnStep()
-                        ? 10.0f : 25.0f;
+                        ? 10.0f : (assistedTurnOwnershipBeat
+                            ? 12.0f : 25.0f);
                     const float angularSpeedLimit =
                         landingAngularSpeedLimit();
                     const float horizontalSpeedLimit =
@@ -7932,6 +8726,9 @@
             comp._gaitPlantPreviousDrift = 0.0f;
             comp._gaitPlantDriftRate = 0.0f;
             comp._physicalStepPlantAcquireStableTime = 0.0f;
+            // SUPPORT_READY owns a fresh phase clock and must earn its own bounded
+            // deadline; the SETTLE grace only protects impact-pivot convergence.
+            comp._physicalStepPlantAcquireGraceLatched = false;
             comp._physicalStepPlantSettledOffsetTime = 0.0f;
             comp._physicalStepPlantUnsafeTime = 0.0f;
             spdlog::info(
@@ -9089,10 +9886,16 @@
 
         const bool applyMovingSwingIK = comp._physicalStepPhase >= kTakeoff
             && comp._physicalStepPhase <= kTouchdownWait;
-        const bool applyPlantedSwingIK = continuousEnabled
-            && comp._physicalStepTouchdownAccepted && swing->planted
-            && comp._physicalStepPhase >= kSettle
-            && comp._physicalStepPhase <= kInterStep;
+        const bool applyDoubleSupportSwingIK = continuousEnabled
+            && comp._assistedTurnPlan.standingStart
+            && !comp._assistedTurnPlan.turnBeatAdmitted
+            && swing->planted && swing->plantSolveValid
+            && comp._physicalStepPhase == kWeightShift;
+        const bool applyPlantedSwingIK = applyDoubleSupportSwingIK
+            || (continuousEnabled
+                && comp._physicalStepTouchdownAccepted && swing->planted
+                && comp._physicalStepPhase >= kSettle
+                && comp._physicalStepPhase <= kInterStep);
         if (applyMovingSwingIK) {
             solveLegIK(*swing, swingFoot, desiredFoot, true);
         } else if (applyPlantedSwingIK) {
@@ -9759,8 +10562,18 @@
                     && loadedSoleReady
                     && (recoverableDriftTrend
                         || recoverableSettledOffset);
+                // Once the bounded grace is earned at the base deadline, keep it. A
+                // one-frame manifold flicker must not shrink an already announced
+                // 0.8-second deadline back to 0.6 seconds and abort immediately. Drift,
+                // stance-contact, tilt, and slip guards remain independently active.
+                const bool acquireGraceWasLatched =
+                    comp._physicalStepPlantAcquireGraceLatched;
+                if (recoverableAcquireGrace
+                    && comp._physicalStepPhaseTime >= baseAcquireTimeout) {
+                    comp._physicalStepPlantAcquireGraceLatched = true;
+                }
                 const float ordinaryAcquireTimeout = baseAcquireTimeout
-                    + (recoverableAcquireGrace
+                    + (comp._physicalStepPlantAcquireGraceLatched
                         ? kRecoverableAcquireGraceTime : 0.0f);
                 // SUPPORT_READY owns a fresh clock. Its bounded deadline includes the
                 // immutable center blend plus an independent stability proof.
@@ -9801,9 +10614,8 @@
                 }
                 comp._physicalStepPlantAcquireStableTime = acquisitionKinematicallyStable
                     ? comp._physicalStepPlantAcquireStableTime + dt : 0.0f;
-                if (recoverableAcquireGrace
-                    && comp._physicalStepPhaseTime >= baseAcquireTimeout
-                    && comp._physicalStepPhaseTime - dt < baseAcquireTimeout) {
+                if (!acquireGraceWasLatched
+                    && comp._physicalStepPlantAcquireGraceLatched) {
                     spdlog::info(
                         "[LocomotionGait] PLANT_ACQUIRE_GRACE step={} plant={} "
                         "mode={} timeout={:.3f}->{:.3f}s anchorDrift={:.3f} "
@@ -10184,6 +10996,87 @@
                 const bool completedStraightTranslationObjective =
                     comp._gaitTurnPlan.objective
                         == TurnObjective::Translation;
+                auto& assistedPlan = comp._assistedTurnPlan;
+                if (assistedPlan.active
+                    && assistedPlan.cadenceEligible
+                    && assistedPlan.turnBeatAdmitted
+                    && !assistedPlan.turnBeatComplete
+                    && assistedPlan.turnBeatStepIndex
+                        == comp._stepSequenceStepIndex) {
+                    assistedPlan.turnBeatCompleteTimestamp =
+                        comp._gaitRunTime;
+                    assistedPlan.turnBeatCompletedCount = glm::max(
+                        assistedPlan.turnBeatCompletedCount,
+                        assistedPlan.turnBeatActiveIndex);
+                    assistedPlan.turnBeatCompletedSwingSide =
+                        assistedPlan.turnBeatSwingSide;
+                    const bool finalTurnBeat =
+                        assistedPlan.turnBeatCompletedCount
+                            >= assistedPlan.turnBeatRequiredCount;
+                    assistedPlan.turnBeatComplete = finalTurnBeat;
+                    if (comp.debug) {
+                        spdlog::info(
+                            "[LocomotionAssistedTurn] turn={} retarget={} "
+                            "event=TURN_BEAT_COMPLETE gaitTime={:.3f}s "
+                            "beat={}/{} step={} source={} swing={} outside={} "
+                            "duration={:.3f}s target={:.3f}s "
+                            "advance=({:.3f}->{:.3f})m "
+                            "contacts={} load={:.3f} drift={:.3f}m "
+                            "tilt={:.1f}deg motor={:.3f} final={}",
+                            assistedPlan.turnSequence,
+                            assistedPlan.retargetSequence,
+                            assistedPlan.turnBeatCompleteTimestamp,
+                            assistedPlan.turnBeatActiveIndex,
+                            assistedPlan.turnBeatRequiredCount,
+                            assistedPlan.turnBeatStepIndex,
+                            assistedPlan.turnBeatInherited
+                                ? "inherited" : "shaped",
+                            assistedPlan.turnBeatSwingSide < 0 ? "LEFT"
+                                : (assistedPlan.turnBeatSwingSide > 0
+                                    ? "RIGHT" : "NONE"),
+                            assistedPlan.turnBeatOutside ? "yes" : "NO",
+                            glm::max(
+                                assistedPlan.turnBeatCompleteTimestamp
+                                    - assistedPlan.turnBeatAdmittedTimestamp,
+                                0.0f),
+                            assistedPlan.turnBeatTargetPeriod,
+                            comp._gaitPlannedSupportAdvance,
+                            comp._gaitAchievedSupportAdvance,
+                            static_cast<int>(swingContactNow)
+                                + static_cast<int>(stanceContactNow),
+                            comp._gaitNewSupportLoad,
+                            comp._gaitStepMaxRelevantDrift,
+                            comp._physicalStepPeakTilt,
+                            comp._physicalStepMaxMotorRatio,
+                            finalTurnBeat ? "yes" : "no");
+                    }
+                    if (!finalTurnBeat) {
+                        assistedPlan.turnBeatAdmitted = false;
+                        assistedPlan.turnBeatInherited = false;
+                        assistedPlan.turnBeatOutside = false;
+                        assistedPlan.turnBeatStepIndex = -1;
+                        assistedPlan.turnBeatSwingSide = 0;
+                        assistedPlan.turnBeatActiveIndex = 0;
+                        assistedPlan.turnBeatAdmittedTimestamp = -1.0f;
+                        if (comp.debug) {
+                            spdlog::info(
+                                "[LocomotionAssistedTurn] turn={} retarget={} "
+                                "event=TURN_SUPPORT_HANDOFF gaitTime={:.3f}s "
+                                "completed={}/{} scheduled={:+.3f}deg "
+                                "load={:.3f} support={} "
+                                "action=admit-inside-beat",
+                                assistedPlan.turnSequence,
+                                assistedPlan.retargetSequence,
+                                comp._gaitRunTime,
+                                assistedPlan.turnBeatCompletedCount,
+                                assistedPlan.turnBeatRequiredCount,
+                                glm::degrees(assistedPlan.scheduledYaw),
+                                comp._gaitNewSupportLoad,
+                                comp._physicalStepSupportSide < 0
+                                    ? "LEFT" : "RIGHT");
+                        }
+                    }
+                }
                 if (comp._gaitCancelMode == 0) {
                     // Pure turns freeze only forward stride learning. Contact, lateral,
                     // drift, motor, impact, and load-transfer feedback remain live.
@@ -10398,7 +11291,15 @@
                 ? comp._stepSequenceInterStepStableTime + dt : 0.0f;
             const float requiredInterStepTime = continuousEnabled
                 ? 0.0f : cadenceInterStepTime;
-            if (comp._stepSequenceInterStepStableTime >= requiredInterStepTime) {
+            const auto& assistedPlan = comp._assistedTurnPlan;
+            const bool holdForAssistedTurnCompletion =
+                continuousEnabled
+                && assistedPlan.active
+                && assistedPlan.cadenceEligible
+                && assistedPlan.turnBeatComplete
+                && !assistedPlan.gaitReady;
+            if (comp._stepSequenceInterStepStableTime >= requiredInterStepTime
+                && !holdForAssistedTurnCompletion) {
                 const float completedPlannedAdvance =
                     comp._gaitPlannedSupportAdvance;
                 const float completedAchievedAdvance =
@@ -10419,7 +11320,40 @@
                 comp._physicalStepFootBaselineL = leftFoot;
                 comp._physicalStepFootBaselineR = rightFoot;
                 comp._physicalStepComBaseline = rag._locomotionCOM;
-                comp._physicalStepSupportSide = -oldSupportSide;
+                int nextSupportSide = -oldSupportSide;
+                auto& assistedPlanForRole = comp._assistedTurnPlan;
+                if (assistedPlanForRole.active
+                    && assistedPlanForRole.twoBeatCadence
+                    && !assistedPlanForRole.turnBeatAdmitted
+                    && !assistedPlanForRole.turnBeatComplete) {
+                    const int pendingBeat =
+                        assistedPlanForRole.turnBeatCompletedCount + 1;
+                    const int outsideSwingSide =
+                        assistedPlanForRole.requestedYaw < 0.0f ? -1 : 1;
+                    const int requiredSwingSide = pendingBeat == 1
+                        ? outsideSwingSide
+                        : (assistedPlanForRole.turnBeatCompletedSwingSide != 0
+                            ? -assistedPlanForRole.turnBeatCompletedSwingSide
+                            : -outsideSwingSide);
+                    nextSupportSide = -requiredSwingSide;
+                    comp._runtimeNextSupportSide = requiredSwingSide;
+                    if (comp.debug) {
+                        spdlog::info(
+                            "[LocomotionAssistedTurn] turn={} retarget={} "
+                            "event=TURN_BEAT_ROLE_SELECT beat={}/{} "
+                            "requiredSwing={} support={} naturalSwap={} "
+                            "action=select-at-inter-step",
+                            assistedPlanForRole.turnSequence,
+                            assistedPlanForRole.retargetSequence,
+                            pendingBeat,
+                            assistedPlanForRole.turnBeatRequiredCount,
+                            requiredSwingSide < 0 ? "LEFT" : "RIGHT",
+                            nextSupportSide < 0 ? "LEFT" : "RIGHT",
+                            nextSupportSide == -oldSupportSide
+                                ? "yes" : "no");
+                    }
+                }
+                comp._physicalStepSupportSide = nextSupportSide;
                 if (continuousEnabled) {
                     comp._physicalStepSupportTarget = completedSupportTarget;
                     comp._physicalStepComCommand =
@@ -10445,6 +11379,7 @@
                 comp._physicalStepPlantAcquireStableTime = 0.0f;
                 comp._physicalStepPlantSettledOffsetTime = 0.0f;
                 comp._physicalStepPlantUnsafeTime = 0.0f;
+                comp._physicalStepPlantAcquireGraceLatched = false;
                 comp._physicalStepPlantAnchorRebased = false;
                 comp._physicalStepPlantCenterAnchorActive = false;
                 comp._physicalStepPlantContactMigrationLogged = false;
@@ -10959,7 +11894,7 @@
             }
         }
 
-        // Slice 3: the schedule is the only global heading objective through 90
+        // The assisted schedule is the only global heading objective through 180
         // degrees. Physics and the existing step planner still contribute normally;
         // this path rotates only the remaining signed lag and can never pass the
         // current schedule sample.

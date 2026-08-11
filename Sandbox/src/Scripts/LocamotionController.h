@@ -153,6 +153,13 @@ struct LocamotionControllerComponent
     float assistedTurnDiagnosticYawDeg = 5.0f;
     float assistedTurnDiagnosticWeight = 0.0f;
     bool _assistedTurnDiagnosticRequested = false;
+    // Debug-only deterministic phase coverage. The requested heading is held after
+    // ARRIVAL fires until gameplay input changes or releases, so the ordinary retarget
+    // path sees one real command instead of a one-frame synthetic pulse.
+    bool _assistedTurnArrivalRetargetArmed = false;
+    bool _assistedTurnPhaseRetargetOverrideActive = false;
+    glm::vec3 _assistedTurnPhaseRetargetForward { 0.0f, 0.0f, -1.0f };
+    glm::vec3 _assistedTurnPhaseRetargetSourceForward { 0.0f, 0.0f, -1.0f };
 
     // Bounded turn-plan state. Desired heading remains live, committed heading advances
     // only after support transfer, and an admitted active plan stays immutable until
@@ -307,6 +314,8 @@ struct LocamotionControllerComponent
         bool swingSpeedLaneFloorExceeded = false;
         bool turnInitiationDeferred = false;
         bool turnExitBlendApplied = false;
+        bool assistedTurnBeat = false;
+        bool assistedTurnBeatOutside = false;
         bool footSeparationLimited = false;
         bool candidateGrounded = false;
         bool candidateEvaluated = false;
@@ -337,6 +346,29 @@ struct LocamotionControllerComponent
         float physicalAngularVelocity = 0.0f;
         float residualYaw = 0.0f;
         float headingStableTime = 0.0f;
+        float turnBeatAdvanceScale = 1.0f;
+        float turnBeatTargetPeriod = 0.50f;
+        float turnBeatAdmittedTimestamp = -1.0f;
+        float turnBeatCompleteTimestamp = -1.0f;
+        // For a two-beat turn this is the amount of time the heading curve has
+        // actually been allowed to run. Slice 6 advances it from command receipt;
+        // contact completion remains a separate gait-ready condition.
+        float turnBeatScheduleElapsed = 0.0f;
+        float torsoLeadYaw = 0.0f;
+        float turnStartNextPlanTime = 0.0f;
+        // A release keeps the turn record alive while the ordinary safe-stop path
+        // owns the feet. The scheduled target is rebased to the measured heading and
+        // only its reported angular rate is eased to zero; assistance is disabled.
+        float releaseElapsed = 0.0f;
+        float releaseDuration = 0.0f;
+        float releaseInitialAngularVelocity = 0.0f;
+        // Exact support command inherited from the standing frame. The large-turn
+        // preload uses these as its Hermite start conditions instead of rebasing the
+        // pelvis command to the COM and creating a visible one-frame kick.
+        glm::vec3 turnStartSupportOrigin { 0.0f };
+        glm::vec3 turnStartSupportOriginVelocity { 0.0f };
+        glm::vec3 turnStartSupportEnd { 0.0f };
+        bool turnStartSupportInherited = false;
         float assistedYaw = 0.0f;
         float lastAssistedYaw = 0.0f;
         float commandTimestamp = 0.0f;
@@ -349,6 +381,14 @@ struct LocamotionControllerComponent
         int turnSequence = 0;
         int retargetSequence = 0;
         int assistanceApplications = 0;
+        int turnBeatStepIndex = -1;
+        int turnBeatSwingSide = 0;
+        int turnBeatRequiredCount = 1;
+        int turnBeatCompletedCount = 0;
+        int turnBeatActiveIndex = 0;
+        int turnBeatCompletedSwingSide = 0;
+        int turnStartPlanDeferrals = 0;
+        int commandPhase = 0;
         unsigned int headingCrossingMask = 0;
         bool active = false;
         bool scheduleComplete = false;
@@ -356,6 +396,17 @@ struct LocamotionControllerComponent
         bool gaitReady = false;
         bool assistanceEligible = false;
         bool assistanceRejectLogged = false;
+        bool cadenceEligible = false;
+        bool twoBeatCadence = false;
+        // True only for a newly commanded two-beat turn on the first step out of
+        // double-support idle. This permits a short moving preload without relaxing
+        // the ordinary walking or mid-gait retarget admission gates.
+        bool standingStart = false;
+        bool turnBeatAdmitted = false;
+        bool turnBeatInherited = false;
+        bool turnBeatOutside = false;
+        bool turnBeatComplete = false;
+        bool releasing = false;
     };
 
     struct AssistedTurnDiagnosticState {
@@ -483,6 +534,7 @@ struct LocamotionControllerComponent
     float _physicalStepPlantAcquireStableTime = 0.0f;
     float _physicalStepPlantSettledOffsetTime = 0.0f;
     float _physicalStepPlantUnsafeTime = 0.0f;
+    bool _physicalStepPlantAcquireGraceLatched = false;
     bool _physicalStepPlantAnchorRebased = false;
     // Landing owns the first material contact only while the sole is still rocking.
     // Once it is level and quiet, ownership blends to a frozen sole-center anchor.
@@ -561,6 +613,7 @@ struct LocamotionControllerComponent
     float _gaitSwingDeadline = 0.0f;
     float _gaitSwingWatchdogProgress = 0.0f;
     float _gaitSwingNoProgressTime = 0.0f;
+    bool _gaitTurnBeatLandingGraceActive = false;
     glm::quat _gaitSwingSoleCommandWorld { 1.0f, 0.0f, 0.0f, 0.0f };
     bool _gaitSwingSoleCommandValid = false;
     // Center rise is useful trajectory telemetry, but it is not ground clearance when
@@ -748,9 +801,22 @@ struct LocamotionControllerComponent
     glm::vec3 _gaitSupportCurveStartVelocity { 0.0f };
     glm::vec3 _gaitSupportCurveEndVelocity { 0.0f };
     glm::vec3 _gaitSupportCommandVelocity { 0.0f };
+    glm::vec3 _gaitStartSupportTarget { 0.0f };
+    glm::vec3 _gaitStartSupportVelocity { 0.0f };
+    bool _gaitSupportTargetWasActive = false;
+    bool _gaitStartSupportInherited = false;
     // True while the physical gait owns the walking pose.
     bool _gaitEnabled = false;
     bool _runtimeWalkIntent = false;
+    // Controller headings are latched only after a meaningful, stable angular
+    // change. This rejects stick recenter noise without filtering walk speed.
+    glm::vec3 _runtimeMoveDirection { 0.0f, 0.0f, -1.0f };
+    glm::vec3 _runtimeMoveDirectionCandidate { 0.0f, 0.0f, -1.0f };
+    float _runtimeMoveDirectionStableTime = 0.0f;
+    float _runtimeInputReleaseTime = 0.0f;
+    float _runtimeMoveSpeed = 0.0f;
+    bool _runtimeMoveDirectionValid = false;
+    bool _runtimeMoveDirectionCandidateValid = false;
     bool _runtimeRestartBlocked = false;
     // A rejected physical reversal completes the validated stop but cannot restart
     // against the identical command forever. Release or a meaningful direction change
@@ -922,12 +988,21 @@ inline void DrawComponentInspector<LocamotionControllerComponent>(LocamotionCont
         if (ImGui::Button("+20 deg")) c.assistedTurnDiagnosticYawDeg = 20.0f;
         if (ImGui::Button("Apply Pivot Yaw Once"))
             c._assistedTurnDiagnosticRequested = true;
+        if (ImGui::Button("Retarget at next ARRIVAL"))
+            c._assistedTurnArrivalRetargetArmed = true;
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel Phase Retarget")) {
+            c._assistedTurnArrivalRetargetArmed = false;
+            c._assistedTurnPhaseRetargetOverrideActive = false;
+        }
         ImGui::Text(
-            "phase=%d support=%s refresh=%s",
+            "phase=%d support=%s refresh=%s arrival=%s override=%s",
             c._physicalStepPhase,
             c._physicalStepSupportSide < 0 ? "LEFT"
                 : (c._physicalStepSupportSide > 0 ? "RIGHT" : "NONE"),
-            c._assistedTurnDiagnostic.awaitingRefresh ? "pending" : "idle");
+            c._assistedTurnDiagnostic.awaitingRefresh ? "pending" : "idle",
+            c._assistedTurnArrivalRetargetArmed ? "armed" : "idle",
+            c._assistedTurnPhaseRetargetOverrideActive ? "active" : "idle");
     }
     ImGui::Checkbox("Debug Locomotion", &c.debug);
 #undef LOCO_DRAG
@@ -1076,8 +1151,11 @@ class LocamotionControllerSystem : public GameSystem
 public:
     void OnStart(Scene&) override
     {
-        Input::BindAxis("MoveX", Key::D, Key::A);
-        Input::BindAxis("MoveY", Key::S, Key::W);
+        // Input::BindAxis("MoveX", Key::D, Key::A);
+        // Input::BindAxis("MoveY", Key::S, Key::W);
+
+        Input::BindAxis("MoveX", GamepadAxis::LeftX);
+        Input::BindAxis("MoveY", GamepadAxis::LeftY);
     }
 
     void OnUpdate(Scene& scene, float dt) override
@@ -1125,21 +1203,116 @@ public:
             comp._timeSincePowered += dt;
             rag.strength = glm::clamp(comp.consciousness, 0.0f, 1.0f);
 
-            const float speed = magnitude > comp.deadzone
+            const float rawSpeed = magnitude > comp.deadzone
                 ? (magnitude - comp.deadzone)
                     / (1.0f - comp.deadzone) * comp.maxSpeed
                 : 0.0f;
-            glm::vec3 moveDirection =
+            glm::vec3 rawMoveDirection =
                 cameraRight * inputX + cameraForward * inputY;
-            moveDirection.y = 0.0f;
-            moveDirection = glm::length(moveDirection) > 1e-4f
-                ? glm::normalize(moveDirection) : glm::vec3(0.0f);
+            rawMoveDirection.y = 0.0f;
+            const bool rawDirectionValid = magnitude > comp.deadzone
+                && glm::dot(rawMoveDirection, rawMoveDirection) > 1e-8f;
+            if (rawDirectionValid)
+                rawMoveDirection = glm::normalize(rawMoveDirection);
 
             const float startSpeed = glm::max(comp.minWalkSpeed, 0.0f);
             const float stopSpeed = startSpeed * 0.5f;
-            comp._runtimeWalkIntent = comp._runtimeWalkIntent
-                ? speed > stopSpeed : speed > startSpeed;
+            const bool hadWalkIntent = comp._runtimeWalkIntent;
+            constexpr float kInputReleaseGraceTime = 0.12f;
+            float speed = rawSpeed;
+            if (rawSpeed > stopSpeed) {
+                if (comp.debug && comp._runtimeInputReleaseTime > 0.0f) {
+                    spdlog::info(
+                        "[LocoRuntime] INPUT_RELEASE_GRACE_CANCEL "
+                        "elapsed={:.3f}s action=continue-gait",
+                        comp._runtimeInputReleaseTime);
+                }
+                comp._runtimeInputReleaseTime = 0.0f;
+                comp._runtimeMoveSpeed = rawSpeed;
+                comp._runtimeWalkIntent = hadWalkIntent
+                    ? true : rawSpeed > startSpeed;
+            } else if (hadWalkIntent && comp._gaitRunning) {
+                const float previousReleaseTime =
+                    comp._runtimeInputReleaseTime;
+                comp._runtimeInputReleaseTime += glm::max(dt, 0.0f);
+                if (comp._runtimeInputReleaseTime < kInputReleaseGraceTime) {
+                    comp._runtimeWalkIntent = true;
+                    speed = comp._runtimeMoveSpeed;
+                    if (comp.debug && previousReleaseTime <= 0.0f) {
+                        spdlog::info(
+                            "[LocoRuntime] INPUT_RELEASE_GRACE_BEGIN "
+                            "duration={:.3f}s heldSpeed={:.3f}mps",
+                            kInputReleaseGraceTime,
+                            comp._runtimeMoveSpeed);
+                    }
+                } else {
+                    comp._runtimeWalkIntent = false;
+                    speed = 0.0f;
+                    if (comp.debug) {
+                        spdlog::info(
+                            "[LocoRuntime] INPUT_RELEASE_GRACE_EXPIRE "
+                            "elapsed={:.3f}s action=request-stop",
+                            comp._runtimeInputReleaseTime);
+                    }
+                    comp._runtimeInputReleaseTime = 0.0f;
+                }
+            } else {
+                comp._runtimeWalkIntent = rawSpeed > startSpeed;
+                comp._runtimeInputReleaseTime = 0.0f;
+                if (comp._runtimeWalkIntent)
+                    comp._runtimeMoveSpeed = rawSpeed;
+            }
             const bool wantsToWalk = comp._runtimeWalkIntent;
+
+            constexpr float kDirectionLatchThresholdDeg = 2.5f;
+            constexpr float kDirectionCandidateToleranceDeg = 1.25f;
+            constexpr float kDirectionStableTime = 0.06f;
+            auto horizontalAngleDeg = [](const glm::vec3& a,
+                                         const glm::vec3& b) {
+                return glm::degrees(std::acos(glm::clamp(
+                    glm::dot(a, b), -1.0f, 1.0f)));
+            };
+            if (rawDirectionValid) {
+                // A new start must remain immediate. During an active gait, require the
+                // stick to settle briefly before publishing a different heading so a
+                // controller crossing/recentering cannot repeatedly rebuild the turn.
+                if (!comp._runtimeMoveDirectionValid || !comp._gaitRunning
+                    || !hadWalkIntent) {
+                    comp._runtimeMoveDirection = rawMoveDirection;
+                    comp._runtimeMoveDirectionValid = true;
+                    comp._runtimeMoveDirectionCandidateValid = false;
+                    comp._runtimeMoveDirectionStableTime = 0.0f;
+                } else if (horizontalAngleDeg(
+                               comp._runtimeMoveDirection,
+                               rawMoveDirection) > kDirectionLatchThresholdDeg) {
+                    if (!comp._runtimeMoveDirectionCandidateValid
+                        || horizontalAngleDeg(
+                               comp._runtimeMoveDirectionCandidate,
+                               rawMoveDirection)
+                            > kDirectionCandidateToleranceDeg) {
+                        comp._runtimeMoveDirectionCandidate = rawMoveDirection;
+                        comp._runtimeMoveDirectionCandidateValid = true;
+                        comp._runtimeMoveDirectionStableTime = 0.0f;
+                    } else {
+                        comp._runtimeMoveDirectionStableTime += glm::max(dt, 0.0f);
+                        if (comp._runtimeMoveDirectionStableTime
+                            >= kDirectionStableTime) {
+                            comp._runtimeMoveDirection =
+                                comp._runtimeMoveDirectionCandidate;
+                            comp._runtimeMoveDirectionCandidateValid = false;
+                            comp._runtimeMoveDirectionStableTime = 0.0f;
+                        }
+                    }
+                } else {
+                    comp._runtimeMoveDirectionCandidateValid = false;
+                    comp._runtimeMoveDirectionStableTime = 0.0f;
+                }
+            } else {
+                comp._runtimeMoveDirectionCandidateValid = false;
+                comp._runtimeMoveDirectionStableTime = 0.0f;
+            }
+            const glm::vec3 moveDirection = comp._runtimeMoveDirectionValid
+                ? comp._runtimeMoveDirection : glm::vec3(0.0f);
             comp._runtimeRecoveryCooldown = glm::max(
                 comp._runtimeRecoveryCooldown - dt, 0.0f);
             if (wantsToWalk && comp._runtimeRestartBlocked
@@ -1219,6 +1392,8 @@ public:
             rag.locomotionSimbicon = false;
             rag.locomotionSimbiconBlend = 0.0f;
             rag.locomotionTargetVel = glm::vec3(0.0f);
+            comp._gaitSupportTargetWasActive =
+                rag.locomotionSupportTargetWeight > 0.01f;
             rag.locomotionSupportTargetWeight = 0.0f;
             rag.locomotionHeightOffset = 0.0f;
             rag.locomotionHipTorque[0] =
@@ -1357,6 +1532,15 @@ private:
         c._gaitWeight = 0.0f;
         c._poseBlend = 0.0f;
         c._runtimeWalkIntent = false;
+        c._runtimeMoveDirection = glm::vec3(0.0f, 0.0f, -1.0f);
+        c._runtimeMoveDirectionCandidate = glm::vec3(0.0f, 0.0f, -1.0f);
+        c._runtimeMoveDirectionStableTime = 0.0f;
+        c._runtimeInputReleaseTime = 0.0f;
+        c._runtimeMoveSpeed = 0.0f;
+        c._runtimeMoveDirectionValid = false;
+        c._runtimeMoveDirectionCandidateValid = false;
+        c._gaitSupportTargetWasActive = false;
+        c._gaitStartSupportInherited = false;
         c._runtimeRestartBlocked = false;
         c._runtimeRestartBlockForwardValid = false;
         c._runtimeRestartBlockForward = glm::vec3(0.0f, 0.0f, -1.0f);
@@ -1475,8 +1659,47 @@ private:
 
         const int torsoIndex = skeleton.Find(comp.torsoBone);
         if (torsoIndex >= 0) {
+            // The pelvis follows the physical heading while the chest briefly leads
+            // into the destination.  This introduces visible spine articulation without
+            // interfering with either leg IK owner or weakening planted-foot safety.
+            auto& assistedPlan = comp._assistedTurnPlan;
+            float torsoLeadYaw = 0.0f;
+            if (assistedPlan.active
+                && assistedPlan.assistanceEligible
+                && assistedPlan.cadenceEligible
+                && assistedPlan.easedProgress > 0.0f
+                && assistedPlan.easedProgress < 1.0f) {
+                const float progress = glm::clamp(
+                    assistedPlan.easedProgress, 0.0f, 1.0f);
+                const float leadIn = glm::smoothstep(
+                    0.0f, 0.18f, progress);
+                const float leadOut = 1.0f - glm::smoothstep(
+                    0.72f, 1.0f, progress);
+                const float magnitudeScale = glm::clamp(
+                    std::abs(glm::degrees(assistedPlan.requestedYaw))
+                        / 90.0f,
+                    0.20f, 1.0f);
+                const float rateScale = glm::mix(
+                    0.55f, 1.0f,
+                    glm::clamp(
+                        std::abs(glm::degrees(
+                            assistedPlan.scheduledAngularVelocity))
+                            / glm::max(
+                                comp.gaitAssistedTurnMaxSpeedDeg, 1.0f),
+                        0.0f, 1.0f));
+                const float turnSign = assistedPlan.requestedYaw < 0.0f
+                    ? -1.0f : 1.0f;
+                constexpr float kMaximumTorsoLeadDeg = 18.0f;
+                torsoLeadYaw = turnSign
+                    * glm::radians(kMaximumTorsoLeadDeg)
+                    * magnitudeScale * rateScale * leadIn * leadOut;
+            }
+            assistedPlan.torsoLeadYaw = torsoLeadYaw;
+            const glm::quat torsoHeading = glm::normalize(
+                glm::angleAxis(torsoLeadYaw, glm::vec3(0.0f, 1.0f, 0.0f))
+                * heading);
             const glm::quat torsoWorld = glm::normalize(
-                heading * entityRotation
+                torsoHeading * entityRotation
                 * BindModelRot(skeleton, torsoIndex));
             const glm::quat torsoLocal = glm::normalize(
                 glm::conjugate(ParentWorldRot(
