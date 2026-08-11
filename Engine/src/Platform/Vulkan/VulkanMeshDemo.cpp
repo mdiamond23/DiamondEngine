@@ -385,8 +385,17 @@ int RunVulkanMeshDemo() {
                                 cmd->DrawIndexed(indexCount);
                             });
 
-    // Pass 7 — tonemap the composited HDR result onto the swapchain (ACES + gamma).
-    tonemap.AddToGraph(graph, hdrFinal);
+    // Pass 7 — tonemap the composited HDR result onto the swapchain (curve + gamma).
+    // The tonemap samples a 1x1 exposure multiplier that the scene renderer's
+    // auto-exposure chain produces; this demo has no metering, so a clear-only
+    // pass (no execute callback) supplies a constant 1.0 — manual exposure only.
+    const RGTextureHandle exposureOne =
+        graph.DeclareTexture("exposureOne", { 1, 1, RHIFormat::R16F });
+    graph.AddPass("ExposureConstant")
+         .Write(exposureOne)
+         .SetClearColor({ 1.0f, 1.0f, 1.0f, 1.0f });
+
+    tonemap.AddToGraph(graph, hdrFinal, exposureOne);
 
     graph.Compile();
 

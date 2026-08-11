@@ -1325,6 +1325,7 @@ static void BuildRagdoll(PhysicsSystem::Impl& impl, Scene& scene,
             }
         }
     }
+    rag._locomotionPhysicsStepSerial = 0;
     rag._ragdollId = impl.nextRagdollId++;
     rag.mode       = RagdollMode::Animated;
     inst.mode      = RagdollMode::Animated;
@@ -2733,6 +2734,7 @@ static void UpdateRagdollFootContacts(PhysicsSystem::Impl& impl, Scene& scene,
         if (!reg.valid(inst.entity)) continue;
         auto* rag = reg.try_get<RagdollComponent>(inst.entity);
         if (!rag) continue;
+        ++rag->_locomotionPhysicsStepSerial;
         for (int i = 0; i < 2; ++i) {
             rag->_locomotionFootContact[i] = false;
             rag->_locomotionFootContactNormal[i] = glm::vec3(0.0f);
@@ -3306,6 +3308,159 @@ glm::vec3 GetRagdollBoneLinearVelocity(const RagdollComponent& rag, int boneInde
     if (ok) *ok = b != nullptr;
     if (!b) return glm::vec3(0.0f);
     return FromJolt(s_Impl->joltSystem->GetBodyInterface().GetLinearVelocity(b->id));
+}
+
+bool ApplyRagdollLocomotionPivotYaw(
+    RagdollComponent& rag, glm::vec3 pivotWorld,
+    float yawRadians, int pivotBoneIndex,
+    RagdollPivotYawResult* result)
+{
+    RagdollPivotYawResult localResult;
+    if (result) *result = localResult;
+    if (!s_Impl || rag._ragdollId == 0xFFFFFFFFu
+        || rag.mode != RagdollMode::Powered || !rag.locomotionActive
+        || !std::isfinite(pivotWorld.x) || !std::isfinite(pivotWorld.y)
+        || !std::isfinite(pivotWorld.z) || !std::isfinite(yawRadians))
+        return false;
+
+    auto ragdollIt = s_Impl->ragdolls.find(rag._ragdollId);
+    if (ragdollIt == s_Impl->ragdolls.end()) return false;
+    RagdollInstance& inst = ragdollIt->second;
+    if (inst.mode != RagdollMode::Powered
+        || inst.reaction.kind != RagReaction::Kind::None
+        || inst.bodies.empty())
+        return false;
+
+    constexpr float kMaximumYawRadians = glm::radians(20.0f);
+    const float appliedYaw = glm::clamp(
+        yawRadians, -kMaximumYawRadians, kMaximumYawRadians);
+    if (std::abs(appliedYaw) < 1e-6f) return false;
+
+    struct BodySnapshot {
+        const RagdollBody* body = nullptr;
+        glm::vec3 position { 0.0f };
+        glm::quat rotation { 1.0f, 0.0f, 0.0f, 0.0f };
+        glm::vec3 linearVelocity { 0.0f };
+        glm::vec3 angularVelocity { 0.0f };
+    };
+
+    JPH::BodyInterface& bi = s_Impl->joltSystem->GetBodyInterface();
+    std::vector<BodySnapshot> snapshots;
+    snapshots.reserve(inst.bodies.size());
+    int pivotSlot = -1;
+    for (int slot = 0; slot < static_cast<int>(inst.bodies.size()); ++slot) {
+        const RagdollBody& body = inst.bodies[slot];
+        BodySnapshot snapshot;
+        snapshot.body = &body;
+        snapshot.position = FromJolt(bi.GetPosition(body.id));
+        snapshot.rotation = FromJolt(bi.GetRotation(body.id));
+        snapshot.linearVelocity = FromJolt(bi.GetLinearVelocity(body.id));
+        snapshot.angularVelocity = FromJolt(bi.GetAngularVelocity(body.id));
+        snapshots.push_back(snapshot);
+        if (body.boneIndex == pivotBoneIndex) pivotSlot = slot;
+    }
+
+    glm::vec3 pivotLocal(0.0f);
+    if (pivotSlot >= 0) {
+        const BodySnapshot& pivotBody = snapshots[pivotSlot];
+        pivotLocal = glm::conjugate(glm::normalize(pivotBody.rotation))
+            * (pivotWorld - pivotBody.position);
+    }
+
+    float rootTiltBefore = 0.0f;
+    if (inst.rootBodySlot >= 0) {
+        const glm::quat rootRotation = snapshots[inst.rootBodySlot].rotation;
+        const glm::vec3 rootUp = rootRotation
+            * (glm::conjugate(inst.rootBindRot) * glm::vec3(0.0f, 1.0f, 0.0f));
+        rootTiltBefore = glm::degrees(std::acos(glm::clamp(
+            rootUp.y, -1.0f, 1.0f)));
+    }
+
+    const glm::quat yawRotation = glm::angleAxis(
+        appliedYaw, glm::vec3(0.0f, 1.0f, 0.0f));
+    for (const BodySnapshot& snapshot : snapshots) {
+        const glm::vec3 position = pivotWorld
+            + yawRotation * (snapshot.position - pivotWorld);
+        const glm::quat rotation = glm::normalize(
+            yawRotation * snapshot.rotation);
+        const glm::vec3 linearVelocity =
+            yawRotation * snapshot.linearVelocity;
+        const glm::vec3 angularVelocity =
+            yawRotation * snapshot.angularVelocity;
+        bi.SetPositionAndRotation(
+            snapshot.body->id, ToJolt(position), ToJolt(rotation),
+            JPH::EActivation::Activate);
+        bi.SetLinearVelocity(snapshot.body->id, ToJolt(linearVelocity));
+        bi.SetAngularVelocity(snapshot.body->id, ToJolt(angularVelocity));
+        bi.InvalidateContactCache(snapshot.body->id);
+
+        const glm::vec3 storedLinearVelocity = FromJolt(
+            bi.GetLinearVelocity(snapshot.body->id));
+        const glm::vec3 storedAngularVelocity = FromJolt(
+            bi.GetAngularVelocity(snapshot.body->id));
+        localResult.maxLinearSpeedError = glm::max(
+            localResult.maxLinearSpeedError,
+            std::abs(glm::length(storedLinearVelocity)
+                     - glm::length(snapshot.linearVelocity)));
+        localResult.maxAngularSpeedError = glm::max(
+            localResult.maxAngularSpeedError,
+            std::abs(glm::length(storedAngularVelocity)
+                     - glm::length(snapshot.angularVelocity)));
+    }
+
+    for (const RagdollJoint& joint : inst.joints) {
+        if (joint.parentSlot < 0 || joint.childSlot < 0) continue;
+        const BodySnapshot& oldParent = snapshots[joint.parentSlot];
+        const BodySnapshot& oldChild = snapshots[joint.childSlot];
+        const glm::vec3 newParentPosition = FromJolt(
+            bi.GetPosition(oldParent.body->id));
+        const glm::vec3 newChildPosition = FromJolt(
+            bi.GetPosition(oldChild.body->id));
+        const glm::quat newParentRotation = FromJolt(
+            bi.GetRotation(oldParent.body->id));
+        const glm::quat newChildRotation = FromJolt(
+            bi.GetRotation(oldChild.body->id));
+        localResult.maxRelativePositionError = glm::max(
+            localResult.maxRelativePositionError,
+            glm::length(
+                (newChildPosition - newParentPosition)
+                    - yawRotation
+                        * (oldChild.position - oldParent.position)));
+        const glm::quat oldRelative = glm::normalize(
+            glm::conjugate(oldParent.rotation) * oldChild.rotation);
+        const glm::quat newRelative = glm::normalize(
+            glm::conjugate(newParentRotation) * newChildRotation);
+        localResult.maxRelativeRotationErrorDeg = glm::max(
+            localResult.maxRelativeRotationErrorDeg,
+            QuatAngleDeg(glm::normalize(
+                glm::conjugate(oldRelative) * newRelative)));
+    }
+
+    if (pivotSlot >= 0) {
+        const BodySnapshot& pivotBody = snapshots[pivotSlot];
+        const glm::vec3 newPosition = FromJolt(
+            bi.GetPosition(pivotBody.body->id));
+        const glm::quat newRotation = FromJolt(
+            bi.GetRotation(pivotBody.body->id));
+        localResult.pivotError = glm::length(
+            newPosition + newRotation * pivotLocal - pivotWorld);
+    }
+    if (inst.rootBodySlot >= 0) {
+        const glm::quat rootRotation = FromJolt(bi.GetRotation(
+            snapshots[inst.rootBodySlot].body->id));
+        const glm::vec3 rootUp = rootRotation
+            * (glm::conjugate(inst.rootBindRot) * glm::vec3(0.0f, 1.0f, 0.0f));
+        const float rootTiltAfter = glm::degrees(std::acos(glm::clamp(
+            rootUp.y, -1.0f, 1.0f)));
+        localResult.rootTiltDeltaDeg =
+            std::abs(rootTiltAfter - rootTiltBefore);
+    }
+
+    localResult.applied = true;
+    localResult.bodiesRotated = static_cast<int>(snapshots.size());
+    localResult.appliedYawRadians = appliedYaw;
+    if (result) *result = localResult;
+    return true;
 }
 
 // Kick off a procedural get-up (the auto-on-settle path uses the same StartRagdollGetUp).

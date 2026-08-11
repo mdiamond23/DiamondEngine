@@ -21,9 +21,10 @@ VulkanTonemapPass::VulkanTonemapPass(RHIDevice* device, const std::string& shade
     desc.fragmentShader = m_Frag.get();
     // No vertex layout — the fullscreen triangle is generated from gl_VertexIndex.
     desc.resourceBindings = {
-        { 0, RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment },
+        { 0, RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment }, // HDR scene
+        { 1, RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment }, // exposure
     };
-    desc.pushConstants = { RHIShaderStage::Fragment, sizeof(float) };   // exposure
+    desc.pushConstants = { RHIShaderStage::Fragment, sizeof(TonemapPush) };
     desc.colorFormat = outputFormat;   // backbuffer, or an LDR texture for FXAA to read
     m_Pipeline = device->CreatePipeline(desc);
 }
@@ -31,22 +32,25 @@ VulkanTonemapPass::VulkanTonemapPass(RHIDevice* device, const std::string& shade
 VulkanTonemapPass::~VulkanTonemapPass() = default;
 
 void VulkanTonemapPass::AddToGraph(RHIRenderGraph& graph, RGTextureHandle hdrInput,
-                                   RGTextureHandle output)
+                                   RGTextureHandle exposureTex, RGTextureHandle output)
 {
     // The HDR input is graph-owned but pooled (stable for the graph's lifetime), so
     // the sampler set is built once. A resize that recreates the pool texture would
     // require rebuilding this; the demo's offscreen targets are fixed-size.
     if (!m_Set)
         m_Set = m_Device->CreateResourceSet(
-            m_Pipeline.get(), 0, {}, { { 0, graph.GetTexture(hdrInput) } });
+            m_Pipeline.get(), 0, {},
+            { { 0, graph.GetTexture(hdrInput) },
+              { 1, graph.GetTexture(exposureTex) } });
 
-    RGPass& pass = graph.AddPass("Tonemap").Read(hdrInput);
+    RGPass& pass = graph.AddPass("Tonemap").Read(hdrInput).Read(exposureTex);
     if (output.IsValid()) pass.Write(output);   // LDR texture for a later FXAA pass
     else                  pass.WriteSwapchain();
     pass.SetExecute([this](RHICommandList* cmd) {
+        const TonemapPush push{ m_Exposure, static_cast<int>(m_Tonemapper) };
         cmd->BindPipeline(m_Pipeline.get());
         cmd->BindResourceSet(0, m_Set.get());
-        cmd->PushConstants(RHIShaderStage::Fragment, 0, sizeof(float), &m_Exposure);
+        cmd->PushConstants(RHIShaderStage::Fragment, 0, sizeof(push), &push);
         cmd->Draw(3);
     });
 }

@@ -12,10 +12,12 @@ layout(location = 0) out vec4 outColor;
 layout(set = 0, binding = 0) uniform sampler2D uScene;
 layout(set = 0, binding = 1) uniform sampler2D uBloom;
 
-const float kBloomIntensity = 1.0;
+layout(push_constant) uniform Push {
+    float intensity;   // strength the blurred bright pass is added back at
+} pc;
 
 void main() {
     vec3 hdr   = texture(uScene, vUV).rgb;
     vec3 bloom = texture(uBloom, vUV).rgb;
-    outColor   = vec4(hdr + bloom * kBloomIntensity, 1.0);
+    outColor   = vec4(hdr + bloom * pc.intensity, 1.0);
 }

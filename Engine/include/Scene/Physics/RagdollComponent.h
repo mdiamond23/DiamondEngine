@@ -62,6 +62,9 @@ struct RagdollComponent {
     bool _locomotionFootContact[2] { false, false };
     glm::vec3 _locomotionFootContactNormal[2] { glm::vec3(0.0f), glm::vec3(0.0f) };
     glm::vec3 _locomotionFootContactPoint[2] { glm::vec3(0.0f), glm::vec3(0.0f) };
+    // Advances after each fixed physics step refreshes the solver-backed foot contacts.
+    // Diagnostics can wait on this instead of assuming one render frame equals one step.
+    uint64_t _locomotionPhysicsStepSerial = 0;
     // Positive means actual overlap. Negative is a Jolt speculative contact whose shapes
     // have not touched yet. Together with soleMinY this distinguishes collision slop from
     // a debug-draw/floor-render mismatch.

@@ -19,6 +19,7 @@
 #include <glm/gtc/quaternion.hpp>
 #include <spdlog/spdlog.h>
 #include <cmath>
+#include <limits>
 #include <string>
 
 // Gameplay-facing settings and runtime state for the physical ragdoll gait. The system
@@ -116,7 +117,7 @@ struct LocamotionControllerComponent
     float gaitHeadingStiffness = 180.0f;
     float gaitHeadingDamping = 50.0f;
     float gaitHeadingMaxTorque = 80.0f;
-    float gaitMaxTurnStepDeg = 5.0f;
+    float gaitMaxTurnStepDeg = 20.0f;
     float gaitTurnFullAdvanceDeg = 15.0f;
     float gaitTurnZeroAdvanceDeg = 45.0f;
     float gaitTurnInsideSwingSpeedLimit = 0.78f;
@@ -124,6 +125,9 @@ struct LocamotionControllerComponent
     float gaitTurnAngularSpeedLimit = 2.25f;
     float gaitTurnLinearAcceleration = 2.50f;
     float gaitTurnAngularAcceleration = 12.0f;
+    bool gaitAssistedTurnEnabled = true;
+    float gaitAssistedTurnStrength = 1.0f;
+    float gaitAssistedTurnMaxSpeedDeg = 360.0f;
     float gaitMaxFootSeparation = 0.18f;
     float gaitInterStepTiltLimit = 15.0f;
     float gaitInterStepHeadingLimit = 8.0f;
@@ -143,6 +147,12 @@ struct LocamotionControllerComponent
 
     bool ikWriteEnabled = true;
     bool debug = false;
+
+    // Slice 2 one-shot diagnostic. Weight defaults to zero and these controls are
+    // intentionally not serialized, so loading a scene can never rotate a ragdoll.
+    float assistedTurnDiagnosticYawDeg = 5.0f;
+    float assistedTurnDiagnosticWeight = 0.0f;
+    bool _assistedTurnDiagnosticRequested = false;
 
     // Bounded turn-plan state. Desired heading remains live, committed heading advances
     // only after support transfer, and an admitted active plan stays immutable until
@@ -308,7 +318,64 @@ struct LocamotionControllerComponent
         bool touchdownReadinessBlockedLogged = false;
     };
 
+    // Angle-independent assisted-turn schedule. Slice 3 consumes the residual for
+    // eligible turns through 90 degrees; larger turns remain shadow-only until Slice 5.
+    // Angles and angular rates are radians/radians-per-second; telemetry converts them
+    // to degrees at the logging boundary.
+    struct AssistedTurnPlan {
+        glm::vec3 startForward { 0.0f, 0.0f, -1.0f };
+        glm::vec3 desiredForward { 0.0f, 0.0f, -1.0f };
+        glm::vec3 scheduledForward { 0.0f, 0.0f, -1.0f };
+        glm::vec3 previousPhysicalForward { 0.0f, 0.0f, -1.0f };
+        float requestedYaw = 0.0f;
+        float scheduledDuration = 0.0f;
+        float elapsed = 0.0f;
+        float easedProgress = 0.0f;
+        float scheduledYaw = 0.0f;
+        float scheduledAngularVelocity = 0.0f;
+        float physicalYaw = 0.0f;
+        float physicalAngularVelocity = 0.0f;
+        float residualYaw = 0.0f;
+        float headingStableTime = 0.0f;
+        float assistedYaw = 0.0f;
+        float lastAssistedYaw = 0.0f;
+        float commandTimestamp = 0.0f;
+        float headingCompleteTimestamp = -1.0f;
+        float gaitReadyTimestamp = -1.0f;
+        float nextSampleTimestamp = 0.0f;
+        float nextAssistanceLogTimestamp = 0.0f;
+        int supportSideAtStart = 0;
+        int currentSupportSide = 0;
+        int turnSequence = 0;
+        int retargetSequence = 0;
+        int assistanceApplications = 0;
+        unsigned int headingCrossingMask = 0;
+        bool active = false;
+        bool scheduleComplete = false;
+        bool headingComplete = false;
+        bool gaitReady = false;
+        bool assistanceEligible = false;
+        bool assistanceRejectLogged = false;
+    };
+
+    struct AssistedTurnDiagnosticState {
+        glm::vec3 pivotWorld { 0.0f };
+        glm::vec3 pivotBoneLocal { 0.0f };
+        float footSeparationBefore = 0.0f;
+        float tiltBeforeDeg = 0.0f;
+        float headingErrorBeforeDeg = 0.0f;
+        int pivotBone = -1;
+        int supportSide = 0;
+        int sequence = 0;
+        uint64_t physicsStepSerialBefore = 0;
+        bool contactBeforeL = false;
+        bool contactBeforeR = false;
+        bool awaitingRefresh = false;
+    };
+
     TurnPlanDiagnostics _gaitTurnPlan;
+    AssistedTurnPlan _assistedTurnPlan;
+    AssistedTurnDiagnosticState _assistedTurnDiagnostic;
     bool _gaitTurnPairPendingInside = false;
     float _gaitTurnPairAdvanceScale = 1.0f;
     float _gaitTurnPairYawScale = 1.0f;
@@ -803,6 +870,9 @@ inline void DrawComponentInspector<LocamotionControllerComponent>(LocamotionCont
         LOCO_DRAG("Turn Foot Angular Speed", gaitTurnAngularSpeedLimit, 0.05f, 0.25f, 8.0f, "%.2f rad/s");
         LOCO_DRAG("Turn Foot Linear Accel", gaitTurnLinearAcceleration, 0.10f, 0.25f, 10.0f, "%.2f m/s^2");
         LOCO_DRAG("Turn Foot Angular Accel", gaitTurnAngularAcceleration, 0.50f, 1.0f, 40.0f, "%.1f rad/s^2");
+        ImGui::Checkbox("Scheduled Turn Assistance", &c.gaitAssistedTurnEnabled);
+        LOCO_DRAG("Turn Assistance Strength", gaitAssistedTurnStrength, 0.05f, 0.0f, 1.0f, "%.2f");
+        LOCO_DRAG("Turn Assistance Speed", gaitAssistedTurnMaxSpeedDeg, 5.0f, 30.0f, 720.0f, "%.0f deg/s");
         LOCO_DRAG("Maximum Foot Separation", gaitMaxFootSeparation, 0.005f, 0.10f, 0.30f, "%.3f m");
         LOCO_DRAG("Inter-Step Tilt Gate", gaitInterStepTiltLimit, 0.5f, 0.0f, 45.0f, "%.1f deg");
         LOCO_DRAG("Inter-Step Heading Gate", gaitInterStepHeadingLimit, 0.5f, 0.0f, 45.0f, "%.1f deg");
@@ -831,6 +901,33 @@ inline void DrawComponentInspector<LocamotionControllerComponent>(LocamotionCont
         boneField("Left Foot Bone", c.leftFootBone);
         boneField("Right Foot Bone", c.rightFootBone);
         boneField("Torso Bone", c.torsoBone);
+    }
+    if (ImGui::CollapsingHeader("Assisted Turn Diagnostics")) {
+        ImGui::TextUnformatted("Slice 2: one-shot pivot yaw (not saved)");
+        ImGui::SliderFloat(
+            "Diagnostic Weight", &c.assistedTurnDiagnosticWeight,
+            0.0f, 1.0f, "%.2f");
+        ImGui::SliderFloat(
+            "Diagnostic Yaw", &c.assistedTurnDiagnosticYawDeg,
+            -20.0f, 20.0f, "%+.1f deg");
+        if (ImGui::Button("-20 deg")) c.assistedTurnDiagnosticYawDeg = -20.0f;
+        ImGui::SameLine();
+        if (ImGui::Button("-10 deg")) c.assistedTurnDiagnosticYawDeg = -10.0f;
+        ImGui::SameLine();
+        if (ImGui::Button("-5 deg")) c.assistedTurnDiagnosticYawDeg = -5.0f;
+        if (ImGui::Button("+5 deg")) c.assistedTurnDiagnosticYawDeg = 5.0f;
+        ImGui::SameLine();
+        if (ImGui::Button("+10 deg")) c.assistedTurnDiagnosticYawDeg = 10.0f;
+        ImGui::SameLine();
+        if (ImGui::Button("+20 deg")) c.assistedTurnDiagnosticYawDeg = 20.0f;
+        if (ImGui::Button("Apply Pivot Yaw Once"))
+            c._assistedTurnDiagnosticRequested = true;
+        ImGui::Text(
+            "phase=%d support=%s refresh=%s",
+            c._physicalStepPhase,
+            c._physicalStepSupportSide < 0 ? "LEFT"
+                : (c._physicalStepSupportSide > 0 ? "RIGHT" : "NONE"),
+            c._assistedTurnDiagnostic.awaitingRefresh ? "pending" : "idle");
     }
     ImGui::Checkbox("Debug Locomotion", &c.debug);
 #undef LOCO_DRAG
@@ -877,6 +974,8 @@ inline std::string SerializeComponent<LocamotionControllerComponent>(const Locam
     LOCO_SAVE(gaitTurnInsideSwingSpeedLimit); LOCO_SAVE(gaitTurnOutsideSwingSpeedLimit);
     LOCO_SAVE(gaitTurnAngularSpeedLimit); LOCO_SAVE(gaitTurnLinearAcceleration);
     LOCO_SAVE(gaitTurnAngularAcceleration);
+    LOCO_SAVE(gaitAssistedTurnEnabled); LOCO_SAVE(gaitAssistedTurnStrength);
+    LOCO_SAVE(gaitAssistedTurnMaxSpeedDeg);
     LOCO_SAVE(gaitMaxFootSeparation); LOCO_SAVE(gaitInterStepTiltLimit);
     LOCO_SAVE(gaitInterStepHeadingLimit); LOCO_SAVE(gaitStopTime); LOCO_SAVE(gaitStopHoldTime);
     LOCO_SAVE(maxLegReachFraction); LOCO_SAVE(standingPoseResponse); LOCO_SAVE(hipLimitMarginDeg);
@@ -950,6 +1049,8 @@ inline void DeserializeComponent<LocamotionControllerComponent>(LocamotionContro
     LOCO_LOAD(gaitTurnInsideSwingSpeedLimit); LOCO_LOAD(gaitTurnOutsideSwingSpeedLimit);
     LOCO_LOAD(gaitTurnAngularSpeedLimit); LOCO_LOAD(gaitTurnLinearAcceleration);
     LOCO_LOAD(gaitTurnAngularAcceleration);
+    LOCO_LOAD(gaitAssistedTurnEnabled); LOCO_LOAD(gaitAssistedTurnStrength);
+    LOCO_LOAD(gaitAssistedTurnMaxSpeedDeg);
     LOCO_LOAD(gaitMaxFootSeparation);
     LOCO_MIGRATE(gaitInterStepTiltLimit, "test7InterStepTiltLimit");
     LOCO_MIGRATE(gaitInterStepHeadingLimit, "test7InterStepHeadingLimit");

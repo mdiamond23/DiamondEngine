@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Renderer/RHI/RHIRenderGraph.h"
+#include "Renderer/SceneRenderer.h"   // Tonemapper
 
 #include <memory>
 #include <string>
@@ -36,20 +37,32 @@ public:
                       RHIFormat outputFormat);
     ~VulkanTonemapPass();
 
-    // Register the tonemap as a graph pass: reads 'hdrInput' and writes 'output' —
-    // or the swapchain backbuffer when 'output' is an invalid handle (the default).
-    // The sampler resource set is built once from the input's pooled texture (which
-    // the graph keeps stable for its lifetime).
+    // Register the tonemap as a graph pass: reads 'hdrInput' and the 1x1
+    // 'exposureTex' (the auto-exposure multiplier, 1.0 when auto is off), and
+    // writes 'output' — or the swapchain backbuffer when 'output' is an invalid
+    // handle (the default). The sampler resource set is built once from the
+    // inputs' pooled textures (which the graph keeps stable for its lifetime).
     void AddToGraph(RHIRenderGraph& graph, RGTextureHandle hdrInput,
-                    RGTextureHandle output = {});
+                    RGTextureHandle exposureTex, RGTextureHandle output = {});
 
-    // Scales the HDR input before the ACES curve (pushed per frame). 1.0 (the
+    // Scales the HDR input before the curve (pushed per frame). 1.0 (the
     // default) reproduces the GL tonemap exactly; lower to darken the frame.
     void SetExposure(float exposure) { m_Exposure = exposure; }
 
+    // Display curve, pushed alongside exposure. Both branches live in
+    // tonemap.frag, so switching costs nothing but a different push value.
+    void SetTonemapper(Tonemapper curve) { m_Tonemapper = curve; }
+
 private:
+    // Mirrors tonemap.frag's push_constant block.
+    struct TonemapPush {
+        float exposure;
+        int   tonemapper;
+    };
+
     RHIDevice*                      m_Device;
-    float                           m_Exposure = 1.0f;
+    float                           m_Exposure   = 1.0f;
+    Tonemapper                      m_Tonemapper = Tonemapper::ACES;
     std::unique_ptr<RHIShader>      m_Vert;
     std::unique_ptr<RHIShader>      m_Frag;
     std::unique_ptr<RHIPipeline>    m_Pipeline;

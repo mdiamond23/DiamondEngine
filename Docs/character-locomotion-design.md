@@ -2406,6 +2406,377 @@ add an inverted-pendulum or capture-point offset to the nominal steering footpri
 projection. That is deliberately outside the first turning implementation; current support and
 landing feedback remain unchanged until the nominal steering behavior passes.
 
+### Unified assisted turning speed - authoritative implementation plan
+
+**Design decision (2026-08-11): planned.** The bounded physical-turn planner above proves safe
+footprint construction, contact ownership, mirrored direction changes, retargeting, cancellation,
+and exact-reversal convergence. It does not provide acceptable gameplay response. Increasing the
+controller yaw ceiling alone cannot close that gap because heading is still serialized behind a
+complete physical step and each anatomical sole must recover the accumulated rotation from its
+previous plant.
+
+The first 20-degree-ceiling runtime captured on 2026-08-11 demonstrates the limit. An exact
+180-degree command began at `14:00:43.324` and converged at `14:01:08.436`: 25.112 seconds and 15
+yaw-bearing commits. The first outside foot admitted 20 degrees, but later plans admitted values
+between roughly 6 and 18 degrees under `swing-angular-speed` and `turn-pair-budget`. Completed turn
+steps took approximately 1.4-2.6 seconds despite the 0.50-second nominal cadence. A 45-degree request
+would therefore be descended by the same admission constraints and would not provide the required
+order-of-magnitude improvement.
+
+The new milestone uses one unified scheduled-heading curve for every nontrivial direction change
+from 0 through 180 degrees. Physical heading control and physical footsteps remain active, while a
+bounded whole-ragdoll yaw correction closes only the lag between the scheduled heading and the
+heading that physics has achieved. Assistance increases naturally with tracking lag instead of
+switching on at one large-angle threshold. Small arcs should need little correction; a rapid reversal
+will use most of the available correction.
+
+This is not a return to the removed settled `TURN_BLEND` behavior:
+
+- it runs concurrently with the physical gait rather than stopping, rotating, and restarting;
+- it pivots around the currently loaded stance contact rather than the midpoint of two settled feet;
+- it follows one authoritative heading schedule and never adds an independent visual angle to the
+  physical turn;
+- it retains real swing, touchdown, load transfer, minimum separation, and fall response;
+- it rotates every affected world-space gait reference by exactly the same incremental correction;
+- it uses one turn beat through 90 degrees and an outside/inside pair above 90 degrees, so the feet
+  visibly participate in the direction change.
+
+The assisted path deliberately supersedes the earlier prohibition on direct ragdoll yaw during the
+ordinary turn path. The prohibition remains the regression baseline until each slice below passes.
+The new permission is narrow: incremental yaw about an owned physical stance pivot, driven by the
+scheduled-heading residual, while a turn plan is active. It does not permit arbitrary root snapping,
+translation warping, or rotating cached references independently of the bodies.
+
+#### Gameplay timing contract
+
+Heading time and gait-ready time are separate measurements. `heading complete` means the physical
+pelvis forward is within 2 degrees of the scheduled target and its yaw rate is below 30 degrees per
+second. `gait ready` additionally means the required turn contacts and load handoff are valid and a
+step in the new direction may be admitted.
+
+| Requested change | Heading target | Intended foot behavior |
+|------------------|----------------|------------------------|
+| 0-15 degrees | 0.15-0.20 s | ordinary walking arc; residual assistance only |
+| 15-45 degrees | 0.20-0.35 s | one short turning step |
+| 45-90 degrees | 0.35-0.55 s | one assisted pivot step |
+| 90-120 degrees | 0.50-0.70 s | one large or two overlapping turn beats |
+| 120-180 degrees | 0.70-0.90 s | outside-foot then inside-foot assisted turn |
+
+The initial schedule is:
+
+```text
+turnDuration = clamp(abs(requestedYawDegrees) / 200.0, 0.15, 0.90)
+```
+
+The curve must ease angular velocity at both ends and remain deterministic across render frame
+rates. The 180-degree target reserves up to 0.20 seconds after heading completion for the closing
+contact, making 1.10 seconds the first full gait-ready target and 1.20 seconds the hard acceptance
+limit. Once repeatable, tuning may attempt a sub-one-second full handoff without weakening contact or
+load proofs.
+
+These are gameplay targets rather than claims that all humans turn at one fixed rate. Human
+180-degree turns use step, pivot, and mixed strategies, commonly expressed with a small number of
+turning steps rather than many incremental shuffles. The engine targets a responsive mixed
+step-and-pivot style. See [Faria et al.](https://pmc.ncbi.nlm.nih.gov/articles/PMC5088107/) and
+[Bonnyaud et al.](https://pmc.ncbi.nlm.nih.gov/articles/PMC5431013/) for the relevant strategy and
+step-pattern descriptions.
+
+#### Authoritative heading and assistance contract
+
+The controller must keep four values distinct:
+
+- **desired heading:** latest live player intent;
+- **scheduled heading:** the global eased heading for the current turn time;
+- **physical heading:** measured pelvis heading after the physics step;
+- **assisted yaw:** the bounded incremental correction applied to close scheduled-versus-physical
+  lag during that update.
+
+The scheduled heading is the only angular objective. The joint heading motor, foot planner, and
+assisted yaw all consume it. Assisted yaw never advances the character beyond the schedule and is
+zero when physics already tracks or leads it. Retargeting constructs a new schedule from the current
+physical heading; it does not restart from the old plan origin or add the remaining angle twice.
+
+The correction pivot is the measured stance contact/plant center while one foot owns support. During
+validated double support, pivot ownership blends continuously from the old stance center to the new
+one using the same load handoff that selects support ownership. There must be no midpoint switch or
+world-space target jump at the role swap.
+
+Applying one assisted increment must rotate together:
+
+- every ragdoll body position and orientation about the owned pivot;
+- linear and angular velocity directions;
+- physical foot baselines and plant references;
+- COM baseline, support target, support curve endpoints, and support velocities;
+- admitted swing start/target/desired positions and turn-plan bases;
+- standing ground-reference heading and committed/scheduled heading state;
+- any cancellation, stop, or inter-step world-space reference that can survive the frame.
+
+The stance center is not translated by the operation. Contact caches are invalidated for affected
+bodies after the incremental transform. Pitch, roll, vertical position, relative articulated pose,
+and the existing fall state are preserved.
+
+#### Foot strategy and cadence overlay
+
+Foot behavior changes continuously with requested angle; angle bands select contact count, not a
+different heading controller:
+
+- below 15 degrees, preserve ordinary forward walking and curve the footprint;
+- from 15 through 90 degrees, suppress forward advance progressively and use one shortened turning
+  step around the loaded stance foot;
+- above 90 degrees, suppress forward advance, retain the exact-180 outside-first sign latch, and use
+  an outside/inside pair;
+- after heading completion, admit a closing step only when needed for stance width or load symmetry;
+  it must not delay the reported heading time;
+- retain the current 20-degree physical-footprint ceiling initially. It controls how much relative
+  leg/sole steering the physical planner attempts, not the global turn duration.
+
+Turning uses the existing contact-driven phase names but receives a cadence overlay. The nominal
+target for each turn beat is 0.45-0.55 seconds. Weight shift, swing, landing validation, and load
+transfer should overlap where their existing predicates allow. A timer may not be bypassed merely to
+hit the deadline, but an already-proven contact/load condition must not pay another serialized hold.
+Diagnostics must identify whether any excess is caused by contact, tracking, sole orientation, load,
+drift, tilt, or a timer.
+
+#### Slice 1 - turn-level clock and shadow scheduler
+
+**Behavior change:** none.
+
+**Accepted for progression (2026-08-11); full runtime matrix deferred.**
+`LocamotionControllerComponent::AssistedTurnPlan` now stores the command basis, live target,
+duration, elapsed/eased schedule, scheduled and measured yaw/rates, residual, support ownership,
+event timestamps, crossing mask, and turn/retarget sequence. `UpdatePhysicalGait` samples this record
+after command/start state is finalized. The block writes no existing gait, ragdoll, heading, foot, or
+support target, and `_assistedTurnPlan` has no control-path reader.
+
+The `[LocomotionAssistedTurn]` stream reports `COMMAND`, `RETARGET`, `RELEASE`,
+`SCHEDULE_COMPLETE`, `HEADING_CROSS`, `HEADING_COMPLETE`, `GAIT_READY`, and 0.25-second `SAMPLE`
+records. A formula check at 30, 60, and 144 Hz reached identical signed endpoints monotonically for
+mirrored 15/45/90/120/180-degree schedules, the Debug build passes, and a routing audit confirms that
+the shadow record cannot affect current locomotion. Because the complete manual matrix was
+impractical to exercise, the live mirrored matrix, exact-180 sign trace, retarget/release trace, and
+unchanged physical-turn comparison remain deferred regression coverage. They do not block the
+diagnostic-only Slice 2, but must pass before scheduled assistance is activated in Slice 3.
+
+Add an angle-independent `AssistedTurnPlan` (or equivalent) containing start/desired heading,
+scheduled duration, elapsed time, eased progress, scheduled angular velocity, measured physical
+progress, support role, and turn/retarget sequence. Keep the current physical planner authoritative
+while evaluating the new schedule in shadow mode.
+
+Add one turn-level telemetry stream with command, heading-crossing, and gait-ready timestamps instead
+of reconstructing total latency from per-phase messages. It must record requested angle, scheduled
+angle/rate, physical angle/rate, residual, current phase, current support foot, contact count, and the
+constraint delaying gait-ready completion.
+
+**Pass gate:** mirrored 15/45/90/120/180-degree commands produce monotonic, frame-rate-independent
+schedules; exact 180 keeps one deterministic sign; retarget/release produces no angle discontinuity;
+runtime behavior and the accepted physical-turn regression remain unchanged.
+
+#### Slice 2 - bounded yaw primitive and reference coherence
+
+**Behavior change:** diagnostic test path only.
+
+**Accepted (2026-08-11).**
+`Physics::ApplyRagdollLocomotionPivotYaw` is restricted to active Powered locomotion and clamps one
+call to 20 degrees. It snapshots the complete articulated body set, rotates positions and
+orientations about the requested stance pivot, rotates linear and angular velocities without
+changing their magnitudes, activates the bodies, and invalidates every affected contact cache. Its
+result reports pivot, momentum, relative-pose, tilt, and body-count checks.
+
+`RotatePhysicalGaitWorldReferences` is the single gait-side coherence boundary. It rotates physical
+turn bases, foot plants and baselines, swing/landing targets, support curves, COM/stop/cancellation
+references, world-space leg references, cached physics readback, and the current physical heading
+target in the same call. Live input and the global Slice 1 schedule remain fixed so an applied yaw
+reduces their measured residual instead of moving the objective. The inspector exposes nonserialized
+5/10/20-degree presets, a diagnostic weight that defaults to zero, and an explicit one-shot Apply
+button. `[LocomotionAssistedYawDiagnostic]` reports `ZERO_WEIGHT`, `APPLY`, `REJECT`, and `REFRESH`;
+`REFRESH` waits for a real fixed-physics-step serial before evaluating contact preservation.
+
+The Debug build and zero-weight routing audit pass, and the live one-shot diagnostic produced the
+expected pivot-yaw behavior without an observed pose, contact, or locomotion regression. Slice 2 is
+therefore accepted for progression. Keep the one-shot path available while Slice 3 is introduced;
+any later mirrored-turn failure attributable to pivot drift, reference mismatch, momentum change,
+or contact refresh reopens this acceptance rather than being hidden by assistance tuning.
+
+Restore a narrowly scoped physics operation that rotates an active ragdoll incrementally about an
+explicit world-space pivot while preserving relative pose and momentum. Add one gait-side function
+that rotates every surviving world-space reference listed above in the same call site. Do not expose
+the operation as a general gameplay teleport.
+
+Exercise 5-, 10-, and 20-degree incremental rotations from settled double support and from each
+mirrored single-support stance. Verify the chosen pivot remains fixed, reference deltas equal body
+deltas, the upright constraint follows the new frame, and one physics refresh produces valid contacts.
+
+**Pass gate:** pivot translation below 5 mm, no reference discontinuity, no new foot separation or
+tilt failure, momentum rotates without magnitude injection, and returning the diagnostic weight to
+zero exactly reproduces current behavior.
+
+#### Slice 3 - unified scheduled assistance through 90 degrees
+
+**Behavior change:** enable scheduled residual assistance for 0-90-degree runtime turns while keeping
+the existing physical cadence and foothold admission.
+
+**Accepted (2026-08-11).**
+The Slice 1 scheduler now marks nontrivial requests through 90 degrees as assistance-eligible while
+leaving larger requests in shadow mode. The eased scheduled heading becomes the global root-motor
+target for an eligible turn. At the end of each controller update, the measured signed lag is scaled
+by `gaitAssistedTurnStrength`, capped by `gaitAssistedTurnMaxSpeedDeg` and the Slice 2 20-degree
+primitive limit, and applied only when physics is behind the schedule in the requested direction.
+The correction cannot pass the current scheduled sample.
+
+Pivot ownership stays on the current support foot during single support. During validated double
+support it blends from the old contact to the new contact over the existing 0.48-0.68 measured-load
+handoff, then the ordinary role swap makes the new foot authoritative. Every applied increment uses
+the accepted Slice 2 reference-coherence boundary; afterward the fixed global schedule target is
+reasserted so rotating the immutable physical step cannot double-add its admitted yaw. Assisted
+commits use measured pelvis heading rather than the rotated per-step endpoint.
+
+`Scheduled Turn Assistance` defaults on with strength 1 and a 360-degree/second correction cap. The
+fields are serialized and exposed in the locomotion inspector, so setting the strength to zero or
+disabling assistance restores the previous physical path. `[LocomotionAssistedTurn]` now labels each
+turn `mode=assisted` or `mode=shadow` and reports correction, accumulated assisted yaw, pivot blend,
+and application count. Mirrored schedule simulation at 30, 60, and 144 Hz reaches identical
+15/45/90-degree endpoints without exceeding a 10-degree incremental correction; the Debug build
+passes. Live mirrored timing, overshoot, contact, foot-crossing, abort, and straight/zero-yaw checks
+remain the acceptance gate.
+
+The first live acceptance run confirmed the heading response—a 89.945-degree command reported
+`HEADING_COMPLETE` in 0.451 seconds—but exposed a straight-walking regression after convergence.
+The active schedule continued applying direct corrections until command release, and the physical
+foothold planner treated residual yaw as small as 0.106 degrees as a fresh turn. That combination
+could invoke an inside-foot role swap, reduce heading advance to zero, and produce a zero-length
+planned step after an otherwise successful turn.
+
+The stabilization pass now latches direct assistance off at the existing rate-checked
+`HEADING_COMPLETE` event, evaluates the completion rate by magnitude, ignores assisted commands
+below 1 degree, and quantizes physical foothold yaw below 1 degree to zero. The scheduled heading
+remains the ordinary motor target after assistance stops, so physics may settle naturally without
+additional whole-ragdoll transforms. Sub-threshold foothold residuals retain full translation and
+cannot trigger outside-foot selection, turn-pair bookkeeping, or an inside-foot role swap. Runtime
+acceptance still requires a fresh straight-walk and mirrored-turn trace; this stabilization is not
+itself an acceptance claim.
+
+A second live trace confirmed normal 0.139-0.154 m straight advances and no assisted transforms
+after `HEADING_COMPLETE`, but exposed two post-heading aborts. A 90-degree run admitted a redundant
+-1.9-degree physical cleanup turn and later failed sole ownership on its exit step; a 45-degree
+retarget admitted a redundant -6.0-degree inside-foot role swap while the global schedule was still
+finishing, then failed descent. Both came from the physical foothold planner comparing its older
+committed basis with the final input heading even though scheduled assistance already owned that
+same remaining yaw.
+
+The localized ownership correction now rebases each newly admitted foothold to the current scheduled
+heading while an eligible assisted schedule is active. The current scheduled basis is both the start
+and angular objective for that admission; subsequent assisted increments rotate the immutable plan
+through the existing reference-coherence boundary. Superseded physical turn-pair and exit-blend
+latches are cleared at that boundary, with `FOOTHOLD_REBASE` telemetry recording any nontrivial
+basis change. This prevents the physical planner from replaying scheduler residuals without changing
+contact, sole, drift, or landing thresholds.
+
+Heading completion and gait-ready admission now use the same measured pelvis angular velocity shown
+by assisted-turn telemetry rather than the root motor's internal rate, which excludes direct
+whole-ragdoll correction. Heading error and measured rate must remain inside their existing 2-degree
+and 30-degree/second limits for 0.04 seconds before `HEADING_COMPLETE`. This bounded stability proof
+prevents the first post-turn foothold from starting while the visible ragdoll is still rotating.
+
+The acceptance trace from `15:32:37.220` through `15:33:02.090` passed the Slice 3 runtime gate. The
+89.813-degree retarget reached `HEADING_COMPLETE` in 0.501 seconds, and the 45.387-degree retarget in
+0.270 seconds. Additional mirrored live retargets of 68.734 and 84.803 degrees completed in 0.390 and
+0.472 seconds. Schedule completion correctly reported `heading-settle` or `yaw-rate` until the
+measured 0.04-second stability proof passed, and no assisted increment followed any
+`HEADING_COMPLETE` event. Across 28 subsequent foothold admissions, scheduler ownership produced
+zero requested physical yaw and full 0.135-0.144 m advances; neither the former -1.9-degree cleanup
+turn nor the -6-degree role swap recurred. No locomotion abort occurred in the acceptance interval.
+The later 180-degree shadow-mode experiment is outside Slice 3 and is intentionally excluded from
+this result. Slice 3 is accepted for progression to the one-beat cadence work in Slice 4.
+
+Each physics update measures pelvis heading, samples the schedule, and applies only the bounded lag
+correction about the currently owned stance pivot. The physical heading motor remains enabled.
+Assistance must approach zero on gentle arcs that the motor tracks and increase smoothly with lag;
+there is no on/off threshold at 15, 45, or 90 degrees.
+
+The admitted swing foothold remains immutable in the corrected world frame. After an assisted
+increment, rotate that immutable plan as a whole rather than rebuilding it from measured error.
+
+**Pass gate:** mirrored 15/45/90-degree turns reach their heading targets without overshoot, target
+rewrite, foot crossing, or an abort. Heading time meets 0.20/0.35/0.55 seconds respectively, even if
+the unchanged physical cadence still delays `gait ready`. Straight walking and zero-yaw plans apply
+exactly zero assisted rotation.
+
+#### Slice 4 - one-beat turn cadence through 90 degrees
+
+**Behavior change:** enable the 0.45-0.55-second cadence overlay for 15-90-degree turns.
+
+Use one outside-directed turn step. Begin support preparation as the global heading starts, continue
+the support curve through swing and landing, and allow existing touchdown/load validation to overlap.
+The stance foot remains the assisted pivot until the normal load-handoff predicate transfers
+ownership. Forward advance scales smoothly from ordinary gait below 15 degrees to nearly zero at 90.
+
+**Pass gate:** mirrored 15/45/90-degree commands meet both heading and gait-ready targets, use no more
+than one primary turn contact, and preserve the existing contact, 4 cm drift, 30-degree tilt, 10 cm
+minimum separation, reach, touchdown, load, and motor-saturation limits. Release and retarget at each
+major phase must remain bounded.
+
+#### Slice 5 - two-beat 90-180-degree turn
+
+**Behavior change:** extend the same scheduler and assistance to large direction changes.
+
+Use the existing exact-opposite sign latch and outside-foot selection. The first beat places the
+outside foot while heading advances toward the midpoint of the global curve. After measured load
+ownership transfers to that foot, pivot ownership moves continuously to it and the inside foot closes
+toward the final heading. The second foothold is predicted from the global schedule and physical
+support state; it is not derived by adding another per-step yaw to the assisted result.
+
+The controller may finish heading before the closing contact settles. It may not start forward
+acceleration in the new direction until `gait ready` passes.
+
+**Pass gate:** mirrored 120/135/180-degree commands complete with two primary contacts, reach heading
+within 0.70/0.75/0.90 seconds, and become gait-ready within 1.20 seconds. Exact reversals retain one
+direction, no turn uses more than two primary contacts, and no run emits plan rejection, abort,
+automatic retry, crossover, or a standing restart.
+
+#### Slice 6 - active-phase handoff, release, and retarget
+
+**Behavior change:** allow the unified schedule to begin from every gait phase.
+
+- `WEIGHT_SHIFT` and `INTER_STEP` enter the schedule immediately;
+- early swing retains the existing safe return while scheduled yaw decelerates or retargets from the
+  achieved physical heading;
+- late swing, arrival, and descent finish their immutable foothold while the global schedule proceeds;
+- touchdown, settle, transfer, and hold preserve the admitted contact and rebase the pivot only after
+  measured load ownership changes;
+- release decelerates to the achieved heading, while a live direction change constructs one new
+  schedule without a stop/restart cycle.
+
+**Pass gate:** mirrored release and retarget tests in every major phase produce one continuous heading
+record, no double-applied yaw, no stale pivot, no target jump, and either continued stable gait or the
+validated controlled stop. The 0-180 timing targets apply from command receipt, not only from the next
+step boundary.
+
+#### Slice 7 - final tuning, presentation, and regression
+
+Tune scheduled angular rate/acceleration, maximum residual-assist rate, and the turn cadence together.
+Do not tune the 20-degree footprint ceiling, foot angular-speed limit, heading torque, or assistance
+cap in isolation. A parameter increase requires telemetry showing that its corresponding limit is the
+active cause of lateness and that physical reserve remains.
+
+After physical timing passes, an optional presentation-only refinement may lead the pelvis by a small
+torso/head target. It must not own root heading, foot placement, or support and is not required for the
+first accepted implementation.
+
+**Final acceptance matrix:**
+
+- mirrored 5/15/30/45/60/90/120/135/180-degree commands from both initial support roles;
+- sustained gentle arcs and repeated alternating medium turns;
+- command, release, and retarget during every major gait phase;
+- exact reversal followed immediately by walking in the new direction;
+- 30, 60, and 120 Hz render rates with the same physics timestep;
+- the accepted straight 44-step/controlled-stop regression;
+- the previous physical-only turning matrix with assisted weight forced to zero.
+
+The accepted implementation must meet the timing table at the 95th percentile across repeated runs,
+apply zero assistance to zero-yaw gait, preserve all existing fall/contact/reach/drift/tilt/separation/
+load/motor safety bounds, and contain no unreported fallback. Once this matrix passes, the physical-
+only route remains a diagnostic mode rather than the default gameplay turn.
+
 ## Relationship to SIMBICON
 
 Keep from the paper:

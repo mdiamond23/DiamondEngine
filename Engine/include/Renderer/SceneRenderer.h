@@ -23,6 +23,38 @@ class RHICommandList;
 class RHITexture;
 struct PBRMaterial;
 
+// Display curve applied by the tonemap pass. ACES is the Narkowicz fit the GL
+// renderer uses — cheap, but saturated highlights shift hue as they clip. AgX
+// rolls them off toward white instead, which holds up far better on emissive
+// and bloomed content. Values are pushed to tonemap.frag as-is.
+enum class Tonemapper : int {
+    ACES = 0,
+    AgX  = 1,
+};
+
+// Eye adaptation. The renderer meters the scene's average log-luminance each
+// frame, eases the retained value toward it, and maps that onto 'keyValue' to
+// get an exposure multiplier — which is applied ON TOP of SetExposure, so the
+// manual value stays useful as EV compensation.
+struct AutoExposureSettings {
+    // Off by default: a fixed exposure is the predictable thing for a scene
+    // that was authored against one, and adaptation changes every frame.
+    bool  enabled = false;
+
+    // Luminance the adapted average maps to — "middle grey". Raise to expose
+    // the scene brighter overall.
+    float keyValue = 0.18f;
+
+    // Metering range in log2 luminance (stops). The measured average is clamped
+    // here, which bounds how far exposure can swing in either direction — the
+    // guard against a mostly-black or mostly-blown frame running away.
+    float minLogLuminance = -8.0f;
+    float maxLogLuminance =  4.0f;
+
+    // Adaptation rate, roughly stops per second. Higher settles faster.
+    float speed = 2.0f;
+};
+
 // Backend-neutral bridge from the engine's Scene/ECS to the RHI render graph.
 //
 // The public surface names no backend type: it takes a Scene + Camera + an
@@ -138,10 +170,25 @@ public:
     // the swapchain overlay. Set once; capture what it draws by reference.
     virtual void SetUIOverlay(const OverlayFn& fn) = 0;
 
-    // Global exposure: scales the HDR scene color before the ACES tonemap curve.
+    // Global exposure: scales the HDR scene color before the tonemap curve.
     // 1.0 (the default) matches the GL renderer's tonemap exactly; lower values
     // darken the whole frame. Takes effect next frame; survives Resize.
     virtual void SetExposure(float exposure) = 0;
+
+    // Display curve (default ACES, matching the GL renderer). Takes effect next
+    // frame; survives Resize.
+    virtual void SetTonemapper(Tonemapper curve) = 0;
+
+    // Eye adaptation (default off — see AutoExposureSettings). Takes effect next
+    // frame; survives Resize. Toggling on snaps to the metered luminance rather
+    // than easing from a stale retained value.
+    virtual void SetAutoExposure(const AutoExposureSettings& settings) = 0;
+
+    // Bloom bright-pass cutoff in linear HDR luminance (default 1.0) and the
+    // strength the blurred result is added back at (default 1.0). Threshold is
+    // absolute, so it wants re-tuning whenever scene exposure changes materially
+    // — until auto-exposure lands and it can key off the adapted level.
+    virtual void SetBloomParams(float threshold, float intensity) = 0;
 
     // Temporal anti-aliasing (default on). Checked per frame: off = no
     // projection jitter, no history blend, no history copy — the resolve pass

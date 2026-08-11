@@ -31,6 +31,8 @@
 #include "Platform/Vulkan/Passes/Forward/VulkanTransparencyPass.h"
 #include "Platform/Vulkan/Passes/PostProcess/VulkanTonemapPass.h"
 #include "Platform/Vulkan/Passes/PostProcess/VulkanTAAPass.h"
+#include "Platform/Vulkan/Passes/PostProcess/VulkanBloomPass.h"
+#include "Platform/Vulkan/Passes/PostProcess/VulkanAutoExposurePass.h"
 #include "Platform/Vulkan/Passes/IBL/VulkanIBLPass.h"
 #include "Platform/Vulkan/Passes/VulkanPassCommon.h"   // RecompileSpirv (shader hot-reload)
 #include "Platform/Vulkan/Resources/VulkanParticleRenderer.h"
@@ -256,7 +258,31 @@ public:
     void SetExposure(float exposure) override {
         m_Exposure = exposure;
         for (auto& v : m_Views)
-            if (v) v->tonemap->SetExposure(exposure);
+            if (v) {
+                v->tonemap->SetExposure(exposure);
+                // The bright pass thresholds against the exposed image, so it
+                // needs the same manual term the tonemap applies.
+                v->bloom->SetExposure(exposure);
+            }
+    }
+
+    void SetAutoExposure(const AutoExposureSettings& settings) override {
+        m_AutoExposure = settings;
+        for (auto& v : m_Views)
+            if (v) ApplyAutoExposureSettings(*v->autoExposure);
+    }
+
+    void SetTonemapper(Tonemapper curve) override {
+        m_Tonemapper = curve;
+        for (auto& v : m_Views)
+            if (v) v->tonemap->SetTonemapper(curve);
+    }
+
+    void SetBloomParams(float threshold, float intensity) override {
+        m_BloomThreshold = threshold;
+        m_BloomIntensity = intensity;
+        for (auto& v : m_Views)
+            if (v) v->bloom->SetParams(threshold, intensity);
     }
 
     // Checked once per view per frame (RenderView): gates the projection
@@ -430,6 +456,16 @@ public:
         // stats window brackets this whole call, not just BeginFrame/EndFrame.
         m_Device->ResetFrameStats();
         ++m_FrameIndex;
+
+        // Frame delta for auto-exposure adaptation. Clamped: a hitch (or the
+        // first frame after a scene load) must not let adaptation jump a stop.
+        const auto now = std::chrono::high_resolution_clock::now();
+        if (m_HasLastFrameTime) {
+            const std::chrono::duration<float> elapsed = now - m_LastFrameTime;
+            m_DeltaTime = std::clamp(elapsed.count(), 0.0f, 0.1f);
+        }
+        m_LastFrameTime    = now;
+        m_HasLastFrameTime = true;
 
         View& main = *m_Views[kMainView];
         const Frustum mainFrustum = Frustum::Extract(proj * view, /*zeroToOneDepth*/ true);
@@ -678,6 +714,8 @@ private:
         std::unique_ptr<VulkanDeferredLightingPass> lighting;
         std::unique_ptr<VulkanSkyboxPass>           skybox;
         std::unique_ptr<VulkanTransparencyPass>     transparency;
+        std::unique_ptr<VulkanAutoExposurePass>     autoExposure;
+        std::unique_ptr<VulkanBloomPass>            bloom;
         std::unique_ptr<VulkanTonemapPass>          tonemap;
         std::unique_ptr<VulkanParticleRenderer>     particles;
         std::unique_ptr<VulkanDebugDrawPass>        debugDraw;   // main view only
@@ -757,6 +795,18 @@ private:
             "Assets/Textures/citrus_orchard_road_puresky_4k.hdr"));
     }
 
+    void ApplyAutoExposureSettings(VulkanAutoExposurePass& pass) const {
+        pass.SetEnabled(m_AutoExposure.enabled);
+        pass.SetKeyValue(m_AutoExposure.keyValue);
+        pass.SetRange(m_AutoExposure.minLogLuminance, m_AutoExposure.maxLogLuminance);
+        pass.SetSpeed(m_AutoExposure.speed);
+    }
+
+    // Bloom runs its extract + blur chain at half resolution: the result is
+    // low-frequency, so the halved cost and memory cost nothing visually, and the
+    // wider effective blur radius per tap actually helps the glow spread.
+    static uint32_t BloomScale(uint32_t x) { return std::max(1u, x / 2); }
+
     std::unique_ptr<View> CreateView(uint32_t width, uint32_t height,
                                      bool offscreen, bool editorComposite,
                                      bool external, int viewIdx) {
@@ -782,12 +832,22 @@ private:
         v->lighting     = std::make_unique<VulkanDeferredLightingPass>(m_Device, shaderDir);
         v->skybox       = std::make_unique<VulkanSkyboxPass>(m_Device, shaderDir);
         v->transparency = std::make_unique<VulkanTransparencyPass>(m_Device, shaderDir);
+        // Bloom composites into an HDR target, so it always outputs RGBA16F —
+        // tonemapping stays downstream regardless of the view's final format.
+        // Metering chain is a fixed size — nothing about it depends on the view.
+        v->autoExposure = std::make_unique<VulkanAutoExposurePass>(m_Device, shaderDir);
+        ApplyAutoExposureSettings(*v->autoExposure);
+        v->bloom = std::make_unique<VulkanBloomPass>(
+            m_Device, shaderDir, BloomScale(width), BloomScale(height), RHIFormat::RGBA16F);
+        v->bloom->SetParams(m_BloomThreshold, m_BloomIntensity);
+        v->bloom->SetExposure(m_Exposure);
         // Offscreen views tonemap into an LDR texture ImGui can sample; the
         // swapchain-mode main view tonemaps straight into the backbuffer.
         v->tonemap = std::make_unique<VulkanTonemapPass>(
             m_Device, shaderDir,
             offscreen ? RHIFormat::RGBA8 : m_Device->SwapchainFormat());
         v->tonemap->SetExposure(m_Exposure);
+        v->tonemap->SetTonemapper(m_Tonemapper);
         v->particles = std::make_unique<VulkanParticleRenderer>(m_Device, shaderDir, RHIFormat::RGBA16F);
 
         // Collider/ragdoll/IK/audio debug wireframes — only the main (editor)
@@ -824,12 +884,19 @@ private:
         // its history-valid flag, so the first post-resize frame passes through.
         v.taa      = std::make_unique<VulkanTAAPass>(m_Device, shaderDir, width, height);
         v.lighting = std::make_unique<VulkanDeferredLightingPass>(m_Device, shaderDir);
+        v.autoExposure = std::make_unique<VulkanAutoExposurePass>(m_Device, shaderDir);
+        ApplyAutoExposureSettings(*v.autoExposure);
+        v.bloom    = std::make_unique<VulkanBloomPass>(
+            m_Device, shaderDir, BloomScale(width), BloomScale(height), RHIFormat::RGBA16F);
+        v.bloom->SetParams(m_BloomThreshold, m_BloomIntensity);
+        v.bloom->SetExposure(m_Exposure);
         // Same format split as CreateView: offscreen tonemaps into the LDR
         // texture, swapchain mode straight into the backbuffer.
         v.tonemap  = std::make_unique<VulkanTonemapPass>(
             m_Device, shaderDir,
             v.offscreen ? RHIFormat::RGBA8 : m_Device->SwapchainFormat());
         v.tonemap->SetExposure(m_Exposure);   // the recreated pass defaults to 1.0
+        v.tonemap->SetTonemapper(m_Tonemapper);
 
         v.graph.ResetPasses();
         BuildViewGraph(v, viewIdx);   // re-declares textures + re-binds IBL/point shadows
@@ -862,6 +929,12 @@ private:
         // Second MRT copy of the resolve, untouched by transparency/particles —
         // the post-graph history copy reads this, never hdrTAA (see VulkanTAAPass).
         const RGTextureHandle taaHistorySrc = g.DeclareTexture("taaHistorySrc", { v.width, v.height, RHIFormat::RGBA16F });
+        // Scene + bloom, still HDR. Separate target for the same reason as hdrSSR:
+        // the composite reads the scene it adds onto, so it can't write it back.
+        const RGTextureHandle hdrBloom    = g.DeclareTexture("hdrBloom",    { v.width, v.height, RHIFormat::RGBA16F });
+        // 1x1 auto-exposure multiplier, produced by the metering chain and read
+        // by both the bloom bright pass and the tonemap.
+        const RGTextureHandle exposureTex = g.DeclareTexture("exposure",    { 1, 1, RHIFormat::R16F });
 
         std::array<RGTextureHandle, VulkanCSMPass::NUM_CASCADES> cascades;
         for (int i = 0; i < VulkanCSMPass::NUM_CASCADES; ++i)
@@ -935,11 +1008,24 @@ private:
                 particles.End();
             });
 
-        // Tonemap HDR → swapchain (ACES + gamma), or → the LDR output texture
+        // Auto-exposure — meters the finished HDR scene (post transparency and
+        // particles, so emissive VFX count toward the average) down to a 1x1
+        // multiplier. Must precede bloom: the bright pass thresholds against the
+        // exposed image, so it consumes this frame's multiplier.
+        v.autoExposure->AddToGraph(g, hdrTAA, exposureTex);
+
+        // Bloom — bright-pass extract + separable blur at half res, added back onto
+        // the scene. Last thing before tonemap so emissive surfaces, transparency
+        // and particles all glow; the bright pass reads linear HDR, which is the
+        // whole point of running it ahead of the tonemap curve.
+        v.bloom->AddToGraph(g, hdrTAA, exposureTex, hdrBloom);
+
+        // Tonemap HDR → swapchain (curve + gamma), or → the LDR output texture
         // for offscreen views.
         if (v.offscreen)
             v.outputColor = g.DeclareTexture("outputColor", { v.width, v.height, RHIFormat::RGBA8 });
-        v.tonemap->AddToGraph(g, hdrTAA, v.offscreen ? v.outputColor : RGTextureHandle{});
+        v.tonemap->AddToGraph(g, hdrBloom, exposureTex,
+                              v.offscreen ? v.outputColor : RGTextureHandle{});
 
         // Collider/ragdoll/IK/audio debug wireframes — on top of the tonemapped
         // LDR scene, read-only depth test against the G-buffer depth. Matches
@@ -1032,11 +1118,22 @@ private:
                                  m_PointRadius);
         if (v.debugDraw) v.debugDraw->SetFrameData(proj * view);
 
-        // First frame only: put the never-written TAA history in a sampleable
-        // layout — the resolve's descriptor set binds it even when passthrough.
+        // Adaptation eases per second, so it needs the frame delta; both views in
+        // a frame share the one measured in RenderFrame.
+        v.autoExposure->SetDeltaTime(m_DeltaTime);
+
+        // First frame only: put the never-written TAA history and auto-exposure
+        // retained value in a sampleable layout — both are bound by descriptor
+        // sets from frame one, even on the frames whose branches ignore them.
         v.taa->Prepare(cmd);
+        v.autoExposure->Prepare(cmd);
 
         v.graph.Execute(cmd);
+
+        // Auto-exposure upkeep, raw after the graph — same shape as the TAA
+        // history copy below: move this frame's adapted luminance into the
+        // retained image so the next frame eases from it.
+        v.autoExposure->RecordAdaptedCopy(cmd);
 
         // TAA history upkeep, raw after the graph: enabled → copy this frame's
         // resolve into the history (marks it valid); disabled → drop the
@@ -1735,7 +1832,21 @@ private:
     // Albedo textures behind cached transparency sets, kept alive with them.
     std::unordered_map<RHITexture*, std::shared_ptr<Texture>> m_TransparentAlbedos;
 
-    float                  m_Exposure = 1.0f;   // re-applied when a resize recreates a tonemap pass
+    // All re-applied when a resize recreates the pass that owns them.
+    float                  m_Exposure       = 1.0f;
+    Tonemapper             m_Tonemapper     = Tonemapper::ACES;
+    float                  m_BloomThreshold = 1.0f;
+    float                  m_BloomIntensity = 1.0f;
+    AutoExposureSettings   m_AutoExposure   {};
+
+    // Wall-clock frame delta, measured once per RenderFrame and shared by every
+    // view. Auto-exposure adaptation is the only consumer; taking it from the
+    // clock rather than the engine's dt keeps the renderer's public surface free
+    // of a per-frame setter that every caller (editor, standalone runtime) would
+    // otherwise have to remember to drive.
+    float                                              m_DeltaTime = 1.0f / 60.0f;
+    std::chrono::high_resolution_clock::time_point     m_LastFrameTime{};
+    bool                                               m_HasLastFrameTime = false;
     glm::vec3              m_SunDir   { 0.0f, -1.0f, 0.0f };
     glm::vec3              m_SunColor { 0.0f };
     std::vector<glm::vec3> m_PointPos;      // world space

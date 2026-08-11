@@ -301,12 +301,46 @@ public:
         ImGui::Text("Backend: Vulkan (deferred, RHI render graph)");
         ImGui::Text("Scene output: %ux%u", m_SceneW, m_SceneH);
         ImGui::Separator();
-        // Global exposure (HDR scale before the ACES tonemap; 1.0 = GL parity).
-        if (ImGui::SliderFloat("Exposure", &m_Exposure, 0.1f, 2.0f, "%.2f"))
+        // Global exposure (HDR scale before the tonemap curve; 1.0 = GL parity).
+        if (ImGui::SliderFloat("Exposure", &m_Exposure, 0.1f, 8.0f, "%.2f"))
             m_Renderer->SetExposure(m_Exposure);
+        // Display curve. AgX rolls saturated highlights toward white instead of
+        // clipping them with a hue shift — most visible on bloomed emissives.
+        const char* kCurves[] = { "ACES (Narkowicz)", "AgX" };
+        if (ImGui::Combo("Tonemapper", &m_Tonemapper, kCurves, IM_ARRAYSIZE(kCurves)))
+            m_Renderer->SetTonemapper(static_cast<Tonemapper>(m_Tonemapper));
         // Temporal AA — off also disables the projection jitter + history copy.
         if (ImGui::Checkbox("TAA", &m_TAAEnabled))
             m_Renderer->SetTAAEnabled(m_TAAEnabled);
+
+        ImGui::Separator();
+        // Auto-exposure. The multiplier this produces stacks on the Exposure
+        // slider above, which stays useful as EV compensation while it's on.
+        ImGui::TextUnformatted("Auto Exposure");
+        bool autoDirty = false;
+        autoDirty |= ImGui::Checkbox("Enabled##autoexp", &m_AutoExposure.enabled);
+        if (m_AutoExposure.enabled) {
+            autoDirty |= ImGui::SliderFloat("Key", &m_AutoExposure.keyValue,
+                                            0.01f, 1.0f, "%.3f");
+            autoDirty |= ImGui::SliderFloat("Adapt speed", &m_AutoExposure.speed,
+                                            0.1f, 10.0f, "%.2f stops/s");
+            autoDirty |= ImGui::SliderFloat("Min log luma", &m_AutoExposure.minLogLuminance,
+                                            -16.0f, 0.0f, "%.1f");
+            autoDirty |= ImGui::SliderFloat("Max log luma", &m_AutoExposure.maxLogLuminance,
+                                            0.0f, 16.0f, "%.1f");
+        }
+        if (autoDirty)
+            m_Renderer->SetAutoExposure(m_AutoExposure);
+
+        ImGui::Separator();
+        // Bloom. Threshold is an absolute linear-HDR luminance cutoff, so it
+        // interacts with Exposure above — expect to move both together.
+        ImGui::TextUnformatted("Bloom");
+        bool bloomDirty = false;
+        bloomDirty |= ImGui::SliderFloat("Threshold", &m_BloomThreshold, 0.0f, 10.0f, "%.2f");
+        bloomDirty |= ImGui::SliderFloat("Intensity", &m_BloomIntensity, 0.0f, 3.0f, "%.2f");
+        if (bloomDirty)
+            m_Renderer->SetBloomParams(m_BloomThreshold, m_BloomIntensity);
     }
 
     void RenderFrame(const EditorFrameInput& input) override {
@@ -490,8 +524,13 @@ private:
     ImageSets m_GameSets {};
     ImageSets m_PreviewSets {};
 
-    float m_Exposure   = 1.0f;
-    bool  m_TAAEnabled = true;   // mirrors the renderer default
+    // All mirror the renderer defaults.
+    float m_Exposure       = 1.0f;
+    int   m_Tonemapper     = static_cast<int>(Tonemapper::ACES);
+    bool  m_TAAEnabled     = true;
+    float m_BloomThreshold = 1.0f;
+    float m_BloomIntensity = 1.0f;
+    AutoExposureSettings m_AutoExposure {};
 };
 
 } // namespace

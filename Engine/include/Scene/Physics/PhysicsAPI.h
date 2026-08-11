@@ -182,6 +182,28 @@ namespace Physics {
     glm::vec3 GetRagdollBonePosition(const RagdollComponent& rag, int boneIndex, bool* ok = nullptr);
     glm::vec3 GetRagdollBoneLinearVelocity(const RagdollComponent& rag, int boneIndex, bool* ok = nullptr);
 
+    // Narrow locomotion-only primitive for assisted-turn validation. Rotates every
+    // active Powered-ragdoll body and its velocity vectors through one bounded yaw
+    // about an explicit world pivot, then invalidates the affected contact caches.
+    // It is deliberately unavailable to Animated/Limp or inactive locomotion and is
+    // capped at 20 degrees per call; callers must rotate their cached gait references
+    // by result.appliedYawRadians in the same update.
+    struct RagdollPivotYawResult {
+        bool applied = false;
+        int bodiesRotated = 0;
+        float appliedYawRadians = 0.0f;
+        float pivotError = 0.0f;
+        float maxLinearSpeedError = 0.0f;
+        float maxAngularSpeedError = 0.0f;
+        float maxRelativePositionError = 0.0f;
+        float maxRelativeRotationErrorDeg = 0.0f;
+        float rootTiltDeltaDeg = 0.0f;
+    };
+    bool ApplyRagdollLocomotionPivotYaw(
+        RagdollComponent& rag, glm::vec3 pivotWorld,
+        float yawRadians, int pivotBoneIndex,
+        RagdollPivotYawResult* result = nullptr);
+
     // Start a procedural get-up: the rig heaves itself upright by driving its motors
     // toward the bind/stand pose (cones opened, strength ramping up with wobble), then
     // hands back to Animated. Works from Limp (the usual trigger) or any built ragdoll.

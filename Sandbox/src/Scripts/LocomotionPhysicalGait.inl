@@ -1,8 +1,18 @@
 // Included in LocamotionControllerSystem's private section. This file owns the
 // physical step state machine, foot planning, and constrained ragdoll leg solve.
+    // Ignore sub-degree command jitter before it can create an assisted schedule or
+    // a turn-conditioned foothold. The ordinary heading motor can still settle a
+    // completed turn without turning microscopic residuals into role swaps or
+    // shortened strides.
+    static constexpr float kAssistedTurnCommandNoticeDeg = 1.0f;
+    static constexpr float kMeaningfulFootholdTurnDeg = 1.0f;
+
     static void ResetPhysicalGait(Comp& c)
     {
         c._gaitTurnPlan = {};
+        c._assistedTurnPlan = {};
+        c._assistedTurnDiagnosticRequested = false;
+        c._assistedTurnDiagnostic = {};
         c._gaitTurnPairPendingInside = false;
         c._gaitTurnPairAdvanceScale = 1.0f;
         c._gaitTurnPairYawScale = 1.0f;
@@ -309,6 +319,150 @@
         c._legR.groundReferenceFootRotationValid = false;
         c._legL.groundReferenceKneePoleValid = false;
         c._legR.groundReferenceKneePoleValid = false;
+    }
+
+    // Rotate every persistent world-space reference that can survive an assisted
+    // ragdoll yaw. Live player intent and the global shadow-schedule objective remain
+    // fixed; physical-frame plans, plants, caches, and velocities move with the bodies.
+    static void RotatePhysicalGaitWorldReferences(
+        Comp& c, RagdollComponent& rag,
+        const glm::vec3& pivotWorld, float yawRadians)
+    {
+        if (std::abs(yawRadians) < 1e-6f) return;
+        const glm::quat yawRotation = glm::angleAxis(
+            yawRadians, glm::vec3(0.0f, 1.0f, 0.0f));
+        auto rotatePoint = [&](glm::vec3& point) {
+            point = pivotWorld + yawRotation * (point - pivotWorld);
+        };
+        auto rotateVector = [&](glm::vec3& vector) {
+            vector = yawRotation * vector;
+        };
+        auto rotateOrientation = [&](glm::quat& orientation) {
+            orientation = glm::normalize(yawRotation * orientation);
+        };
+
+        auto& turnPlan = c._gaitTurnPlan;
+        rotateVector(turnPlan.committedForward);
+        rotateVector(turnPlan.activeStartForward);
+        rotateVector(turnPlan.activeStartRight);
+        rotateVector(turnPlan.activeMidForward);
+        rotateVector(turnPlan.activeMidRight);
+        rotateVector(turnPlan.activeEndForward);
+        rotateVector(turnPlan.activeEndRight);
+        rotateOrientation(turnPlan.activeStartRotation);
+        rotateOrientation(turnPlan.activeEndRotation);
+        rotatePoint(turnPlan.planOrigin);
+        rotatePoint(turnPlan.candidateFootPosition);
+        rotatePoint(turnPlan.admittedFootPosition);
+        rotateOrientation(turnPlan.candidateFootRotation);
+        rotateOrientation(turnPlan.admittedFootRotation);
+        rotateOrientation(turnPlan.stanceFootRotationAtAdmission);
+        rotatePoint(turnPlan.predictedContactHip);
+        rotatePoint(turnPlan.actualContactHip);
+        rotateVector(turnPlan.contactHipError);
+        rotateVector(turnPlan.predictedContactSupportVelocity);
+
+        rotateOrientation(c._gaitTurnCancellationStartRotation);
+        rotateOrientation(c._gaitTurnCancellationEndRotation);
+        rotateVector(c._gaitTurnCancellationStartForward);
+        rotateVector(c._gaitTurnCancellationEndForward);
+
+        auto rotateLeg = [&](Leg& leg) {
+            rotatePoint(leg.plantFoot);
+            rotatePoint(leg.swingStartFoot);
+            rotatePoint(leg.swingTargetFoot);
+            rotatePoint(leg.desiredFoot);
+            rotateVector(leg.ankleFromFootWorld);
+            rotateVector(leg.kneePoleWorld);
+            rotateOrientation(leg.plantedFootWorldRotation);
+            rotateVector(leg.referenceUpperWorld);
+            rotateOrientation(leg.referenceHipWorld);
+        };
+        rotateLeg(c._legL);
+        rotateLeg(c._legR);
+
+        rotateVector(c._right);
+        rotateVector(c._fwd);
+        rotatePoint(c._physicalStepPlantCenterAnchorStart);
+        rotatePoint(c._physicalStepPlantCenterAnchorTarget);
+        rotatePoint(c._gaitFkDesiredPosition);
+        rotatePoint(c._gaitFkCommandPosition);
+        rotatePoint(c._gaitFkPhysicalPosition);
+        rotateVector(c._gaitFkDesiredToCommand);
+        rotateVector(c._gaitFkCommandToPhysical);
+        rotateVector(c._gaitFkDesiredToPhysical);
+        rotateOrientation(c._gaitSwingSoleCommandWorld);
+        rotatePoint(c._physicalStepFootBaselineL);
+        rotatePoint(c._physicalStepFootBaselineR);
+        rotatePoint(c._physicalStepComBaseline);
+        rotateVector(c._physicalStepRight);
+        rotateVector(c._physicalStepForward);
+        rotatePoint(c._physicalStepSupportTarget);
+        rotatePoint(c._physicalStepSwingStart);
+        rotatePoint(c._physicalStepArcStart);
+        rotatePoint(c._physicalStepFoothold);
+        rotatePoint(c._physicalStepDesiredFoot);
+        rotatePoint(c._physicalStepTouchdownPlant);
+        rotatePoint(c._physicalStepTouchdownContactWorld);
+        rotateVector(c._physicalStepApiVelocity);
+        rotateVector(c._physicalStepMeasuredVelocity);
+        rotatePoint(c._physicalStepPreviousSwingFoot);
+        rotatePoint(c._physicalStepContactPoint);
+        rotatePoint(c._supportTransferTransferStartTarget);
+        rotatePoint(c._supportTransferTransferEndTarget);
+        rotatePoint(c._gaitCycleSupportTarget);
+        rotatePoint(c._gaitSupportCurveStart);
+        rotatePoint(c._gaitSupportCurveEnd);
+        rotateVector(c._gaitSupportCurveStartVelocity);
+        rotateVector(c._gaitSupportCurveEndVelocity);
+        rotateVector(c._gaitSupportCommandVelocity);
+        rotatePoint(c._gaitStartCom);
+        rotatePoint(c._gaitStepStartCom);
+        rotatePoint(c._gaitIkPlanHip);
+        rotatePoint(c._gaitInterStepRecenterStart);
+        rotatePoint(c._gaitInterStepRecenterTarget);
+        rotatePoint(c._gaitStopStartTarget);
+        rotatePoint(c._gaitStopEndTarget);
+        rotatePoint(c._gaitStopFootTargetL);
+        rotatePoint(c._gaitStopFootTargetR);
+        rotatePoint(c._gaitStopSettleFootTargetL);
+        rotatePoint(c._gaitStopSettleFootTargetR);
+        rotateOrientation(c._gaitHeadingTargetRot);
+        c._yaw = std::atan2(
+            std::sin(c._yaw + yawRadians),
+            std::cos(c._yaw + yawRadians));
+
+        auto& assistedPlan = c._assistedTurnPlan;
+        if (assistedPlan.active) {
+            rotateVector(assistedPlan.previousPhysicalForward);
+            assistedPlan.physicalYaw += yawRadians;
+            assistedPlan.residualYaw = assistedPlan.scheduledYaw
+                - assistedPlan.physicalYaw;
+        }
+
+        rotateOrientation(rag.locomotionTargetRot);
+        rotateVector(rag.locomotionTargetVel);
+        if (rag.locomotionSupportTargetWeight > 0.0f)
+            rotatePoint(rag.locomotionSupportTarget);
+        rotateVector(rag.locomotionSupportTargetVel);
+        rotateVector(rag._locomotionSupportForce);
+        rotateVector(rag._locomotionSupportPositionForce);
+        rotateVector(rag._locomotionSupportDampingForce);
+        rotateVector(rag._locomotionRootVel);
+        rotateVector(rag._locomotionRootAngularVelocity);
+        rotateVector(rag._locomotionUprightDeltaAngularVelocity);
+        rotateVector(rag._locomotionUprightTorque);
+        if (rag._locomotionCOMValid) rotatePoint(rag._locomotionCOM);
+        rotateVector(rag._locomotionCOMVel);
+        for (int foot = 0; foot < 2; ++foot) {
+            if (rag._locomotionFootContact[foot]) {
+                rotatePoint(rag._locomotionFootContactPoint[foot]);
+                rotateVector(rag._locomotionFootContactNormal[foot]);
+            }
+            if (rag.locomotionFootLockBones[foot] >= 0)
+                rotatePoint(rag.locomotionFootLockTargets[foot]);
+            rotateVector(rag.locomotionHipTorque[foot]);
+        }
     }
 
     static void CameraRelativeBasis(Scene& scene, glm::vec3& right, glm::vec3& forward)
@@ -1591,6 +1745,394 @@
         if (continuousEnabled && comp._gaitRunning)
             comp._gaitRunTime += dt;
 
+        // Unified assisted-turn schedule. Slice 3 consumes its signed residual only
+        // for eligible turns through 90 degrees; larger turns retain the Slice 1
+        // shadow-only measurement path. Foothold admission remains physical.
+        {
+            constexpr float kHeadingCompleteToleranceDeg = 2.0f;
+            constexpr float kHeadingCompleteRateDegPerSecond = 30.0f;
+            constexpr float kHeadingCompleteStableTime = 0.04f;
+            constexpr float kTelemetryPeriod = 0.25f;
+
+            auto measuredPhysicalForward = [&]() {
+                const glm::vec3 targetForward = horizontalForward(
+                    rag.locomotionTargetRot);
+                const glm::quat targetToPhysical = glm::angleAxis(
+                    -glm::radians(rag._locomotionHeadingErrorDeg),
+                    glm::vec3(0.0f, 1.0f, 0.0f));
+                glm::vec3 physicalForward = targetToPhysical * targetForward;
+                physicalForward.y = 0.0f;
+                return glm::dot(physicalForward, physicalForward) > 1e-8f
+                    ? glm::normalize(physicalForward) : targetForward;
+            };
+            auto supportName = [](int supportSide) {
+                return supportSide < 0 ? "LEFT"
+                    : (supportSide > 0 ? "RIGHT" : "NONE");
+            };
+            auto beginAssistedTurnSchedule = [&](glm::vec3 physicalForward,
+                                                  glm::vec3 desiredForward,
+                                                  float requestedYaw,
+                                                  bool retarget) {
+                auto& plan = comp._assistedTurnPlan;
+                const int turnSequence = retarget
+                    ? plan.turnSequence : plan.turnSequence + 1;
+                const int retargetSequence = retarget
+                    ? plan.retargetSequence + 1 : 0;
+                plan = {};
+                plan.active = true;
+                plan.startForward = physicalForward;
+                plan.desiredForward = desiredForward;
+                plan.scheduledForward = physicalForward;
+                plan.previousPhysicalForward = physicalForward;
+                plan.requestedYaw = requestedYaw;
+                plan.scheduledDuration = glm::clamp(
+                    std::abs(glm::degrees(requestedYaw)) / 200.0f,
+                    0.15f, 0.90f);
+                plan.assistanceEligible = comp.gaitAssistedTurnEnabled
+                    && comp.gaitAssistedTurnStrength > 0.0f
+                    && std::abs(glm::degrees(requestedYaw)) <= 90.25f;
+                plan.commandTimestamp = glm::max(
+                    0.0f, comp._gaitRunTime - glm::max(dt, 0.0f));
+                plan.nextSampleTimestamp = kTelemetryPeriod;
+                plan.nextAssistanceLogTimestamp = 0.10f;
+                plan.supportSideAtStart = comp._physicalStepSupportSide;
+                plan.currentSupportSide = comp._physicalStepSupportSide;
+                plan.turnSequence = turnSequence;
+                plan.retargetSequence = retargetSequence;
+                if (comp.debug) {
+                    spdlog::info(
+                        "[LocomotionAssistedTurn] turn={} retarget={} event={} "
+                        "gaitTime={:.3f}s requested={:+.3f}deg duration={:.3f}s "
+                        "start=({:+.3f},{:+.3f}) desired=({:+.3f},{:+.3f}) "
+                        "phase={} support={} contacts={} mode={}",
+                        plan.turnSequence, plan.retargetSequence,
+                        retarget ? "RETARGET" : "COMMAND",
+                        plan.commandTimestamp,
+                        glm::degrees(plan.requestedYaw),
+                        plan.scheduledDuration,
+                        plan.startForward.x, plan.startForward.z,
+                        plan.desiredForward.x, plan.desiredForward.z,
+                        gaitPhaseName(comp._physicalStepPhase),
+                        supportName(plan.supportSideAtStart),
+                        static_cast<int>(comp._physicalStepContactL)
+                            + static_cast<int>(comp._physicalStepContactR),
+                        plan.assistanceEligible ? "assisted" : "shadow");
+                }
+            };
+
+            auto& assistedPlan = comp._assistedTurnPlan;
+            const glm::vec3 physicalForward = measuredPhysicalForward();
+            const bool turnCommandActive = continuousEnabled && gameplayCommand
+                && comp._gaitRunning && liveDesiredHeading
+                && !continuousCommand.stopRequested
+                && !comp._gaitStopRequested
+                && comp._physicalStepPhase < kStopping;
+
+            if (turnCommandActive) {
+                if (assistedPlan.active) {
+                    const float desiredChangeDeg = std::abs(glm::degrees(
+                        signedHeadingDelta(assistedPlan.desiredForward,
+                                           diagnosticDesired)));
+                    if (desiredChangeDeg
+                        >= kAssistedTurnCommandNoticeDeg) {
+                        const float retargetYaw = resolvedHeadingDelta(
+                            physicalForward, diagnosticDesired);
+                        if (std::abs(glm::degrees(retargetYaw))
+                            >= kAssistedTurnCommandNoticeDeg) {
+                            beginAssistedTurnSchedule(
+                                physicalForward, diagnosticDesired,
+                                retargetYaw, true);
+                        }
+                    }
+                } else {
+                    const float requestedYaw = resolvedHeadingDelta(
+                        physicalForward, diagnosticDesired);
+                    if (std::abs(glm::degrees(requestedYaw))
+                        >= kAssistedTurnCommandNoticeDeg) {
+                        beginAssistedTurnSchedule(
+                            physicalForward, diagnosticDesired,
+                            requestedYaw, false);
+                    }
+                }
+            } else if (assistedPlan.active) {
+                if (comp.debug) {
+                    spdlog::info(
+                        "[LocomotionAssistedTurn] turn={} retarget={} event=RELEASE "
+                        "gaitTime={:.3f}s elapsed={:.3f}s scheduled={:+.3f}deg "
+                        "physical={:+.3f}deg residual={:+.3f}deg phase={} "
+                        "support={} contacts={} mode={}",
+                        assistedPlan.turnSequence,
+                        assistedPlan.retargetSequence,
+                        comp._gaitRunTime, assistedPlan.elapsed,
+                        glm::degrees(assistedPlan.scheduledYaw),
+                        glm::degrees(assistedPlan.physicalYaw),
+                        glm::degrees(assistedPlan.residualYaw),
+                        gaitPhaseName(comp._physicalStepPhase),
+                        supportName(comp._physicalStepSupportSide),
+                        static_cast<int>(comp._physicalStepContactL)
+                            + static_cast<int>(comp._physicalStepContactR),
+                        assistedPlan.assistanceEligible
+                            ? "assisted" : "shadow");
+                }
+                assistedPlan.active = false;
+            }
+
+            if (assistedPlan.active) {
+                const float safeDt = glm::max(dt, 0.0f);
+                assistedPlan.elapsed += safeDt;
+                const float linearProgress = glm::clamp(
+                    assistedPlan.elapsed
+                        / glm::max(assistedPlan.scheduledDuration, 1e-4f),
+                    0.0f, 1.0f);
+                assistedPlan.easedProgress = linearProgress * linearProgress
+                    * (3.0f - 2.0f * linearProgress);
+                assistedPlan.scheduledYaw = assistedPlan.requestedYaw
+                    * assistedPlan.easedProgress;
+                assistedPlan.scheduledAngularVelocity =
+                    assistedPlan.requestedYaw
+                    * (6.0f * linearProgress * (1.0f - linearProgress))
+                    / glm::max(assistedPlan.scheduledDuration, 1e-4f);
+                assistedPlan.scheduledForward = glm::normalize(
+                    glm::angleAxis(assistedPlan.scheduledYaw,
+                                   glm::vec3(0.0f, 1.0f, 0.0f))
+                    * assistedPlan.startForward);
+
+                const float physicalIncrement = signedHeadingDelta(
+                    assistedPlan.previousPhysicalForward, physicalForward);
+                assistedPlan.physicalYaw += physicalIncrement;
+                assistedPlan.physicalAngularVelocity = safeDt > 1e-5f
+                    ? physicalIncrement / safeDt : 0.0f;
+                assistedPlan.previousPhysicalForward = physicalForward;
+                assistedPlan.residualYaw = assistedPlan.scheduledYaw
+                    - assistedPlan.physicalYaw;
+                assistedPlan.currentSupportSide = comp._physicalStepSupportSide;
+
+                const bool wasScheduleComplete = assistedPlan.scheduleComplete;
+                assistedPlan.scheduleComplete =
+                    assistedPlan.elapsed >= assistedPlan.scheduledDuration;
+                const int contactCount =
+                    static_cast<int>(comp._physicalStepContactL)
+                    + static_cast<int>(comp._physicalStepContactR);
+                const float finalHeadingErrorDeg = std::abs(glm::degrees(
+                    signedHeadingDelta(physicalForward,
+                                       assistedPlan.desiredForward)));
+                // Use the same measured pelvis delta reported by telemetry. The root
+                // motor's internal rate excludes the whole-ragdoll correction and could
+                // therefore declare the gait ready while the visible character was still
+                // rotating rapidly at the end of the schedule.
+                const float physicalYawRateDeg = std::abs(glm::degrees(
+                    assistedPlan.physicalAngularVelocity));
+                const bool headingKinematicsStable =
+                    assistedPlan.scheduleComplete
+                    && finalHeadingErrorDeg
+                        <= kHeadingCompleteToleranceDeg
+                    && physicalYawRateDeg
+                        <= kHeadingCompleteRateDegPerSecond;
+                assistedPlan.headingStableTime = headingKinematicsStable
+                    ? assistedPlan.headingStableTime + safeDt : 0.0f;
+                const bool phaseAllowsAdmission =
+                    comp._physicalStepPhase == kIdle
+                    || comp._physicalStepPhase == kWeightShift
+                    || comp._physicalStepPhase == kInterStep
+                    || comp._physicalStepPhase == kComplete;
+                const bool loadReady = comp._gaitNewSupportLoadLatched
+                    || comp._physicalStepPhase == kIdle
+                    || comp._physicalStepPhase == kWeightShift
+                    || comp._physicalStepPhase == kInterStep
+                    || comp._physicalStepPhase == kComplete;
+                const char* gaitReadyConstraint = "none";
+                if (!assistedPlan.scheduleComplete)
+                    gaitReadyConstraint = "schedule";
+                else if (finalHeadingErrorDeg
+                         > kHeadingCompleteToleranceDeg)
+                    gaitReadyConstraint = "heading-error";
+                else if (physicalYawRateDeg
+                         > kHeadingCompleteRateDegPerSecond)
+                    gaitReadyConstraint = "yaw-rate";
+                else if (assistedPlan.headingStableTime
+                         < kHeadingCompleteStableTime)
+                    gaitReadyConstraint = "heading-settle";
+                else if (contactCount < 2)
+                    gaitReadyConstraint = "contact-count";
+                else if (comp._physicalStepMotorSaturated)
+                    gaitReadyConstraint = "motor-saturation";
+                else if (!loadReady)
+                    gaitReadyConstraint = "load-handoff";
+                else if (!phaseAllowsAdmission)
+                    gaitReadyConstraint = "phase-ownership";
+
+                if (!wasScheduleComplete && assistedPlan.scheduleComplete
+                    && comp.debug) {
+                    spdlog::info(
+                        "[LocomotionAssistedTurn] turn={} retarget={} "
+                        "event=SCHEDULE_COMPLETE gaitTime={:.3f}s elapsed={:.3f}s "
+                        "scheduled={:+.3f}deg physical={:+.3f}deg "
+                        "scheduledRate={:+.3f}deg/s physicalRate={:+.3f}deg/s "
+                        "residual={:+.3f}deg phase={} support={} contacts={} "
+                        "gaitReadyConstraint={} mode={}",
+                        assistedPlan.turnSequence,
+                        assistedPlan.retargetSequence,
+                        comp._gaitRunTime, assistedPlan.elapsed,
+                        glm::degrees(assistedPlan.scheduledYaw),
+                        glm::degrees(assistedPlan.physicalYaw),
+                        glm::degrees(assistedPlan.scheduledAngularVelocity),
+                        glm::degrees(assistedPlan.physicalAngularVelocity),
+                        glm::degrees(assistedPlan.residualYaw),
+                        gaitPhaseName(comp._physicalStepPhase),
+                        supportName(assistedPlan.currentSupportSide),
+                        contactCount, gaitReadyConstraint,
+                        assistedPlan.assistanceEligible
+                            ? "assisted" : "shadow");
+                }
+
+                constexpr float kHeadingCrossingsDeg[] = {
+                    15.0f, 45.0f, 90.0f, 120.0f
+                };
+                const float requestedMagnitudeDeg = std::abs(
+                    glm::degrees(assistedPlan.requestedYaw));
+                const float physicalProgressDeg = glm::degrees(
+                    assistedPlan.physicalYaw)
+                    * (assistedPlan.requestedYaw < 0.0f ? -1.0f : 1.0f);
+                for (unsigned int crossingIndex = 0;
+                     crossingIndex < 4; ++crossingIndex) {
+                    const unsigned int crossingBit = 1u << crossingIndex;
+                    const float crossingDeg =
+                        kHeadingCrossingsDeg[crossingIndex];
+                    if ((assistedPlan.headingCrossingMask & crossingBit) == 0
+                        && requestedMagnitudeDeg
+                            >= crossingDeg + kHeadingCompleteToleranceDeg
+                        && physicalProgressDeg >= crossingDeg) {
+                        assistedPlan.headingCrossingMask |= crossingBit;
+                        if (comp.debug) {
+                            spdlog::info(
+                                "[LocomotionAssistedTurn] turn={} retarget={} "
+                                "event=HEADING_CROSS gaitTime={:.3f}s "
+                                "elapsed={:.3f}s crossing={:.1f}deg "
+                                "scheduled={:+.3f}deg physical={:+.3f}deg "
+                                "residual={:+.3f}deg phase={} support={} "
+                                "contacts={} mode={}",
+                                assistedPlan.turnSequence,
+                                assistedPlan.retargetSequence,
+                                comp._gaitRunTime, assistedPlan.elapsed,
+                                crossingDeg,
+                                glm::degrees(assistedPlan.scheduledYaw),
+                                glm::degrees(assistedPlan.physicalYaw),
+                                glm::degrees(assistedPlan.residualYaw),
+                                gaitPhaseName(comp._physicalStepPhase),
+                                supportName(assistedPlan.currentSupportSide),
+                                contactCount,
+                                assistedPlan.assistanceEligible
+                                    ? "assisted" : "shadow");
+                        }
+                    }
+                }
+
+                if (!assistedPlan.headingComplete
+                    && assistedPlan.headingStableTime
+                        >= kHeadingCompleteStableTime) {
+                    assistedPlan.headingComplete = true;
+                    assistedPlan.headingCompleteTimestamp = comp._gaitRunTime;
+                    if (comp.debug) {
+                        spdlog::info(
+                            "[LocomotionAssistedTurn] turn={} retarget={} "
+                            "event=HEADING_COMPLETE gaitTime={:.3f}s "
+                            "turnTime={:.3f}s requested={:+.3f}deg "
+                            "scheduled={:+.3f}deg physical={:+.3f}deg "
+                            "physicalRate={:+.3f}deg/s residual={:+.3f}deg "
+                            "phase={} support={} contacts={} "
+                            "gaitReadyConstraint={} mode={}",
+                            assistedPlan.turnSequence,
+                            assistedPlan.retargetSequence,
+                            comp._gaitRunTime,
+                            comp._gaitRunTime
+                                - assistedPlan.commandTimestamp,
+                            glm::degrees(assistedPlan.requestedYaw),
+                            glm::degrees(assistedPlan.scheduledYaw),
+                            glm::degrees(assistedPlan.physicalYaw),
+                            glm::degrees(assistedPlan.physicalAngularVelocity),
+                            glm::degrees(assistedPlan.residualYaw),
+                            gaitPhaseName(comp._physicalStepPhase),
+                            supportName(assistedPlan.currentSupportSide),
+                            contactCount, gaitReadyConstraint,
+                            assistedPlan.assistanceEligible
+                                ? "assisted" : "shadow");
+                    }
+                }
+
+                if (!assistedPlan.gaitReady
+                    && assistedPlan.headingComplete
+                    && contactCount == 2
+                    && !comp._physicalStepMotorSaturated
+                    && loadReady && phaseAllowsAdmission) {
+                    assistedPlan.gaitReady = true;
+                    assistedPlan.gaitReadyTimestamp = comp._gaitRunTime;
+                    if (comp.debug) {
+                        spdlog::info(
+                            "[LocomotionAssistedTurn] turn={} retarget={} "
+                            "event=GAIT_READY gaitTime={:.3f}s turnTime={:.3f}s "
+                            "headingTime={:.3f}s requested={:+.3f}deg "
+                            "scheduled={:+.3f}deg physical={:+.3f}deg "
+                            "residual={:+.3f}deg phase={} support={} contacts={} "
+                            "gaitReadyConstraint=none mode={}",
+                            assistedPlan.turnSequence,
+                            assistedPlan.retargetSequence,
+                            comp._gaitRunTime,
+                            comp._gaitRunTime
+                                - assistedPlan.commandTimestamp,
+                            assistedPlan.headingCompleteTimestamp
+                                - assistedPlan.commandTimestamp,
+                            glm::degrees(assistedPlan.requestedYaw),
+                            glm::degrees(assistedPlan.scheduledYaw),
+                            glm::degrees(assistedPlan.physicalYaw),
+                            glm::degrees(assistedPlan.residualYaw),
+                            gaitPhaseName(comp._physicalStepPhase),
+                            supportName(assistedPlan.currentSupportSide),
+                            contactCount,
+                            assistedPlan.assistanceEligible
+                                ? "assisted" : "shadow");
+                    }
+                }
+
+                if (comp.debug && !assistedPlan.gaitReady
+                    && assistedPlan.elapsed
+                        >= assistedPlan.nextSampleTimestamp) {
+                    spdlog::info(
+                        "[LocomotionAssistedTurn] turn={} retarget={} event=SAMPLE "
+                        "gaitTime={:.3f}s elapsed={:.3f}s progress={:.3f} "
+                        "requested={:+.3f}deg scheduled={:+.3f}deg "
+                        "physical={:+.3f}deg scheduledRate={:+.3f}deg/s "
+                        "physicalRate={:+.3f}deg/s residual={:+.3f}deg "
+                        "headingError={:.3f}deg phase={} support={} contacts={} "
+                        "gaitReadyConstraint={} mode={} assisted={:+.3f}deg "
+                        "lastAssist={:+.3f}deg assistCalls={}",
+                        assistedPlan.turnSequence,
+                        assistedPlan.retargetSequence,
+                        comp._gaitRunTime, assistedPlan.elapsed,
+                        assistedPlan.easedProgress,
+                        glm::degrees(assistedPlan.requestedYaw),
+                        glm::degrees(assistedPlan.scheduledYaw),
+                        glm::degrees(assistedPlan.physicalYaw),
+                        glm::degrees(assistedPlan.scheduledAngularVelocity),
+                        glm::degrees(assistedPlan.physicalAngularVelocity),
+                        glm::degrees(assistedPlan.residualYaw),
+                        finalHeadingErrorDeg,
+                        gaitPhaseName(comp._physicalStepPhase),
+                        supportName(assistedPlan.currentSupportSide),
+                        contactCount, gaitReadyConstraint,
+                        assistedPlan.assistanceEligible
+                            ? "assisted" : "shadow",
+                        glm::degrees(assistedPlan.assistedYaw),
+                        glm::degrees(assistedPlan.lastAssistedYaw),
+                        assistedPlan.assistanceApplications);
+                    do {
+                        assistedPlan.nextSampleTimestamp += kTelemetryPeriod;
+                    } while (assistedPlan.nextSampleTimestamp
+                             <= assistedPlan.elapsed);
+                }
+
+            }
+        }
+
         if (continuousEnabled && comp._gaitRunning
             && comp._gaitTurnCancellationUnwindActive) {
             constexpr float kCancellationSwingHeadingShare = 0.80f;
@@ -1689,13 +2231,36 @@
             comp._gaitHeadingTargetRot = glm::normalize(glm::slerp(
                 startRotation, endRotation,
                 turnPlan.plannedTurnProgress));
+            const bool scheduledAssistanceOwnsHeading =
+                comp._assistedTurnPlan.active
+                && comp._assistedTurnPlan.assistanceEligible
+                && comp.gaitAssistedTurnEnabled
+                && comp.gaitAssistedTurnStrength > 0.0f;
+            if (scheduledAssistanceOwnsHeading) {
+                const glm::vec3 scheduledForward =
+                    comp._assistedTurnPlan.scheduledForward;
+                const float scheduledHeadingYaw = std::atan2(
+                    -scheduledForward.x, -scheduledForward.z);
+                comp._gaitHeadingTargetRot = glm::angleAxis(
+                    scheduledHeadingYaw, glm::vec3(0.0f, 1.0f, 0.0f));
+            }
             rag.locomotionTargetRot = comp._gaitHeadingTargetRot;
 
             if (std::abs(turnPlan.admittedYaw) > 1e-6f) {
-                const float commandedYaw = turnPlan.admittedYaw
-                    * turnPlan.plannedTurnProgress;
-                turnPlan.achievedYaw = commandedYaw
-                    - glm::radians(comp._gaitHeadingErrorDeg);
+                if (scheduledAssistanceOwnsHeading) {
+                    const glm::vec3 targetForward = horizontalForward(
+                        rag.locomotionTargetRot);
+                    const glm::vec3 actualForward = glm::angleAxis(
+                        -glm::radians(comp._gaitHeadingErrorDeg),
+                        glm::vec3(0.0f, 1.0f, 0.0f)) * targetForward;
+                    turnPlan.achievedYaw = signedHeadingDelta(
+                        turnPlan.activeStartForward, actualForward);
+                } else {
+                    const float commandedYaw = turnPlan.admittedYaw
+                        * turnPlan.plannedTurnProgress;
+                    turnPlan.achievedYaw = commandedYaw
+                        - glm::radians(comp._gaitHeadingErrorDeg);
+                }
                 turnPlan.achievedTurnProgress =
                     turnPlan.achievedYaw / turnPlan.admittedYaw;
             } else {
@@ -2853,12 +3418,73 @@
                 desiredForward = committedForward;
             desiredForward = glm::normalize(desiredForward);
 
+            const auto& assistedPlan = comp._assistedTurnPlan;
+            const bool scheduledAssistanceOwnsFootholdHeading =
+                assistedPlan.active
+                && assistedPlan.assistanceEligible
+                && comp.gaitAssistedTurnEnabled
+                && comp.gaitAssistedTurnStrength > 0.0f;
+            if (scheduledAssistanceOwnsFootholdHeading) {
+                glm::vec3 scheduledForward = assistedPlan.scheduledForward;
+                scheduledForward.y = 0.0f;
+                if (glm::dot(scheduledForward, scheduledForward) > 1e-8f) {
+                    scheduledForward = glm::normalize(scheduledForward);
+                    const float rebaseDeltaDeg = glm::degrees(
+                        signedHeadingDelta(committedForward,
+                                           scheduledForward));
+                    const bool clearedTurnPair =
+                        comp._gaitTurnPairPendingInside;
+                    const bool clearedExitBlend =
+                        comp._gaitTurnExitBlendPending;
+
+                    // The scheduled heading already rotates an admitted immutable
+                    // foothold through the Slice 2 coherence boundary. Planning the
+                    // remaining input angle here would schedule the same yaw twice and
+                    // can create a stale inside-foot role swap just before completion.
+                    committedForward = scheduledForward;
+                    desiredForward = scheduledForward;
+                    turnPlan.committedForward = scheduledForward;
+                    comp._physicalStepForward = scheduledForward;
+                    comp._physicalStepRight = glm::cross(
+                        scheduledForward, glm::vec3(0.0f, 1.0f, 0.0f));
+                    makeHorizontalBasis(
+                        comp._physicalStepRight, comp._physicalStepForward);
+                    comp._gaitTurnPairPendingInside = false;
+                    comp._gaitTurnPairAdvanceScale = 1.0f;
+                    comp._gaitTurnPairYawScale = 1.0f;
+                    comp._gaitTurnPairYawSign = 0.0f;
+                    comp._gaitTurnExitBlendPending = false;
+
+                    if (comp.debug
+                        && (std::abs(rebaseDeltaDeg) >= 0.01f
+                            || clearedTurnPair || clearedExitBlend)) {
+                        spdlog::info(
+                            "[LocomotionAssistedTurn] turn={} retarget={} "
+                            "event=FOOTHOLD_REBASE scheduled={:+.3f}deg "
+                            "basisDelta={:+.3f}deg pairCleared={} "
+                            "exitCleared={} phase={} swing={}",
+                            assistedPlan.turnSequence,
+                            assistedPlan.retargetSequence,
+                            glm::degrees(assistedPlan.scheduledYaw),
+                            rebaseDeltaDeg,
+                            clearedTurnPair ? "yes" : "no",
+                            clearedExitBlend ? "yes" : "no",
+                            gaitPhaseName(comp._physicalStepPhase),
+                            swingFootLeft ? "LEFT" : "RIGHT");
+                    }
+                }
+            }
+
             const float desiredHeadingError = resolvedHeadingDelta(
                 committedForward, desiredForward);
             const float maximumStepYaw = glm::radians(glm::clamp(
                 comp.gaitMaxTurnStepDeg, 0.0f, 45.0f));
-            const float requestedStepYaw = glm::clamp(
+            const float clampedStepYaw = glm::clamp(
                 desiredHeadingError, -maximumStepYaw, maximumStepYaw);
+            const float requestedStepYaw =
+                std::abs(glm::degrees(clampedStepYaw))
+                    >= kMeaningfulFootholdTurnDeg
+                ? clampedStepYaw : 0.0f;
             const bool turnExitBlendApplied = continuousEnabled
                 && comp._gaitTurnExitBlendPending
                 && !comp._gaitStopRequested
@@ -4629,12 +5255,17 @@
                 previousCommitted, turnPlan.desiredForward);
             const bool yawBearingStep =
                 std::abs(turnPlan.admittedYaw) > 1e-6f;
-            if (std::abs(turnPlan.admittedYaw) > 1e-6f) {
+            const bool scheduledAssistedCommit =
+                comp._assistedTurnPlan.active
+                && comp._assistedTurnPlan.assistanceEligible
+                && comp.gaitAssistedTurnEnabled
+                && comp.gaitAssistedTurnStrength > 0.0f;
+            if (yawBearingStep && !scheduledAssistedCommit) {
                 turnPlan.achievedYaw = turnPlan.admittedYaw
                     - glm::radians(comp._gaitHeadingErrorDeg);
                 turnPlan.achievedTurnProgress =
                     turnPlan.achievedYaw / turnPlan.admittedYaw;
-            } else {
+            } else if (!yawBearingStep) {
                 turnPlan.achievedYaw = 0.0f;
                 turnPlan.achievedTurnProgress = 0.0f;
             }
@@ -4653,6 +5284,23 @@
                     * turnPlan.activeStartRotation)
                 : glm::normalize(turnPlan.activeEndRotation);
             glm::vec3 committedForward = horizontalForward(committedRotation);
+            if (scheduledAssistedCommit) {
+                const glm::vec3 targetForward = horizontalForward(
+                    rag.locomotionTargetRot);
+                committedForward = glm::normalize(glm::angleAxis(
+                    -glm::radians(comp._gaitHeadingErrorDeg),
+                    glm::vec3(0.0f, 1.0f, 0.0f)) * targetForward);
+                const float measuredCommittedYaw = std::atan2(
+                    -committedForward.x, -committedForward.z);
+                committedRotation = glm::angleAxis(
+                    measuredCommittedYaw, glm::vec3(0.0f, 1.0f, 0.0f));
+                if (yawBearingStep) {
+                    turnPlan.achievedYaw = signedHeadingDelta(
+                        previousCommitted, committedForward);
+                    turnPlan.achievedTurnProgress =
+                        turnPlan.achievedYaw / turnPlan.admittedYaw;
+                }
+            }
             float remainingAfter = resolvedHeadingDelta(
                 committedForward, turnPlan.desiredForward);
             // Sub-degree residuals are below the useful resolution of a physical gait
@@ -10308,6 +10956,418 @@
                 }
                 DebugDraw::Line(hoverTarget, comp._physicalStepFoothold,
                                 {0.2f, 0.9f, 1.0f});
+            }
+        }
+
+        // Slice 3: the schedule is the only global heading objective through 90
+        // degrees. Physics and the existing step planner still contribute normally;
+        // this path rotates only the remaining signed lag and can never pass the
+        // current schedule sample.
+        bool scheduledAssistanceAppliedThisUpdate = false;
+        {
+            auto& assistedPlan = comp._assistedTurnPlan;
+            assistedPlan.lastAssistedYaw = 0.0f;
+            const bool assistanceActive = assistedPlan.active
+                && assistedPlan.assistanceEligible
+                && !assistedPlan.headingComplete
+                && comp.gaitAssistedTurnEnabled
+                && comp.gaitAssistedTurnStrength > 0.0f
+                && comp._gaitRunning
+                && !comp._gaitStopRequested
+                && comp._physicalStepPhase < kStopping;
+            if (assistanceActive) {
+                const float turnSign = assistedPlan.requestedYaw < 0.0f
+                    ? -1.0f : 1.0f;
+                const float directedLag = assistedPlan.residualYaw * turnSign;
+                constexpr float kMinimumAssistanceDeg = 0.01f;
+                if (directedLag > glm::radians(kMinimumAssistanceDeg)) {
+                    const float safeDt = glm::max(dt, 0.0f);
+                    const float maximumCorrection = glm::min(
+                        glm::radians(20.0f),
+                        glm::radians(glm::max(
+                            comp.gaitAssistedTurnMaxSpeedDeg, 0.0f))
+                            * safeDt);
+                    const float requestedCorrection = directedLag
+                        * glm::clamp(
+                            comp.gaitAssistedTurnStrength, 0.0f, 1.0f);
+                    const float correctionMagnitude = glm::min(
+                        requestedCorrection, maximumCorrection);
+                    const float correctionYaw = turnSign
+                        * correctionMagnitude;
+
+                    int supportSide = comp._physicalStepSupportSide;
+                    if (supportSide == 0) {
+                        supportSide = comp._physicalStepContactR
+                            && !comp._physicalStepContactL ? 1 : -1;
+                    }
+                    Leg& oldSupportLeg = supportSide < 0
+                        ? comp._legL : comp._legR;
+                    Leg& newSupportLeg = supportSide < 0
+                        ? comp._legR : comp._legL;
+                    const int oldContactIndex = supportSide < 0 ? 0 : 1;
+                    const int newContactIndex = supportSide < 0 ? 1 : 0;
+                    auto supportPivot = [&](Leg& leg, int contactIndex,
+                                            bool& valid) {
+                        valid = true;
+                        if (rag._locomotionFootContact[contactIndex])
+                            return rag._locomotionFootContactPoint[contactIndex];
+                        if (leg.planted) return leg.plantFoot;
+                        return physicalPosition(leg.footIdx, &valid);
+                    };
+                    bool oldPivotValid = false, newPivotValid = false;
+                    const glm::vec3 oldPivot = supportPivot(
+                        oldSupportLeg, oldContactIndex, oldPivotValid);
+                    const glm::vec3 newPivot = supportPivot(
+                        newSupportLeg, newContactIndex, newPivotValid);
+                    float handoffBlend = 0.0f;
+                    const bool validatedDoubleSupport =
+                        comp._physicalStepContactL
+                        && comp._physicalStepContactR
+                        && comp._physicalStepPhase >= kSettle
+                        && comp._physicalStepPhase <= kInterStep;
+                    if (validatedDoubleSupport && newPivotValid) {
+                        constexpr float kHandoffBlendStart = 0.48f;
+                        constexpr float kHandoffBlendEnd = 0.68f;
+                        handoffBlend = smoothstep(glm::clamp(
+                            (comp._gaitNewSupportLoad - kHandoffBlendStart)
+                                / (kHandoffBlendEnd - kHandoffBlendStart),
+                            0.0f, 1.0f));
+                    }
+                    const glm::vec3 pivotWorld = glm::mix(
+                        oldPivot, newPivot, handoffBlend);
+
+                    Physics::RagdollPivotYawResult result;
+                    const bool applied = oldPivotValid
+                        && correctionMagnitude
+                            >= glm::radians(kMinimumAssistanceDeg)
+                        && Physics::ApplyRagdollLocomotionPivotYaw(
+                            rag, pivotWorld, correctionYaw,
+                            oldSupportLeg.footIdx, &result);
+                    if (applied) {
+                        RotatePhysicalGaitWorldReferences(
+                            comp, rag, pivotWorld,
+                            result.appliedYawRadians);
+                        assistedPlan.assistedYaw +=
+                            result.appliedYawRadians;
+                        assistedPlan.lastAssistedYaw =
+                            result.appliedYawRadians;
+                        ++assistedPlan.assistanceApplications;
+                        assistedPlan.assistanceRejectLogged = false;
+                        scheduledAssistanceAppliedThisUpdate = true;
+
+                        // Reference coherence rotates the current physical target with
+                        // the bodies. Reassert the fixed global schedule before Jolt's
+                        // upcoming step so its heading motor cannot double-advance it.
+                        const float scheduledHeadingYaw = std::atan2(
+                            -assistedPlan.scheduledForward.x,
+                            -assistedPlan.scheduledForward.z);
+                        comp._gaitHeadingTargetRot = glm::angleAxis(
+                            scheduledHeadingYaw,
+                            glm::vec3(0.0f, 1.0f, 0.0f));
+                        rag.locomotionTargetRot =
+                            comp._gaitHeadingTargetRot;
+
+                        const bool assistanceLogDue = comp.debug
+                            && (assistedPlan.assistanceApplications == 1
+                                || assistedPlan.elapsed
+                                    >= assistedPlan.nextAssistanceLogTimestamp
+                                || assistedPlan.scheduleComplete);
+                        if (assistanceLogDue) {
+                            spdlog::info(
+                                "[LocomotionAssistedTurn] turn={} retarget={} "
+                                "event=ASSIST elapsed={:.3f}s "
+                                "scheduled={:+.3f}deg physical={:+.3f}deg "
+                                "lagBefore={:+.3f}deg correction={:+.3f}deg "
+                                "assistedTotal={:+.3f}deg phase={} support={} "
+                                "pivotBlend={:.3f} pivotError={:.6f}m "
+                                "applications={}",
+                                assistedPlan.turnSequence,
+                                assistedPlan.retargetSequence,
+                                assistedPlan.elapsed,
+                                glm::degrees(assistedPlan.scheduledYaw),
+                                glm::degrees(assistedPlan.physicalYaw),
+                                glm::degrees(directedLag * turnSign),
+                                glm::degrees(result.appliedYawRadians),
+                                glm::degrees(assistedPlan.assistedYaw),
+                                gaitPhaseName(comp._physicalStepPhase),
+                                supportSide < 0 ? "LEFT" : "RIGHT",
+                                handoffBlend, result.pivotError,
+                                assistedPlan.assistanceApplications);
+                            do {
+                                assistedPlan.nextAssistanceLogTimestamp += 0.10f;
+                            } while (assistedPlan.nextAssistanceLogTimestamp
+                                     <= assistedPlan.elapsed);
+                        }
+                    } else if (!assistedPlan.assistanceRejectLogged) {
+                        assistedPlan.assistanceRejectLogged = true;
+                        if (comp.debug) {
+                            spdlog::warn(
+                                "[LocomotionAssistedTurn] turn={} retarget={} "
+                                "event=ASSIST_REJECT elapsed={:.3f}s "
+                                "reason={} phase={} support={} lag={:+.3f}deg",
+                                assistedPlan.turnSequence,
+                                assistedPlan.retargetSequence,
+                                assistedPlan.elapsed,
+                                oldPivotValid ? "physics-precondition"
+                                    : "pivot-unavailable",
+                                gaitPhaseName(comp._physicalStepPhase),
+                                supportSide < 0 ? "LEFT" : "RIGHT",
+                                glm::degrees(directedLag * turnSign));
+                        }
+                    }
+                }
+            }
+        }
+
+        // Slice 2 is an explicit one-shot diagnostic. There is no automatic caller:
+        // with the default zero weight this path performs no physics or state writes.
+        auto physicalFootSeparation = [&]() {
+            bool leftOk = false, rightOk = false;
+            const glm::vec3 physicalLeft = physicalPosition(
+                comp._legL.footIdx, &leftOk);
+            const glm::vec3 physicalRight = physicalPosition(
+                comp._legR.footIdx, &rightOk);
+            return leftOk && rightOk
+                ? glm::length(glm::vec2(
+                    physicalRight.x - physicalLeft.x,
+                    physicalRight.z - physicalLeft.z))
+                : 0.0f;
+        };
+        auto& assistedDiagnostic = comp._assistedTurnDiagnostic;
+        if (assistedDiagnostic.awaitingRefresh
+            && rag._locomotionPhysicsStepSerial
+                > assistedDiagnostic.physicsStepSerialBefore) {
+                bool pivotPositionOk = false, pivotRotationOk = false;
+                const glm::vec3 pivotBodyPosition =
+                    Physics::GetRagdollBonePosition(
+                        rag, assistedDiagnostic.pivotBone,
+                        &pivotPositionOk);
+                const glm::quat pivotBodyRotation =
+                    Physics::GetRagdollBoneRotation(
+                        rag, assistedDiagnostic.pivotBone,
+                        &pivotRotationOk);
+                const float pivotDrift = pivotPositionOk && pivotRotationOk
+                    ? glm::length(
+                        pivotBodyPosition
+                            + pivotBodyRotation
+                                * assistedDiagnostic.pivotBoneLocal
+                            - assistedDiagnostic.pivotWorld)
+                    : std::numeric_limits<float>::infinity();
+                const float footSeparation = physicalFootSeparation();
+                const float footSeparationDelta = std::abs(
+                    footSeparation
+                        - assistedDiagnostic.footSeparationBefore);
+                const float tiltAfterDeg = Physics::GetRagdollTiltDeg(rag);
+                const float tiltDeltaDeg = std::abs(
+                    tiltAfterDeg - assistedDiagnostic.tiltBeforeDeg);
+                const float headingErrorDeltaDeg = std::abs(
+                    rag._locomotionHeadingErrorDeg
+                        - assistedDiagnostic.headingErrorBeforeDeg);
+                const bool contactsPreserved =
+                    (!assistedDiagnostic.contactBeforeL
+                        || comp._physicalStepContactL)
+                    && (!assistedDiagnostic.contactBeforeR
+                        || comp._physicalStepContactR);
+                const bool refreshPassed = pivotDrift < 0.005f
+                    && footSeparationDelta < 0.005f
+                    && tiltDeltaDeg < 0.5f
+                    && headingErrorDeltaDeg < 2.0f
+                    && contactsPreserved;
+                spdlog::info(
+                    "[LocomotionAssistedYawDiagnostic] sequence={} "
+                    "event=REFRESH result={} phase={} support={} "
+                    "pivotDrift={:.6f}m footSeparation=({:.6f}->{:.6f})m "
+                    "separationDelta={:.6f}m tilt=({:.3f}->{:.3f})deg "
+                    "headingError=({:+.3f}->{:+.3f})deg "
+                    "contacts=({},{}) preserved={} physicsSteps>=1",
+                    assistedDiagnostic.sequence,
+                    refreshPassed ? "PASS" : "FAIL",
+                    gaitPhaseName(comp._physicalStepPhase),
+                    assistedDiagnostic.supportSide < 0 ? "LEFT" : "RIGHT",
+                    pivotDrift,
+                    assistedDiagnostic.footSeparationBefore,
+                    footSeparation, footSeparationDelta,
+                    assistedDiagnostic.tiltBeforeDeg, tiltAfterDeg,
+                    assistedDiagnostic.headingErrorBeforeDeg,
+                    rag._locomotionHeadingErrorDeg,
+                    comp._physicalStepContactL ? "L" : "-",
+                    comp._physicalStepContactR ? "R" : "-",
+                    contactsPreserved ? "yes" : "no");
+                assistedDiagnostic.awaitingRefresh = false;
+        }
+
+        if (comp._assistedTurnDiagnosticRequested) {
+            comp._assistedTurnDiagnosticRequested = false;
+            const float requestedYawDeg = glm::clamp(
+                comp.assistedTurnDiagnosticYawDeg, -20.0f, 20.0f);
+            const float diagnosticWeight = glm::clamp(
+                comp.assistedTurnDiagnosticWeight, 0.0f, 1.0f);
+            const float weightedYawDeg = requestedYawDeg * diagnosticWeight;
+            if (std::abs(weightedYawDeg) < 0.001f) {
+                spdlog::info(
+                    "[LocomotionAssistedYawDiagnostic] event=ZERO_WEIGHT "
+                    "result=PASS requested={:+.3f}deg weight={:.3f} "
+                    "action=no-op",
+                    requestedYawDeg, diagnosticWeight);
+            } else if (assistedDiagnostic.awaitingRefresh) {
+                spdlog::warn(
+                    "[LocomotionAssistedYawDiagnostic] event=REJECT "
+                    "reason=refresh-pending");
+            } else if (scheduledAssistanceAppliedThisUpdate) {
+                spdlog::warn(
+                    "[LocomotionAssistedYawDiagnostic] event=REJECT "
+                    "reason=scheduled-assistance-active");
+            } else {
+                int supportSide = comp._physicalStepSupportSide;
+                if (supportSide == 0) {
+                    if (comp._physicalStepContactL
+                        && !comp._physicalStepContactR)
+                        supportSide = -1;
+                    else if (comp._physicalStepContactR
+                             && !comp._physicalStepContactL)
+                        supportSide = 1;
+                    else
+                        supportSide = -1;
+                }
+                Leg& pivotLeg = supportSide < 0
+                    ? comp._legL : comp._legR;
+                const int contactIndex = supportSide < 0 ? 0 : 1;
+                bool pivotPositionOk = false, pivotRotationOk = false;
+                const glm::vec3 pivotBodyPosition =
+                    Physics::GetRagdollBonePosition(
+                        rag, pivotLeg.footIdx, &pivotPositionOk);
+                const glm::quat pivotBodyRotation =
+                    Physics::GetRagdollBoneRotation(
+                        rag, pivotLeg.footIdx, &pivotRotationOk);
+                glm::vec3 pivotWorld = pivotBodyPosition;
+                if (rag._locomotionFootContact[contactIndex])
+                    pivotWorld = rag._locomotionFootContactPoint[contactIndex];
+                else if (pivotLeg.planted)
+                    pivotWorld = pivotLeg.plantFoot;
+
+                if (!pivotPositionOk || !pivotRotationOk
+                    || !comp._physicalStepBaselineValid) {
+                    spdlog::warn(
+                        "[LocomotionAssistedYawDiagnostic] event=REJECT "
+                        "reason={} phase={} support={}",
+                        !comp._physicalStepBaselineValid
+                            ? "no-gait-baseline" : "no-pivot-body",
+                        gaitPhaseName(comp._physicalStepPhase),
+                        supportSide < 0 ? "LEFT" : "RIGHT");
+                } else {
+                    const glm::vec3 pivotBoneLocal =
+                        glm::conjugate(glm::normalize(pivotBodyRotation))
+                            * (pivotWorld - pivotBodyPosition);
+                    const float footSeparationBefore =
+                        physicalFootSeparation();
+                    const float tiltBeforeDeg =
+                        Physics::GetRagdollTiltDeg(rag);
+                    const glm::vec3 supportReferenceBefore =
+                        comp._physicalStepSupportTarget;
+                    const glm::vec3 leftBaselineBefore =
+                        comp._physicalStepFootBaselineL;
+                    const glm::vec3 rightBaselineBefore =
+                        comp._physicalStepFootBaselineR;
+                    const glm::quat headingBefore =
+                        comp._gaitHeadingTargetRot;
+
+                    Physics::RagdollPivotYawResult result;
+                    const bool applied =
+                        Physics::ApplyRagdollLocomotionPivotYaw(
+                            rag, pivotWorld, glm::radians(weightedYawDeg),
+                            pivotLeg.footIdx, &result);
+                    if (!applied) {
+                        spdlog::warn(
+                            "[LocomotionAssistedYawDiagnostic] event=REJECT "
+                            "reason=physics-precondition phase={} support={} "
+                            "powered={} locomotionActive={}",
+                            gaitPhaseName(comp._physicalStepPhase),
+                            supportSide < 0 ? "LEFT" : "RIGHT",
+                            rag.mode == RagdollMode::Powered ? "yes" : "no",
+                            rag.locomotionActive ? "yes" : "no");
+                    } else {
+                        RotatePhysicalGaitWorldReferences(
+                            comp, rag, pivotWorld,
+                            result.appliedYawRadians);
+                        const glm::quat yawRotation = glm::angleAxis(
+                            result.appliedYawRadians,
+                            glm::vec3(0.0f, 1.0f, 0.0f));
+                        auto expectedPoint = [&](const glm::vec3& point) {
+                            return pivotWorld
+                                + yawRotation * (point - pivotWorld);
+                        };
+                        const float referencePositionError = glm::max(
+                            glm::length(comp._physicalStepSupportTarget
+                                - expectedPoint(supportReferenceBefore)),
+                            glm::max(
+                                glm::length(comp._physicalStepFootBaselineL
+                                    - expectedPoint(leftBaselineBefore)),
+                                glm::length(comp._physicalStepFootBaselineR
+                                    - expectedPoint(rightBaselineBefore))));
+                        const glm::quat expectedHeading = glm::normalize(
+                            yawRotation * headingBefore);
+                        const glm::quat headingError = glm::normalize(
+                            glm::conjugate(expectedHeading)
+                                * comp._gaitHeadingTargetRot);
+                        const float referenceHeadingErrorDeg =
+                            glm::degrees(2.0f * std::acos(glm::clamp(
+                                std::abs(headingError.w), 0.0f, 1.0f)));
+                        const bool immediatePassed =
+                            result.pivotError < 0.005f
+                            && result.maxLinearSpeedError < 1e-4f
+                            && result.maxAngularSpeedError < 1e-4f
+                            && result.maxRelativePositionError < 1e-4f
+                            && result.maxRelativeRotationErrorDeg < 0.01f
+                            && result.rootTiltDeltaDeg < 0.01f
+                            && referencePositionError < 1e-5f
+                            && referenceHeadingErrorDeg < 0.01f;
+
+                        ++assistedDiagnostic.sequence;
+                        assistedDiagnostic.pivotWorld = pivotWorld;
+                        assistedDiagnostic.pivotBoneLocal = pivotBoneLocal;
+                        assistedDiagnostic.footSeparationBefore =
+                            footSeparationBefore;
+                        assistedDiagnostic.tiltBeforeDeg = tiltBeforeDeg;
+                        assistedDiagnostic.headingErrorBeforeDeg =
+                            rag._locomotionHeadingErrorDeg;
+                        assistedDiagnostic.pivotBone = pivotLeg.footIdx;
+                        assistedDiagnostic.supportSide = supportSide;
+                        assistedDiagnostic.physicsStepSerialBefore =
+                            rag._locomotionPhysicsStepSerial;
+                        assistedDiagnostic.contactBeforeL =
+                            comp._physicalStepContactL;
+                        assistedDiagnostic.contactBeforeR =
+                            comp._physicalStepContactR;
+                        assistedDiagnostic.awaitingRefresh = true;
+                        spdlog::info(
+                            "[LocomotionAssistedYawDiagnostic] sequence={} "
+                            "event=APPLY result={} phase={} support={} "
+                            "requested={:+.3f}deg weight={:.3f} "
+                            "applied={:+.3f}deg pivot=({:+.4f},{:+.4f},{:+.4f}) "
+                            "bodies={} pivotError={:.6f}m "
+                            "speedError=(linear={:.7f},angular={:.7f}) "
+                            "relativeError=(position={:.7f}m,rotation={:.5f}deg) "
+                            "tiltDelta={:.5f}deg referenceError=({:.7f}m,{:.5f}deg) "
+                            "contacts=({},{})",
+                            assistedDiagnostic.sequence,
+                            immediatePassed ? "PASS" : "FAIL",
+                            gaitPhaseName(comp._physicalStepPhase),
+                            supportSide < 0 ? "LEFT" : "RIGHT",
+                            requestedYawDeg, diagnosticWeight,
+                            glm::degrees(result.appliedYawRadians),
+                            pivotWorld.x, pivotWorld.y, pivotWorld.z,
+                            result.bodiesRotated, result.pivotError,
+                            result.maxLinearSpeedError,
+                            result.maxAngularSpeedError,
+                            result.maxRelativePositionError,
+                            result.maxRelativeRotationErrorDeg,
+                            result.rootTiltDeltaDeg,
+                            referencePositionError,
+                            referenceHeadingErrorDeg,
+                            comp._physicalStepContactL ? "L" : "-",
+                            comp._physicalStepContactR ? "R" : "-");
+                    }
+                }
             }
         }
     }

@@ -351,6 +351,7 @@ if(DIAMOND_ENABLE_VULKAN)
         src/Platform/Vulkan/Passes/PostProcess/VulkanTAAPass.cpp
         src/Platform/Vulkan/Passes/PostProcess/VulkanFXAAPass.cpp
         src/Platform/Vulkan/Passes/PostProcess/VulkanBloomPass.cpp
+        src/Platform/Vulkan/Passes/PostProcess/VulkanAutoExposurePass.cpp
         src/Platform/Vulkan/Passes/Deferred/VulkanGBufferPass.cpp
         src/Platform/Vulkan/Passes/Deferred/VulkanSSAOPass.cpp
         src/Platform/Vulkan/Passes/Deferred/VulkanSSRPass.cpp
@@ -400,6 +401,7 @@ if(DIAMOND_ENABLE_VULKAN)
     set(_vk_spv_outputs)
     foreach(_shader mesh.vert mesh.frag fullscreen.vert tonemap.frag fxaa.frag
                     bloom_extract.frag bloom_blur.frag bloom_composite.frag
+                    luma_extract.frag luma_reduce.frag exposure_adapt.frag
                     gbuffer.vert gbuffer.frag gbuffer_debug.frag
                     gbuffer_skinned.vert
                     ssao.frag ssao_blur.frag ssr.frag ssr_composite.frag

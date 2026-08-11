@@ -521,7 +521,7 @@
           "gaitMaxPeriodSlowdown": 0.4000000059604645,
           "gaitMaxStepLength": 0.18000000715255737,
           "gaitMaxStrideCorrection": 0.019999999552965164,
-          "gaitMaxTurnStepDeg": 12.5,
+          "gaitMaxTurnStepDeg": 20.0,
           "gaitMinStepLength": 0.07999999821186066,
           "gaitNominalAdvance": 0.11999999731779099,
           "gaitPlacementGain": 0.75,
