@@ -22,7 +22,10 @@ struct RHIBufferDesc {
     // never races the GPU still reading this frame's. Static buffers are
     // device-local and uploaded once from initialData.
     bool        dynamic     = false;
-    const void* initialData = nullptr;   // required for static buffers
+    // Static buffers upload this once at creation. Null leaves the allocation
+    // uninitialized — correct for a GPU-produced storage buffer, wrong for a
+    // vertex/index buffer that nothing else fills.
+    const void* initialData = nullptr;
 };
 
 class RHIBuffer {
@@ -177,6 +180,20 @@ struct RHIPipelineDesc {
 class RHIPipeline {
 public:
     virtual ~RHIPipeline() = default;
+};
+
+// ── Compute pipeline ─────────────────────────────────────────────────────────
+// One shader plus its binding layout — no vertex input, no attachments, no
+// fixed-function state, so it gets its own descriptor rather than leaving most
+// of RHIPipelineDesc meaningless. The result is an ordinary RHIPipeline: it
+// binds and takes resource sets exactly like a graphics one, and the command
+// list picks the bind point from the pipeline itself.
+struct RHIComputePipelineDesc {
+    RHIShader* computeShader = nullptr;
+
+    std::vector<RHIResourceBinding> resourceBindings;    // descriptor set 0
+    std::vector<RHIResourceBinding> resourceBindings1;   // optional set 1
+    RHIPushConstantRange            pushConstants;
 };
 
 // ── Resource set (descriptor set analogue) ───────────────────────────────────

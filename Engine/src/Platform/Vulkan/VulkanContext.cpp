@@ -82,11 +82,20 @@ QueueFamilyIndices FindQueueFamilies(VkPhysicalDevice device, VkSurfaceKHR surfa
     std::vector<VkQueueFamilyProperties> families(count);
     vkGetPhysicalDeviceQueueFamilyProperties(device, &count, families.data());
 
+    // Compute passes record into the same command buffer as graphics, so the
+    // graphics family must also accept dispatches. Every real driver sets both
+    // bits on its main family; the fallback only matters if one ever doesn't,
+    // in which case the compute path is unavailable but rendering still works.
+    uint32_t graphicsOnly = UINT32_MAX;
+
     for (uint32_t i = 0; i < count; ++i) {
         const VkQueueFlags flags = families[i].queueFlags;
 
-        if ((flags & VK_QUEUE_GRAPHICS_BIT) && indices.graphics == UINT32_MAX)
-            indices.graphics = i;
+        if (flags & VK_QUEUE_GRAPHICS_BIT) {
+            if (graphicsOnly == UINT32_MAX) graphicsOnly = i;
+            if ((flags & VK_QUEUE_COMPUTE_BIT) && indices.graphics == UINT32_MAX)
+                indices.graphics = i;
+        }
 
         // Prefer a transfer-capable family that is NOT graphics — a dedicated
         // DMA queue lets uploads overlap rendering later.
@@ -99,6 +108,7 @@ QueueFamilyIndices FindQueueFamilies(VkPhysicalDevice device, VkSurfaceKHR surfa
             indices.present = i;
     }
 
+    if (indices.graphics == UINT32_MAX) indices.graphics = graphicsOnly;
     if (indices.transfer == UINT32_MAX) indices.transfer = indices.graphics;
     return indices;
 }

@@ -36,7 +36,11 @@ public:
     explicit VulkanRHICommandList(VulkanRHIDevice* device) : m_Device(device) {}
 
     // Re-targets the recorder at a freshly-begun command buffer for a new frame.
-    void Reset(VkCommandBuffer cmd) { m_Cmd = cmd; m_Layout = VK_NULL_HANDLE; }
+    void Reset(VkCommandBuffer cmd) {
+        m_Cmd       = cmd;
+        m_Layout    = VK_NULL_HANDLE;
+        m_BindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    }
 
     // The frame's raw command buffer — for Vulkan-only overlays (e.g. ImGui) that
     // record directly rather than through the RHI. Valid between BeginFrame/EndFrame.
@@ -56,6 +60,8 @@ public:
                      uint32_t firstIndex) override;
     void Draw(uint32_t vertexCount, uint32_t instanceCount,
               uint32_t firstVertex) override;
+    void Dispatch(uint32_t groupsX, uint32_t groupsY, uint32_t groupsZ) override;
+    void StorageBarrier() override;
 
     void BeginDebugLabel(const char* name) override;
     void EndDebugLabel() override;
@@ -63,7 +69,10 @@ public:
 private:
     VulkanRHIDevice* m_Device;
     VkCommandBuffer  m_Cmd    = VK_NULL_HANDLE;
-    VkPipelineLayout m_Layout = VK_NULL_HANDLE;   // of the currently-bound pipeline
+    // Layout + bind point of the currently-bound pipeline; descriptor sets and
+    // push constants target whichever one BindPipeline last selected.
+    VkPipelineLayout    m_Layout    = VK_NULL_HANDLE;
+    VkPipelineBindPoint m_BindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
 };
 
 // Vulkan RHIDevice: owns the context + swapchain + per-frame synchronization and
@@ -83,6 +92,8 @@ public:
     std::unique_ptr<RHIShader>   CreateShader(const RHIShaderDesc& desc) override;
     std::unique_ptr<RHITexture>  CreateTexture(const RHITextureDesc& desc) override;
     std::unique_ptr<RHIPipeline> CreatePipeline(const RHIPipelineDesc& desc) override;
+    std::unique_ptr<RHIPipeline> CreateComputePipeline(
+        const RHIComputePipelineDesc& desc) override;
     std::unique_ptr<RHIResourceSet> CreateResourceSet(
         RHIPipeline* pipeline, uint32_t setIndex,
         const std::vector<RHIBufferBinding>&  buffers,

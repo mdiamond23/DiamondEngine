@@ -1,0 +1,30 @@
+#version 450
+
+// Graph bring-up check (VulkanComputeSelfTest.cpp), "reduce" stage: fold this
+// execute's gradient and the PREVIOUS execute's accumulation into a graph
+// storage buffer. Reading uAccum is the graph's ReadHistory — on the second
+// execute it holds what the copy pass wrote during the first, which is the
+// whole thing being proven.
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform sampler2D uGradient;
+layout(set = 0, binding = 1) uniform sampler2D uAccum;
+
+layout(std430, set = 0, binding = 2) buffer Sums {
+    float values[];
+} uSums;
+
+layout(push_constant) uniform Push {
+    uvec2 size;
+} pc;
+
+void main() {
+    const uvec2 id = gl_GlobalInvocationID.xy;
+    if (id.x >= pc.size.x || id.y >= pc.size.y) return;
+
+    const vec3 gradient = texelFetch(uGradient, ivec2(id), 0).rgb;
+    const vec3 accum    = texelFetch(uAccum,    ivec2(id), 0).rgb;
+
+    uSums.values[id.y * pc.size.x + id.x] =
+        (gradient.r + gradient.g + gradient.b) + (accum.r + accum.g + accum.b);
+}

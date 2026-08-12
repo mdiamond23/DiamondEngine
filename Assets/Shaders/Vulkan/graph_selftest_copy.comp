@@ -1,0 +1,26 @@
+#version 450
+
+// Graph bring-up check (VulkanComputeSelfTest.cpp), "history copy" stage: the
+// same shape as TAA's copy pass, but compute — sample a source texture and
+// imageStore it into the persistent accumulation target. Source and destination
+// are always different textures, so neither is bound as a storage image and a
+// sampler in the same descriptor set.
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0, rgba16f) uniform image2D uDst;
+layout(set = 0, binding = 1) uniform sampler2D uSrc;
+
+// 'scale' differs per execute, which is what makes the ordering observable: the
+// reduce pass must see the PREVIOUS execute's scale, so running the two passes
+// in the wrong order changes the answer instead of silently agreeing.
+layout(push_constant) uniform Push {
+    uvec2 size;
+    float scale;
+} pc;
+
+void main() {
+    const uvec2 id = gl_GlobalInvocationID.xy;
+    if (id.x >= pc.size.x || id.y >= pc.size.y) return;
+
+    imageStore(uDst, ivec2(id), texelFetch(uSrc, ivec2(id), 0) * pc.scale);
+}

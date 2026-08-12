@@ -1,9 +1,12 @@
 #include "Platform/Vulkan/RHI/VulkanRHIDevice.h"
 #include "Platform/Vulkan/RHI/VulkanRHIResources.h"
 #include "Platform/Vulkan/RHI/VulkanRHIEnums.h"
+#include "Platform/Vulkan/VulkanComputeSelfTest.h"
 
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
+
+#include <cstdlib>
 
 #ifdef DIAMOND_TRACY
 #include <cstdio>
@@ -16,15 +19,15 @@ namespace Diamond {
 
 void VulkanRHICommandList::BindPipeline(RHIPipeline* pipeline) {
     auto* vp = static_cast<VulkanRHIPipeline*>(pipeline);
-    m_Layout = vp->Layout();
-    vkCmdBindPipeline(m_Cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, vp->Handle());
+    m_Layout    = vp->Layout();
+    m_BindPoint = vp->BindPoint();
+    vkCmdBindPipeline(m_Cmd, m_BindPoint, vp->Handle());
 }
 
 void VulkanRHICommandList::BindResourceSet(uint32_t setIndex, RHIResourceSet* set) {
     auto* vs = static_cast<VulkanRHIResourceSet*>(set);
     VkDescriptorSet ds = vs->Handle(m_Device->CurrentFrame());
-    vkCmdBindDescriptorSets(m_Cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_Layout,
-                            setIndex, 1, &ds, 0, nullptr);
+    vkCmdBindDescriptorSets(m_Cmd, m_BindPoint, m_Layout, setIndex, 1, &ds, 0, nullptr);
 }
 
 void VulkanRHICommandList::PushConstants(RHIShaderStage stages, uint32_t offset,
@@ -54,6 +57,31 @@ void VulkanRHICommandList::Draw(uint32_t vertexCount, uint32_t instanceCount,
                                 uint32_t firstVertex) {
     vkCmdDraw(m_Cmd, vertexCount, instanceCount, firstVertex, 0);
     m_Device->RecordDraw((uint64_t)(vertexCount / 3) * instanceCount);
+}
+
+void VulkanRHICommandList::Dispatch(uint32_t groupsX, uint32_t groupsY, uint32_t groupsZ) {
+    vkCmdDispatch(m_Cmd, groupsX, groupsY, groupsZ);
+}
+
+void VulkanRHICommandList::StorageBarrier() {
+    // One global memory barrier rather than per-resource buffer barriers: the
+    // callers are whole passes, so the extra scope costs nothing measurable and
+    // there is no bookkeeping to get wrong. Images keep using TransitionTexture,
+    // which must also change their layout.
+    VkMemoryBarrier2 barrier{ VK_STRUCTURE_TYPE_MEMORY_BARRIER_2 };
+    barrier.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+    barrier.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+    barrier.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
+                          | VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT
+                          | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+    barrier.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT
+                          | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT
+                          | VK_ACCESS_2_UNIFORM_READ_BIT;
+
+    VkDependencyInfo dep{ VK_STRUCTURE_TYPE_DEPENDENCY_INFO };
+    dep.memoryBarrierCount = 1;
+    dep.pMemoryBarriers    = &barrier;
+    vkCmdPipelineBarrier2(m_Cmd, &dep);
 }
 
 void VulkanRHICommandList::BeginDebugLabel(const char* name) {
@@ -86,8 +114,14 @@ void StageAccessForLayout(VkImageLayout layout,
                    | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
             access = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT; break;
         case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
-            stage  = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+            // Either shader stage may have sampled it — a compute pass reading a
+            // G-buffer leaves the image here just as a fragment pass does.
+            stage  = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT
+                   | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
             access = VK_ACCESS_2_SHADER_READ_BIT; break;
+        case VK_IMAGE_LAYOUT_GENERAL:
+            stage  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            access = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT; break;
         default:   // UNDEFINED and anything else: no prior work to wait on
             stage  = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
             access = 0; break;
@@ -109,9 +143,19 @@ void StateTarget(RHITextureState state,
             access = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT
                    | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT; break;
         case RHITextureState::SampledRead:
+            // Covers both consumers, so a compute pass can sample a texture the
+            // graph transitioned without needing a second sampled state.
             layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            stage  = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+            stage  = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT
+                   | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
             access = VK_ACCESS_2_SHADER_READ_BIT; break;
+        case RHITextureState::Storage:
+            // General is the only layout that permits imageLoad *and* imageStore,
+            // so one state serves compute reads and writes alike.
+            layout = VK_IMAGE_LAYOUT_GENERAL;
+            stage  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            access = VK_ACCESS_2_SHADER_STORAGE_READ_BIT
+                   | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT; break;
     }
 }
 
@@ -237,6 +281,13 @@ VulkanRHIDevice::VulkanRHIDevice(GLFWwindow* window) : m_Window(window) {
 #ifdef DIAMOND_TRACY
     CreateTracyVkContext();
 #endif
+
+    // Opt-in compute bring-up check; see VulkanComputeSelfTest.h. Last, so it
+    // runs against a fully-constructed device.
+    if (std::getenv("DIAMOND_COMPUTE_SELFTEST")) {
+        RunComputeSelfTest(*this, DIAMOND_VULKAN_SHADER_DIR);
+        RunGraphSelfTest(*this, DIAMOND_VULKAN_SHADER_DIR);
+    }
 }
 
 VulkanRHIDevice::~VulkanRHIDevice() {
@@ -370,9 +421,14 @@ void VulkanRHIDevice::CreateDescriptorPool() {
     // set per frame slot × 6 samplers + 2 UBOs). Pools are host-side and cheap;
     // running one dry aborts via VK_CHECK(OUT_OF_POOL_MEMORY) at draw time, so
     // headroom here is the difference between a stress test and a crash.
+    // The storage sizes are the compute path's (GI probe/ray buffers, denoiser
+    // targets): a handful of bindings per pass, not per material, so they need
+    // nowhere near the sampled-texture headroom.
     const VkDescriptorPoolSize poolSizes[] = {
         { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,         4096 },
         { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 16384 },
+        { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,         512 },
+        { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          512 },
     };
 
     VkDescriptorPoolCreateInfo poolInfo{ VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO };
@@ -434,6 +490,11 @@ std::unique_ptr<RHITexture> VulkanRHIDevice::CreateTexture(const RHITextureDesc&
 }
 
 std::unique_ptr<RHIPipeline> VulkanRHIDevice::CreatePipeline(const RHIPipelineDesc& desc) {
+    return std::make_unique<VulkanRHIPipeline>(this, desc);
+}
+
+std::unique_ptr<RHIPipeline> VulkanRHIDevice::CreateComputePipeline(
+    const RHIComputePipelineDesc& desc) {
     return std::make_unique<VulkanRHIPipeline>(this, desc);
 }
 

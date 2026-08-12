@@ -9,22 +9,9 @@ namespace {
 constexpr RHIFormat kHDRFormat = RHIFormat::RGBA16F;   // scene chain + history
 } // namespace
 
-VulkanTAAPass::VulkanTAAPass(RHIDevice* device, const std::string& shaderDir,
-                             uint32_t width, uint32_t height)
+VulkanTAAPass::VulkanTAAPass(RHIDevice* device, const std::string& shaderDir)
     : m_Device(device)
 {
-    // History — single-buffered on purpose (see the class comment): frame N's
-    // copy must be exactly what frame N+1 samples, and the per-frame-in-flight
-    // duplication of a normal render target would stagger that to two frames.
-    RHITextureDesc hist;
-    hist.width          = width;
-    hist.height         = height;
-    hist.format         = kHDRFormat;
-    hist.usage          = RHITextureUsage::Sampled | RHITextureUsage::ColorAttachment;
-    hist.singleBuffered = true;
-    hist.debugName      = "taaHistory";
-    m_History = device->CreateTexture(hist);
-
     const std::vector<uint32_t> vs   = LoadSpirv(shaderDir, "fullscreen.vert.spv");
     const std::vector<uint32_t> fs   = LoadSpirv(shaderDir, "taa_resolve.frag.spv");
     const std::vector<uint32_t> copy = LoadSpirv(shaderDir, "copy.frag.spv");
@@ -36,7 +23,7 @@ VulkanTAAPass::VulkanTAAPass(RHIDevice* device, const std::string& shaderDir,
     m_ResolveFrag    = device->CreateShader(fsDesc);
     m_CopyFrag       = device->CreateShader(cpDesc);
 
-    // Resolve: fullscreen, samples scene + velocity (graph) and history (raw).
+    // Resolve: fullscreen, samples scene + velocity + history.
     {
         RHIPipelineDesc desc;
         desc.vertexShader     = m_FullscreenVert.get();
@@ -51,7 +38,7 @@ VulkanTAAPass::VulkanTAAPass(RHIDevice* device, const std::string& shaderDir,
         desc.colorFormats  = { kHDRFormat, kHDRFormat };
         m_ResolvePipeline  = device->CreatePipeline(desc);
     }
-    // History copy: the shared passthrough copy.frag, resolved output -> history.
+    // History copy: the shared passthrough copy.frag, historySrc -> history.
     {
         RHIPipelineDesc desc;
         desc.vertexShader     = m_FullscreenVert.get();
@@ -68,69 +55,64 @@ VulkanTAAPass::~VulkanTAAPass() = default;
 
 void VulkanTAAPass::AddToGraph(RHIRenderGraph& graph,
                                RGTextureHandle sceneColor, RGTextureHandle velocity,
-                               RGTextureHandle outColor, RGTextureHandle historySrc) {
-    // Sets are built once — graph textures keep their identity across frames,
-    // and the history is pass-owned. The history is NOT a declared graph read:
-    // its transitions are recorded manually in Prepare/RecordHistoryCopy.
+                               RGTextureHandle outColor, RGTextureHandle historySrc,
+                               RGTextureHandle history) {
+    // Sets are built once — graph textures keep their identity across frames.
+    // (A resize recreates the whole pass, so these rebuild against the new
+    // targets rather than going stale.)
     if (!m_ResolveSet)
         m_ResolveSet = m_Device->CreateResourceSet(
             m_ResolvePipeline.get(), 0, {},
             { { 0, graph.GetTexture(sceneColor) },
               { 1, graph.GetTexture(velocity) },
-              { 2, m_History.get() } });
+              { 2, graph.GetTexture(history) } });
 
-    m_HistorySrc = graph.GetTexture(historySrc);
     if (!m_CopySet)
         m_CopySet = m_Device->CreateResourceSet(
             m_CopyPipeline.get(), 0, {},
-            { { 0, m_HistorySrc } });
+            { { 0, graph.GetTexture(historySrc) } });
 
-    // Writes in frag `location` order: 0 = outColor, 1 = historySrc.
+    // Writes in frag `location` order: 0 = outColor, 1 = historySrc. The history
+    // is a ReadHistory, not a Read: its value is last frame's, so depending on
+    // this frame's copy pass (which reads historySrc, written here) would close
+    // a cycle. The graph transitions it for sampling either way.
     graph.AddPass("TAAResolve")
         .Read(sceneColor).Read(velocity)
+        .ReadHistory(history)
         .Write(outColor)
         .Write(historySrc)
         .SetExecute([this](RHICommandList* cmd) {
             // Invalid history (first frame, TAA just re-enabled, post-resize
             // pass rebuild) -> alpha 1.0 -> the shader passes the current
             // frame straight through and never dereferences the history.
-            const float alpha = m_HistoryValid ? m_Alpha : 1.0f;
+            const float alpha = (m_Enabled && m_HistoryValid) ? m_Alpha : 1.0f;
             cmd->BindPipeline(m_ResolvePipeline.get());
             cmd->BindResourceSet(0, m_ResolveSet.get());
             cmd->PushConstants(RHIShaderStage::Fragment, 0, sizeof(float), &alpha);
             cmd->Draw(3);
         });
-}
 
-void VulkanTAAPass::Prepare(RHICommandList* cmd) {
-    // The resolve's descriptor set binds the history from frame one, and Vulkan
-    // requires a sampled image in a valid layout even when the shader's uniform
-    // branch never reads it — seed Undefined -> SampledRead once.
-    if (m_Prepared) return;
-    cmd->TransitionTexture(m_History.get(), RHITextureState::SampledRead);
-    m_Prepared = true;
-}
-
-void VulkanTAAPass::RecordHistoryCopy(RHICommandList* cmd) {
-    // Outside any render scope, after graph.Execute. historySrc has no in-graph
-    // reader, so it's still in ColorTarget layout from the resolve — move it to
-    // SampledRead for the copy's sampler, and the history to ColorTarget.
-    cmd->TransitionTexture(m_HistorySrc, RHITextureState::SampledRead);
-    cmd->TransitionTexture(m_History.get(), RHITextureState::ColorTarget);
-
-    RHIRenderPass pass;
-    RHIAttachment color;
-    color.texture = m_History.get();
-    color.clear   = false;   // every pixel is overwritten by the fullscreen copy
-    pass.colorAttachments.push_back(color);
-    cmd->BeginRendering(pass);
-    cmd->BindPipeline(m_CopyPipeline.get());
-    cmd->BindResourceSet(0, m_CopySet.get());
-    cmd->Draw(3);
-    cmd->EndRendering();
-
-    cmd->TransitionTexture(m_History.get(), RHITextureState::SampledRead);
-    m_HistoryValid = true;
+    // The pass writes a persistent target, so the graph keeps it (and the
+    // resolve upstream of it) alive even though nothing reads the history with
+    // a real dependency edge — next frame's resolve is the consumer.
+    graph.AddPass("TAAHistoryCopy")
+        .Read(historySrc)
+        .Write(history)
+        .Load()   // the fullscreen copy overwrites every pixel
+        .SetExecute([this](RHICommandList* cmd) {
+            // Disabled: skip the draw so the accumulation stops and re-enabling
+            // self-seeds from a passthrough frame instead of blending against
+            // stale history. The empty render scope is all that remains of the
+            // cost while off.
+            if (!m_Enabled) {
+                m_HistoryValid = false;
+                return;
+            }
+            cmd->BindPipeline(m_CopyPipeline.get());
+            cmd->BindResourceSet(0, m_CopySet.get());
+            cmd->Draw(3);
+            m_HistoryValid = true;
+        });
 }
 
 } // namespace Diamond

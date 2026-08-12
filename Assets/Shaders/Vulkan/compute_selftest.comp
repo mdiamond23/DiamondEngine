@@ -1,0 +1,34 @@
+#version 450
+
+// Bring-up check for the RHI compute path (VulkanComputeSelfTest.cpp). Two
+// dispatches of the same pipeline:
+//   pass 0 — write a known gradient into the storage image
+//   pass 1 — read it back and fold each texel into the storage buffer
+// so a CPU readback of the buffer alone proves imageStore, imageLoad, the
+// General layout, and the storage barrier between the dispatches all work.
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0, rgba16f) uniform image2D uImage;
+
+layout(std430, set = 0, binding = 1) buffer OutBuffer {
+    float values[];
+} uOut;
+
+layout(push_constant) uniform Push {
+    uvec2 size;
+    uint  pass;
+} pc;
+
+void main() {
+    const uvec2 id = gl_GlobalInvocationID.xy;
+    if (id.x >= pc.size.x || id.y >= pc.size.y) return;
+
+    if (pc.pass == 0u) {
+        imageStore(uImage, ivec2(id), vec4(float(id.x) / float(pc.size.x),
+                                           float(id.y) / float(pc.size.y),
+                                           0.25, 1.0));
+    } else {
+        const vec4 texel = imageLoad(uImage, ivec2(id));
+        uOut.values[id.y * pc.size.x + id.x] = texel.r + texel.g + texel.b;
+    }
+}

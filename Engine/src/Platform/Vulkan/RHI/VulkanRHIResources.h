@@ -25,6 +25,12 @@ public:
     // ignore 'frame' and always return the single allocation.
     VkBuffer Handle(uint32_t frame) const;
 
+    // Dynamic buffers only: the persistent host mapping for a frame slot. Writes
+    // go through Update(); this exists so one-off CPU readback of GPU-written
+    // results is possible. The allocation is host-write-optimized, so reading it
+    // back is correct but uncached — never a per-frame path.
+    void* Mapped(uint32_t frame) const { return m_Mapped[frame]; }
+
 private:
     VulkanRHIDevice* m_Device;
     bool             m_Dynamic;
@@ -91,26 +97,46 @@ private:
     RHIShaderStage   m_Stage;
 };
 
-// Graphics pipeline + its layout. Owns the descriptor-set-0 layout so resource
-// sets allocated against this pipeline match its bindings.
+// Graphics or compute pipeline + its layout. Owns the descriptor-set layouts so
+// resource sets allocated against this pipeline match its bindings.
 class VulkanRHIPipeline : public RHIPipeline {
 public:
     VulkanRHIPipeline(VulkanRHIDevice* device, const RHIPipelineDesc& desc);
+    VulkanRHIPipeline(VulkanRHIDevice* device, const RHIComputePipelineDesc& desc);
     ~VulkanRHIPipeline() override;
 
     VkPipeline            Handle()    const { return m_Pipeline; }
     VkPipelineLayout      Layout()    const { return m_Layout; }
+    // Graphics or compute — the command list binds the pipeline and its sets at
+    // whichever bind point the pipeline was built for.
+    VkPipelineBindPoint   BindPoint() const { return m_BindPoint; }
     // Descriptor-set layout for set 'index' (0, or 1 when the pipeline declares a
     // second set). A resource set is allocated against the layout of the set it
     // targets so it binds at the matching index.
     VkDescriptorSetLayout SetLayout(uint32_t index = 0) const { return m_SetLayouts[index]; }
 
+    // The descriptor type the layout declared for 'binding' in set 'setIndex'.
+    // Resource sets write descriptors of the declared type rather than assuming
+    // one per resource category, so a storage image is never written as a
+    // combined sampler (which the validation layers reject). 'fallback' is the
+    // category's pre-compute default, used when the binding wasn't declared.
+    VkDescriptorType DescriptorTypeAt(uint32_t setIndex, uint32_t binding,
+                                      VkDescriptorType fallback) const;
+
 private:
+    // Shared by both constructors: descriptor-set layouts + pipeline layout.
+    void CreateLayouts(const std::vector<RHIResourceBinding>& set0,
+                       const std::vector<RHIResourceBinding>& set1,
+                       const RHIPushConstantRange& push);
+
     VulkanRHIDevice*      m_Device;
     // [0] always present; [1] valid only when resourceBindings1 was non-empty.
     std::array<VkDescriptorSetLayout, 2> m_SetLayouts{ VK_NULL_HANDLE, VK_NULL_HANDLE };
+    // Declared bindings per set, kept for DescriptorTypeAt.
+    std::array<std::vector<RHIResourceBinding>, 2> m_Bindings;
     VkPipelineLayout      m_Layout    = VK_NULL_HANDLE;
     VkPipeline            m_Pipeline  = VK_NULL_HANDLE;
+    VkPipelineBindPoint   m_BindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
 };
 
 // One descriptor set per frame slot, each pointing at that frame's copy of the

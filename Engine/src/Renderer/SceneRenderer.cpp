@@ -828,7 +828,7 @@ private:
         const std::string shaderDir = ShaderDir();
         v->ssao         = std::make_unique<VulkanSSAOPass>(m_Device, shaderDir, width, height);
         v->ssr          = std::make_unique<VulkanSSRPass>(m_Device, shaderDir, width, height);
-        v->taa          = std::make_unique<VulkanTAAPass>(m_Device, shaderDir, width, height);
+        v->taa          = std::make_unique<VulkanTAAPass>(m_Device, shaderDir);
         v->lighting     = std::make_unique<VulkanDeferredLightingPass>(m_Device, shaderDir);
         v->skybox       = std::make_unique<VulkanSkyboxPass>(m_Device, shaderDir);
         v->transparency = std::make_unique<VulkanTransparencyPass>(m_Device, shaderDir);
@@ -880,9 +880,10 @@ private:
         const std::string shaderDir = ShaderDir();
         v.ssao     = std::make_unique<VulkanSSAOPass>(m_Device, shaderDir, width, height);
         v.ssr      = std::make_unique<VulkanSSRPass>(m_Device, shaderDir, width, height);
-        // TAA holds a size-dependent history texture; recreating it also resets
-        // its history-valid flag, so the first post-resize frame passes through.
-        v.taa      = std::make_unique<VulkanTAAPass>(m_Device, shaderDir, width, height);
+        // TAA's descriptor sets sample size-dependent graph textures (including
+        // the history); recreating the pass also resets its history-valid flag,
+        // so the first post-resize frame passes through.
+        v.taa      = std::make_unique<VulkanTAAPass>(m_Device, shaderDir);
         v.lighting = std::make_unique<VulkanDeferredLightingPass>(m_Device, shaderDir);
         v.autoExposure = std::make_unique<VulkanAutoExposurePass>(m_Device, shaderDir);
         ApplyAutoExposureSettings(*v.autoExposure);
@@ -927,8 +928,12 @@ private:
         // after the resolve (transparency/particles/tonemap) consumes this.
         const RGTextureHandle hdrTAA      = g.DeclareTexture("hdrTAA",      { v.width, v.height, RHIFormat::RGBA16F });
         // Second MRT copy of the resolve, untouched by transparency/particles —
-        // the post-graph history copy reads this, never hdrTAA (see VulkanTAAPass).
+        // the history copy pass reads this, never hdrTAA (see VulkanTAAPass).
         const RGTextureHandle taaHistorySrc = g.DeclareTexture("taaHistorySrc", { v.width, v.height, RHIFormat::RGBA16F });
+        // TAA accumulation buffer — persistent, so frame N's copy is exactly what
+        // frame N+1 resolves against rather than the frame before that.
+        const RGTextureHandle taaHistory  = g.DeclareTexture("taaHistory",
+            { v.width, v.height, RHIFormat::RGBA16F, /*storage*/ false, /*persistent*/ true });
         // Scene + bloom, still HDR. Separate target for the same reason as hdrSSR:
         // the composite reads the scene it adds onto, so it can't write it back.
         const RGTextureHandle hdrBloom    = g.DeclareTexture("hdrBloom",    { v.width, v.height, RHIFormat::RGBA16F });
@@ -981,14 +986,14 @@ private:
         // into hdrSSR. Later passes composite over hdrSSR, not hdrLit.
         v.ssr->AddToGraph(g, gViewPos, gViewNormal, hdrLit, ssrColor, gMaterial, hdrSSR);
 
-        // TAA — accumulates the jittered frames against its pass-owned history,
+        // TAA — accumulates the jittered frames against the persistent history,
         // reprojected through gVelocity. Before transparency/particles: neither
         // has motion vectors, so they draw over the resolved image rather than
-        // smearing into the history. Its history copy is recorded raw after
-        // graph.Execute (RenderView), not as a graph pass — taaHistorySrc's
-        // consumer is outside the graph, so keep it from being culled.
-        v.taa->AddToGraph(g, hdrSSR, gVelocity, hdrTAA, taaHistorySrc);
-        g.MarkOutput(taaHistorySrc);
+        // smearing into the history. Both the resolve and the history copy are
+        // ordinary graph passes; the resolve consumes the history as a
+        // ReadHistory (last frame's contents), which is what keeps the copy from
+        // closing a cycle back onto it.
+        v.taa->AddToGraph(g, hdrSSR, gVelocity, hdrTAA, taaHistorySrc, taaHistory);
 
         // Forward transparency blends over the resolved scene, depth-testing
         // (not writing) against the G-buffer depth — before particles, matching
@@ -1122,11 +1127,16 @@ private:
         // a frame share the one measured in RenderFrame.
         v.autoExposure->SetDeltaTime(m_DeltaTime);
 
-        // First frame only: put the never-written TAA history and auto-exposure
-        // retained value in a sampleable layout — both are bound by descriptor
-        // sets from frame one, even on the frames whose branches ignore them.
-        v.taa->Prepare(cmd);
+        // First frame only: put the never-written auto-exposure retained value in
+        // a sampleable layout — its descriptor set binds it from frame one, even
+        // on the frames whose branch ignores it. (The TAA history needs no such
+        // seeding: it's a graph texture now, so its first ReadHistory transitions
+        // it out of Undefined automatically.)
         v.autoExposure->Prepare(cmd);
+
+        // Gates the accumulation for this frame's two TAA passes — with it off
+        // the resolve is a passthrough and the copy skips its draw.
+        v.taa->SetEnabled(m_TAAEnabled);
 
         v.graph.Execute(cmd);
 
@@ -1134,14 +1144,6 @@ private:
         // history copy below: move this frame's adapted luminance into the
         // retained image so the next frame eases from it.
         v.autoExposure->RecordAdaptedCopy(cmd);
-
-        // TAA history upkeep, raw after the graph: enabled → copy this frame's
-        // resolve into the history (marks it valid); disabled → drop the
-        // accumulation, so re-enabling self-seeds with a passthrough frame
-        // instead of blending against stale history. The bool gate is the whole
-        // cost switch — no copy, no blend, no jitter while off.
-        if (m_TAAEnabled) v.taa->RecordHistoryCopy(cmd);
-        else              v.taa->InvalidateHistory();
 
         // Hand an externally-consumed output (the game image) to its sampler —
         // inside this graph nothing reads it, so nothing else transitions it.

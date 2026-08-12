@@ -21,53 +21,46 @@ class RHICommandList;
 // SSR composite and before transparency/particles — those have no motion
 // vectors, so they must draw over the resolved image, never into the history.
 //
-// Follows the ported-pass template with one extra wrinkle: the history. It is a
-// pass-owned SINGLE-BUFFERED render target (RHITextureDesc::singleBuffered) —
-// the per-frame-in-flight duplication normal render targets get would make the
-// resolve sample 2-frame-old history against a 1-frame velocity. It can't be a
-// graph texture either: the resolve both samples history and produces next
-// frame's history, and a graph pass reading its own write target is a feedback
-// loop. So the resolve samples m_History raw (the lighting pass's point-shadow
-// cube precedent) and MRT-writes its result twice: outColor for the downstream
-// chain (transparency/particles Load-blend into it in place, then tonemap) and
-// historySrc, which nothing else touches. RecordHistoryCopy — recorded raw
-// AFTER graph.Execute, outside any render scope — fullscreen-copies historySrc
-// into m_History, so translucents/particles (no motion vectors) never enter
-// the accumulation.
+// Two graph passes. The resolve MRT-writes its result twice: outColor for the
+// downstream chain (transparency/particles Load-blend into it in place, then
+// tonemap) and historySrc, which nothing else touches. The copy then moves
+// historySrc into the history, so translucents and particles — which have no
+// motion vectors — never enter the accumulation.
 //
-// Toggling: the pass always runs (the graph is compiled once), but with an
-// invalid history it pushes alpha = 1.0 and the shader is a pure passthrough.
-// The owner skips RecordHistoryCopy and calls InvalidateHistory while TAA is
-// off, so re-enabling self-seeds: passthrough frame -> copy -> blending.
+// The history is a caller-declared PERSISTENT graph texture: one image rather
+// than one per frame-in-flight, so what frame N wrote is exactly what frame N+1
+// samples (per-frame-in-flight duplication would resolve 2-frame-old history
+// against 1-frame velocity). The resolve consumes it with ReadHistory rather
+// than Read — it wants last frame's contents, so it must NOT depend on this
+// frame's copy pass, which would be a cycle.
+//
+// Toggling: both passes always run (the graph is compiled once), but while TAA
+// is off the resolve pushes alpha = 1.0 (a pure passthrough) and the copy skips
+// its draw and drops the history-valid flag. Re-enabling therefore self-seeds:
+// passthrough frame -> copy -> blending.
 class VulkanTAAPass {
 public:
-    // 'width'/'height' is the view's offscreen resolution — sizes the history.
-    VulkanTAAPass(RHIDevice* device, const std::string& shaderDir,
-                  uint32_t width, uint32_t height);
+    VulkanTAAPass(RHIDevice* device, const std::string& shaderDir);
     ~VulkanTAAPass();
 
-    // Register the resolve: reads sceneColor (post-SSR HDR) + velocity
-    // (G-buffer motion vectors), writes outColor + historySrc (both
-    // caller-declared RGBA16F, same resolved image). Downstream passes consume
-    // outColor; historySrc must have NO other writer or reader — it exists so
-    // the post-graph history copy sees the resolve output, not the
-    // transparency/particles composited over outColor.
+    // Register both passes. The resolve reads sceneColor (post-SSR HDR) +
+    // velocity (G-buffer motion vectors), history-reads 'history', and writes
+    // outColor + historySrc (both caller-declared RGBA16F, the same resolved
+    // image). The copy reads historySrc and writes 'history'. Downstream passes
+    // consume outColor; historySrc must have no other writer, and 'history' must
+    // be declared with RGTextureDesc::persistent.
     void AddToGraph(RHIRenderGraph& graph,
                     RGTextureHandle sceneColor, RGTextureHandle velocity,
-                    RGTextureHandle outColor, RGTextureHandle historySrc);
+                    RGTextureHandle outColor, RGTextureHandle historySrc,
+                    RGTextureHandle history);
 
-    // Record once per frame BEFORE graph.Execute (first frame only, no-op
-    // after): moves the never-written history into a sampleable layout so the
-    // resolve's descriptor set is valid even while alpha = 1.0 ignores it.
-    void Prepare(RHICommandList* cmd);
-
-    // Record AFTER graph.Execute, outside any render scope: fullscreen-copies
-    // the resolved outColor into the history and marks it valid. Skip this
-    // (and call InvalidateHistory) while TAA is disabled.
-    void RecordHistoryCopy(RHICommandList* cmd);
+    // Gates the accumulation for the coming frame — call before graph.Execute.
+    // While false the resolve is a passthrough and the history stops updating.
+    void SetEnabled(bool enabled) { m_Enabled = enabled; }
 
     // Forget the accumulated history — the next resolve passes the current
-    // frame through (alpha 1.0) and the next RecordHistoryCopy re-seeds.
+    // frame through (alpha 1.0) and the next copy re-seeds. For discontinuities
+    // the velocity buffer can't express, like a camera teleport.
     void InvalidateHistory() { m_HistoryValid = false; }
 
     // Steady-state blend toward the current frame (default 0.1 — a frame's
@@ -77,17 +70,14 @@ public:
 private:
     RHIDevice*                      m_Device;
     float                           m_Alpha        = 0.1f;
+    bool                            m_Enabled      = true;
     bool                            m_HistoryValid = false;  // alpha=1 passthrough until seeded
-    bool                            m_Prepared     = false;  // history layout initialized
-
-    std::unique_ptr<RHITexture>     m_History;    // single-buffered RGBA16F accumulation
-    RHITexture*                     m_HistorySrc = nullptr;   // graph-owned; copy source
 
     std::unique_ptr<RHIShader>      m_FullscreenVert;
     std::unique_ptr<RHIShader>      m_ResolveFrag;
     std::unique_ptr<RHIShader>      m_CopyFrag;
     std::unique_ptr<RHIPipeline>    m_ResolvePipeline;
-    std::unique_ptr<RHIPipeline>    m_CopyPipeline;   // outColor -> history
+    std::unique_ptr<RHIPipeline>    m_CopyPipeline;   // historySrc -> history
     std::unique_ptr<RHIResourceSet> m_ResolveSet;
     std::unique_ptr<RHIResourceSet> m_CopySet;
 };

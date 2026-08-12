@@ -49,6 +49,19 @@ public:
     virtual void Draw(uint32_t vertexCount, uint32_t instanceCount = 1,
                       uint32_t firstVertex = 0) = 0;
 
+    // Runs the bound compute pipeline over the given workgroup counts — groups,
+    // not threads, so divide the target extent by the shader's local_size and
+    // round up. Must be called OUTSIDE a BeginRendering scope.
+    virtual void Dispatch(uint32_t groupsX, uint32_t groupsY = 1,
+                          uint32_t groupsZ = 1) = 0;
+
+    // Orders shader storage writes recorded before it against storage accesses
+    // recorded after it — the buffer-side counterpart to TransitionTexture,
+    // which already covers images via their layout. Deliberately one coarse
+    // global barrier: passes barrier a handful of times per frame, not per draw.
+    // Must be called outside a rendering scope.
+    virtual void StorageBarrier() = 0;
+
     // Opens/closes a named region visible in capture tools (RenderDoc groups
     // draws under it). Purely diagnostic — default no-op so backends without a
     // labeling mechanism ignore it. May nest.

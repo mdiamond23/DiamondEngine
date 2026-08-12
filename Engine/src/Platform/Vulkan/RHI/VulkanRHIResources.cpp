@@ -15,6 +15,7 @@ VkBufferUsageFlags ToVkBufferUsage(RHIBufferUsage usage) {
     if (HasFlag(usage, RHIBufferUsage::Vertex))  flags |= VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
     if (HasFlag(usage, RHIBufferUsage::Index))   flags |= VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
     if (HasFlag(usage, RHIBufferUsage::Uniform)) flags |= VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+    if (HasFlag(usage, RHIBufferUsage::Storage)) flags |= VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
     return flags;
 }
 } // namespace
@@ -24,9 +25,14 @@ VulkanRHIBuffer::VulkanRHIBuffer(VulkanRHIDevice* device, const RHIBufferDesc& d
     VmaAllocator allocator = m_Device->Ctx().Allocator();
 
     if (!m_Dynamic) {
-        // Static: device-local, uploaded once from initialData.
-        m_Static = CreateDeviceLocalBuffer(m_Device->Ctx(), desc.initialData,
-                                           desc.size, ToVkBufferUsage(desc.usage));
+        // Static: device-local, uploaded once from initialData — or left
+        // uninitialized when there is none, which is what a GPU-produced storage
+        // buffer wants (its first writer fills it).
+        m_Static = desc.initialData
+            ? CreateDeviceLocalBuffer(m_Device->Ctx(), desc.initialData,
+                                      desc.size, ToVkBufferUsage(desc.usage))
+            : CreateBuffer(allocator, desc.size, ToVkBufferUsage(desc.usage),
+                           VMA_MEMORY_USAGE_AUTO);
         return;
     }
 
@@ -117,13 +123,18 @@ VulkanRHITexture::VulkanRHITexture(VulkanRHIDevice* device, const RHITextureDesc
 
     VkImageUsageFlags usage = 0;
     if (HasFlag(desc.usage, RHITextureUsage::Sampled)) usage |= VK_IMAGE_USAGE_SAMPLED_BIT;
+    if (HasFlag(desc.usage, RHITextureUsage::Storage)) usage |= VK_IMAGE_USAGE_STORAGE_BIT;
     if (isColorTarget)        usage |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
     if (isDepthTarget)        usage |= VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
     if (desc.initialData)     usage |= VK_IMAGE_USAGE_TRANSFER_DST_BIT;
     if (blitMips)             usage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;   // blit source
 
-    // Render targets keep one image per frame-in-flight; static textures and
-    // single-buffered accumulation targets (TAA history) use one.
+    // Render targets keep one image per frame-in-flight; static textures,
+    // single-buffered accumulation targets (TAA history), and compute-only
+    // storage images use one. A storage image is GPU-written and GPU-read with
+    // explicit barriers ordering it on a single queue — the same reasoning that
+    // makes singleBuffered safe — and persisting one image across frames is what
+    // an accumulating compute target wants anyway.
     const uint32_t count =
         (m_RenderTarget && !m_SingleBuffered) ? VulkanRHIDevice::kFramesInFlight : 1;
     for (uint32_t i = 0; i < count; ++i) {
@@ -275,9 +286,12 @@ VulkanRHIShader::~VulkanRHIShader() {
 
 // ── Pipeline ─────────────────────────────────────────────────────────────────
 
-VulkanRHIPipeline::VulkanRHIPipeline(VulkanRHIDevice* device, const RHIPipelineDesc& desc)
-    : m_Device(device) {
+void VulkanRHIPipeline::CreateLayouts(const std::vector<RHIResourceBinding>& set0,
+                                      const std::vector<RHIResourceBinding>& set1,
+                                      const RHIPushConstantRange& push) {
     VkDevice dev = m_Device->Ctx().Device();
+    m_Bindings[0] = set0;
+    m_Bindings[1] = set1;
 
     // Build a descriptor-set layout from a binding list (set 0 always; set 1 only
     // when the pipeline declares a second set — skinned pipelines' bone UBO).
@@ -303,18 +317,18 @@ VulkanRHIPipeline::VulkanRHIPipeline(VulkanRHIDevice* device, const RHIPipelineD
     // Set 0 (always) + an optional set 1. When set 1 is present, set 0 may legally
     // be empty (a skinned depth pass binds only bones at set 1); an empty layout is
     // valid and needs no set bound at draw time.
-    m_SetLayouts[0] = makeSetLayout(desc.resourceBindings);
-    const bool hasSet1 = !desc.resourceBindings1.empty();
+    m_SetLayouts[0] = makeSetLayout(set0);
+    const bool hasSet1 = !set1.empty();
     const uint32_t setLayoutCount = hasSet1 ? 2u : 1u;
     if (hasSet1)
-        m_SetLayouts[1] = makeSetLayout(desc.resourceBindings1);
+        m_SetLayouts[1] = makeSetLayout(set1);
 
     VkPushConstantRange pushRange{};
-    const bool hasPush = desc.pushConstants.size > 0;
+    const bool hasPush = push.size > 0;
     if (hasPush) {
-        pushRange.stageFlags = ToVkShaderStages(desc.pushConstants.stages);
+        pushRange.stageFlags = ToVkShaderStages(push.stages);
         pushRange.offset     = 0;
-        pushRange.size       = desc.pushConstants.size;
+        pushRange.size       = push.size;
     }
 
     VkPipelineLayoutCreateInfo layoutInfo{ VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
@@ -323,6 +337,20 @@ VulkanRHIPipeline::VulkanRHIPipeline(VulkanRHIDevice* device, const RHIPipelineD
     layoutInfo.pushConstantRangeCount = hasPush ? 1 : 0;
     layoutInfo.pPushConstantRanges    = hasPush ? &pushRange : nullptr;
     VK_CHECK(vkCreatePipelineLayout(dev, &layoutInfo, nullptr, &m_Layout));
+}
+
+VkDescriptorType VulkanRHIPipeline::DescriptorTypeAt(uint32_t setIndex, uint32_t binding,
+                                                     VkDescriptorType fallback) const {
+    for (const RHIResourceBinding& b : m_Bindings[setIndex])
+        if (b.binding == binding) return ToVkDescriptorType(b.type);
+    return fallback;
+}
+
+VulkanRHIPipeline::VulkanRHIPipeline(VulkanRHIDevice* device, const RHIPipelineDesc& desc)
+    : m_Device(device) {
+    VkDevice dev = m_Device->Ctx().Device();
+
+    CreateLayouts(desc.resourceBindings, desc.resourceBindings1, desc.pushConstants);
 
     auto* vert = static_cast<VulkanRHIShader*>(desc.vertexShader);
     auto* frag = static_cast<VulkanRHIShader*>(desc.fragmentShader);
@@ -459,6 +487,24 @@ VulkanRHIPipeline::VulkanRHIPipeline(VulkanRHIDevice* device, const RHIPipelineD
     VK_CHECK(vkCreateGraphicsPipelines(dev, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &m_Pipeline));
 }
 
+VulkanRHIPipeline::VulkanRHIPipeline(VulkanRHIDevice* device, const RHIComputePipelineDesc& desc)
+    : m_Device(device) {
+    VkDevice dev = m_Device->Ctx().Device();
+
+    CreateLayouts(desc.resourceBindings, desc.resourceBindings1, desc.pushConstants);
+    m_BindPoint = VK_PIPELINE_BIND_POINT_COMPUTE;
+
+    auto* comp = static_cast<VulkanRHIShader*>(desc.computeShader);
+
+    VkComputePipelineCreateInfo info{ VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO };
+    info.stage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    info.stage.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
+    info.stage.module = comp->Module();
+    info.stage.pName  = "main";
+    info.layout       = m_Layout;
+    VK_CHECK(vkCreateComputePipelines(dev, VK_NULL_HANDLE, 1, &info, nullptr, &m_Pipeline));
+}
+
 VulkanRHIPipeline::~VulkanRHIPipeline() {
     VkDevice dev = m_Device->Ctx().Device();
     vkDestroyPipeline(dev, m_Pipeline, nullptr);
@@ -506,23 +552,34 @@ VulkanRHIResourceSet::VulkanRHIResourceSet(VulkanRHIDevice* device, VulkanRHIPip
             w.dstSet          = m_Sets[frame];
             w.dstBinding      = buffers[i].binding;
             w.descriptorCount = 1;
-            w.descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            // Uniform vs storage comes from the pipeline's declared layout, the
+            // single source of truth — a write of the wrong type is invalid.
+            w.descriptorType  = pipeline->DescriptorTypeAt(setIndex, buffers[i].binding,
+                                                           VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
             w.pBufferInfo     = &bufferInfos[i];
             writes.push_back(w);
         }
 
         for (size_t i = 0; i < textures.size(); ++i) {
             auto* tex = static_cast<VulkanRHITexture*>(textures[i].texture);
+            const VkDescriptorType type =
+                pipeline->DescriptorTypeAt(setIndex, textures[i].binding,
+                                           VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
+            const bool isStorage = type == VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+
             imageInfos[i] = {};
-            imageInfos[i].sampler     = tex->Sampler();
+            // Storage images are accessed without a sampler, and only from the
+            // General layout — the barrier RHITextureState::Storage installs.
+            imageInfos[i].sampler     = isStorage ? VK_NULL_HANDLE : tex->Sampler();
             imageInfos[i].imageView   = tex->View(frame);   // per-frame for render targets
-            imageInfos[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            imageInfos[i].imageLayout = isStorage ? VK_IMAGE_LAYOUT_GENERAL
+                                                  : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
             VkWriteDescriptorSet w{ VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
             w.dstSet          = m_Sets[frame];
             w.dstBinding      = textures[i].binding;
             w.descriptorCount = 1;
-            w.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            w.descriptorType  = type;
             w.pImageInfo      = &imageInfos[i];
             writes.push_back(w);
         }

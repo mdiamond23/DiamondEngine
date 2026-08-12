@@ -55,6 +55,7 @@ inline VkShaderStageFlags ToVkShaderStages(RHIShaderStage s) {
     VkShaderStageFlags flags = 0;
     if (HasFlag(s, RHIShaderStage::Vertex))   flags |= VK_SHADER_STAGE_VERTEX_BIT;
     if (HasFlag(s, RHIShaderStage::Fragment)) flags |= VK_SHADER_STAGE_FRAGMENT_BIT;
+    if (HasFlag(s, RHIShaderStage::Compute))  flags |= VK_SHADER_STAGE_COMPUTE_BIT;
     return flags;
 }
 
@@ -84,6 +85,8 @@ inline VkDescriptorType ToVkDescriptorType(RHIResourceType t) {
     switch (t) {
         case RHIResourceType::UniformBuffer:        return VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         case RHIResourceType::CombinedImageSampler: return VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        case RHIResourceType::StorageBuffer:        return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        case RHIResourceType::StorageImage:         return VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     }
     return VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
 }

@@ -31,6 +31,10 @@ public:
     virtual std::unique_ptr<RHIShader>   CreateShader(const RHIShaderDesc& desc) = 0;
     virtual std::unique_ptr<RHITexture>  CreateTexture(const RHITextureDesc& desc) = 0;
     virtual std::unique_ptr<RHIPipeline> CreatePipeline(const RHIPipelineDesc& desc) = 0;
+    // Compute counterpart. Returns the same handle type, so resource sets and
+    // BindPipeline are shared with graphics.
+    virtual std::unique_ptr<RHIPipeline> CreateComputePipeline(
+        const RHIComputePipelineDesc& desc) = 0;
     virtual std::unique_ptr<RHIResourceSet> CreateResourceSet(
         RHIPipeline* pipeline, uint32_t setIndex,
         const std::vector<RHIBufferBinding>&  buffers,

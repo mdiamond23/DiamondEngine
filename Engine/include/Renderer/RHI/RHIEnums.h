@@ -76,8 +76,15 @@ enum class RHIBlendMode { Opaque, Alpha, Additive };
 // to 1, filling only the pixels no geometry wrote.
 enum class RHICompareOp { Less, LessEqual };
 
-// Resource kinds a descriptor binding can hold (grows with storage buffers etc).
-enum class RHIResourceType { UniformBuffer, CombinedImageSampler };
+// Resource kinds a descriptor binding can hold. The storage variants are
+// compute-side: written (and read) through image2D/buffer blocks rather than
+// sampled, so they need the General layout and a storage barrier, not a sampler.
+enum class RHIResourceType {
+    UniformBuffer,
+    CombinedImageSampler,
+    StorageBuffer,
+    StorageImage,
+};
 
 // Texture sampling filter for minification/magnification.
 enum class RHIFilter { Nearest, Linear };
@@ -85,16 +92,20 @@ enum class RHIFilter { Nearest, Linear };
 // Layout/usage state a texture can be transitioned to between render passes.
 // Drives the image-memory barriers the command list (and later the render graph)
 // inserts so a written attachment can be safely sampled by a later pass.
-enum class RHITextureState { SampledRead, ColorTarget, DepthTarget };
+// Storage covers both compute reads and writes through an image2D binding — the
+// underlying layout permits both, so one state serves either direction.
+enum class RHITextureState { SampledRead, ColorTarget, DepthTarget, Storage };
 
 // What roles a texture must support. A render target sampled by a later pass is
 // ColorAttachment | Sampled; a depth buffer is DepthAttachment; an uploaded
-// image read in shaders is Sampled.
+// image read in shaders is Sampled. Storage means a compute shader binds it as
+// an image2D — combine with Sampled for the usual write-then-sample chain.
 enum class RHITextureUsage : uint32_t {
     None            = 0,
     Sampled         = 1u << 0,
     ColorAttachment = 1u << 1,
     DepthAttachment = 1u << 2,
+    Storage         = 1u << 3,
 };
 constexpr RHITextureUsage operator|(RHITextureUsage a, RHITextureUsage b) {
     return static_cast<RHITextureUsage>(static_cast<uint32_t>(a) | static_cast<uint32_t>(b));
@@ -110,6 +121,7 @@ enum class RHIBufferUsage : uint32_t {
     Vertex  = 1u << 0,
     Index   = 1u << 1,
     Uniform = 1u << 2,
+    Storage = 1u << 3,   // read/written by a shader through a buffer block
 };
 constexpr RHIBufferUsage operator|(RHIBufferUsage a, RHIBufferUsage b) {
     return static_cast<RHIBufferUsage>(static_cast<uint32_t>(a) | static_cast<uint32_t>(b));
@@ -123,6 +135,7 @@ enum class RHIShaderStage : uint32_t {
     None     = 0,
     Vertex   = 1u << 0,
     Fragment = 1u << 1,
+    Compute  = 1u << 2,
 };
 constexpr RHIShaderStage operator|(RHIShaderStage a, RHIShaderStage b) {
     return static_cast<RHIShaderStage>(static_cast<uint32_t>(a) | static_cast<uint32_t>(b));

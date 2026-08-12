@@ -347,6 +347,7 @@ if(DIAMOND_ENABLE_VULKAN)
         src/Platform/Vulkan/VulkanImage.cpp
         src/Platform/Vulkan/RHI/VulkanRHIDevice.cpp
         src/Platform/Vulkan/RHI/VulkanRHIResources.cpp
+        src/Platform/Vulkan/VulkanComputeSelfTest.cpp
         src/Platform/Vulkan/Passes/PostProcess/VulkanTonemapPass.cpp
         src/Platform/Vulkan/Passes/PostProcess/VulkanTAAPass.cpp
         src/Platform/Vulkan/Passes/PostProcess/VulkanFXAAPass.cpp
@@ -419,7 +420,9 @@ if(DIAMOND_ENABLE_VULKAN)
                     renderer2d.vert renderer2d.frag
                     particle.vert particle.frag
                     thumbnail.vert thumbnail.frag
-                    material_preview.vert material_preview.frag)
+                    material_preview.vert material_preview.frag
+                    compute_selftest.comp
+                    graph_selftest_reduce.comp graph_selftest_copy.comp)
         add_custom_command(
             OUTPUT  ${_vk_spv_dir}/${_shader}.spv
             COMMAND ${GLSLANG_VALIDATOR} -V ${_vk_shader_src}/${_shader} -o ${_vk_spv_dir}/${_shader}.spv
