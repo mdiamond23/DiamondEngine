@@ -55,6 +55,13 @@ public:
     virtual void Dispatch(uint32_t groupsX, uint32_t groupsY = 1,
                           uint32_t groupsZ = 1) = 0;
 
+    // Launches the bound ray-tracing pipeline over a width×height ray grid —
+    // rays, not workgroups, so this takes the target extent directly (unlike
+    // Dispatch). The SBT regions come from the bound pipeline. Must be called
+    // OUTSIDE a BeginRendering scope, like Dispatch.
+    virtual void TraceRays(uint32_t /*width*/, uint32_t /*height*/,
+                           uint32_t /*depth*/ = 1) {}
+
     // Orders shader storage writes recorded before it against storage accesses
     // recorded after it — the buffer-side counterpart to TransitionTexture,
     // which already covers images via their layout. Deliberately one coarse

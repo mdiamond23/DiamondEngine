@@ -103,7 +103,16 @@ class VulkanRHIPipeline : public RHIPipeline {
 public:
     VulkanRHIPipeline(VulkanRHIDevice* device, const RHIPipelineDesc& desc);
     VulkanRHIPipeline(VulkanRHIDevice* device, const RHIComputePipelineDesc& desc);
+    VulkanRHIPipeline(VulkanRHIDevice* device, const RHIRayTracingPipelineDesc& desc);
     ~VulkanRHIPipeline() override;
+
+    // Shader binding table regions, valid only on a ray-tracing pipeline —
+    // vkCmdTraceRaysKHR takes them by pointer, so the command list reads them
+    // straight off the bound pipeline.
+    const VkStridedDeviceAddressRegionKHR* RaygenRegion()   const { return &m_RaygenRegion; }
+    const VkStridedDeviceAddressRegionKHR* MissRegion()     const { return &m_MissRegion; }
+    const VkStridedDeviceAddressRegionKHR* HitRegion()      const { return &m_HitRegion; }
+    const VkStridedDeviceAddressRegionKHR* CallableRegion() const { return &m_CallableRegion; }
 
     VkPipeline            Handle()    const { return m_Pipeline; }
     VkPipelineLayout      Layout()    const { return m_Layout; }
@@ -137,6 +146,14 @@ private:
     VkPipelineLayout      m_Layout    = VK_NULL_HANDLE;
     VkPipeline            m_Pipeline  = VK_NULL_HANDLE;
     VkPipelineBindPoint   m_BindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+
+    // Ray-tracing pipelines only: the SBT and the three regions into it. Zeroed
+    // (address 0, size 0) on graphics/compute pipelines, which never trace.
+    VulkanBuffer                    m_SBT;
+    VkStridedDeviceAddressRegionKHR m_RaygenRegion{};
+    VkStridedDeviceAddressRegionKHR m_MissRegion{};
+    VkStridedDeviceAddressRegionKHR m_HitRegion{};
+    VkStridedDeviceAddressRegionKHR m_CallableRegion{};
 };
 
 // One descriptor set per frame slot, each pointing at that frame's copy of the
@@ -146,7 +163,8 @@ class VulkanRHIResourceSet : public RHIResourceSet {
 public:
     VulkanRHIResourceSet(VulkanRHIDevice* device, VulkanRHIPipeline* pipeline,
                          uint32_t setIndex, const std::vector<RHIBufferBinding>& buffers,
-                         const std::vector<RHITextureBinding>& textures);
+                         const std::vector<RHITextureBinding>& textures,
+                         const std::vector<RHIAccelStructBinding>& accelStructs = {});
     // Returns the sets to the device pool. Same contract as the other RHI
     // resources: caller must WaitIdle() before destroying a set still in flight.
     ~VulkanRHIResourceSet() override;

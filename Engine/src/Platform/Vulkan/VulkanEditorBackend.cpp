@@ -330,6 +330,21 @@ public:
         }
 
         ImGui::Separator();
+        // Ray-tracing bring-up (gi-design.md slice 2). Replaces the whole image
+        // with primary-ray hit distance — the check that the acceleration
+        // structures and RT pipeline are actually correct before DDGI uses them.
+        ImGui::TextUnformatted("Ray Tracing");
+        if (!m_Renderer->SupportsRayTracing()) {
+            ImGui::TextDisabled("unsupported on this GPU (GI tier 1)");
+        } else {
+            if (ImGui::Checkbox("RT Hit Distance", &m_RTDebugEnabled))
+                m_Renderer->SetRTDebugEnabled(m_RTDebugEnabled);
+            if (m_RTDebugEnabled &&
+                ImGui::SliderFloat("Ray Length##rt", &m_RTDebugMaxDistance, 1.0f, 500.0f, "%.0f"))
+                m_Renderer->SetRTDebugMaxDistance(m_RTDebugMaxDistance);
+        }
+
+        ImGui::Separator();
         // Auto-exposure. The multiplier this produces stacks on the Exposure
         // slider above, which stays useful as EV compensation while it's on.
         ImGui::TextUnformatted("Auto Exposure");
@@ -548,6 +563,8 @@ private:
     int   m_SSGIRays         = 8;
     float m_SSGIIntensity    = 1.0f;
     float m_SSGIMaxDistance  = 8.0f;
+    bool  m_RTDebugEnabled     = false;
+    float m_RTDebugMaxDistance = 100.0f;
     float m_BloomThreshold = 1.0f;
     float m_BloomIntensity = 1.0f;
     AutoExposureSettings m_AutoExposure {};

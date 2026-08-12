@@ -29,6 +29,18 @@ constexpr std::array kRequiredDeviceExtensions = {
     VK_KHR_SWAPCHAIN_EXTENSION_NAME,
 };
 
+// OPTIONAL — ray tracing (Docs/gi-design.md tier 2). A device missing these is
+// still perfectly suitable; it just runs the screen-space tier. Everything else
+// RT needs (buffer_device_address, descriptor_indexing, SPIR-V 1.4) is core in
+// Vulkan 1.3, so this is the whole extension cost.
+// deferred_host_operations carries no code here — acceleration_structure simply
+// requires it to be enabled.
+constexpr std::array kRayTracingExtensions = {
+    VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME,
+    VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME,
+    VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME,
+};
+
 VKAPI_ATTR VkBool32 VKAPI_CALL DebugCallback(
     VkDebugUtilsMessageSeverityFlagBitsEXT      severity,
     VkDebugUtilsMessageTypeFlagsEXT             /*type*/,
@@ -113,19 +125,43 @@ QueueFamilyIndices FindQueueFamilies(VkPhysicalDevice device, VkSurfaceKHR surfa
     return indices;
 }
 
-bool DeviceSupportsExtensions(VkPhysicalDevice device) {
+// True when 'device' exposes every name in 'wanted'.
+template <size_t N>
+bool DeviceHasExtensions(VkPhysicalDevice device, const std::array<const char*, N>& wanted) {
     uint32_t count = 0;
     vkEnumerateDeviceExtensionProperties(device, nullptr, &count, nullptr);
     std::vector<VkExtensionProperties> available(count);
     vkEnumerateDeviceExtensionProperties(device, nullptr, &count, available.data());
 
-    for (const char* required : kRequiredDeviceExtensions) {
+    for (const char* required : wanted) {
         bool found = false;
         for (const auto& ext : available)
             if (std::strcmp(ext.extensionName, required) == 0) { found = true; break; }
         if (!found) return false;
     }
     return true;
+}
+
+bool DeviceSupportsExtensions(VkPhysicalDevice device) {
+    return DeviceHasExtensions(device, kRequiredDeviceExtensions);
+}
+
+// Both the extensions AND the feature bits — an extension can be present while
+// the feature it gates is reported unsupported, and enabling it then fails
+// device creation. Never a suitability requirement: it only picks the GI tier.
+bool DeviceSupportsRayTracing(VkPhysicalDevice device) {
+    if (!DeviceHasExtensions(device, kRayTracingExtensions)) return false;
+
+    VkPhysicalDeviceRayTracingPipelineFeaturesKHR rt{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_FEATURES_KHR };
+    VkPhysicalDeviceAccelerationStructureFeaturesKHR as{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR };
+    as.pNext = &rt;
+    VkPhysicalDeviceFeatures2 f2{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2 };
+    f2.pNext = &as;
+    vkGetPhysicalDeviceFeatures2(device, &f2);
+
+    return as.accelerationStructure && rt.rayTracingPipeline;
 }
 
 // Vulkan 1.3 / 1.2 features the renderer relies on. Queried during selection and
@@ -173,6 +209,15 @@ void VulkanContext::Init(GLFWwindow* window) {
                  VK_API_VERSION_MAJOR(m_DeviceProps.apiVersion),
                  VK_API_VERSION_MINOR(m_DeviceProps.apiVersion),
                  VK_API_VERSION_PATCH(m_DeviceProps.apiVersion));
+
+    if (m_RayTracingSupported)
+        spdlog::info("[Vulkan] ray tracing enabled (GI tier 2) — SBT handle {} B, "
+                     "base alignment {} B, max recursion {}",
+                     m_RTProps.shaderGroupHandleSize,
+                     m_RTProps.shaderGroupBaseAlignment,
+                     m_RTProps.maxRayRecursionDepth);
+    else
+        spdlog::info("[Vulkan] no ray-tracing support — screen-space GI only (tier 1)");
 }
 
 void VulkanContext::CreateInstance() {
@@ -302,18 +347,71 @@ void VulkanContext::CreateLogicalDevice() {
     f2.features.textureCompressionBC = VK_TRUE;
     f2.pNext = &f12;
 
+    std::vector<const char*> extensions(kRequiredDeviceExtensions.begin(),
+                                        kRequiredDeviceExtensions.end());
+
+    // Ray tracing rides along when the device has it. The feature structs splice
+    // in AHEAD of f13 rather than replacing anything, so the non-RT chain below
+    // is byte-identical on a device without it.
+    VkPhysicalDeviceAccelerationStructureFeaturesKHR asFeatures{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR };
+    VkPhysicalDeviceRayTracingPipelineFeaturesKHR rtFeatures{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_FEATURES_KHR };
+
+    m_RayTracingSupported = DeviceSupportsRayTracing(m_PhysicalDevice);
+    if (m_RayTracingSupported) {
+        extensions.insert(extensions.end(),
+                          kRayTracingExtensions.begin(), kRayTracingExtensions.end());
+
+        asFeatures.accelerationStructure = VK_TRUE;
+        rtFeatures.rayTracingPipeline    = VK_TRUE;
+
+        // Closest-hit shading indexes an unbounded array of per-instance geometry
+        // (slice 3), so the descriptor-indexing bits are enabled up front — they
+        // cost nothing and avoid re-touching device creation later.
+        f12.descriptorIndexing                           = VK_TRUE;
+        f12.runtimeDescriptorArray                       = VK_TRUE;
+        f12.shaderStorageBufferArrayNonUniformIndexing   = VK_TRUE;
+        f12.descriptorBindingVariableDescriptorCount     = VK_TRUE;
+        f12.descriptorBindingPartiallyBound              = VK_TRUE;
+
+        rtFeatures.pNext = &f13;
+        asFeatures.pNext = &rtFeatures;
+        f12.pNext        = &asFeatures;
+    }
+
     VkDeviceCreateInfo ci{ VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO };
     ci.pNext                   = &f2;    // features via pNext chain; pEnabledFeatures stays null
     ci.queueCreateInfoCount    = static_cast<uint32_t>(queueInfos.size());
     ci.pQueueCreateInfos       = queueInfos.data();
-    ci.enabledExtensionCount   = static_cast<uint32_t>(kRequiredDeviceExtensions.size());
-    ci.ppEnabledExtensionNames = kRequiredDeviceExtensions.data();
+    ci.enabledExtensionCount   = static_cast<uint32_t>(extensions.size());
+    ci.ppEnabledExtensionNames = extensions.data();
 
     VK_CHECK(vkCreateDevice(m_PhysicalDevice, &ci, nullptr, &m_Device));
 
     vkGetDeviceQueue(m_Device, m_Queues.graphics, 0, &m_GraphicsQueue);
     vkGetDeviceQueue(m_Device, m_Queues.present,  0, &m_PresentQueue);
     vkGetDeviceQueue(m_Device, m_Queues.transfer, 0, &m_TransferQueue);
+
+    if (m_RayTracingSupported) QueryRayTracingProperties();
+}
+
+// SBT handle sizes/alignments + the AS scratch-offset alignment. Properties, not
+// features, so this is a plain query — but only valid once the extensions are
+// actually enabled, hence the call after vkCreateDevice.
+void VulkanContext::QueryRayTracingProperties() {
+    m_RTProps.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_PROPERTIES_KHR;
+    m_AccelStructProps.sType =
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_PROPERTIES_KHR;
+    m_RTProps.pNext = &m_AccelStructProps;
+
+    VkPhysicalDeviceProperties2 props2{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2 };
+    props2.pNext = &m_RTProps;
+    vkGetPhysicalDeviceProperties2(m_PhysicalDevice, &props2);
+
+    // pNext is a query-time link, not data — clear it so a later reader can't
+    // walk into a chain that no longer means anything.
+    m_RTProps.pNext = nullptr;
 }
 
 void VulkanContext::CreateAllocator() {

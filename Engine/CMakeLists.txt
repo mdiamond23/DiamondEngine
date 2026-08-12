@@ -355,6 +355,8 @@ if(DIAMOND_ENABLE_VULKAN)
         src/Platform/Vulkan/Passes/PostProcess/VulkanAutoExposurePass.cpp
         src/Platform/Vulkan/Passes/Deferred/VulkanGBufferPass.cpp
         src/Platform/Vulkan/Passes/Deferred/VulkanSSAOPass.cpp
+        src/Platform/Vulkan/RHI/VulkanRHIAccelStruct.cpp
+        src/Platform/Vulkan/Passes/Debug/VulkanRTDebugPass.cpp
         src/Platform/Vulkan/Passes/Deferred/VulkanSSGIPass.cpp
         src/Platform/Vulkan/Passes/Deferred/VulkanSSRPass.cpp
         src/Platform/Vulkan/Passes/Deferred/VulkanDeferredLightingPass.cpp
@@ -438,6 +440,23 @@ if(DIAMOND_ENABLE_VULKAN)
             VERBATIM)
         list(APPEND _vk_spv_outputs ${_vk_spv_dir}/${_shader}.spv)
     endforeach()
+    # Ray-tracing stages compile separately: they need SPIR-V >= 1.4, which the
+    # bare `-V` above does not target (it emits Vulkan 1.0 / SPIR-V 1.0). Kept as
+    # its own loop rather than bumping the whole list, so the ~50 shaders already
+    # verified against the 1.0 target keep compiling byte-identically.
+    set(_vk_rt_shaders rt_debug.rgen rt_debug.rmiss rt_debug.rchit)
+    foreach(_shader ${_vk_rt_shaders})
+        add_custom_command(
+            OUTPUT  ${_vk_spv_dir}/${_shader}.spv
+            COMMAND ${GLSLANG_VALIDATOR} -V --target-env vulkan1.3
+                    -I${_vk_shader_src}/include
+                    ${_vk_shader_src}/${_shader} -o ${_vk_spv_dir}/${_shader}.spv
+            DEPENDS ${_vk_shader_src}/${_shader} ${_vk_shader_headers}
+            COMMENT "Compiling Vulkan RT shader ${_shader} → SPIR-V 1.4"
+            VERBATIM)
+        list(APPEND _vk_spv_outputs ${_vk_spv_dir}/${_shader}.spv)
+    endforeach()
+
     add_custom_target(VulkanShaders DEPENDS ${_vk_spv_outputs})
     add_dependencies(MyEngine VulkanShaders)
 

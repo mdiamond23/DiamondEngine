@@ -40,6 +40,7 @@ public:
         m_Cmd       = cmd;
         m_Layout    = VK_NULL_HANDLE;
         m_BindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+        m_Bound     = nullptr;
     }
 
     // The frame's raw command buffer — for Vulkan-only overlays (e.g. ImGui) that
@@ -61,6 +62,7 @@ public:
     void Draw(uint32_t vertexCount, uint32_t instanceCount,
               uint32_t firstVertex) override;
     void Dispatch(uint32_t groupsX, uint32_t groupsY, uint32_t groupsZ) override;
+    void TraceRays(uint32_t width, uint32_t height, uint32_t depth) override;
     void StorageBarrier() override;
 
     void BeginDebugLabel(const char* name) override;
@@ -73,6 +75,8 @@ private:
     // push constants target whichever one BindPipeline last selected.
     VkPipelineLayout    m_Layout    = VK_NULL_HANDLE;
     VkPipelineBindPoint m_BindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    // The bound pipeline itself — TraceRays reads its SBT regions.
+    class VulkanRHIPipeline* m_Bound = nullptr;
 };
 
 // Vulkan RHIDevice: owns the context + swapchain + per-frame synchronization and
@@ -97,7 +101,19 @@ public:
     std::unique_ptr<RHIResourceSet> CreateResourceSet(
         RHIPipeline* pipeline, uint32_t setIndex,
         const std::vector<RHIBufferBinding>&  buffers,
-        const std::vector<RHITextureBinding>& textures) override;
+        const std::vector<RHITextureBinding>& textures = {},
+        // Same default as the base declaration — callers holding a
+        // VulkanRHIDevice* bind against THIS declaration, so omitting it here
+        // would break every existing two-list call site.
+        const std::vector<RHIAccelStructBinding>& accelStructs = {}) override;
+    bool SupportsRayTracing() const override { return m_Ctx.RayTracingSupported(); }
+    std::unique_ptr<RHIAccelStruct> CreateBLAS(const RHIBLASDesc& desc) override;
+    std::unique_ptr<RHIAccelStruct> CreateTLAS(
+        const std::vector<RHITLASInstance>& instances) override;
+    bool RebuildTLAS(RHIAccelStruct* tlas,
+                     const std::vector<RHITLASInstance>& instances) override;
+    std::unique_ptr<RHIPipeline> CreateRayTracingPipeline(
+        const RHIRayTracingPipelineDesc& desc) override;
     RHIFormat SwapchainFormat() const override;
     RHIFormat DepthFormat() const override;
     RHICommandList* BeginFrame() override;

@@ -196,6 +196,57 @@ struct RHIComputePipelineDesc {
     RHIPushConstantRange            pushConstants;
 };
 
+// ── Acceleration structures ──────────────────────────────────────────────────
+// The BVH ray traversal walks. Two levels: a BLAS holds one mesh's triangles in
+// local space and is built once at mesh registration; the TLAS holds instances
+// of BLASes with world transforms and is rebuilt when the static set changes.
+// Only available when RHIDevice::SupportsRayTracing().
+class RHIAccelStruct {
+public:
+    virtual ~RHIAccelStruct() = default;
+};
+
+// One BLAS from one indexed triangle mesh. Both buffers must have been created
+// with AccelStructInput | ShaderDeviceAddress — the build reads them by GPU
+// address, not through a descriptor. Position must sit at offset 0 of the vertex.
+struct RHIBLASDesc {
+    RHIBuffer* vertexBuffer = nullptr;
+    uint32_t   vertexCount  = 0;
+    uint32_t   vertexStride = 0;
+    RHIBuffer* indexBuffer  = nullptr;   // 32-bit indices
+    uint32_t   indexCount   = 0;
+    const char* debugName   = nullptr;
+};
+
+// One instance in the TLAS. 'transform' is a ROW-major 3x4 world matrix — the
+// transpose of the top three columns of a glm::mat4, which is column-major.
+struct RHITLASInstance {
+    float           transform[12] { 1,0,0,0,  0,1,0,0,  0,0,1,0 };
+    RHIAccelStruct* blas        = nullptr;
+    // Surfaces as gl_InstanceCustomIndexEXT in the hit shader — the index into
+    // the per-instance geometry table that slice 3 adds. Unused in slice 2.
+    uint32_t        customIndex = 0;
+};
+
+// ── Ray-tracing pipeline ─────────────────────────────────────────────────────
+// Raygen + miss + closest-hit, and the shader binding table wiring them to the
+// traversal. Like the compute variant this yields an ordinary RHIPipeline; the
+// command list picks the ray-tracing bind point from the pipeline itself and
+// TraceRays reads the SBT regions off it.
+struct RHIRayTracingPipelineDesc {
+    RHIShader* raygenShader     = nullptr;
+    RHIShader* missShader       = nullptr;
+    RHIShader* closestHitShader = nullptr;
+
+    std::vector<RHIResourceBinding> resourceBindings;    // descriptor set 0
+    RHIPushConstantRange            pushConstants;
+
+    // Depth of traceRayEXT calls made from *within* a hit/miss shader. 1 means
+    // primary rays only, which is all DDGI needs — the recursive bounce term
+    // comes from the previous frame's probe irradiance, not from a recursive ray.
+    uint32_t maxRecursionDepth = 1;
+};
+
 // ── Resource set (descriptor set analogue) ───────────────────────────────────
 struct RHIBufferBinding {
     uint32_t   binding = 0;
@@ -205,6 +256,11 @@ struct RHIBufferBinding {
 struct RHITextureBinding {
     uint32_t    binding = 0;
     RHITexture* texture = nullptr;
+};
+
+struct RHIAccelStructBinding {
+    uint32_t        binding = 0;
+    RHIAccelStruct* accel   = nullptr;
 };
 
 class RHIResourceSet {

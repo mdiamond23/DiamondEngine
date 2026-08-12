@@ -38,7 +38,35 @@ public:
     virtual std::unique_ptr<RHIResourceSet> CreateResourceSet(
         RHIPipeline* pipeline, uint32_t setIndex,
         const std::vector<RHIBufferBinding>&  buffers,
-        const std::vector<RHITextureBinding>& textures = {}) = 0;
+        const std::vector<RHITextureBinding>& textures = {},
+        const std::vector<RHIAccelStructBinding>& accelStructs = {}) = 0;
+
+    // ── Ray tracing (Docs/gi-design.md slice 2) ──────────────────────────────
+    // False on any device without the KHR ray-tracing extensions. Everything
+    // below returns nullptr in that case, so callers gate on this once at setup
+    // rather than null-checking every result.
+    virtual bool SupportsRayTracing() const { return false; }
+
+    // One BLAS per registered mesh, built synchronously (blocks on the GPU).
+    virtual std::unique_ptr<RHIAccelStruct> CreateBLAS(const RHIBLASDesc& /*desc*/) {
+        return nullptr;
+    }
+    // TLAS over BLAS instances. An empty list yields nullptr — an empty scene
+    // has nothing to trace against.
+    virtual std::unique_ptr<RHIAccelStruct> CreateTLAS(
+        const std::vector<RHITLASInstance>& /*instances*/) { return nullptr; }
+    // Re-point an existing TLAS at a new instance set (the static geometry
+    // changed). Blocks like the build does; the handle stays valid, so resource
+    // sets built against it need no rebuild — unless it returns false, which
+    // means the instance count outgrew the allocation and the caller must
+    // recreate the TLAS (and any set that binds it).
+    virtual bool RebuildTLAS(RHIAccelStruct* /*tlas*/,
+                             const std::vector<RHITLASInstance>& /*instances*/) {
+        return false;
+    }
+
+    virtual std::unique_ptr<RHIPipeline> CreateRayTracingPipeline(
+        const RHIRayTracingPipelineDesc& /*desc*/) { return nullptr; }
 
     // Format of the swapchain color target — feed into RHIPipelineDesc::colorFormat
     // so pipelines match the backbuffer they render to.

@@ -165,6 +165,15 @@ the fallback gets built and proven before the RT work rather than bolted on afte
 2. **RT foundation** — extensions/features/capability query, device addresses,
    BLAS/TLAS from static meshes, RT pipeline + SBT, and a throwaway debug pass
    that visualizes ray hit distance fullscreen. Independently verifiable.
+   **IMPLEMENTED 2026-08-12** — `VulkanContext::RayTracingSupported()` + RT/AS
+   property queries; RHI gains accel structures, RT pipelines, `TraceRays` and
+   accel-struct descriptor bindings; `VulkanRHIAccelStruct` (BLAS per registered
+   mesh, TLAS over static opaque instances, rebuilt off the static-shadow hash);
+   `VulkanRTDebugPass` + `rt_debug.{rgen,rmiss,rchit}` behind an editor toggle.
+   Runs clean under validation on an RTX 5070 (tier 2 detected, SBT handle 32 B /
+   base align 64 B) with the trace active; the hit-distance image itself is not
+   yet eyeballed. Known gap: the rebuild trigger is the static *shadow-caster*
+   hash, so a static non-casting mesh that moves won't re-trigger a TLAS build.
 3. **DDGI core** — volume component, atlases, raygen/rchit/rmiss, blend +
    relocation/classification compute, probe debug viz. Not yet lighting the scene.
 4. **DDGI into lighting** — probe irradiance replaces IBL ambient behind `giMode`;

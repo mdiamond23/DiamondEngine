@@ -1,5 +1,6 @@
 #include "Platform/Vulkan/RHI/VulkanRHIResources.h"
 #include "Platform/Vulkan/RHI/VulkanRHIEnums.h"
+#include "Platform/Vulkan/RHI/VulkanRHIAccelStruct.h"   // BufferDeviceAddress (SBT)
 
 #include <cstring>
 #include <string>
@@ -10,12 +11,24 @@ namespace Diamond {
 // ── Buffer ───────────────────────────────────────────────────────────────────
 
 namespace {
+constexpr uint32_t AlignUpU32(uint32_t value, uint32_t alignment) {
+    return alignment == 0 ? value : (value + alignment - 1) & ~(alignment - 1);
+}
+
 VkBufferUsageFlags ToVkBufferUsage(RHIBufferUsage usage) {
     VkBufferUsageFlags flags = 0;
     if (HasFlag(usage, RHIBufferUsage::Vertex))  flags |= VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
     if (HasFlag(usage, RHIBufferUsage::Index))   flags |= VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
     if (HasFlag(usage, RHIBufferUsage::Uniform)) flags |= VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
     if (HasFlag(usage, RHIBufferUsage::Storage)) flags |= VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+    if (HasFlag(usage, RHIBufferUsage::ShaderDeviceAddress))
+        flags |= VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+    if (HasFlag(usage, RHIBufferUsage::AccelStructInput))
+        flags |= VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR;
+    if (HasFlag(usage, RHIBufferUsage::AccelStructStorage))
+        flags |= VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR;
+    if (HasFlag(usage, RHIBufferUsage::ShaderBindingTable))
+        flags |= VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR;
     return flags;
 }
 } // namespace
@@ -505,8 +518,112 @@ VulkanRHIPipeline::VulkanRHIPipeline(VulkanRHIDevice* device, const RHIComputePi
     VK_CHECK(vkCreateComputePipelines(dev, VK_NULL_HANDLE, 1, &info, nullptr, &m_Pipeline));
 }
 
+VulkanRHIPipeline::VulkanRHIPipeline(VulkanRHIDevice* device,
+                                     const RHIRayTracingPipelineDesc& desc)
+    : m_Device(device) {
+    VulkanContext& ctx = m_Device->Ctx();
+    VkDevice       dev = ctx.Device();
+
+    CreateLayouts(desc.resourceBindings, {}, desc.pushConstants);
+    m_BindPoint = VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR;
+
+    auto module = [](RHIShader* s) {
+        return static_cast<VulkanRHIShader*>(s)->Module();
+    };
+
+    // Stage order fixes the group indices below: 0 raygen, 1 miss, 2 closest-hit.
+    VkPipelineShaderStageCreateInfo stages[3]{};
+    const VkShaderStageFlagBits stageBits[3] = {
+        VK_SHADER_STAGE_RAYGEN_BIT_KHR,
+        VK_SHADER_STAGE_MISS_BIT_KHR,
+        VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR,
+    };
+    RHIShader* shaders[3] = { desc.raygenShader, desc.missShader, desc.closestHitShader };
+    for (int i = 0; i < 3; ++i) {
+        stages[i].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        stages[i].stage  = stageBits[i];
+        stages[i].module = module(shaders[i]);
+        stages[i].pName  = "main";
+    }
+
+    // Raygen and miss are GENERAL groups (one shader each); the hit group is a
+    // TRIANGLES group whose any-hit/intersection slots stay unused.
+    VkRayTracingShaderGroupCreateInfoKHR groups[3]{};
+    for (auto& g : groups) {
+        g.sType              = VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR;
+        g.generalShader      = VK_SHADER_UNUSED_KHR;
+        g.closestHitShader   = VK_SHADER_UNUSED_KHR;
+        g.anyHitShader       = VK_SHADER_UNUSED_KHR;
+        g.intersectionShader = VK_SHADER_UNUSED_KHR;
+    }
+    groups[0].type = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
+    groups[0].generalShader = 0;
+    groups[1].type = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
+    groups[1].generalShader = 1;
+    groups[2].type = VK_RAY_TRACING_SHADER_GROUP_TYPE_TRIANGLES_HIT_GROUP_KHR;
+    groups[2].closestHitShader = 2;
+
+    VkRayTracingPipelineCreateInfoKHR info{
+        VK_STRUCTURE_TYPE_RAY_TRACING_PIPELINE_CREATE_INFO_KHR };
+    info.stageCount                   = 3;
+    info.pStages                      = stages;
+    info.groupCount                   = 3;
+    info.pGroups                      = groups;
+    info.maxPipelineRayRecursionDepth = desc.maxRecursionDepth;
+    info.layout                       = m_Layout;
+    VK_CHECK(vkCreateRayTracingPipelinesKHR(dev, VK_NULL_HANDLE, VK_NULL_HANDLE,
+                                            1, &info, nullptr, &m_Pipeline));
+
+    // ── Shader binding table ─────────────────────────────────────────────────
+    // Three single-record regions. Each region must START at a
+    // shaderGroupBaseAlignment boundary, so one group gets one baseAlignment
+    // slot even though its handle is smaller.
+    const auto& rtProps    = ctx.RTProps();
+    const uint32_t handleSize = rtProps.shaderGroupHandleSize;
+    const uint32_t baseAlign  = rtProps.shaderGroupBaseAlignment;
+
+    std::vector<uint8_t> handles(size_t(handleSize) * 3);
+    VK_CHECK(vkGetRayTracingShaderGroupHandlesKHR(
+        dev, m_Pipeline, 0, 3, handles.size(), handles.data()));
+
+    VmaAllocationInfo sbtInfo{};
+    m_SBT = CreateBuffer(
+        ctx.Allocator(), VkDeviceSize(baseAlign) * 3,
+        VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+        VMA_MEMORY_USAGE_AUTO,
+        VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+        VMA_ALLOCATION_CREATE_MAPPED_BIT,
+        &sbtInfo);
+
+    auto* sbtBytes = static_cast<uint8_t*>(sbtInfo.pMappedData);
+    for (uint32_t g = 0; g < 3; ++g)
+        std::memcpy(sbtBytes + size_t(g) * baseAlign, handles.data() + size_t(g) * handleSize,
+                    handleSize);
+    vmaFlushAllocation(ctx.Allocator(), m_SBT.allocation, 0, VK_WHOLE_SIZE);
+
+    const VkDeviceAddress base = BufferDeviceAddress(dev, m_SBT.handle);
+
+    // The raygen region is the odd one: the spec requires size == stride AND
+    // both to be a multiple of shaderGroupBaseAlignment, so it cannot use the
+    // (smaller) handle alignment the miss/hit regions use.
+    m_RaygenRegion.deviceAddress = base;
+    m_RaygenRegion.stride        = baseAlign;
+    m_RaygenRegion.size          = baseAlign;
+
+    const uint32_t handleAligned = AlignUpU32(handleSize, rtProps.shaderGroupHandleAlignment);
+    m_MissRegion.deviceAddress = base + baseAlign;
+    m_MissRegion.stride        = handleAligned;
+    m_MissRegion.size          = handleAligned;
+
+    m_HitRegion.deviceAddress = base + VkDeviceSize(baseAlign) * 2;
+    m_HitRegion.stride        = handleAligned;
+    m_HitRegion.size          = handleAligned;
+    // m_CallableRegion stays zeroed — no callable shaders.
+}
+
 VulkanRHIPipeline::~VulkanRHIPipeline() {
     VkDevice dev = m_Device->Ctx().Device();
+    DestroyBuffer(m_Device->Ctx().Allocator(), m_SBT);
     vkDestroyPipeline(dev, m_Pipeline, nullptr);
     vkDestroyPipelineLayout(dev, m_Layout, nullptr);
     for (VkDescriptorSetLayout l : m_SetLayouts)
@@ -518,7 +635,8 @@ VulkanRHIPipeline::~VulkanRHIPipeline() {
 VulkanRHIResourceSet::VulkanRHIResourceSet(VulkanRHIDevice* device, VulkanRHIPipeline* pipeline,
                                            uint32_t setIndex,
                                            const std::vector<RHIBufferBinding>& buffers,
-                                           const std::vector<RHITextureBinding>& textures)
+                                           const std::vector<RHITextureBinding>& textures,
+                                           const std::vector<RHIAccelStructBinding>& accelStructs)
     : m_Device(device) {
     VkDevice dev = m_Device->Ctx().Device();
 
@@ -538,8 +656,13 @@ VulkanRHIResourceSet::VulkanRHIResourceSet(VulkanRHIDevice* device, VulkanRHIPip
     for (uint32_t frame = 0; frame < VulkanRHIDevice::kFramesInFlight; ++frame) {
         std::vector<VkDescriptorBufferInfo> bufferInfos(buffers.size());
         std::vector<VkDescriptorImageInfo>  imageInfos(textures.size());
+        // An acceleration structure has no buffer/image info — the handle rides
+        // in a struct chained into the write's pNext. Both vectors must outlive
+        // the vkUpdateDescriptorSets call, hence the parallel storage.
+        std::vector<VkWriteDescriptorSetAccelerationStructureKHR> accelInfos(accelStructs.size());
+        std::vector<VkAccelerationStructureKHR>                   accelHandles(accelStructs.size());
         std::vector<VkWriteDescriptorSet>   writes;
-        writes.reserve(buffers.size() + textures.size());
+        writes.reserve(buffers.size() + textures.size() + accelStructs.size());
 
         for (size_t i = 0; i < buffers.size(); ++i) {
             auto* buf = static_cast<VulkanRHIBuffer*>(buffers[i].buffer);
@@ -581,6 +704,24 @@ VulkanRHIResourceSet::VulkanRHIResourceSet(VulkanRHIDevice* device, VulkanRHIPip
             w.descriptorCount = 1;
             w.descriptorType  = type;
             w.pImageInfo      = &imageInfos[i];
+            writes.push_back(w);
+        }
+
+        for (size_t i = 0; i < accelStructs.size(); ++i) {
+            auto* accel = static_cast<VulkanRHIAccelStruct*>(accelStructs[i].accel);
+            if (!accel || !accel->Valid()) continue;
+
+            accelHandles[i] = accel->Handle();
+            accelInfos[i] = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR };
+            accelInfos[i].accelerationStructureCount = 1;
+            accelInfos[i].pAccelerationStructures    = &accelHandles[i];
+
+            VkWriteDescriptorSet w{ VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
+            w.pNext           = &accelInfos[i];
+            w.dstSet          = m_Sets[frame];
+            w.dstBinding      = accelStructs[i].binding;
+            w.descriptorCount = 1;
+            w.descriptorType  = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
             writes.push_back(w);
         }
 

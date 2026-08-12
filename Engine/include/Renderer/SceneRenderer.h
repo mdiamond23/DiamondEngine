@@ -204,6 +204,16 @@ public:
     // march distance. Live-tunable; the defaults are 8 / 1.0 / 8.0.
     virtual void SetSSGIParams(int rayCount, float intensity, float maxDistance) = 0;
 
+    // Ray-tracing bring-up view (Docs/gi-design.md slice 2), default off: traces
+    // one primary ray per pixel against the scene TLAS and replaces the finished
+    // image with the hit distance (white = near, black = miss). A no-op on
+    // hardware without ray tracing — check SupportsRayTracing() before offering
+    // it in UI. 'maxDistance' is both the ray length and the ramp's far end.
+    virtual void SetRTDebugEnabled(bool enabled) = 0;
+    virtual void SetRTDebugMaxDistance(float distance) = 0;
+    // Whether this device can ray trace at all — the GI tier-2 gate.
+    virtual bool SupportsRayTracing() const = 0;
+
     // Live material edits (Inspector): drop the baked G-buffer descriptor set
     // for 'mat' so the next frame rebuilds it from the material's current
     // textures/params. A no-op if the material was never drawn (nothing baked

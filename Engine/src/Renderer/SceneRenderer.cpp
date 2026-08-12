@@ -22,6 +22,7 @@
 #include "Platform/Vulkan/Passes/Deferred/VulkanGBufferPass.h"
 #include "Platform/Vulkan/Passes/Deferred/VulkanSSAOPass.h"
 #include "Platform/Vulkan/Passes/Deferred/VulkanSSGIPass.h"
+#include "Platform/Vulkan/Passes/Debug/VulkanRTDebugPass.h"
 #include "Platform/Vulkan/Passes/Deferred/VulkanSSRPass.h"
 #include "Platform/Vulkan/Passes/Deferred/VulkanDeferredLightingPass.h"
 #include "Platform/Vulkan/Passes/Deferred/VulkanSkyboxPass.h"
@@ -221,20 +222,42 @@ public:
         for (const Vertex& v : data.Vertices)
             verts.push_back({ v.Position, v.Normal, v.TexCoords, v.Tangent });
 
+        // A BLAS build reads the geometry by device address, so on an RT device
+        // every mesh buffer carries the two extra usage bits. They cost nothing
+        // on a buffer that never ends up in an acceleration structure, but
+        // requesting them without the extension enabled is invalid.
+        const RHIBufferUsage rtUsage = m_Device->SupportsRayTracing()
+            ? (RHIBufferUsage::ShaderDeviceAddress | RHIBufferUsage::AccelStructInput)
+            : RHIBufferUsage::None;
+
         GpuMesh gm;
         RHIBufferDesc vb;
         vb.size        = verts.size() * sizeof(MeshVertex);
-        vb.usage       = RHIBufferUsage::Vertex;
+        vb.usage       = RHIBufferUsage::Vertex | rtUsage;
         vb.initialData = verts.data();
         gm.vertexBuffer = m_Device->CreateBuffer(vb);
+        gm.vertexCount  = static_cast<uint32_t>(verts.size());
 
         RHIBufferDesc ib;
         ib.size        = data.Indices.size() * sizeof(uint32_t);
-        ib.usage       = RHIBufferUsage::Index;
+        ib.usage       = RHIBufferUsage::Index | rtUsage;
         ib.initialData = data.Indices.data();
         gm.indexBuffer = m_Device->CreateBuffer(ib);
         gm.indexCount  = static_cast<uint32_t>(data.Indices.size());
         gm.bounds      = data.ComputeAABB();   // local-space; culled against per draw
+
+        if (m_Device->SupportsRayTracing()) {
+            RHIBLASDesc blas;
+            blas.vertexBuffer = gm.vertexBuffer.get();
+            blas.vertexCount  = gm.vertexCount;
+            blas.vertexStride = sizeof(MeshVertex);   // position at offset 0
+            blas.indexBuffer  = gm.indexBuffer.get();
+            blas.indexCount   = gm.indexCount;
+            blas.debugName    = "MeshBLAS";
+            gm.blas = m_Device->CreateBLAS(blas);
+            // A new mesh means the TLAS no longer describes the scene.
+            m_TLASDirty = true;
+        }
 
         m_Meshes.emplace(key, std::move(gm));
     }
@@ -297,6 +320,11 @@ public:
         m_SSGIIntensity   = intensity;
         m_SSGIMaxDistance = maxDistance;
     }
+
+    // Both re-applied per frame in RenderView, so they survive a resize.
+    void SetRTDebugEnabled(bool enabled) override { m_RTDebugEnabled = enabled; }
+    void SetRTDebugMaxDistance(float distance) override { m_RTDebugMaxDistance = distance; }
+    bool SupportsRayTracing() const override { return m_Device->SupportsRayTracing(); }
 
     // Drop the baked G-buffer descriptor set(s) for a material edited in the
     // Inspector, so the next frame's GetOrCreateMaterialSet rebuilds it from
@@ -543,6 +571,10 @@ public:
         const bool   staticChanged = staticHash != m_LastStaticShadowHash;
         m_LastStaticShadowHash = staticHash;
 
+        // The TLAS describes the same static set, so it rides the same trigger.
+        if (staticChanged) m_TLASDirty = true;
+        UpdateTLAS();
+
         m_SpotShadow->ComputeMatrices(m_SpotLights);
         if (staticChanged) m_SpotShadow->MarkStaticDirty();
         cmd->BeginDebugLabel("SpotShadows");
@@ -616,8 +648,12 @@ private:
     struct GpuMesh {
         std::unique_ptr<RHIBuffer> vertexBuffer;
         std::unique_ptr<RHIBuffer> indexBuffer;
-        uint32_t                   indexCount = 0;
+        uint32_t                   indexCount  = 0;
+        uint32_t                   vertexCount = 0;   // BLAS build needs maxVertex
         AABB                       bounds;
+        // Ray-tracing BLAS, built once here. Null on a non-RT device, and on
+        // meshes too degenerate to build (see VulkanRHIAccelStruct).
+        std::unique_ptr<RHIAccelStruct> blas;
     };
     // A cached material: the static params buffer, the engine textures kept
     // alive, and one descriptor set PER VIEW against the G-buffer pipeline
@@ -728,6 +764,7 @@ private:
         std::unique_ptr<VulkanTonemapPass>          tonemap;
         std::unique_ptr<VulkanParticleRenderer>     particles;
         std::unique_ptr<VulkanDebugDrawPass>        debugDraw;   // main view only
+        std::unique_ptr<VulkanRTDebugPass>          rtDebug;     // null without RT support
 
         std::vector<DrawItem>        drawList;          // frustum-culled — geometry pass
         std::vector<SkinnedDrawItem> skinnedDraws;      // frustum-culled — skinned geometry
@@ -869,6 +906,16 @@ private:
                 m_Device, shaderDir,
                 offscreen ? RHIFormat::RGBA8 : m_Device->SwapchainFormat());
 
+        // RT bring-up view, main view only (it replaces the whole image, which
+        // makes no sense in the game view). Inert without RT support.
+        if (viewIdx == kMainView) {
+            v->rtDebug = std::make_unique<VulkanRTDebugPass>(
+                m_Device, shaderDir, width, height,
+                offscreen ? RHIFormat::RGBA8 : m_Device->SwapchainFormat());
+            v->rtDebug->SetEnabled(m_RTDebugEnabled);
+            v->rtDebug->SetTLAS(m_TLAS.get());
+        }
+
         BuildViewGraph(*v, viewIdx);
         return v;
     }
@@ -912,6 +959,14 @@ private:
             v.offscreen ? RHIFormat::RGBA8 : m_Device->SwapchainFormat());
         v.tonemap->SetExposure(m_Exposure);   // the recreated pass defaults to 1.0
         v.tonemap->SetTonemapper(m_Tonemapper);
+        // Its launch grid and blit set are both size-dependent.
+        if (v.rtDebug) {
+            v.rtDebug = std::make_unique<VulkanRTDebugPass>(
+                m_Device, shaderDir, width, height,
+                v.offscreen ? RHIFormat::RGBA8 : m_Device->SwapchainFormat());
+            v.rtDebug->SetEnabled(m_RTDebugEnabled);
+            v.rtDebug->SetTLAS(m_TLAS.get());
+        }
 
         v.graph.ResetPasses();
         BuildViewGraph(v, viewIdx);   // re-declares textures + re-binds IBL/point shadows
@@ -1075,6 +1130,16 @@ private:
         v.tonemap->AddToGraph(g, hdrBloom, exposureTex,
                               v.offscreen ? v.outputColor : RGTextureHandle{});
 
+        // RT bring-up visualization — replaces the finished image when enabled,
+        // and is skipped entirely (draw and dispatch both) when not, so leaving
+        // it wired costs two layout transitions. Registered only on an RT
+        // device; the pass reports Available() false otherwise.
+        if (v.rtDebug && v.rtDebug->Available()) {
+            const RGTextureHandle rtDebugImage = g.DeclareTexture("rtDebug",
+                { v.width, v.height, RHIFormat::RGBA16F, /*storage*/ true });
+            v.rtDebug->AddToGraph(g, rtDebugImage, v.outputColor, /*toSwapchain*/ !v.offscreen);
+        }
+
         // Collider/ragdoll/IK/audio debug wireframes — on top of the tonemapped
         // LDR scene, read-only depth test against the G-buffer depth. Matches
         // the GL editor's frame order (scene -> debug draw -> UI canvas).
@@ -1167,6 +1232,12 @@ private:
                                  m_SpotLights, m_SpotShadow->GetLightMatrices(),
                                  m_PointRadius);
         if (v.debugDraw) v.debugDraw->SetFrameData(proj * view);
+        // Unjittered: a debug visualization has no resolve to average jitter away.
+        if (v.rtDebug) {
+            v.rtDebug->SetEnabled(m_RTDebugEnabled);
+            v.rtDebug->SetMaxDistance(m_RTDebugMaxDistance);
+            v.rtDebug->SetCamera(view, proj);
+        }
 
         // Adaptation eases per second, so it needs the frame delta; both views in
         // a frame share the one measured in RenderFrame.
@@ -1390,6 +1461,26 @@ private:
         return it != m_PrevWorld.end() ? it->second : world;
     }
 
+    // Rebuilds the scene TLAS from m_RTInstances when the static set changed.
+    // Blocks on the GPU, which is why it is gated rather than run every frame.
+    // A rebuild that no longer fits reallocates, so the RT passes are re-pointed
+    // at whatever the TLAS is now.
+    void UpdateTLAS() {
+        if (!m_Device->SupportsRayTracing() || !m_TLASDirty) return;
+        m_TLASDirty = false;
+
+        if (m_RTInstances.empty()) {
+            m_TLAS.reset();
+        } else if (!m_TLAS || !m_Device->RebuildTLAS(m_TLAS.get(), m_RTInstances)) {
+            m_Device->WaitIdle();   // sets built against the old TLAS die with it
+            m_TLAS.reset();
+            m_TLAS = m_Device->CreateTLAS(m_RTInstances);
+        }
+
+        for (auto& v : m_Views)
+            if (v && v->rtDebug) v->rtDebug->SetTLAS(m_TLAS.get());
+    }
+
     void RebuildDrawList(Scene& scene, const Frustum& frustum, const glm::vec3& cameraPos,
                          View& v, int viewIdx) {
         v.drawList.clear();
@@ -1398,6 +1489,7 @@ private:
         m_ShadowDraws.clear();          // view-independent (culled per light view at draw time);
                                         // refilling is idempotent
         m_SkinnedShadowDraws.clear();   // (both cleared per rebuild — filled the same for either view)
+        m_RTInstances.clear();          // view-independent too: rays don't respect a frustum
         const TransformSystem& ts = scene.GetTransformSystem();
         for (auto [entity, mc] : scene.GetRegistry().view<MeshComponent>().each()) {
             if (!mc.visible || !mc.mesh) continue;
@@ -1450,6 +1542,29 @@ private:
                         isStatic = (rb->bodyType == BodyType::Static);
                 }
                 m_ShadowDraws.push_back({ &it->second, world, worldBounds, isStatic });
+            }
+
+            // TLAS membership is decided independently of shadow casting: a mesh
+            // that doesn't cast still occludes and bounces probe rays. Static
+            // opaque only (gi-design.md) — skinned meshes are excluded entirely
+            // and dynamic ones would force a rebuild every frame.
+            if (it->second.blas) {
+                bool rtStatic = mc.staticShadowCaster;
+                if (rtStatic) {
+                    if (const auto* rb = scene.GetRegistry().try_get<RigidBodyComponent>(entity))
+                        rtStatic = (rb->bodyType == BodyType::Static);
+                }
+                if (rtStatic) {
+                    RHITLASInstance inst;
+                    // glm is column-major; Vulkan wants a row-major 3x4, so this
+                    // is the transpose of the matrix's first three columns.
+                    for (int c = 0; c < 4; ++c)
+                        for (int r = 0; r < 3; ++r)
+                            inst.transform[r * 4 + c] = world[c][r];
+                    inst.blas        = it->second.blas.get();
+                    inst.customIndex = static_cast<uint32_t>(m_RTInstances.size());
+                    m_RTInstances.push_back(inst);
+                }
             }
             if (frustum.TestAABB(worldBounds)) {
                 m_Device->RecordVisible(1);
@@ -1905,6 +2020,13 @@ private:
     std::vector<ShadowItem> m_ShadowDraws;   // all casters — culled per light view at draw time
     size_t m_LastStaticShadowHash = 0;       // detects static-caster changes → re-bake cached maps
 
+    // Ray tracing: the scene TLAS over static opaque meshes, plus the instance
+    // list RebuildDrawList gathers for it. Rebuilt only when m_TLASDirty — the
+    // build blocks, so it must never be a per-frame cost.
+    std::unique_ptr<RHIAccelStruct> m_TLAS;
+    std::vector<RHITLASInstance>    m_RTInstances;
+    bool                            m_TLASDirty = true;
+
     // Per-skinned-entity GPU state (SkinnedInstance defined above), keyed by entity.
     std::unordered_map<entt::entity, SkinnedInstance> m_Skinned;
     // Last frame's world matrix per entity — TAA velocity input (PrevWorld reads
@@ -1956,6 +2078,8 @@ private:
     // a frame share the same Halton sample).
     uint64_t m_FrameIndex = 0;
     bool     m_TAAEnabled = true;
+    bool     m_RTDebugEnabled     = false;    // bring-up tool, not a feature
+    float    m_RTDebugMaxDistance = 100.0f;
     bool     m_SSGIEnabled      = true;
     int      m_SSGIRays         = 8;
     float    m_SSGIIntensity    = 1.0f;

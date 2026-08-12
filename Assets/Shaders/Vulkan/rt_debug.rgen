@@ -1,0 +1,44 @@
+#version 460
+#extension GL_EXT_ray_tracing : require
+
+// RT bring-up visualization (Docs/gi-design.md slice 2): one primary ray per
+// pixel through the TLAS, shaded by hit distance alone. White = near, black =
+// miss. Throwaway — it exists to prove extensions, device addresses, BLAS/TLAS,
+// the RT pipeline and the SBT all line up before DDGI depends on them.
+
+layout(set = 0, binding = 0, rgba16f) uniform writeonly image2D uOut;
+layout(set = 0, binding = 1) uniform accelerationStructureEXT uTLAS;
+
+layout(set = 0, binding = 2) uniform Camera {
+    mat4 invView;   // view -> world
+    mat4 invProj;   // clip -> view
+} cam;
+
+layout(push_constant) uniform Push {
+    float maxDistance;   // also the far end of the distance ramp
+} pc;
+
+layout(location = 0) rayPayloadEXT float hitT;   // < 0 = miss
+
+void main() {
+    const vec2 size = vec2(gl_LaunchSizeEXT.xy);
+    const vec2 uv   = (vec2(gl_LaunchIDEXT.xy) + 0.5) / size;
+
+    // uv -> clip. The v flip is the inverse of ProjectToUV in
+    // screen_trace.glsl: the negative-height viewport puts clip y=+1 in row 0,
+    // so a raster pass and this launch grid only agree with the flip in place.
+    const vec2 ndc = vec2(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
+
+    // Far-plane point (ZO depth range, so z = 1) unprojected into view space.
+    vec4 viewH  = cam.invProj * vec4(ndc, 1.0, 1.0);
+    vec3 dir    = normalize(mat3(cam.invView) * normalize(viewH.xyz / viewH.w));
+    vec3 origin = cam.invView[3].xyz;
+
+    hitT = -1.0;
+    traceRayEXT(uTLAS, gl_RayFlagsOpaqueEXT, 0xFF,
+                0 /*sbtOffset*/, 0 /*sbtStride*/, 0 /*missIndex*/,
+                origin, 0.01, dir, pc.maxDistance, 0 /*payload*/);
+
+    float v = hitT < 0.0 ? 0.0 : 1.0 - clamp(hitT / pc.maxDistance, 0.0, 1.0);
+    imageStore(uOut, ivec2(gl_LaunchIDEXT.xy), vec4(v, v, v, 1.0));
+}

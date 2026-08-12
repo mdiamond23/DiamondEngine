@@ -56,6 +56,9 @@ inline VkShaderStageFlags ToVkShaderStages(RHIShaderStage s) {
     if (HasFlag(s, RHIShaderStage::Vertex))   flags |= VK_SHADER_STAGE_VERTEX_BIT;
     if (HasFlag(s, RHIShaderStage::Fragment)) flags |= VK_SHADER_STAGE_FRAGMENT_BIT;
     if (HasFlag(s, RHIShaderStage::Compute))  flags |= VK_SHADER_STAGE_COMPUTE_BIT;
+    if (HasFlag(s, RHIShaderStage::RayGen))     flags |= VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+    if (HasFlag(s, RHIShaderStage::Miss))       flags |= VK_SHADER_STAGE_MISS_BIT_KHR;
+    if (HasFlag(s, RHIShaderStage::ClosestHit)) flags |= VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
     return flags;
 }
 
@@ -87,6 +90,8 @@ inline VkDescriptorType ToVkDescriptorType(RHIResourceType t) {
         case RHIResourceType::CombinedImageSampler: return VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         case RHIResourceType::StorageBuffer:        return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         case RHIResourceType::StorageImage:         return VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        case RHIResourceType::AccelerationStructure:
+            return VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
     }
     return VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
 }

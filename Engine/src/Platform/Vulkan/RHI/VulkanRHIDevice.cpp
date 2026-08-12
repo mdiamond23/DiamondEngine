@@ -1,6 +1,7 @@
 #include "Platform/Vulkan/RHI/VulkanRHIDevice.h"
 #include "Platform/Vulkan/RHI/VulkanRHIResources.h"
 #include "Platform/Vulkan/RHI/VulkanRHIEnums.h"
+#include "Platform/Vulkan/RHI/VulkanRHIAccelStruct.h"
 #include "Platform/Vulkan/VulkanComputeSelfTest.h"
 
 #define GLFW_INCLUDE_NONE
@@ -21,6 +22,7 @@ void VulkanRHICommandList::BindPipeline(RHIPipeline* pipeline) {
     auto* vp = static_cast<VulkanRHIPipeline*>(pipeline);
     m_Layout    = vp->Layout();
     m_BindPoint = vp->BindPoint();
+    m_Bound     = vp;
     vkCmdBindPipeline(m_Cmd, m_BindPoint, vp->Handle());
 }
 
@@ -63,6 +65,14 @@ void VulkanRHICommandList::Dispatch(uint32_t groupsX, uint32_t groupsY, uint32_t
     vkCmdDispatch(m_Cmd, groupsX, groupsY, groupsZ);
 }
 
+void VulkanRHICommandList::TraceRays(uint32_t width, uint32_t height, uint32_t depth) {
+    if (!m_Bound) return;
+    vkCmdTraceRaysKHR(m_Cmd,
+                      m_Bound->RaygenRegion(), m_Bound->MissRegion(),
+                      m_Bound->HitRegion(),    m_Bound->CallableRegion(),
+                      width, height, depth);
+}
+
 void VulkanRHICommandList::StorageBarrier() {
     // One global memory barrier rather than per-resource buffer barriers: the
     // callers are whole passes, so the extra scope costs nothing measurable and
@@ -101,6 +111,12 @@ void VulkanRHICommandList::EndDebugLabel() {
 
 namespace {
 
+// VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR is only a LEGAL stage bit when
+// the rayTracingPipeline feature is enabled — naming it unconditionally is a
+// validation error on every non-RT device. So it is folded into the shader-stage
+// masks below through this flag, set once from the device constructor.
+VkPipelineStageFlags2 g_RayTracingStage = 0;
+
 // The synchronization2 stage/access scope for work that leaves an image in a
 // given layout — used as the *source* scope when transitioning away from it.
 void StageAccessForLayout(VkImageLayout layout,
@@ -114,13 +130,15 @@ void StageAccessForLayout(VkImageLayout layout,
                    | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
             access = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT; break;
         case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
-            // Either shader stage may have sampled it — a compute pass reading a
-            // G-buffer leaves the image here just as a fragment pass does.
+            // Any shader stage may have sampled it — a compute or ray-tracing
+            // pass reading a G-buffer leaves the image here just as a fragment
+            // pass does.
             stage  = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT
-                   | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                   | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
+                   | g_RayTracingStage;
             access = VK_ACCESS_2_SHADER_READ_BIT; break;
         case VK_IMAGE_LAYOUT_GENERAL:
-            stage  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            stage  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | g_RayTracingStage;
             access = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT; break;
         default:   // UNDEFINED and anything else: no prior work to wait on
             stage  = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
@@ -147,13 +165,15 @@ void StateTarget(RHITextureState state,
             // graph transitioned without needing a second sampled state.
             layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
             stage  = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT
-                   | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                   | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
+                   | g_RayTracingStage;
             access = VK_ACCESS_2_SHADER_READ_BIT; break;
         case RHITextureState::Storage:
             // General is the only layout that permits imageLoad *and* imageStore,
-            // so one state serves compute reads and writes alike.
+            // so one state serves compute reads and writes alike — and a raygen
+            // shader's imageStore is the same access as a compute one's.
             layout = VK_IMAGE_LAYOUT_GENERAL;
-            stage  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            stage  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | g_RayTracingStage;
             access = VK_ACCESS_2_SHADER_STORAGE_READ_BIT
                    | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT; break;
     }
@@ -273,6 +293,9 @@ void VulkanRHICommandList::EndRendering() {
 
 VulkanRHIDevice::VulkanRHIDevice(GLFWwindow* window) : m_Window(window) {
     m_Ctx.Init(window);
+    // Only legal to name in a barrier once rayTracingPipeline is enabled.
+    g_RayTracingStage = m_Ctx.RayTracingSupported()
+        ? VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR : 0;
     m_Swapchain.Init(&m_Ctx, window);
     CreateFrameResources();
     CreateDepthResources();
@@ -429,6 +452,8 @@ void VulkanRHIDevice::CreateDescriptorPool() {
         { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 16384 },
         { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,         512 },
         { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          512 },
+        // TLAS bindings: one per RT pass per frame slot, so a handful ever.
+        { VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 64 },
     };
 
     VkDescriptorPoolCreateInfo poolInfo{ VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO };
@@ -501,9 +526,45 @@ std::unique_ptr<RHIPipeline> VulkanRHIDevice::CreateComputePipeline(
 std::unique_ptr<RHIResourceSet> VulkanRHIDevice::CreateResourceSet(
     RHIPipeline* pipeline, uint32_t setIndex,
     const std::vector<RHIBufferBinding>& buffers,
-    const std::vector<RHITextureBinding>& textures) {
+    const std::vector<RHITextureBinding>& textures,
+    const std::vector<RHIAccelStructBinding>& accelStructs) {
     return std::make_unique<VulkanRHIResourceSet>(
-        this, static_cast<VulkanRHIPipeline*>(pipeline), setIndex, buffers, textures);
+        this, static_cast<VulkanRHIPipeline*>(pipeline), setIndex,
+        buffers, textures, accelStructs);
+}
+
+// ── Ray tracing ──────────────────────────────────────────────────────────────
+// Every entry point returns null on a device without the extensions rather than
+// asserting: SupportsRayTracing() is the gate callers are expected to check, and
+// a null result keeps a mis-gated caller inert instead of crashing.
+
+std::unique_ptr<RHIAccelStruct> VulkanRHIDevice::CreateBLAS(const RHIBLASDesc& desc) {
+    if (!m_Ctx.RayTracingSupported()) return nullptr;
+    auto blas = std::make_unique<VulkanRHIAccelStruct>(this, desc);
+    return blas->Valid() ? std::move(blas) : nullptr;
+}
+
+std::unique_ptr<RHIAccelStruct> VulkanRHIDevice::CreateTLAS(
+    const std::vector<RHITLASInstance>& instances) {
+    if (!m_Ctx.RayTracingSupported() || instances.empty()) return nullptr;
+    auto tlas = std::make_unique<VulkanRHIAccelStruct>(this, instances);
+    return tlas->Valid() ? std::move(tlas) : nullptr;
+}
+
+bool VulkanRHIDevice::RebuildTLAS(RHIAccelStruct* tlas,
+                                  const std::vector<RHITLASInstance>& instances) {
+    if (!tlas) return false;
+    return static_cast<VulkanRHIAccelStruct*>(tlas)->Rebuild(instances);
+}
+
+std::unique_ptr<RHIPipeline> VulkanRHIDevice::CreateRayTracingPipeline(
+    const RHIRayTracingPipelineDesc& desc) {
+    if (!m_Ctx.RayTracingSupported()) return nullptr;
+    if (!desc.raygenShader || !desc.missShader || !desc.closestHitShader) {
+        spdlog::error("[Vulkan] ray-tracing pipeline needs all three stages");
+        return nullptr;
+    }
+    return std::make_unique<VulkanRHIPipeline>(this, desc);
 }
 
 RHIFormat VulkanRHIDevice::SwapchainFormat() const {

@@ -45,6 +45,25 @@ public:
 
     const VkPhysicalDeviceProperties& DeviceProperties() const { return m_DeviceProps; }
 
+    // Whether the acceleration-structure / ray-tracing-pipeline extensions were
+    // found AND enabled on this device. Every RT code path is gated on this;
+    // false is a supported tier, not an error (Docs/gi-design.md hardware tiers).
+    //
+    // Presence is NOT proof of usable RT hardware — GTX 10/16-series expose the
+    // extensions through driver emulation. The settings-level tier override that
+    // lets those users force tier 1 lands with slice 5.
+    bool RayTracingSupported() const { return m_RayTracingSupported; }
+
+    // Shader-group handle sizes/alignments the shader binding table must respect,
+    // and the scratch-buffer offset alignment acceleration-structure builds need.
+    // Both are zero-initialized and only meaningful when RayTracingSupported().
+    const VkPhysicalDeviceRayTracingPipelinePropertiesKHR& RTProps() const {
+        return m_RTProps;
+    }
+    const VkPhysicalDeviceAccelerationStructurePropertiesKHR& AccelStructProps() const {
+        return m_AccelStructProps;
+    }
+
     // Whether VK_EXT_debug_utils is enabled — gates command-buffer labels and
     // object naming (RenderDoc groups/names). Independent of validation.
     bool DebugUtilsEnabled() const { return m_DebugUtilsEnabled; }
@@ -65,6 +84,7 @@ private:
     void CreateSurface(GLFWwindow* window);
     void SelectPhysicalDevice();
     void CreateLogicalDevice();
+    void QueryRayTracingProperties();
     void CreateAllocator();
     void CreateImmediateContext();
 
@@ -87,6 +107,12 @@ private:
     VkPhysicalDeviceProperties m_DeviceProps{};
     bool                       m_ValidationEnabled = false;
     bool                       m_DebugUtilsEnabled = false;
+
+    // Ray tracing support + the sizing constants the SBT and AS builds need
+    // (KHR extensions, not core Vulkan). Filled by CreateLogicalDevice.
+    bool                                               m_RayTracingSupported = false;
+    VkPhysicalDeviceRayTracingPipelinePropertiesKHR    m_RTProps{};
+    VkPhysicalDeviceAccelerationStructurePropertiesKHR m_AccelStructProps{};
 };
 
 } // namespace Diamond

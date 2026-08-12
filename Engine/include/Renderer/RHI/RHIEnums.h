@@ -84,6 +84,7 @@ enum class RHIResourceType {
     CombinedImageSampler,
     StorageBuffer,
     StorageImage,
+    AccelerationStructure,
 };
 
 // Texture sampling filter for minification/magnification.
@@ -117,11 +118,15 @@ constexpr bool HasFlag(RHITextureUsage value, RHITextureUsage flag) {
 // ── Bitmask enums ────────────────────────────────────────────────────────────
 // Which buffer roles a buffer may serve.
 enum class RHIBufferUsage : uint32_t {
-    None    = 0,
-    Vertex  = 1u << 0,
-    Index   = 1u << 1,
-    Uniform = 1u << 2,
-    Storage = 1u << 3,   // read/written by a shader through a buffer block
+    None                = 0,
+    Vertex              = 1u << 0,
+    Index               = 1u << 1,
+    Uniform             = 1u << 2,
+    Storage             = 1u << 3,   // read/written by a shader through a buffer block
+    ShaderDeviceAddress = 1u << 4,   // buffer's GPU address readable in shaders
+    AccelStructInput    = 1u << 5,   // BLAS build reads vertices/indices from it
+    AccelStructStorage  = 1u << 6,   // backing store of an acceleration structure
+    ShaderBindingTable  = 1u << 7,
 };
 constexpr RHIBufferUsage operator|(RHIBufferUsage a, RHIBufferUsage b) {
     return static_cast<RHIBufferUsage>(static_cast<uint32_t>(a) | static_cast<uint32_t>(b));
@@ -132,10 +137,13 @@ constexpr bool HasFlag(RHIBufferUsage value, RHIBufferUsage flag) {
 
 // Which shader stages a binding or push-constant range is visible to.
 enum class RHIShaderStage : uint32_t {
-    None     = 0,
-    Vertex   = 1u << 0,
-    Fragment = 1u << 1,
-    Compute  = 1u << 2,
+    None       = 0,
+    Vertex     = 1u << 0,
+    Fragment   = 1u << 1,
+    Compute    = 1u << 2,
+    RayGen     = 1u << 3,
+    Miss       = 1u << 4,
+    ClosestHit = 1u << 5,
 };
 constexpr RHIShaderStage operator|(RHIShaderStage a, RHIShaderStage b) {
     return static_cast<RHIShaderStage>(static_cast<uint32_t>(a) | static_cast<uint32_t>(b));
