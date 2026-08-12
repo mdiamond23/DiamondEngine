@@ -15,11 +15,13 @@ layout(location = 3) in vec3 inTangent;
 layout(location = 0) out vec3 vViewPos;
 layout(location = 1) out vec2 vUV;
 layout(location = 2) out mat3 vTBN;   // consumes locations 2, 3, 4
-// TAA motion: current/previous NDC xy (.xy = current, .zw = previous), already
-// perspective-divided here and interpolated as NDC across the triangle — the
-// standard TAA approximation (curved per-pixel motion vs. this linear
-// interpolation differs by a sub-pixel amount in practice).
-layout(location = 5) out vec4 vNdcCurrPrev;
+// TAA motion, UNDIVIDED clip coords — gbuffer.frag does the perspective divide
+// per fragment. Dividing here instead would interpolate an already-screen-space
+// value through the rasterizer's perspective-correct (1/w-weighted) path, which
+// skews it wherever w varies across a triangle: sub-pixel on small geometry,
+// wildly wrong on a large floor quad spanning near to far.
+layout(location = 5) out vec4 vCurrClip;
+layout(location = 6) out vec4 vPrevClip;
 
 layout(set = 0, binding = 0) uniform FrameUBO {
     mat4 view;
@@ -49,7 +51,6 @@ void main() {
 
     gl_Position = ubo.viewProj * worldPos;
 
-    vec4 currClip = ubo.viewProjUnjittered * worldPos;
-    vec4 prevClip = ubo.prevViewProjUnjittered * (pc.prevModel * vec4(inPos, 1.0));
-    vNdcCurrPrev = vec4(currClip.xy / currClip.w, prevClip.xy / prevClip.w);
+    vCurrClip = ubo.viewProjUnjittered * worldPos;
+    vPrevClip = ubo.prevViewProjUnjittered * (pc.prevModel * vec4(inPos, 1.0));
 }

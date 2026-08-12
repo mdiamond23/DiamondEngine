@@ -13,6 +13,11 @@
 //
 // ssrColor.rgb = reflected scene radiance, ssrColor.a = ray-hit confidence.
 // gMaterial packing (see gbuffer.frag): r = metallic, g = roughness, b = ao.
+//
+// FragColor.a carries the final weight downstream. Nothing samples this target
+// but taa_resolve.frag, which needs to know how reflective a pixel is: SSR
+// moves with the reflected image, not the surface, so gVelocity reprojects it
+// wrong and reflective pixels have to discard history faster.
 
 layout(location = 0) in vec2 vUV;
 layout(location = 0) out vec4 FragColor;
@@ -53,7 +58,7 @@ void main() {
 
     // The tracing pass already rejected misses and invalid rays.
     if (ssr.a <= 0.0) {
-        FragColor = vec4(scene, 1.0);
+        FragColor = vec4(scene, 0.0);
         return;
     }
 
@@ -61,7 +66,7 @@ void main() {
 
     // Background pixel: no geometry was written into the G-buffer.
     if (fragPos.z == 0.0) {
-        FragColor = vec4(scene, 1.0);
+        FragColor = vec4(scene, 0.0);
         return;
     }
 
@@ -69,7 +74,7 @@ void main() {
     float normalLengthSquared = dot(normal, normal);
 
     if (normalLengthSquared <= 1e-6) {
-        FragColor = vec4(scene, 1.0);
+        FragColor = vec4(scene, 0.0);
         return;
     }
 
@@ -106,5 +111,5 @@ void main() {
 
     float weight = clamp(ssr.a * fresnel * roughnessWeight, 0.0, 1.0);
 
-    FragColor = vec4(mix(scene, ssr.rgb, weight), 1.0);
+    FragColor = vec4(mix(scene, ssr.rgb, weight), weight);
 }

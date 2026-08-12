@@ -20,11 +20,12 @@ layout(location = 5) in vec4  inWeights;
 layout(location = 0) out vec3 vViewPos;
 layout(location = 1) out vec2 vUV;
 layout(location = 2) out mat3 vTBN;   // consumes locations 2, 3, 4
-// TAA motion — see gbuffer.vert (already perspective-divided NDC, .xy current /
-// .zw previous). Fully per-bone: the previous position is skinned with LAST
-// frame's palette (BoneUBO's second half) under last frame's model matrix, so
-// a character animating in place gets correct velocity on its moving parts.
-layout(location = 5) out vec4 vNdcCurrPrev;
+// TAA motion — see gbuffer.vert (UNDIVIDED clip coords, divided per fragment).
+// Fully per-bone: the previous position is skinned with LAST frame's palette
+// (BoneUBO's second half) under last frame's model matrix, so a character
+// animating in place gets correct velocity on its moving parts.
+layout(location = 5) out vec4 vCurrClip;
+layout(location = 6) out vec4 vPrevClip;
 
 layout(set = 0, binding = 0) uniform FrameUBO {
     mat4 view;
@@ -85,7 +86,6 @@ void main() {
     if (inWeights.x + inWeights.y + inWeights.z + inWeights.w < 1e-4)
         prevSkinMat = mat4(1.0);
 
-    vec4 currClip = ubo.viewProjUnjittered * worldPos;
-    vec4 prevClip = ubo.prevViewProjUnjittered * (pc.prevModel * (prevSkinMat * vec4(inPos, 1.0)));
-    vNdcCurrPrev = vec4(currClip.xy / currClip.w, prevClip.xy / prevClip.w);
+    vCurrClip = ubo.viewProjUnjittered * worldPos;
+    vPrevClip = ubo.prevViewProjUnjittered * (pc.prevModel * (prevSkinMat * vec4(inPos, 1.0)));
 }

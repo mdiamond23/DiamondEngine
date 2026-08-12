@@ -16,7 +16,8 @@
 layout(location = 0) in vec3 vViewPos;
 layout(location = 1) in vec2 vUV;
 layout(location = 2) in mat3 vTBN;
-layout(location = 5) in vec4 vNdcCurrPrev;   // .xy current NDC, .zw previous NDC
+layout(location = 5) in vec4 vCurrClip;   // undivided — see the divide in main()
+layout(location = 6) in vec4 vPrevClip;
 
 layout(location = 0) out vec4 gViewPos;
 layout(location = 1) out vec4 gViewNormal;
@@ -71,10 +72,19 @@ void main() {
     gMaterial   = vec4(metallic, roughness, ao, 1.0);
     gEmissive   = vec4(emissive, 1.0);
 
+    // Perspective divide HERE, not in the vertex shader: NDC is affine in screen
+    // space, so interpolating a pre-divided value through the rasterizer's
+    // perspective-correct path re-applies a 1/w weighting and skews it wherever
+    // w varies across the triangle — worst on large flat quads spanning depth.
+    //
     // NDC → UV-space delta. x: uv = ndc*0.5+0.5, so Δuv = Δndc*0.5. y is
     // NEGATED: the backend's negative-height viewport puts NDC y=+1 at texel
     // row 0 and sampler v=0 reads row 0 (see fullscreen.vert), so v runs
     // opposite to NDC y. Stored as a true UV offset: historyUV = uv - gVelocity.
-    vec2 dNdc = vNdcCurrPrev.xy - vNdcCurrPrev.zw;
-    gVelocity = vec2(dNdc.x, -dNdc.y) * 0.5;
+    if (vPrevClip.w <= 0.0) {
+        gVelocity = vec2(0.0);   // was behind the previous camera — no history
+    } else {
+        vec2 dNdc = vCurrClip.xy / vCurrClip.w - vPrevClip.xy / vPrevClip.w;
+        gVelocity = vec2(dNdc.x, -dNdc.y) * 0.5;
+    }
 }
