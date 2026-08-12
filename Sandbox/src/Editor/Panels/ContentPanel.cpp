@@ -160,6 +160,7 @@ static const char* AssetTypeName(AssetType t) {
     switch (t) {
         case AssetType::Folder:      return "Folder";
         case AssetType::Texture:     return "Texture";
+        case AssetType::HDRI:        return "Environment";
         case AssetType::Mesh:        return "Mesh";
         case AssetType::SkinnedMesh: return "Skinned Mesh";
         case AssetType::Material:    return "Material";
@@ -177,6 +178,10 @@ static const char* AssetTypeName(AssetType t) {
 AssetType ContentPanel::GetAssetType(const fs::path& p) {
     if (fs::is_directory(p)) return AssetType::Folder;
     std::string ext = LowerExt(p);
+    // HDRIs are environment maps, not surface textures — separate type so they
+    // only drop onto a SkyLight and never onto a material slot.
+    if (ext == ".hdr" || ext == ".exr")
+        return AssetType::HDRI;
     if (ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".bmp" || ext == ".tga")
         return AssetType::Texture;
     if (ext == ".gltf" || ext == ".glb") {
@@ -283,7 +288,9 @@ void ContentPanel::DrawFileIcon(ImVec2 tl, float size, const std::string& ext) {
     const bool isAudio = (ext == ".wav" || ext == ".mp3" || ext == ".flac" || ext == ".ogg");
 
     ImU32 pageCol;
-    if (ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".bmp" || ext == ".tga")
+    if (ext == ".hdr" || ext == ".exr")
+        pageCol = IM_COL32(240, 170, 60, 255);   // sky amber — reads as an environment
+    else if (ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".bmp" || ext == ".tga")
         pageCol = IM_COL32(80, 130, 220, 255);
     else if (ext == ".obj" || ext == ".fbx" || ext == ".gltf" || ext == ".glb")
         pageCol = IM_COL32(80, 195, 110, 255);
@@ -640,6 +647,7 @@ void ContentPanel::DrawItems() {
             bool isInspectorDraggable = (item.type == AssetType::Mesh ||
                                          item.type == AssetType::SkinnedMesh ||
                                          item.type == AssetType::Texture ||
+                                         item.type == AssetType::HDRI ||
                                          item.type == AssetType::PhysicsMat ||
                                          item.type == AssetType::AnimSM ||
                                          item.type == AssetType::Material ||

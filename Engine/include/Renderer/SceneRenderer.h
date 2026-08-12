@@ -196,6 +196,14 @@ public:
     // passthrough frame, then accumulation resumes); survives Resize.
     virtual void SetTAAEnabled(bool enabled) = 0;
 
+    // Screen-space GI (default on). Off skips the trace/temporal dispatches
+    // outright and the composite passes the lit scene through unchanged, so the
+    // ambient falls back to plain IBL. Re-enabling reseeds the accumulation.
+    virtual void SetSSGIEnabled(bool enabled) = 0;
+    // Ray count per half-res pixel, gathered radiance scale, and view-space
+    // march distance. Live-tunable; the defaults are 8 / 1.0 / 8.0.
+    virtual void SetSSGIParams(int rayCount, float intensity, float maxDistance) = 0;
+
     // Live material edits (Inspector): drop the baked G-buffer descriptor set
     // for 'mat' so the next frame rebuilds it from the material's current
     // textures/params. A no-op if the material was never drawn (nothing baked

@@ -47,18 +47,22 @@ public:
     ~VulkanDeferredLightingPass();
 
     // Register the lighting pass: reads the G-buffer (view pos/normal, albedo,
-    // material, emissive) + blurred SSAO + the cascade depth maps, and writes the
-    // HDR 'output' target (RGBA16F). Sets are built once from the graph's pooled
-    // textures. 'spotShadows' are the spot pass's OWN depth maps (rendered +
-    // transitioned by its Record before this graph executes, so they take no
-    // graph reads); returns the pass so a caller can append reads.
+    // material, emissive) + blurred SSAO + the cascade depth maps, and MRT-writes
+    // the HDR 'output' target and 'indirect' (both RGBA16F). 'indirect' carries
+    // the far-field diffuse irradiance this pass used, before the kD/albedo/AO
+    // multiplier — ssgi_composite subtracts it so SSGI replaces that term
+    // instead of stacking on it, and it carries DDGI probe irradiance once
+    // probes exist. Sets are built once from the graph's pooled textures.
+    // 'spotShadows' are the spot pass's OWN depth maps (rendered + transitioned
+    // by its Record before this graph executes, so they take no graph reads);
+    // returns the pass so a caller can append reads.
     RGPass& AddToGraph(RHIRenderGraph& graph,
                        RGTextureHandle viewPos, RGTextureHandle viewNormal,
                        RGTextureHandle albedo,  RGTextureHandle material,
                        RGTextureHandle ssao,    RGTextureHandle emissive,
                        const std::array<RGTextureHandle, NUM_CASCADES>& cascades,
                        const std::array<RHITexture*, NUM_SPOTS>& spotShadows,
-                       RGTextureHandle output);
+                       RGTextureHandle output, RGTextureHandle indirect);
 
     // Graph-handle spot maps (demo scaffolds): resolves the handles and forwards,
     // then reads them so the graph orders after their writers and transitions
@@ -69,7 +73,13 @@ public:
                     RGTextureHandle ssao,    RGTextureHandle emissive,
                     const std::array<RGTextureHandle, NUM_CASCADES>& cascades,
                     const std::array<RGTextureHandle, NUM_SPOTS>& spotShadows,
-                    RGTextureHandle output);
+                    RGTextureHandle output, RGTextureHandle indirect);
+
+    // Sky/IBL ambient multiplier (SkyLightComponent::intensity, default 1). Read
+    // by the next SetFrameData, so call it before that. Scales the irradiance and
+    // prefiltered specular together — and therefore the 'indirect' MRT output, so
+    // the SSGI composite's subtraction stays exact.
+    void SetAmbientIntensity(float intensity) { m_AmbientIntensity = intensity; }
 
     // Bind the baked IBL maps (irradiance/prefilter cubemaps + BRDF LUT) into the
     // resource set's IBL slots (bindings 11-13). The maps are world-space cubemaps,
@@ -130,12 +140,14 @@ private:
         glm::vec4 spotColor[NUM_SPOTS];     // .xyz radiant intensity, .w range
         glm::vec4 counts;   // x = numPointLights, y = prefilter max LOD,
                             // z = numSpotLights, w = point-shadow far plane
+        glm::vec4 ambient;  // x = sky/IBL intensity
     };
 
     RHIDevice*                      m_Device;
     std::string                     m_ShaderDir;
     LightingUBO                     m_UBOData{};
     float                           m_PrefilterMaxLod = 0.0f;
+    float                           m_AmbientIntensity = 1.0f;
 
     std::unique_ptr<RHIShader>      m_Vert;
     std::unique_ptr<RHIShader>      m_Frag;

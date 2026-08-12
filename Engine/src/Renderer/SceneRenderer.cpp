@@ -21,6 +21,7 @@
 
 #include "Platform/Vulkan/Passes/Deferred/VulkanGBufferPass.h"
 #include "Platform/Vulkan/Passes/Deferred/VulkanSSAOPass.h"
+#include "Platform/Vulkan/Passes/Deferred/VulkanSSGIPass.h"
 #include "Platform/Vulkan/Passes/Deferred/VulkanSSRPass.h"
 #include "Platform/Vulkan/Passes/Deferred/VulkanDeferredLightingPass.h"
 #include "Platform/Vulkan/Passes/Deferred/VulkanSkyboxPass.h"
@@ -239,6 +240,7 @@ public:
     }
 
     void SetEnvironment(const std::string& hdrPath) override {
+        m_EnvironmentPath = hdrPath;   // keeps GatherSkyLight from re-baking the same map
         m_IBL->BakeEnvironment(hdrPath);
         for (auto& v : m_Views) {
             if (!v) continue;
@@ -289,6 +291,12 @@ public:
     // jitter and the history copy; the resolve pass itself always runs but
     // degrades to a passthrough draw while off (invalid history → alpha 1).
     void SetTAAEnabled(bool enabled) override { m_TAAEnabled = enabled; }
+    void SetSSGIEnabled(bool enabled) override { m_SSGIEnabled = enabled; }
+    void SetSSGIParams(int rayCount, float intensity, float maxDistance) override {
+        m_SSGIRays        = rayCount;
+        m_SSGIIntensity   = intensity;
+        m_SSGIMaxDistance = maxDistance;
+    }
 
     // Drop the baked G-buffer descriptor set(s) for a material edited in the
     // Inspector, so the next frame's GetOrCreateMaterialSet rebuilds it from
@@ -709,6 +717,7 @@ private:
 
         std::unique_ptr<RHIBuffer>                  cameraUBO;
         std::unique_ptr<VulkanSSAOPass>             ssao;
+        std::unique_ptr<VulkanSSGIPass>             ssgi;
         std::unique_ptr<VulkanSSRPass>              ssr;
         std::unique_ptr<VulkanTAAPass>              taa;
         std::unique_ptr<VulkanDeferredLightingPass> lighting;
@@ -791,8 +800,9 @@ private:
         // Bake a default environment so the deferred ambient term is valid even if
         // the caller never sets one. SetEnvironment can re-bake later.
         m_IBL = std::make_unique<VulkanIBLPass>(m_Device, shaderDir);
-        m_IBL->BakeEnvironment(AssetPaths::Resolve(
-            "Assets/Textures/citrus_orchard_road_puresky_4k.hdr"));
+        m_EnvironmentPath = AssetPaths::Resolve(
+            "Assets/Textures/citrus_orchard_road_puresky_4k.hdr");
+        m_IBL->BakeEnvironment(m_EnvironmentPath);
     }
 
     void ApplyAutoExposureSettings(VulkanAutoExposurePass& pass) const {
@@ -827,6 +837,7 @@ private:
 
         const std::string shaderDir = ShaderDir();
         v->ssao         = std::make_unique<VulkanSSAOPass>(m_Device, shaderDir, width, height);
+        v->ssgi         = std::make_unique<VulkanSSGIPass>(m_Device, shaderDir, width, height);
         v->ssr          = std::make_unique<VulkanSSRPass>(m_Device, shaderDir, width, height);
         v->taa          = std::make_unique<VulkanTAAPass>(m_Device, shaderDir);
         v->lighting     = std::make_unique<VulkanDeferredLightingPass>(m_Device, shaderDir);
@@ -879,6 +890,9 @@ private:
         // re-wire as-is.
         const std::string shaderDir = ShaderDir();
         v.ssao     = std::make_unique<VulkanSSAOPass>(m_Device, shaderDir, width, height);
+        // Half-res targets change size too, and the recreated pass resets its
+        // history-valid flag so the first post-resize frame passes through.
+        v.ssgi     = std::make_unique<VulkanSSGIPass>(m_Device, shaderDir, width, height);
         v.ssr      = std::make_unique<VulkanSSRPass>(m_Device, shaderDir, width, height);
         // TAA's descriptor sets sample size-dependent graph textures (including
         // the history); recreating the pass also resets its history-valid flag,
@@ -919,6 +933,26 @@ private:
         const RGTextureHandle ssaoBlurred = g.DeclareTexture("ssaoBlurred", { v.width, v.height, RHIFormat::R16F     });
         const RGTextureHandle ssrColor    = g.DeclareTexture("ssrColor",    { v.width, v.height, RHIFormat::RGBA16F });
         const RGTextureHandle hdrLit      = g.DeclareTexture("hdrLit",      { v.width, v.height, RHIFormat::RGBA16F });
+        // Lighting's second MRT: the far-field diffuse irradiance it applied,
+        // before the kD/albedo/AO multiplier. SSGI subtracts it so its bounce
+        // REPLACES that term rather than stacking on it; it carries DDGI probe
+        // irradiance once probes exist, with no change to the composite.
+        const RGTextureHandle gIndirect   = g.DeclareTexture("gIndirect",   { v.width, v.height, RHIFormat::RGBA16F });
+        // SSGI traces at half res — the pass is far too expensive at full res
+        // and the result is low-frequency enough to upsample bilaterally.
+        // Raw/resolved are compute-written (storage); the history is written by
+        // an ordinary raster copy and only needs to survive the frame boundary.
+        const uint32_t halfW = std::max(1u, v.width  / 2);
+        const uint32_t halfH = std::max(1u, v.height / 2);
+        const RGTextureHandle ssgiRaw      = g.DeclareTexture("ssgiRaw",
+            { halfW, halfH, RHIFormat::RGBA16F, /*storage*/ true });
+        const RGTextureHandle ssgiResolved = g.DeclareTexture("ssgiResolved",
+            { halfW, halfH, RHIFormat::RGBA16F, /*storage*/ true });
+        const RGTextureHandle ssgiHistory  = g.DeclareTexture("ssgiHistory",
+            { halfW, halfH, RHIFormat::RGBA16F, /*storage*/ false, /*persistent*/ true });
+        // Scene + screen-space GI. Separate target for the same reason as
+        // hdrSSR below — the composite reads the scene it modifies.
+        const RGTextureHandle hdrGI       = g.DeclareTexture("hdrGI",       { v.width, v.height, RHIFormat::RGBA16F });
         // Scene + reflections resolved by SSRComposite. A separate target (not a
         // blend into hdrLit) because the graph points readers at a texture's LAST
         // writer — the SSR trace reading hdrLit while a later pass writes it back
@@ -969,7 +1003,7 @@ private:
         // maps bind as pass-owned RHITextures, the cubes bind raw below.
         v.lighting->AddToGraph(g, gViewPos, gViewNormal, gAlbedo, gMaterial,
                                ssaoBlurred, gEmissive, cascades,
-                               m_SpotShadow->Maps(), hdrLit);
+                               m_SpotShadow->Maps(), hdrLit, gIndirect);
         v.lighting->BindIBL(*m_IBL);
         v.lighting->BindPointShadows(*m_PointShadow);
 
@@ -981,10 +1015,19 @@ private:
         v.skybox->AddToGraph(g, hdrLit, gDepth);
         v.skybox->BindIBL(*m_IBL);
 
-        // SSR — reflections ray-marched off the lit scene (post-skybox so rays
-        // can hit the sky), then material-weighted and resolved with the scene
-        // into hdrSSR. Later passes composite over hdrSSR, not hdrLit.
-        v.ssr->AddToGraph(g, gViewPos, gViewNormal, hdrLit, ssrColor, gMaterial, hdrSSR);
+        // SSGI — half-res cosine-hemisphere rays gathering indirect diffuse off
+        // the lit scene (post-skybox, so the sky is a valid bounce source),
+        // temporally accumulated, then composited into hdrGI. Its bounce
+        // replaces gIndirect's far-field term where the rays hit, and falls
+        // back to it where they miss. Everything after this consumes hdrGI.
+        v.ssgi->AddToGraph(g, gViewPos, gViewNormal, hdrLit, gVelocity,
+                           gAlbedo, gMaterial, ssaoBlurred, gIndirect,
+                           ssgiRaw, ssgiResolved, ssgiHistory, hdrGI);
+
+        // SSR — reflections ray-marched off the GI-composited scene (post-skybox
+        // so rays can hit the sky), then material-weighted and resolved with the
+        // scene into hdrSSR. Later passes composite over hdrSSR, not hdrGI.
+        v.ssr->AddToGraph(g, gViewPos, gViewNormal, hdrGI, ssrColor, gMaterial, hdrSSR);
 
         // TAA — accumulates the jittered frames against the persistent history,
         // reprojected through gVelocity. Before transparency/particles: neither
@@ -1111,10 +1154,12 @@ private:
         v.cameraUBO->Update(&ubo, sizeof(ubo));
 
         v.ssao->SetProjection(jitteredProj);
+        v.ssgi->SetProjection(jitteredProj);
         v.ssr->SetProjection(jitteredProj);
         v.skybox->SetFrameData(view, jitteredProj);
         v.transparency->SetCamera(view, jitteredProj);
         m_CSM->ComputeCascades(m_SunDir, view, proj, kNear, kShadowFar, kShadowRes);
+        v.lighting->SetAmbientIntensity(m_AmbientIntensity);   // read by SetFrameData below
         v.lighting->SetFrameData(view, m_SunDir, m_SunColor,
                                  m_CSM->GetLightMatrices(), m_CSM->GetSplitDepths(),
                                  m_PointPos, m_PointColor,
@@ -1137,6 +1182,10 @@ private:
         // Gates the accumulation for this frame's two TAA passes — with it off
         // the resolve is a passthrough and the copy skips its draw.
         v.taa->SetEnabled(m_TAAEnabled);
+        v.ssgi->SetEnabled(m_SSGIEnabled);
+        v.ssgi->SetRayCount(m_SSGIRays);
+        v.ssgi->SetIntensity(m_SSGIIntensity);
+        v.ssgi->SetMaxDistance(m_SSGIMaxDistance);
 
         v.graph.Execute(cmd);
 
@@ -1690,6 +1739,43 @@ private:
                 foundSun   = true;
             }
         }
+
+        GatherSkyLight(scene);
+    }
+
+    // The scene's sky: first SkyLightComponent wins. Re-baking the environment
+    // is expensive (equirect -> cube + irradiance + prefilter + BRDF) and idles
+    // the device, so it only runs when the path actually changes. No component
+    // leaves the engine default in place.
+    void GatherSkyLight(Scene& scene) {
+        auto view = scene.GetRegistry().view<SkyLightComponent>();
+        float intensity = 1.0f;
+
+        for (auto [entity, sl] : view.each()) {
+            intensity = sl.intensity;
+            const std::string resolved =
+                sl.environmentPath.empty() ? std::string{}
+                                           : AssetPaths::Resolve(sl.environmentPath);
+            if (!resolved.empty() && resolved != m_EnvironmentPath) {
+                m_Device->WaitIdle();          // the bake tears down and rebuilds IBL views
+                m_IBL->BakeEnvironment(resolved);
+                m_EnvironmentPath = resolved;
+                RebindEnvironment();
+            }
+            break;
+        }
+
+        m_AmbientIntensity = intensity;
+    }
+
+    // The baked cube/LUT views are written raw into the lighting + skybox sets,
+    // so a re-bake has to refresh every view's bindings.
+    void RebindEnvironment() {
+        for (std::unique_ptr<View>& v : m_Views) {
+            if (!v) continue;
+            v->lighting->BindIBL(*m_IBL);
+            v->skybox->BindIBL(*m_IBL);
+        }
     }
 
     void GatherParticles(Scene& scene) {
@@ -1851,6 +1937,11 @@ private:
     bool                                               m_HasLastFrameTime = false;
     glm::vec3              m_SunDir   { 0.0f, -1.0f, 0.0f };
     glm::vec3              m_SunColor { 0.0f };
+    // Resolved absolute path of the currently baked environment — the re-bake
+    // guard, since baking costs a WaitIdle plus a full cube/irradiance/prefilter
+    // pass. Ambient intensity comes from the same SkyLightComponent.
+    std::string            m_EnvironmentPath;
+    float                  m_AmbientIntensity = 1.0f;
     std::vector<glm::vec3> m_PointPos;      // world space
     std::vector<glm::vec3> m_PointColor;
     std::vector<float>     m_PointRadius;   // falloff window = the GatherLights cull sphere
@@ -1865,6 +1956,10 @@ private:
     // a frame share the same Halton sample).
     uint64_t m_FrameIndex = 0;
     bool     m_TAAEnabled = true;
+    bool     m_SSGIEnabled      = true;
+    int      m_SSGIRays         = 8;
+    float    m_SSGIIntensity    = 1.0f;
+    float    m_SSGIMaxDistance  = 8.0f;
 
     std::unique_ptr<RHITexture> m_DefaultParticleRHI;
     std::shared_ptr<Texture>    m_DefaultParticleTexture;

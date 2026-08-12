@@ -22,6 +22,10 @@
 
 layout(location = 0) in  vec2 vUV;
 layout(location = 0) out vec4 outColor;
+// Far-field diffuse irradiance this pass used, before the kD/albedo/AO
+// multiplier — ssgi_composite.frag subtracts it to replace the term rather
+// than stack on it. Carries DDGI probe irradiance once probes exist.
+layout(location = 1) out vec4 outIndirect;
 
 layout(set = 0, binding = 0) uniform sampler2D gViewPos;
 layout(set = 0, binding = 1) uniform sampler2D gViewNormal;
@@ -49,6 +53,7 @@ layout(set = 0, binding = 10) uniform LightingUBO {
     vec4 spotColor[4];       // .xyz radiant intensity, .w = range (falloff window)
     vec4 counts;             // x = numPointLights, y = prefilter max LOD,
                              // z = numSpotLights, w = point-shadow far plane
+    vec4 ambient;            // x = sky/IBL intensity (SkyLightComponent), yzw unused
 } u;
 
 // IBL maps (world space). Bound after the resource set is created (bake-time views).
@@ -199,7 +204,11 @@ float PointShadow(int i, vec3 worldPos, vec3 camPosW) {
 void main() {
     vec3 viewPos = texture(gViewPos, vUV).xyz;
     // Background pixel — no geometry written (gViewPos cleared to 0).
-    if (viewPos.z == 0.0) { outColor = vec4(0.0, 0.0, 0.0, 1.0); return; }
+    if (viewPos.z == 0.0) {
+        outColor    = vec4(0.0, 0.0, 0.0, 1.0);
+        outIndirect = vec4(0.0, 0.0, 0.0, 1.0);   // never leave an MRT slot unwritten
+        return;
+    }
 
     vec3  N         = normalize(texture(gViewNormal, vUV).xyz);
     vec3  albedo    = texture(gAlbedo,   vUV).rgb;
@@ -267,8 +276,12 @@ void main() {
     vec3 F  = fresnelSchlickRoughness(NdotV, F0, roughness);
     vec3 kD = (1.0 - F) * (1.0 - metallic);
 
-    vec3 diffuse         = texture(irradianceMap, worldN).rgb * albedo;
-    vec3 prefilteredColor = textureLod(prefilterMap, worldR, roughness * u.counts.y).rgb;
+    // Sky intensity scales BOTH ambient terms. It must be folded in before
+    // outIndirect is written, or SSGI would subtract an unscaled irradiance and
+    // over- or under-shoot by exactly this factor.
+    vec3 irradiance      = texture(irradianceMap, worldN).rgb * u.ambient.x;
+    vec3 diffuse         = irradiance * albedo;
+    vec3 prefilteredColor = textureLod(prefilterMap, worldR, roughness * u.counts.y).rgb * u.ambient.x;
     vec2 brdf            = texture(brdfLUT, vec2(NdotV, roughness)).rg;
     vec3 specular        = prefilteredColor * (F * brdf.x + brdf.y);
 
@@ -276,5 +289,6 @@ void main() {
     vec3 ambient  = (kD * diffuse + specular) * ao * occlusion;
     vec3 emissive = texture(gEmissive, vUV).rgb;
 
-    outColor = vec4(ambient + Lo + emissive, 1.0);
+    outColor    = vec4(ambient + Lo + emissive, 1.0);
+    outIndirect = vec4(irradiance, 1.0);
 }

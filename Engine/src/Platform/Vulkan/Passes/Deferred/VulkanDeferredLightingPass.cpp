@@ -62,7 +62,10 @@ VulkanDeferredLightingPass::VulkanDeferredLightingPass(RHIDevice* device,
         { 20, RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment }, // pointShadow2 (cube)
         { 21, RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment }, // pointShadow3 (cube)
     };
-    desc.colorFormat = kHDRFormat;
+    // MRT: location 0 = the lit scene, location 1 = the far-field diffuse
+    // irradiance this pass used, which ssgi_composite subtracts to replace the
+    // term rather than stack on it.
+    desc.colorFormats = { kHDRFormat, kHDRFormat };
     m_Pipeline = device->CreatePipeline(desc);
 }
 
@@ -75,7 +78,7 @@ RGPass& VulkanDeferredLightingPass::AddToGraph(
         RGTextureHandle ssao,    RGTextureHandle emissive,
         const std::array<RGTextureHandle, NUM_CASCADES>& cascades,
         const std::array<RHITexture*, NUM_SPOTS>& spotShadows,
-        RGTextureHandle output)
+        RGTextureHandle output, RGTextureHandle indirect)
 {
     if (!m_Set) {
         m_TexBindings = {
@@ -99,7 +102,8 @@ RGPass& VulkanDeferredLightingPass::AddToGraph(
         .Read(viewPos).Read(viewNormal).Read(albedo).Read(material)
         .Read(ssao).Read(emissive)
         .Read(cascades[0]).Read(cascades[1]).Read(cascades[2]).Read(cascades[3])
-        .Write(output)
+        // Write order is attachment order: output = location 0, indirect = 1.
+        .Write(output).Write(indirect)
         .SetExecute([this](RHICommandList* cmd) {
             cmd->BindPipeline(m_Pipeline.get());
             cmd->BindResourceSet(0, m_Set.get());
@@ -114,14 +118,14 @@ void VulkanDeferredLightingPass::AddToGraph(
         RGTextureHandle ssao,    RGTextureHandle emissive,
         const std::array<RGTextureHandle, NUM_CASCADES>& cascades,
         const std::array<RGTextureHandle, NUM_SPOTS>& spotShadows,
-        RGTextureHandle output)
+        RGTextureHandle output, RGTextureHandle indirect)
 {
     std::array<RHITexture*, NUM_SPOTS> resolved{};
     for (int i = 0; i < NUM_SPOTS; ++i)
         resolved[i] = graph.GetTexture(spotShadows[i]);
 
     RGPass& pass = AddToGraph(graph, viewPos, viewNormal, albedo, material,
-                              ssao, emissive, cascades, resolved, output);
+                              ssao, emissive, cascades, resolved, output, indirect);
     // Graph-owned spot maps rely on this pass's reads for their SampledRead
     // transition (and, when written, producer ordering).
     for (const RGTextureHandle& h : spotShadows)
@@ -249,6 +253,7 @@ void VulkanDeferredLightingPass::SetFrameData(
 
     m_UBOData.counts = glm::vec4(static_cast<float>(np), m_PrefilterMaxLod,
                                  static_cast<float>(ns), pointShadowFar);
+    m_UBOData.ambient = glm::vec4(m_AmbientIntensity, 0.0f, 0.0f, 0.0f);
 
     m_UBO->Update(&m_UBOData, sizeof(LightingUBO));
 }
@@ -294,7 +299,7 @@ void VulkanDeferredLightingPass::Reload()
         { 20, RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment },
         { 21, RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment },
     };
-    desc.colorFormat = kHDRFormat;
+    desc.colorFormats = { kHDRFormat, kHDRFormat };
     m_Pipeline = m_Device->CreatePipeline(desc);
 
     // AddToGraph only runs once at graph-build time, so rebuild the set eagerly

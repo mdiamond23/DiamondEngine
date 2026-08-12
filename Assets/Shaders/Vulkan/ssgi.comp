@@ -1,0 +1,122 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+
+// Screen-space GI trace, HALF resolution. Fires cosine-weighted hemisphere
+// rays from each pixel, marches them through the G-buffer, and gathers
+// radiance from the lit scene at each hit.
+//
+// Output units match the IBL irradiance map (which stores E/PI, see
+// irradiance_convolution.frag) so the composite can subtract one for the
+// other. rgb = mean radiance over the directions that HIT, a = hit fraction.
+// Dividing by the hit count rather than the ray count is deliberate: the
+// composite lerps toward the far-field term by 'a', which is exactly the
+// "unknown directions look like the far field" assumption.
+
+#include "screen_trace.glsl"
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0, rgba16f) uniform writeonly image2D ssgiRaw;
+layout(set = 0, binding = 1) uniform sampler2D gViewPos;      // full res
+layout(set = 0, binding = 2) uniform sampler2D gViewNormal;   // full res
+layout(set = 0, binding = 3) uniform sampler2D sceneColor;    // hdrLit, post-skybox
+
+layout(set = 0, binding = 4) uniform SSGIUBO {
+    mat4 projection;
+    vec2 halfSize;
+    vec2 _pad;
+} ubo;
+
+layout(push_constant) uniform Push {
+    uint  frameIndex;     // rotates the sample sequence; the temporal pass averages
+    int   rayCount;
+    float maxDistance;    // view-space units a ray may travel
+    float intensity;
+} pc;
+
+const int   TRACE_STEPS   = 16;
+const float THICKNESS     = 0.6;
+const float BIAS          = 0.05;
+const float NORMAL_PUSH   = 0.05;   // lifts the origin off its own surface
+const float FIREFLY_CLAMP = 8.0;    // one blown sample would persist forever
+
+// pcg3d — cheap, well-distributed, and stable under the frameIndex rotation.
+uvec3 PCG3D(uvec3 v) {
+    v = v * 1664525u + 1013904223u;
+    v.x += v.y * v.z; v.y += v.z * v.x; v.z += v.x * v.y;
+    v ^= v >> 16u;
+    v.x += v.y * v.z; v.y += v.z * v.x; v.z += v.x * v.y;
+    return v;
+}
+
+vec2 Hash2(uvec2 pixel, uint ray, uint frame) {
+    uvec3 h = PCG3D(uvec3(pixel, ray * 747796405u + frame * 2891336453u));
+    return vec2(h.xy) * (1.0 / 4294967296.0);
+}
+
+// Branchless orthonormal basis (Duff et al.) — no degenerate case at n.z = -1.
+void BuildBasis(vec3 n, out vec3 t, out vec3 b) {
+    float s  = n.z >= 0.0 ? 1.0 : -1.0;
+    float a  = -1.0 / (s + n.z);
+    float ab = n.x * n.y * a;
+    t = vec3(1.0 + s * n.x * n.x * a, s * ab, -s * n.x);
+    b = vec3(ab, s + n.y * n.y * a, -n.y);
+}
+
+vec3 CosineSample(vec3 n, vec2 xi) {
+    float r   = sqrt(xi.x);
+    float phi = 6.28318530718 * xi.y;
+    vec3 t, b;
+    BuildBasis(n, t, b);
+    return normalize(t * (r * cos(phi)) + b * (r * sin(phi))
+                       + n * sqrt(max(0.0, 1.0 - xi.x)));
+}
+
+void main() {
+    ivec2 id = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(vec2(id), ubo.halfSize))) return;
+
+    vec2 uv      = (vec2(id) + 0.5) / ubo.halfSize;
+    vec3 fragPos = textureLod(gViewPos, uv, 0.0).xyz;
+
+    // Background pixel — no geometry written here.
+    if (fragPos.z == 0.0) {
+        imageStore(ssgiRaw, id, vec4(0.0));
+        return;
+    }
+
+    vec3  normal = textureLod(gViewNormal, uv, 0.0).xyz;
+    float nLenSq = dot(normal, normal);
+    if (nLenSq <= 1e-6) {
+        imageStore(ssgiRaw, id, vec4(0.0));
+        return;
+    }
+    vec3 N = normal * inversesqrt(nLenSq);
+
+    vec3  origin = fragPos + N * NORMAL_PUSH;
+    vec3  sum    = vec3(0.0);
+    float hits   = 0.0;
+
+    for (int i = 0; i < pc.rayCount; ++i) {
+        vec3 dir = CosineSample(N, Hash2(uvec2(id), uint(i), pc.frameIndex));
+
+        vec2 hitUV;
+        if (!TraceScreenRay(gViewPos, ubo.projection, origin, dir,
+                            pc.maxDistance, TRACE_STEPS, THICKNESS, BIAS, hitUV))
+            continue;
+
+        // Weight the sample by the edge fade instead of the radiance, so the
+        // mean stays unbiased and confidence (not brightness) drops at borders.
+        float w = EdgeFade(hitUV);
+        if (w <= 0.0) continue;
+
+        vec3 L = min(textureLod(sceneColor, hitUV, 0.0).rgb, vec3(FIREFLY_CLAMP));
+        sum  += L * w;
+        hits += w;
+    }
+
+    vec3  irradiance = hits > 0.0 ? (sum / hits) * pc.intensity : vec3(0.0);
+    float confidence = hits / float(pc.rayCount);
+
+    imageStore(ssgiRaw, id, vec4(irradiance, confidence));
+}

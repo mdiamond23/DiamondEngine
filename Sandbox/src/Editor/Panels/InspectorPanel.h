@@ -45,6 +45,7 @@ private:
     // Light field drag snapshots
     glm::vec3 m_OldLightColor  = { 1, 1, 1 };
     float     m_OldIntensity   = 1.0f;
+    float     m_OldSkyIntensity = 1.0f;
     float     m_OldRadius      = 10.0f;
     float     m_OldInnerCone   = 30.0f;
     float     m_OldOuterCone   = 45.0f;
@@ -82,6 +83,7 @@ private:
     // Saved component state for deferred remove commands
     std::optional<MeshComponent>         m_PendingRemovedMesh;
     std::optional<LightComponent>        m_PendingRemovedLight;
+    std::optional<SkyLightComponent>     m_PendingRemovedSkyLight;
     std::optional<CameraComponent>       m_PendingRemovedCamera;
     std::optional<ColliderComponent>     m_PendingRemovedCollider;
     std::optional<RigidBodyComponent>    m_PendingRemovedRigidbody;

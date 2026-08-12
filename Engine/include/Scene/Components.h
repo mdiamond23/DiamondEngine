@@ -76,6 +76,16 @@ struct LightComponent
     float     outerConeAngle = 30.0f;   // Spot: outer cone, degrees
 };
 
+// The scene's sky. Drives the IBL ambient (irradiance + prefiltered specular)
+// and the skybox background; the first one found in the scene wins. Pairs with
+// the sun LightComponent — 'intensity' is the sky side of the sun-to-ambient
+// ratio, which is what decides how much bounce light is actually visible.
+struct SkyLightComponent
+{
+    std::string environmentPath;      // .hdr, stored "Assets/..."-relative; empty = engine default
+    float       intensity = 1.0f;     // ambient multiplier
+};
+
 struct CameraComponent
 {
     bool  isPrimary = true;

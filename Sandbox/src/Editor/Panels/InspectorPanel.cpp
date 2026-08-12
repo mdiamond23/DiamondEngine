@@ -571,6 +571,7 @@ void InspectorPanel::OnImGuiRender() {
 
     bool removeMesh        = false;
     bool removeLight       = false;
+    bool removeSkyLight    = false;
     bool removeCamera      = false;
     bool removeCollider    = false;
     bool removeRigidbody   = false;
@@ -948,6 +949,58 @@ void InspectorPanel::OnImGuiRender() {
                         "Change Outer Cone"));
                 }
                 lc.innerConeAngle = std::min(lc.innerConeAngle, lc.outerConeAngle - 0.5f);
+            }
+        }
+    }
+
+    // Sky Light Component — the scene's environment map + ambient level.
+    if (registry.all_of<SkyLightComponent>(entity)) {
+        ImGui::Separator();
+        auto& sl = registry.get<SkyLightComponent>(entity);
+
+        ImGui::Text("Sky Light");
+        if (ImGui::BeginPopupContextItem("##SkyLightCompCtx")) {
+            if (ImGui::MenuItem("Remove Component")) {
+                m_PendingRemovedSkyLight = sl;
+                removeSkyLight = true;
+            }
+            ImGui::EndPopup();
+        }
+
+        if (!removeSkyLight) {
+            const std::string label =
+                sl.environmentPath.empty()
+                    ? std::string("(engine default sky)")
+                    : std::filesystem::path(sl.environmentPath).filename().string();
+            ImGui::Button(label.c_str(), ImVec2(-1.0f, 0.0f));
+            if (ImGui::BeginDragDropTarget()) {
+                if (auto* payload = ImGui::AcceptDragDropPayload("CONTENT_ITEM_PATH")) {
+                    std::string path((const char*)payload->Data);
+                    std::string ext = path.size() >= 4 ? path.substr(path.size() - 4) : "";
+                    for (char& c : ext) c = (char)std::tolower((unsigned char)c);
+                    if (ext == ".hdr" || ext == ".exr") {
+                        const std::string oldPath = sl.environmentPath;
+                        sl.environmentPath = path;
+                        m_Context->Commands.ExecuteCommand(std::make_unique<ValueChangeCommand<std::string>>(
+                            [scene, entity](const std::string& v) {
+                                scene->GetRegistry().get<SkyLightComponent>(entity).environmentPath = v; },
+                            oldPath, path, "Change Sky Environment"));
+                    }
+                }
+                ImGui::EndDragDropTarget();
+            }
+            ImGui::TextDisabled("Drop an .hdr / .exr environment here");
+
+            // The sun-to-ambient ratio. Lower values darken the sky-lit areas,
+            // which is what makes bounce light (SSGI/DDGI) legible.
+            ImGui::DragFloat("Ambient##skylight", &sl.intensity, 0.01f, 0.0f, 10.0f, "%.2f");
+            if (ImGui::IsItemActivated()) m_OldSkyIntensity = sl.intensity;
+            if (ImGui::IsItemDeactivatedAfterEdit()) {
+                float n = sl.intensity, o = m_OldSkyIntensity;
+                m_Context->Commands.ExecuteCommand(std::make_unique<ValueChangeCommand<float>>(
+                    [scene, entity](const float& v) {
+                        scene->GetRegistry().get<SkyLightComponent>(entity).intensity = v; },
+                    o, n, "Change Sky Intensity"));
             }
         }
     }
@@ -2522,6 +2575,15 @@ void InspectorPanel::OnImGuiRender() {
             [scene, entity, saved]() { scene->GetRegistry().emplace_or_replace<LightComponent>(entity, saved); },
             "Remove Light Component"));
     }
+    if (removeSkyLight && m_PendingRemovedSkyLight) {
+        SkyLightComponent saved = *m_PendingRemovedSkyLight;
+        m_PendingRemovedSkyLight.reset();
+        registry.remove<SkyLightComponent>(entity);
+        m_Context->Commands.RecordCommand(std::make_unique<FunctionCommand>(
+            [scene, entity]()        { scene->GetRegistry().remove<SkyLightComponent>(entity); },
+            [scene, entity, saved]() { scene->GetRegistry().emplace_or_replace<SkyLightComponent>(entity, saved); },
+            "Remove Sky Light Component"));
+    }
     if (removeCamera && m_PendingRemovedCamera) {
         CameraComponent saved = *m_PendingRemovedCamera;
         m_PendingRemovedCamera.reset();
@@ -2654,6 +2716,7 @@ void InspectorPanel::OnImGuiRender() {
 
         bool hasMesh        = registry.all_of<MeshComponent>(entity);
         bool hasLight       = registry.all_of<LightComponent>(entity);
+        bool hasSkyLight    = registry.all_of<SkyLightComponent>(entity);
         bool hasCamera      = registry.all_of<CameraComponent>(entity);
         bool hasCollider    = registry.all_of<ColliderComponent>(entity);
         bool hasRigidbody   = registry.all_of<RigidBodyComponent>(entity);
@@ -2676,7 +2739,7 @@ void InspectorPanel::OnImGuiRender() {
         bool canAddUIText     = hasRect && !hasUIText;
         bool canAddUIProgress = hasRect && !hasUIProgress;
         bool canAddUIButton   = hasRect && !hasUIButton;
-        bool anyShown       = !hasMesh || !hasLight || !hasCamera || !hasCollider
+        bool anyShown       = !hasMesh || !hasLight || !hasSkyLight || !hasCamera || !hasCollider
                               || !hasRigidbody || !hasConstraint || !hasSkinnedMesh
                               || canAddAnimator || canAddAnimSM || !hasCanvas || !hasRect
                               || canAddUIImage || canAddUIText || canAddUIProgress || canAddUIButton;
@@ -2702,6 +2765,17 @@ void InspectorPanel::OnImGuiRender() {
                         [scene, entity]() { scene->GetRegistry().emplace<LightComponent>(entity); },
                         [scene, entity]() { scene->GetRegistry().remove<LightComponent>(entity); },
                         "Add Light Component"));
+                    ImGui::CloseCurrentPopup();
+                }
+        }
+
+        if (!hasSkyLight) {
+            if (ImGui::Selectable("Sky Light", false, kCompFlags))
+                if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                    m_Context->Commands.ExecuteCommand(std::make_unique<FunctionCommand>(
+                        [scene, entity]() { scene->GetRegistry().emplace<SkyLightComponent>(entity); },
+                        [scene, entity]() { scene->GetRegistry().remove<SkyLightComponent>(entity); },
+                        "Add Sky Light Component"));
                     ImGui::CloseCurrentPopup();
                 }
         }

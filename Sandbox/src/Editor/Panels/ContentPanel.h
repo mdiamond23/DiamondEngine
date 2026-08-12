@@ -12,7 +12,7 @@
 
 namespace Diamond { class ThumbnailService; }
 
-enum class AssetType { Folder, Texture, Mesh, SkinnedMesh, Material, Shader, Scene, Prefab, PhysicsMat, AnimSM, Font, Audio, File };
+enum class AssetType { Folder, Texture, HDRI, Mesh, SkinnedMesh, Material, Shader, Scene, Prefab, PhysicsMat, AnimSM, Font, Audio, File };
 
 struct ContentItem {
     std::filesystem::path path;

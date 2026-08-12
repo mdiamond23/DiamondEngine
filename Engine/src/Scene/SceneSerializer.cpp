@@ -186,6 +186,16 @@ static json SerializeEntity(Scene& scene, entt::entity entity)
         };
     }
 
+    if (reg.all_of<SkyLightComponent>(entity)) {
+        auto& sl = reg.get<SkyLightComponent>(entity);
+        // environmentPath rides the generic MakePortable/ResolveAll sweep over
+        // the whole tree — nothing extra to hook here.
+        ej["skylight"] = {
+            { "environmentPath", sl.environmentPath },
+            { "intensity",       sl.intensity       }
+        };
+    }
+
     if (reg.all_of<CameraComponent>(entity)) {
         auto& cc = reg.get<CameraComponent>(entity);
         ej["camera"] = {
@@ -588,6 +598,13 @@ static void DeserializeEntityComponents(Scene& scene, entt::entity e, const json
         lc.radius         = lj.value("radius",         10.0f);
         lc.innerConeAngle = lj.value("innerConeAngle", 15.0f);
         lc.outerConeAngle = lj.value("outerConeAngle", 30.0f);
+    }
+
+    if (ej.contains("skylight")) {
+        const auto& sj = ej["skylight"];
+        auto& sl = reg.emplace_or_replace<SkyLightComponent>(e);
+        sl.environmentPath = sj.value("environmentPath", std::string{});
+        sl.intensity       = sj.value("intensity",       1.0f);
     }
 
     if (ej.contains("camera")) {
@@ -1169,6 +1186,7 @@ static void RemoveComponentByKey(Scene& scene, entt::entity e, const std::string
     auto& reg = scene.GetRegistry();
     if      (key == "mesh")             reg.remove<MeshComponent>(e);
     else if (key == "light")            reg.remove<LightComponent>(e);
+    else if (key == "skylight")         reg.remove<SkyLightComponent>(e);
     else if (key == "camera")           reg.remove<CameraComponent>(e);
     else if (key == "canvas")           reg.remove<CanvasComponent>(e);
     else if (key == "rectTransform")    reg.remove<RectTransformComponent>(e);

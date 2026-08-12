@@ -221,6 +221,10 @@ int RunVulkanMeshDemo() {
     // then tonemap maps it to the swapchain.
     const RGTextureHandle hdrLit = graph.DeclareTexture(
         "hdrLit", { kOffscreenW, kOffscreenH, RHIFormat::RGBA16F });
+    // Lighting's second MRT — the far-field irradiance it used. The demo has no
+    // SSGI pass to consume it, but the attachment must exist for the pipeline.
+    const RGTextureHandle gIndirect = graph.DeclareTexture(
+        "gIndirect", { kOffscreenW, kOffscreenH, RHIFormat::RGBA16F });
     // Forward stages compose over the deferred result into their own HDR targets
     // (keeps the graph single-writer): deferred → hdrLit → forward → transparency.
     const RGTextureHandle hdrForward = graph.DeclareTexture(
@@ -351,7 +355,7 @@ int RunVulkanMeshDemo() {
     // shadow + the point light). Reading all four cascades also keeps cascades 1-3
     // alive through dead-pass culling.
     lighting.AddToGraph(graph, gViewPos, gViewNormal, gAlbedo, gMaterial,
-                        ssaoBlurred, gEmissive, csmCascades, spotMaps, hdrLit);
+                        ssaoBlurred, gEmissive, csmCascades, spotMaps, hdrLit, gIndirect);
     // Bind the baked IBL maps into the lighting set (raw cube/2D views) now that the
     // set exists. Static maps, so this is a one-time write. The point-shadow cubes
     // bind the same way; the demo never records them, so they keep their creation-

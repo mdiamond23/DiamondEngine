@@ -314,6 +314,22 @@ public:
             m_Renderer->SetTAAEnabled(m_TAAEnabled);
 
         ImGui::Separator();
+        // Screen-space GI. Off falls the ambient back to plain IBL, which is
+        // the A/B for judging what the bounce is actually contributing.
+        ImGui::TextUnformatted("Screen-Space GI");
+        if (ImGui::Checkbox("SSGI", &m_SSGIEnabled))
+            m_Renderer->SetSSGIEnabled(m_SSGIEnabled);
+        if (m_SSGIEnabled) {
+            bool ssgiDirty = false;
+            // ##ssgi: "Intensity" also names a bloom slider in this same window.
+            ssgiDirty |= ImGui::SliderInt("Rays##ssgi", &m_SSGIRays, 1, 32);
+            ssgiDirty |= ImGui::SliderFloat("Intensity##ssgi", &m_SSGIIntensity, 0.0f, 4.0f, "%.2f");
+            ssgiDirty |= ImGui::SliderFloat("Distance##ssgi", &m_SSGIMaxDistance, 0.5f, 40.0f, "%.1f");
+            if (ssgiDirty)
+                m_Renderer->SetSSGIParams(m_SSGIRays, m_SSGIIntensity, m_SSGIMaxDistance);
+        }
+
+        ImGui::Separator();
         // Auto-exposure. The multiplier this produces stacks on the Exposure
         // slider above, which stays useful as EV compensation while it's on.
         ImGui::TextUnformatted("Auto Exposure");
@@ -528,6 +544,10 @@ private:
     float m_Exposure       = 1.0f;
     int   m_Tonemapper     = static_cast<int>(Tonemapper::ACES);
     bool  m_TAAEnabled     = true;
+    bool  m_SSGIEnabled      = true;
+    int   m_SSGIRays         = 8;
+    float m_SSGIIntensity    = 1.0f;
+    float m_SSGIMaxDistance  = 8.0f;
     float m_BloomThreshold = 1.0f;
     float m_BloomIntensity = 1.0f;
     AutoExposureSettings m_AutoExposure {};

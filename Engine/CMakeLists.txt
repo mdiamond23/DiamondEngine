@@ -355,6 +355,7 @@ if(DIAMOND_ENABLE_VULKAN)
         src/Platform/Vulkan/Passes/PostProcess/VulkanAutoExposurePass.cpp
         src/Platform/Vulkan/Passes/Deferred/VulkanGBufferPass.cpp
         src/Platform/Vulkan/Passes/Deferred/VulkanSSAOPass.cpp
+        src/Platform/Vulkan/Passes/Deferred/VulkanSSGIPass.cpp
         src/Platform/Vulkan/Passes/Deferred/VulkanSSRPass.cpp
         src/Platform/Vulkan/Passes/Deferred/VulkanDeferredLightingPass.cpp
         src/Platform/Vulkan/Passes/Deferred/VulkanSkyboxPass.cpp
@@ -398,6 +399,10 @@ if(DIAMOND_ENABLE_VULKAN)
 
     set(_vk_shader_src ${CMAKE_SOURCE_DIR}/Assets/Shaders/Vulkan)
     set(_vk_spv_dir    ${CMAKE_BINARY_DIR}/shaders)
+    # Shared GLSL headers (#include via GL_GOOGLE_include_directive). Listed as a
+    # dependency of every shader — glslangValidator emits no depfile, so an edit
+    # here would otherwise not rebuild anything.
+    file(GLOB _vk_shader_headers ${_vk_shader_src}/include/*.glsl)
     file(MAKE_DIRECTORY ${_vk_spv_dir})
     set(_vk_spv_outputs)
     foreach(_shader mesh.vert mesh.frag fullscreen.vert tonemap.frag fxaa.frag
@@ -406,6 +411,7 @@ if(DIAMOND_ENABLE_VULKAN)
                     gbuffer.vert gbuffer.frag gbuffer_debug.frag
                     gbuffer_skinned.vert
                     ssao.frag ssao_blur.frag ssr.frag ssr_composite.frag
+                    ssgi.comp ssgi_temporal.comp ssgi_composite.frag
                     taa_resolve.frag
                     csm_depth.vert csm_depth.frag csm_depth_skinned.vert
                     spot_depth_copy.frag
@@ -425,8 +431,9 @@ if(DIAMOND_ENABLE_VULKAN)
                     graph_selftest_reduce.comp graph_selftest_copy.comp)
         add_custom_command(
             OUTPUT  ${_vk_spv_dir}/${_shader}.spv
-            COMMAND ${GLSLANG_VALIDATOR} -V ${_vk_shader_src}/${_shader} -o ${_vk_spv_dir}/${_shader}.spv
-            DEPENDS ${_vk_shader_src}/${_shader}
+            COMMAND ${GLSLANG_VALIDATOR} -V -I${_vk_shader_src}/include
+                    ${_vk_shader_src}/${_shader} -o ${_vk_spv_dir}/${_shader}.spv
+            DEPENDS ${_vk_shader_src}/${_shader} ${_vk_shader_headers}
             COMMENT "Compiling Vulkan shader ${_shader} → SPIR-V"
             VERBATIM)
         list(APPEND _vk_spv_outputs ${_vk_spv_dir}/${_shader}.spv)

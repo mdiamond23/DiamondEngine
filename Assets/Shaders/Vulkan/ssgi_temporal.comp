@@ -1,0 +1,100 @@
+#version 450
+
+// SSGI temporal accumulation, HALF resolution. Reprojects last frame's
+// resolved GI through the G-buffer motion vectors, clips it against the
+// current frame's local range, and blends. This is what makes a 4-8 ray
+// budget viable — the trace alone is far too noisy to display.
+//
+// Same rectification approach as taa_resolve.frag (YCoCg mean/variance clip),
+// but at half res and on irradiance rather than display color. Confidence
+// (alpha) accumulates alongside the radiance.
+//
+// pc.alpha is the blend toward the current frame: ~0.1 steady state, 1.0 when
+// the history is unseeded, which makes this pass a pure passthrough so the
+// graph never needs rebuilding to toggle.
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0, rgba16f) uniform writeonly image2D ssgiResolved;
+layout(set = 0, binding = 1) uniform sampler2D ssgiRaw;       // half res
+layout(set = 0, binding = 2) uniform sampler2D ssgiHistory;   // half res, persistent
+layout(set = 0, binding = 3) uniform sampler2D gVelocity;     // full res, UV-space
+
+layout(push_constant) uniform Push {
+    float alpha;   // 1.0 = ignore history entirely
+} pc;
+
+const float VARIANCE_GAMMA = 1.0;
+
+vec3 RGBToYCoCg(vec3 c) {
+    return vec3( 0.25 * c.r + 0.50 * c.g + 0.25 * c.b,
+                 0.50 * c.r               - 0.50 * c.b,
+                -0.25 * c.r + 0.50 * c.g - 0.25 * c.b);
+}
+
+vec3 YCoCgToRGB(vec3 c) {
+    return vec3(c.x + c.y - c.z, c.x + c.z, c.x - c.y - c.z);
+}
+
+// Clip toward the box center rather than clamping per channel — a clamp slides
+// the color along a box face and shifts its hue.
+vec3 ClipToAABB(vec3 boxMin, vec3 boxMax, vec3 q) {
+    vec3  center = 0.5 * (boxMax + boxMin);
+    vec3  extent = 0.5 * (boxMax - boxMin) + 1e-5;
+    vec3  v      = q - center;
+    vec3  unit   = abs(v / extent);
+    float m      = max(unit.x, max(unit.y, unit.z));
+    return m > 1.0 ? center + v / m : q;
+}
+
+void main() {
+    ivec2 size = textureSize(ssgiRaw, 0);
+    ivec2 id   = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(id, size))) return;
+
+    vec2 uv      = (vec2(id) + 0.5) / vec2(size);
+    vec4 current = textureLod(ssgiRaw, uv, 0.0);
+
+    // Disabled / unseeded history: passthrough. Uniform branch — free.
+    if (pc.alpha >= 1.0) {
+        imageStore(ssgiResolved, id, current);
+        return;
+    }
+
+    // Stale reprojection can divide through w <= 0 and write Inf/NaN — never
+    // trust the raw velocity.
+    vec2 velocity = textureLod(gVelocity, uv, 0.0).rg;
+    if (any(isnan(velocity)) || any(isinf(velocity))) velocity = vec2(0.0);
+
+    vec2 histUV = uv - velocity;
+    if (any(lessThan(histUV, vec2(0.0))) || any(greaterThan(histUV, vec2(1.0)))) {
+        imageStore(ssgiResolved, id, current);   // disocclusion at the frame edge
+        return;
+    }
+
+    // 3x3 mean/variance of the current trace, in YCoCg.
+    vec2 texel = 1.0 / vec2(size);
+    vec3 m1 = vec3(0.0);
+    vec3 m2 = vec3(0.0);
+    for (int y = -1; y <= 1; ++y) {
+        for (int x = -1; x <= 1; ++x) {
+            vec3 c = RGBToYCoCg(textureLod(ssgiRaw, uv + vec2(x, y) * texel, 0.0).rgb);
+            m1 += c;
+            m2 += c * c;
+        }
+    }
+    vec3 mean  = m1 / 9.0;
+    vec3 sigma = sqrt(max(m2 / 9.0 - mean * mean, vec3(0.0)));
+
+    vec4 history = textureLod(ssgiHistory, histUV, 0.0);
+    vec3 clipped = YCoCgToRGB(ClipToAABB(mean - VARIANCE_GAMMA * sigma,
+                                         mean + VARIANCE_GAMMA * sigma,
+                                         RGBToYCoCg(history.rgb)));
+
+    // The YCoCg round-trip can land a hair below zero; negative irradiance
+    // would be subtracted out of the scene by the composite.
+    vec3  radiance   = max(mix(clipped, current.rgb, pc.alpha), vec3(0.0));
+    float confidence = clamp(mix(history.a, current.a, pc.alpha), 0.0, 1.0);
+
+    imageStore(ssgiResolved, id, vec4(radiance, confidence));
+}
