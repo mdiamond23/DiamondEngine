@@ -357,6 +357,7 @@ if(DIAMOND_ENABLE_VULKAN)
         src/Platform/Vulkan/Passes/Deferred/VulkanSSAOPass.cpp
         src/Platform/Vulkan/RHI/VulkanRHIAccelStruct.cpp
         src/Platform/Vulkan/Passes/Debug/VulkanRTDebugPass.cpp
+        src/Platform/Vulkan/Passes/GI/VulkanDDGIPass.cpp
         src/Platform/Vulkan/Passes/Deferred/VulkanSSGIPass.cpp
         src/Platform/Vulkan/Passes/Deferred/VulkanSSRPass.cpp
         src/Platform/Vulkan/Passes/Deferred/VulkanDeferredLightingPass.cpp
@@ -414,6 +415,9 @@ if(DIAMOND_ENABLE_VULKAN)
                     gbuffer_skinned.vert
                     ssao.frag ssao_blur.frag ssr.frag ssr_composite.frag
                     ssgi.comp ssgi_temporal.comp ssgi_composite.frag
+                    ddgi_blend_irradiance.comp ddgi_blend_visibility.comp
+                    ddgi_relocate.comp
+                    ddgi_probe_debug.vert ddgi_probe_debug.frag
                     taa_resolve.frag
                     csm_depth.vert csm_depth.frag csm_depth_skinned.vert
                     spot_depth_copy.frag
@@ -444,7 +448,9 @@ if(DIAMOND_ENABLE_VULKAN)
     # bare `-V` above does not target (it emits Vulkan 1.0 / SPIR-V 1.0). Kept as
     # its own loop rather than bumping the whole list, so the ~50 shaders already
     # verified against the 1.0 target keep compiling byte-identically.
-    set(_vk_rt_shaders rt_debug.rgen rt_debug.rmiss rt_debug.rchit)
+    set(_vk_rt_shaders rt_debug.rgen rt_debug.rmiss rt_debug.rchit
+                       ddgi_probe_trace.rgen ddgi_probe_trace.rmiss
+                       ddgi_probe_trace.rchit)
     foreach(_shader ${_vk_rt_shaders})
         add_custom_command(
             OUTPUT  ${_vk_spv_dir}/${_shader}.spv

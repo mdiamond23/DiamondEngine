@@ -268,6 +268,18 @@ static void BuildDefaultScene(Scene& scene)
         lc.color     = { 1.0f, 1.0f, 1.0f };
         lc.intensity = 3.0f;
     }
+    {
+        // DDGI probe volume covering the demo geometry (gi-design.md slice 3).
+        // Nothing samples the probes yet — this exists so the probe update runs
+        // out of the box and "Show Probes" on the component has something to
+        // draw. Inert on hardware without ray tracing.
+        auto e = scene.CreateEntity("DDGI Volume");
+        auto& tc = scene.GetRegistry().get<TransformComponent>(e);
+        tc.position = glm::vec3(0.0f, 2.0f, 0.0f);
+        auto& dv = scene.GetRegistry().emplace<DDGIVolumeComponent>(e);
+        dv.extent      = glm::vec3(24.0f, 10.0f, 24.0f);
+        dv.probeCounts = glm::ivec3(8, 4, 8);
+    }
 }
 
 int main(int argc, char** argv)

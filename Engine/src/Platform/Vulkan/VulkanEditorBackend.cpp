@@ -342,6 +342,17 @@ public:
             if (m_RTDebugEnabled &&
                 ImGui::SliderFloat("Ray Length##rt", &m_RTDebugMaxDistance, 1.0f, 500.0f, "%.0f"))
                 m_Renderer->SetRTDebugMaxDistance(m_RTDebugMaxDistance);
+
+            // DDGI probe update (gi-design.md slice 3). The master switch only
+            // decides whether the probes are traced at all — everything that
+            // shapes the result (grid, rays, hysteresis, the probe viz) lives on
+            // the DDGIVolumeComponent, where a scene can have it serialized.
+            if (ImGui::Checkbox("DDGI Probes", &m_DDGIEnabled))
+                m_Renderer->SetDDGIEnabled(m_DDGIEnabled);
+            if (!m_Renderer->HasDDGIVolume())
+                ImGui::TextDisabled("no DDGI Volume in the scene");
+            else
+                ImGui::TextDisabled("tune on the DDGI Volume component");
         }
 
         ImGui::Separator();
@@ -565,6 +576,7 @@ private:
     float m_SSGIMaxDistance  = 8.0f;
     bool  m_RTDebugEnabled     = false;
     float m_RTDebugMaxDistance = 100.0f;
+    bool  m_DDGIEnabled        = true;   // matches SceneRendererVk's default
     float m_BloomThreshold = 1.0f;
     float m_BloomIntensity = 1.0f;
     AutoExposureSettings m_AutoExposure {};

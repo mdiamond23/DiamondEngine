@@ -572,6 +572,7 @@ void InspectorPanel::OnImGuiRender() {
     bool removeMesh        = false;
     bool removeLight       = false;
     bool removeSkyLight    = false;
+    bool removeDDGIVolume  = false;
     bool removeCamera      = false;
     bool removeCollider    = false;
     bool removeRigidbody   = false;
@@ -1002,6 +1003,56 @@ void InspectorPanel::OnImGuiRender() {
                         scene->GetRegistry().get<SkyLightComponent>(entity).intensity = v; },
                     o, n, "Change Sky Intensity"));
             }
+        }
+    }
+
+    // DDGI Volume — the probe grid (Docs/gi-design.md slice 3). The entity's
+    // transform is the volume centre; everything below shapes the grid inside it.
+    //
+    // Deliberately NOT routed through the undo stack: these are live-tuning knobs
+    // whose effect you judge by watching the probes converge, and every edit
+    // resets the temporal accumulation anyway. The renderer settings window works
+    // the same way.
+    if (registry.all_of<DDGIVolumeComponent>(entity)) {
+        ImGui::Separator();
+        auto& dv = registry.get<DDGIVolumeComponent>(entity);
+
+        ImGui::Text("DDGI Volume");
+        if (ImGui::BeginPopupContextItem("##DDGIVolumeCompCtx")) {
+            if (ImGui::MenuItem("Remove Component")) {
+                m_PendingRemovedDDGIVolume = dv;
+                removeDDGIVolume = true;
+            }
+            ImGui::EndPopup();
+        }
+
+        if (!removeDDGIVolume) {
+            ImGui::DragFloat3("Extent##ddgi", glm::value_ptr(dv.extent), 0.25f, 0.1f, 500.0f);
+            ImGui::DragInt3("Probe Counts##ddgi", glm::value_ptr(dv.probeCounts), 0.1f, 1, 16);
+            dv.probeCounts = glm::clamp(dv.probeCounts, glm::ivec3(1), glm::ivec3(16));
+            ImGui::TextDisabled("%d probes", dv.probeCounts.x * dv.probeCounts.y * dv.probeCounts.z);
+
+            ImGui::SliderInt("Rays / Probe##ddgi", &dv.raysPerProbe, 8, 128);
+
+            // High hysteresis = slow, clean convergence. This is the knob that
+            // trades probe noise against how fast a light change propagates.
+            ImGui::SliderFloat("Hysteresis##ddgi", &dv.hysteresis, 0.0f, 0.99f, "%.3f");
+            ImGui::SliderFloat("Ray Distance##ddgi", &dv.maxRayDistance, 1.0f, 200.0f, "%.1f");
+            ImGui::SliderFloat("Energy##ddgi", &dv.energy, 0.0f, 4.0f, "%.2f");
+
+            if (ImGui::TreeNode("Bias##ddgi")) {
+                ImGui::SliderFloat("Normal Bias", &dv.normalBias, 0.0f, 1.0f, "%.3f");
+                ImGui::SliderFloat("View Bias",   &dv.viewBias,   0.0f, 1.0f, "%.3f");
+                ImGui::SliderFloat("Backface Threshold", &dv.backfaceThreshold,
+                                   0.01f, 1.0f, "%.2f");
+                ImGui::TreePop();
+            }
+
+            // The slice-3 deliverable: probes shaded by their own irradiance.
+            // Red spheres are probes relocation classified as inside geometry.
+            ImGui::Checkbox("Show Probes##ddgi", &dv.showProbes);
+            if (dv.showProbes)
+                ImGui::SliderFloat("Probe Size##ddgi", &dv.probeRadius, 0.02f, 1.0f, "%.2f");
         }
     }
 
@@ -2584,6 +2635,15 @@ void InspectorPanel::OnImGuiRender() {
             [scene, entity, saved]() { scene->GetRegistry().emplace_or_replace<SkyLightComponent>(entity, saved); },
             "Remove Sky Light Component"));
     }
+    if (removeDDGIVolume && m_PendingRemovedDDGIVolume) {
+        DDGIVolumeComponent saved = *m_PendingRemovedDDGIVolume;
+        m_PendingRemovedDDGIVolume.reset();
+        registry.remove<DDGIVolumeComponent>(entity);
+        m_Context->Commands.RecordCommand(std::make_unique<FunctionCommand>(
+            [scene, entity]()        { scene->GetRegistry().remove<DDGIVolumeComponent>(entity); },
+            [scene, entity, saved]() { scene->GetRegistry().emplace_or_replace<DDGIVolumeComponent>(entity, saved); },
+            "Remove DDGI Volume Component"));
+    }
     if (removeCamera && m_PendingRemovedCamera) {
         CameraComponent saved = *m_PendingRemovedCamera;
         m_PendingRemovedCamera.reset();
@@ -2717,6 +2777,7 @@ void InspectorPanel::OnImGuiRender() {
         bool hasMesh        = registry.all_of<MeshComponent>(entity);
         bool hasLight       = registry.all_of<LightComponent>(entity);
         bool hasSkyLight    = registry.all_of<SkyLightComponent>(entity);
+        bool hasDDGIVolume  = registry.all_of<DDGIVolumeComponent>(entity);
         bool hasCamera      = registry.all_of<CameraComponent>(entity);
         bool hasCollider    = registry.all_of<ColliderComponent>(entity);
         bool hasRigidbody   = registry.all_of<RigidBodyComponent>(entity);
@@ -2739,7 +2800,8 @@ void InspectorPanel::OnImGuiRender() {
         bool canAddUIText     = hasRect && !hasUIText;
         bool canAddUIProgress = hasRect && !hasUIProgress;
         bool canAddUIButton   = hasRect && !hasUIButton;
-        bool anyShown       = !hasMesh || !hasLight || !hasSkyLight || !hasCamera || !hasCollider
+        bool anyShown       = !hasMesh || !hasLight || !hasSkyLight || !hasDDGIVolume
+                              || !hasCamera || !hasCollider
                               || !hasRigidbody || !hasConstraint || !hasSkinnedMesh
                               || canAddAnimator || canAddAnimSM || !hasCanvas || !hasRect
                               || canAddUIImage || canAddUIText || canAddUIProgress || canAddUIButton;
@@ -2776,6 +2838,17 @@ void InspectorPanel::OnImGuiRender() {
                         [scene, entity]() { scene->GetRegistry().emplace<SkyLightComponent>(entity); },
                         [scene, entity]() { scene->GetRegistry().remove<SkyLightComponent>(entity); },
                         "Add Sky Light Component"));
+                    ImGui::CloseCurrentPopup();
+                }
+        }
+
+        if (!hasDDGIVolume) {
+            if (ImGui::Selectable("DDGI Volume", false, kCompFlags))
+                if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                    m_Context->Commands.ExecuteCommand(std::make_unique<FunctionCommand>(
+                        [scene, entity]() { scene->GetRegistry().emplace<DDGIVolumeComponent>(entity); },
+                        [scene, entity]() { scene->GetRegistry().remove<DDGIVolumeComponent>(entity); },
+                        "Add DDGI Volume Component"));
                     ImGui::CloseCurrentPopup();
                 }
         }

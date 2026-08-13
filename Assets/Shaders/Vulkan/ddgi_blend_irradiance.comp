@@ -1,0 +1,86 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+
+#include "ddgi_common.glsl"
+
+// Folds this frame's probe rays into the irradiance atlas (Docs/gi-design.md
+// slice 3). One invocation per atlas texel of the LIVE grid, including the 1px
+// border — border texels copy their mirrored interior neighbour in the same
+// dispatch rather than needing a second pass.
+//
+// The atlas is read AND written here, in place. That is legal precisely because
+// it happens inside one pass: the graph's readers-bind-the-last-writer rule
+// (which forced SSR and SSGI onto separate targets) never sees it, and the
+// probe trace consumes the previous frame's contents through ReadHistory.
+//
+// Normalizing by the summed cosine weight makes the result a cosine-weighted
+// mean radiance, i.e. E/pi — the same convention irradiance_convolution.frag
+// stores, so slice 4 can swap it in for the IBL sample with no rescaling.
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0, rgba16f) uniform image2D uIrradianceAtlas;
+layout(set = 0, binding = 1) uniform sampler2D uRayData;
+layout(set = 0, binding = 2, std140) uniform DDGIBlock { DDGIVolume v; } ddgi;
+layout(set = 0, binding = 3) uniform sampler2D uProbeData;
+
+void main() {
+    const int res  = DDGI_IRRADIANCE_RES;
+    const int tile = res + 2;
+
+    const ivec2 texel = ivec2(gl_GlobalInvocationID.xy);
+    const ivec2 grid  = texel / tile;      // which probe tile
+    const ivec2 local = texel % tile;      // coord inside it, border included
+
+    // The dispatch is sized for the live grid; the atlas is sized for the max.
+    if (grid.x >= ddgi.v.counts.x * ddgi.v.counts.y || grid.y >= ddgi.v.counts.z)
+        return;
+
+    const int probeIndex = grid.x + grid.y * (ddgi.v.counts.x * ddgi.v.counts.y);
+    if (probeIndex >= ddgi.v.counts.w) return;
+
+    // Border texels are pure copies. They run after the interior in the same
+    // dispatch only by luck of scheduling, so they read the PREVIOUS frame's
+    // interior — one frame of lag on the seam, invisible at 8x8.
+    if (local.x == 0 || local.y == 0 || local.x == res + 1 || local.y == res + 1) {
+        const ivec2 src = DDGIBorderSource(local, res);
+        imageStore(uIrradianceAtlas, texel,
+                   imageLoad(uIrradianceAtlas, grid * tile + src));
+        return;
+    }
+
+    // A probe classified inside geometry keeps whatever it had; its rays are
+    // meaningless and re-blending them would drag neighbours down.
+    if (ddgi.v.params3.x > 0.5 && DDGIProbeData(uProbeData, probeIndex).w < 0.5)
+        return;
+
+    // Direction this texel represents on the probe's sphere.
+    const vec2 oct = ((vec2(local) - 0.5) / float(res)) * 2.0 - 1.0;
+    const vec3 dir = DDGIOctDecode(oct);
+
+    const int rayCount = int(ddgi.v.params2.w);
+
+    vec3  sum   = vec3(0.0);
+    float wSum  = 0.0;
+    for (int r = 0; r < rayCount; ++r) {
+        const vec4 ray = texelFetch(uRayData, ivec2(r, probeIndex), 0);
+        if (ray.w < 0.0) continue;   // backface hit — the probe is buried, ignore
+
+        const float w = max(0.0, dot(dir, DDGIRayDirection(ddgi.v, r)));
+        if (w <= 1e-6) continue;
+        sum  += ray.rgb * w;
+        wSum += w;
+    }
+
+    vec3 result = wSum > 1e-6 ? sum / wSum : vec3(0.0);
+
+    // Hysteresis: a low per-frame blend is what lets 64 rays converge to a clean
+    // value over ~30 frames instead of boiling. Bypassed on the first frame,
+    // when the atlas holds pool garbage rather than history.
+    if (ddgi.v.params3.x > 0.5) {
+        const vec3 prev = imageLoad(uIrradianceAtlas, texel).rgb;
+        result = mix(result, prev, ddgi.v.params.x);
+    }
+
+    imageStore(uIrradianceAtlas, texel, vec4(result, 1.0));
+}

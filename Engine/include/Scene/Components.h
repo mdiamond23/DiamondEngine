@@ -86,6 +86,36 @@ struct SkyLightComponent
     float       intensity = 1.0f;     // ambient multiplier
 };
 
+// A DDGI probe volume (Docs/gi-design.md slice 3). The entity's transform gives
+// the volume CENTRE; probes fill a regular grid across 'extent', with the corner
+// probes sitting exactly on the box boundary. Like SkyLightComponent, the first
+// one found in the scene wins — one volume is all slice 3 supports.
+//
+// Requires ray-tracing hardware (GI tier 2); on tier 1 the component is inert
+// and the ambient stays IBL + SSGI.
+struct DDGIVolumeComponent
+{
+    glm::vec3  extent      { 24.0f, 10.0f, 24.0f };   // full size, world units
+    glm::ivec3 probeCounts { 8, 4, 8 };               // clamped to 16 per axis
+
+    int   raysPerProbe = 64;      // per probe per frame, capped at 128
+
+    // Per-frame blend toward the new estimate. High values converge slowly and
+    // cleanly; this is the knob that trades noise against light-change latency.
+    float hysteresis     = 0.97f;
+    float normalBias     = 0.15f;   // push the sample point off the surface
+    float viewBias       = 0.10f;   // ...and toward the viewer, for grazing angles
+    float energy         = 1.0f;    // artistic multiplier on the final irradiance
+    float maxRayDistance = 40.0f;   // probe ray length; also the "sees sky" distance
+
+    // Fraction of a probe's rays that must hit backfaces before it counts as
+    // buried and gets deactivated by the relocation pass.
+    float backfaceThreshold = 0.25f;
+
+    bool  showProbes  = false;   // debug spheres shaded by their own irradiance
+    float probeRadius = 0.15f;   // display size of those spheres
+};
+
 struct CameraComponent
 {
     bool  isPrimary = true;

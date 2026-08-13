@@ -98,7 +98,11 @@ inline bool RecompileSpirv(const std::string& srcDir, const std::string& spvDir,
                            const std::string& name)
 {
 #ifdef DIAMOND_GLSLANG_VALIDATOR
-    const std::string cmd = "\"" DIAMOND_GLSLANG_VALIDATOR "\" -V \"" + srcDir + "/" + name +
+    // -I matches the offline build's include path — without it, hot-reloading any
+    // shader that #includes a shared header (screen_trace.glsl, ddgi_common.glsl)
+    // fails on the include rather than on the edit being reloaded.
+    const std::string cmd = "\"" DIAMOND_GLSLANG_VALIDATOR "\" -V -I\"" + srcDir + "/include\""
+                            " \"" + srcDir + "/" + name +
                             "\" -o \"" + spvDir + "/" + name + ".spv\"";
     // cmd.exe mis-parses a command line that starts with a quoted token unless
     // the whole thing is wrapped in one more pair of quotes.

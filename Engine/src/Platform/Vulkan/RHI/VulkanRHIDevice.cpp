@@ -567,6 +567,14 @@ std::unique_ptr<RHIPipeline> VulkanRHIDevice::CreateRayTracingPipeline(
     return std::make_unique<VulkanRHIPipeline>(this, desc);
 }
 
+uint64_t VulkanRHIDevice::BufferAddress(RHIBuffer* buffer) const {
+    if (!buffer) return 0;
+    // Frame slot 0: only STATIC buffers carry ShaderDeviceAddress usage, and
+    // those are a single allocation, so every slot is the same handle.
+    VkBuffer handle = static_cast<VulkanRHIBuffer*>(buffer)->Handle(0);
+    return handle ? BufferDeviceAddress(m_Ctx.Device(), handle) : 0;
+}
+
 RHIFormat VulkanRHIDevice::SwapchainFormat() const {
     return FromVkFormat(m_Swapchain.ImageFormat());
 }

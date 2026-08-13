@@ -1,0 +1,52 @@
+#version 460
+#extension GL_EXT_ray_tracing        : require
+#extension GL_GOOGLE_include_directive : require
+
+#include "ddgi_common.glsl"
+
+// DDGI probe ray generation (Docs/gi-design.md slice 3). Launch grid is
+// (raysPerProbe, probeCount) — 2D, which is exactly what RHICommandList::TraceRays
+// already takes. Each ray writes one texel of the ray-data image; the two blend
+// passes then fold that image into the octahedral atlases.
+//
+// Rays come from the shared Fibonacci set under this frame's random rotation, so
+// the blend can reconstruct each ray's direction without reading it back.
+
+layout(set = 0, binding = 0) uniform accelerationStructureEXT uTLAS;
+layout(set = 0, binding = 1, rgba16f) uniform writeonly image2D uRayData;
+layout(set = 0, binding = 2, std140) uniform DDGIBlock { DDGIVolume v; } ddgi;
+layout(set = 0, binding = 6) uniform sampler2D uProbeData;
+
+layout(location = 0) rayPayloadEXT DDGIPayload payload;
+
+void main() {
+    const int rayIndex   = int(gl_LaunchIDEXT.x);
+    const int probeIndex = int(gl_LaunchIDEXT.y);
+
+    // The launch is sized for the live grid, but guard anyway — a shrunk grid
+    // between frames would otherwise scribble past the used sub-rect.
+    if (rayIndex >= int(ddgi.v.params2.w) || probeIndex >= ddgi.v.counts.w) return;
+
+    const ivec3 coord = DDGIProbeCoord(probeIndex, ddgi.v.counts.xyz);
+
+    // Relocation offset from last frame. Ignored until the persistent textures
+    // have been written once — before that they hold whatever the pool had.
+    vec3 offset = vec3(0.0);
+    if (ddgi.v.params3.x > 0.5)
+        offset = DDGIProbeData(uProbeData, probeIndex).xyz;
+
+    const vec3 origin = DDGIProbeGridPos(ddgi.v, coord) + offset;
+    const vec3 dir    = DDGIRayDirection(ddgi.v, rayIndex);
+
+    payload.radiance = vec3(0.0);
+    payload.hitT     = ddgi.v.params.w;
+
+    // No culling flags: a backface hit is load-bearing here (it means the probe
+    // is inside geometry), so both windings must reach the closest-hit shader.
+    traceRayEXT(uTLAS, gl_RayFlagsNoneEXT, 0xFF,
+                0 /*sbtOffset*/, 0 /*sbtStride*/, 0 /*missIndex*/,
+                origin, 0.001, dir, ddgi.v.params.w, 0 /*payload*/);
+
+    imageStore(uRayData, ivec2(rayIndex, probeIndex),
+               vec4(payload.radiance, payload.hitT));
+}

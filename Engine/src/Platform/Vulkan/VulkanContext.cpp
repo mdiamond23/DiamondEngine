@@ -372,6 +372,9 @@ void VulkanContext::CreateLogicalDevice() {
         f12.descriptorIndexing                           = VK_TRUE;
         f12.runtimeDescriptorArray                       = VK_TRUE;
         f12.shaderStorageBufferArrayNonUniformIndexing   = VK_TRUE;
+        // Rays in a subgroup hit different instances, so the material index a
+        // closest-hit shader picks its albedo map with is non-uniform by nature.
+        f12.shaderSampledImageArrayNonUniformIndexing    = VK_TRUE;
         f12.descriptorBindingVariableDescriptorCount     = VK_TRUE;
         f12.descriptorBindingPartiallyBound              = VK_TRUE;
 

@@ -1,0 +1,74 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+
+#include "ddgi_common.glsl"
+
+// The visibility half of the probe blend: mean hit distance and mean squared hit
+// distance per octahedral direction, which is what the Chebyshev test in
+// DDGISampleIrradiance turns into "can this probe see that point". Without it,
+// probe irradiance bleeds straight through walls.
+//
+// Same structure as ddgi_blend_irradiance.comp (in-place read/write, border copy
+// in the same dispatch), with three differences: a higher octahedral resolution,
+// a sharply peaked cosine weight so a wall's edge stays crisp, and backface hits
+// are KEPT — geometry occludes regardless of which side was hit.
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0, rg16f) uniform image2D uVisibilityAtlas;
+layout(set = 0, binding = 1) uniform sampler2D uRayData;
+layout(set = 0, binding = 2, std140) uniform DDGIBlock { DDGIVolume v; } ddgi;
+layout(set = 0, binding = 3) uniform sampler2D uProbeData;
+
+void main() {
+    const int res  = DDGI_VISIBILITY_RES;
+    const int tile = res + 2;
+
+    const ivec2 texel = ivec2(gl_GlobalInvocationID.xy);
+    const ivec2 grid  = texel / tile;
+    const ivec2 local = texel % tile;
+
+    if (grid.x >= ddgi.v.counts.x * ddgi.v.counts.y || grid.y >= ddgi.v.counts.z)
+        return;
+
+    const int probeIndex = grid.x + grid.y * (ddgi.v.counts.x * ddgi.v.counts.y);
+    if (probeIndex >= ddgi.v.counts.w) return;
+
+    if (local.x == 0 || local.y == 0 || local.x == res + 1 || local.y == res + 1) {
+        const ivec2 src = DDGIBorderSource(local, res);
+        imageStore(uVisibilityAtlas, texel,
+                   imageLoad(uVisibilityAtlas, grid * tile + src));
+        return;
+    }
+
+    if (ddgi.v.params3.x > 0.5 && DDGIProbeData(uProbeData, probeIndex).w < 0.5)
+        return;
+
+    const vec2 oct = ((vec2(local) - 0.5) / float(res)) * 2.0 - 1.0;
+    const vec3 dir = DDGIOctDecode(oct);
+
+    const int   rayCount  = int(ddgi.v.params2.w);
+    const float sharpness = ddgi.v.params2.z;
+    const float maxDist   = ddgi.v.params.w;
+
+    vec2  sum  = vec2(0.0);
+    float wSum = 0.0;
+    for (int r = 0; r < rayCount; ++r) {
+        const float w = pow(max(0.0, dot(dir, DDGIRayDirection(ddgi.v, r))), sharpness);
+        if (w <= 1e-6) continue;
+
+        // abs(): a backface hit is still an occluder at that distance.
+        const float d = min(abs(texelFetch(uRayData, ivec2(r, probeIndex), 0).w), maxDist);
+        sum  += vec2(d, d * d) * w;
+        wSum += w;
+    }
+
+    vec2 result = wSum > 1e-6 ? sum / wSum : vec2(maxDist, maxDist * maxDist);
+
+    if (ddgi.v.params3.x > 0.5) {
+        const vec2 prev = imageLoad(uVisibilityAtlas, texel).rg;
+        result = mix(result, prev, ddgi.v.params.x);
+    }
+
+    imageStore(uVisibilityAtlas, texel, vec4(result, 0.0, 0.0));
+}

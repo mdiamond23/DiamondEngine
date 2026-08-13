@@ -176,9 +176,108 @@ the fallback gets built and proven before the RT work rather than bolted on afte
    hash, so a static non-casting mesh that moves won't re-trigger a TLAS build.
 3. **DDGI core** — volume component, atlases, raygen/rchit/rmiss, blend +
    relocation/classification compute, probe debug viz. Not yet lighting the scene.
+   **IMPLEMENTED 2026-08-12** — `DDGIVolumeComponent` (serialized, inspector,
+   Add Component); `VulkanDDGIPass` with five graph passes (RT trace → blend
+   irradiance → blend visibility → relocate/classify → probe viz);
+   `ddgi_probe_trace.{rgen,rmiss,rchit}`, `ddgi_blend_{irradiance,visibility}.comp`,
+   `ddgi_relocate.comp`, `ddgi_probe_debug.{vert,frag}` and the shared
+   `include/ddgi_common.glsl`. Full solution builds clean, the Vulkan editor runs
+   with ZERO validation output, and the probe viz shows spheres shaded from the
+   atlas. Also fixed slice 2's known gap: the TLAS now rides its own instance
+   hash rather than the static shadow-caster hash.
+
+   Three decisions taken during implementation, all deliberately scoped:
+   - ~~**Albedo is `BaseColorFactor`, not a texture sample.**~~ **RESOLVED
+     2026-08-13 (slice-4 prep).** `RHIResourceBinding` gained a `count` field and
+     `RHITextureBinding` an `arrayIndex`, which is the whole of the RHI change;
+     `ddgi_probe_trace.rchit` now samples a 256-slot bindless base-color array
+     with `nonuniformEXT` (rays in a subgroup hit different instances, so the
+     index is non-uniform by nature — needs
+     `shaderSampledImageArrayNonUniformIndexing`, now enabled). Every slot is
+     written at set creation, padded with 1×1 white, so no partially-bound
+     feature is involved. `RTGeometry` grew to 64 B carrying the texture slot,
+     the UV scale and the vertex stride. Verified by pointing the probe viz at
+     the downward irradiance and normalizing out magnitude: probes over the lava
+     floor read salmon, not white.
+   - **Sun is CSM-shadowed; point and spot lights are unshadowed.** The RT
+     pipeline desc carries one miss and one closest-hit shader, so proper shadow
+     rays would need multiple miss shaders plus recursion depth 2. Sampling the
+     existing cascades costs nothing extra and needs no RHI change. Consequence:
+     probes beyond CSM range see an unoccluded sun, and a local light leaks
+     through walls into probes. Slice 5.
+   - **One volume, main view only.** First `DDGIVolumeComponent` wins (the
+     `SkyLightComponent` rule). Probes are view-independent, so running the
+     update in both view graphs would double the ray cost for an identical
+     result. **The atlases were hoisted out of the per-view graph 2026-08-13
+     (slice-4 prep):** `SceneRenderer` owns the three textures and every view
+     graph brings them in with `ImportTexture`, so both views can sample one
+     probe set while only the main view runs the update. `ddgiRayData` stays a
+     per-graph transient.
+
+   **Relocation shake — FIXED 2026-08-13, four separate defects.** Probes near
+   and inside geometry visibly jittered every frame. Every one of these is the
+   same class of mistake: a control loop reading a randomly-rotated ray set,
+   with either a hard threshold to flip across or too few samples to be stable.
+   - Steering by the SINGLE nearest ray. Its direction jitters frame to frame
+     because the ray set is randomly rotated. → average the push over every
+     too-close ray.
+   - Discontinuous push/relax branches: a probe near a surface limit-cycled
+     across the boundary. → fade the push weight smoothly to zero at the
+     comfort distance.
+   - No dead band: the relax term fired the instant the push faded, i.e.
+     exactly at the equilibrium, which is where the push is computed from the
+     fewest rays and is noisiest. → a `holdRadius` much larger than `comfort`;
+     between them the probe just holds still.
+   - **The buried branch, which was the worst.** `normalize(backfaceDirSum)`
+     where `backfaceDirSum` sums ~64 *uniformly distributed* directions: it
+     averages to near zero but not zero — a random walk of magnitude
+     ~sqrt(rayCount) — so normalizing produced a fresh RANDOM escape direction
+     every frame at half a cell. Probes inside a mesh thrashed. → head for the
+     nearest exit (proximity-weighted toward the closest backfaces), gated by a
+     smoothstep on directional COHERENCE, so a probe centred in a slab (where
+     up and down are equally close and there is no preferred way out) holds
+     still instead of random-walking.
+
+   Classification also became a Schmitt trigger (enter buried at the threshold,
+   leave at half of it) so the backface ratio can't re-classify every frame; and
+   the backface test moved off `gl_HitKindEXT` onto the authored vertex normal,
+   because winding is unreliable in imported .obj/glTF content and a
+   winding-based test lies about different triangles as the ray set rotates.
+
+   Matters because near-surface probes carry the most trilinear weight, and
+   because Chebyshev depth moments are stored relative to the probe position —
+   a drifting probe is a leaking probe. Residual jitter on a probe INSIDE a mesh
+   is cosmetic only: buried probes are classified inactive, which excludes them
+   from both the blend and `DDGISampleIrradiance`, so their position has no
+   effect on the lit result.
+
+   MEASUREMENT NOTE: the screenshot-diff harness used to quantify this is
+   unreliable — the editor window opens at a cascading position each launch, and
+   raising it to grab pixels can move the editor camera. The before/after diff
+   IMAGES (filled probe discs vs none) are sound; the pixel counts are not
+   comparable across runs.
+
+   **Convergence ramp — ADDED 2026-08-13.** Hysteresis now starts at 0 after a
+   reset and climbs as `N/(N+1)` until it reaches the user's value, i.e. a
+   progressive average over the opening frames. Converges as fast as the ray
+   budget allows with no magic window length; invisible in slice 3, but once
+   lighting depends on probes a scene load would otherwise ramp on screen.
+
+   Other slice-3 notes: atlases are allocated for the MAXIMUM grid (16³ probes,
+   128 rays) because graph textures are declared once while probe counts are
+   live-editable; the irradiance atlas stores **E/π**, matching
+   `irradiance_convolution.frag`, so slice 4's swap needs no rescaling; the blend
+   passes read and write their atlas in place inside one pass, which is legal
+   precisely because the graph never sees it (the trace takes last frame's value
+   through `ReadHistory`); `active` is a GLSL reserved word.
 4. **DDGI into lighting** — probe irradiance replaces IBL ambient behind `giMode`;
    SSAO demoted to indirect-only near-field; composite switches its subtracted
    term to the probe lookup. Tier 2 complete, A/B toggle against tier 1.
+   Opens with bindless material albedo and hoisting the atlases out of the
+   per-view graph (see slice 3's notes) — `DDGISampleIrradiance` in
+   `ddgi_common.glsl` is already written and in use by the closest-hit shader's
+   recursive bounce, so the lighting-side change itself is one branch at
+   `deferred_lighting.frag:282`.
 5. **Polish** — probe budget tuning, Tracy/profiler zones per new pass, editor
    toggles, tier override in settings, Sponza perf baseline per tier.
 
@@ -190,6 +289,8 @@ the fallback gets built and proven before the RT work rather than bolted on afte
   re-verify of the existing shaders.
 - A shared GLSL include needs `GL_GOOGLE_include_directive` + `-I`, and CMake's
   `DEPENDS` won't track the include — add it explicitly or edits won't rebuild.
+  The editor's runtime hot-reload (`RecompileSpirv`) needed the same `-I`; fixed
+  in slice 3.
 - `ProjectToUV`'s y-flip in `ssr.frag:37` must be copied verbatim into SSGI. This
   codebase has been bitten by the negative-viewport UV convention before.
 - **Compute shaders must use `textureLod(s, uv, 0.0)`, never `texture(s, uv)`.**

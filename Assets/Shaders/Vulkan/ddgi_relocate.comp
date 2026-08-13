@@ -1,0 +1,172 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+
+#include "ddgi_common.glsl"
+
+// Probe relocation + classification (Docs/gi-design.md slice 3), one invocation
+// per probe. A uniform grid inevitably drops probes inside walls and floors; a
+// buried probe integrates black and then bleeds that darkness into every sample
+// that trilinearly reaches it, so this pass does two things:
+//
+//   relocation     — nudge a probe that is inside or hard against geometry into
+//                    open space, capped at half the grid spacing so it can never
+//                    cross into a neighbouring cell and scramble the trilinear
+//                    weights.
+//   classification — a probe surrounded by backfaces is inside solid geometry.
+//                    Mark it inactive; the blend passes stop updating it and
+//                    DDGISampleIrradiance drops it from the interpolation.
+//
+// Output is one RGBA16F texel per probe: rgb = offset, a = active flag. It is a
+// persistent texture rather than a storage buffer purely so the trace can
+// consume last frame's value through ReadHistory, which has no buffer analogue.
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+// How hard a too-close surface pushes, and how much of the resulting move is
+// taken per frame. The damping matters as much as the gain: relocation reads a
+// randomly-rotated ray set, so its input is noisy by construction.
+const float kPushGain      = 4.0;
+const float kRelocateSpeed = 0.25;
+// How much the near exits of a buried probe must agree before it acts on them.
+// Below this the direction is noise and the probe holds still instead.
+const float kEscapeCoherence = 0.35;
+
+layout(set = 0, binding = 0, rgba16f) uniform image2D uProbeData;
+layout(set = 0, binding = 1) uniform sampler2D uRayData;
+layout(set = 0, binding = 2, std140) uniform DDGIBlock { DDGIVolume v; } ddgi;
+
+void main() {
+    const int probeIndex = int(gl_GlobalInvocationID.x);
+    if (probeIndex >= ddgi.v.counts.w) return;
+
+    const int   rayCount   = int(ddgi.v.params2.w);
+    const float minSpacing = ddgi.v.spacing.w;
+    const float maxOffset  = 0.45 * minSpacing;   // never leave the probe's cell
+
+    // Clearance a probe wants from the nearest surface. Also the distance the
+    // push term fades out over, which is what keeps it continuous.
+    const float comfort = 0.30 * minSpacing;
+
+    // Survey this frame's rays. Everything here is an AVERAGE over the whole ray
+    // set, never the single nearest hit: the Fibonacci directions are randomly
+    // rotated every frame, so "the closest ray" jitters in direction frame to
+    // frame and a probe that steers by it chases the noise instead of the
+    // geometry. That showed up as probes visibly shaking in the layer just above
+    // a floor.
+    // Anything within this radius means the probe is still near geometry, which
+    // suppresses the relax term. It is deliberately much larger than 'comfort':
+    // the push fades to zero at 'comfort', so a probe at equilibrium sits
+    // exactly where the push is computed from the fewest rays and is therefore
+    // noisiest. Relaxing there would fight that noise every frame. The band
+    // between comfort and hold is a DEAD ZONE where the probe simply holds
+    // still, which is what a control loop reading a randomly-rotated ray set
+    // needs to settle at all.
+    const float holdRadius = 0.75 * minSpacing;
+
+    float backfaceCount  = 0.0;
+    vec3  pushSum        = vec3(0.0);   // away from every too-close surface
+    // Toward the NEAREST exits, for a probe that is inside geometry. Weighted by
+    // proximity, because the shortest way out is through the closest wall.
+    vec3  escapeSum      = vec3(0.0);
+    float escapeWeight   = 0.0;
+    bool  nearGeometry   = false;
+
+    for (int r = 0; r < rayCount; ++r) {
+        const float t   = texelFetch(uRayData, ivec2(r, probeIndex), 0).w;
+        const vec3  dir = DDGIRayDirection(ddgi.v, r);
+        if (t < 0.0) {
+            const float depth = -t;   // backface hits carry a negated distance
+            backfaceCount += 1.0;
+            nearGeometry   = nearGeometry || (depth < holdRadius);
+            if (depth < holdRadius) {
+                const float w = 1.0 - depth / holdRadius;
+                escapeSum    += dir * w;
+                escapeWeight += w;
+            }
+        } else {
+            nearGeometry = nearGeometry || (t < holdRadius);
+            if (t < comfort) {
+                // Weight reaches zero exactly AT the comfort distance, so
+                // pushSum decays smoothly to nothing as the probe earns its
+                // clearance.
+                pushSum -= dir * (1.0 - t / comfort);
+            }
+        }
+    }
+
+    vec4 prev = vec4(0.0, 0.0, 0.0, 1.0);
+    if (ddgi.v.params3.x > 0.5)
+        prev = imageLoad(uProbeData, ivec2(probeIndex, 0));
+    vec3 offset = prev.xyz;
+
+    const float backfaceRatio = backfaceCount / max(float(rayCount), 1.0);
+
+    // Classification is a SCHMITT TRIGGER, not a bare threshold. The ray set is
+    // randomly rotated every frame, so a probe whose backface ratio sits near
+    // the threshold would otherwise re-classify every frame — and the two
+    // branches below have wildly different targets (a half-cell escape versus a
+    // gentle nudge), so that flip alone produced a visible shake for probes
+    // touching geometry. Requiring the ratio to fall to half the threshold
+    // before a buried probe is trusted again makes the state sticky.
+    const float enterBuried = ddgi.v.params3.y;
+    const float leaveBuried = ddgi.v.params3.y * 0.5;
+    const bool  wasBuried   = prev.w < 0.5;
+    const bool  buried      = wasBuried ? (backfaceRatio > leaveBuried)
+                                        : (backfaceRatio > enterBuried);
+
+    float activeFlag = buried ? 0.0 : 1.0;   // 'active' is a GLSL reserved word
+    vec3  target;
+
+    if (buried) {
+        // Head for the nearest exit — moving TOWARD the closest backface pushes
+        // the probe out through that wall.
+        //
+        // Only when the near exits agree on a direction, though. 'coherence' is
+        // the weighted mean direction's length: ~1 when every close exit points
+        // the same way (a probe just inside one wall), ~0 when they cancel (a
+        // probe centred in a slab, where up and down are equally close and there
+        // is genuinely no preferred way out).
+        //
+        // Acting on an incoherent direction is what made probes inside the
+        // ground mesh thrash: averaging ~64 uniformly distributed backface
+        // directions gives a vector that is near zero but NOT zero — a pure
+        // random walk of magnitude ~sqrt(rayCount) — and normalizing it yielded
+        // a fresh random escape direction every frame, applied at half a cell.
+        //
+        // A probe that cannot pick a direction simply holds still. It is
+        // classified inactive, so DDGISampleIrradiance already ignores it and
+        // its position no longer matters; wandering serves nothing.
+        // Gated with a smoothstep rather than a hard comparison, for the same
+        // reason the push weight fades instead of switching: a probe whose
+        // coherence sits near the cutoff would flip between "escape" and "hold"
+        // every frame and jitter on the boundary. Note escapeSum/escapeWeight
+        // already has length == coherence, so the step is doubly damped as the
+        // direction becomes unreliable.
+        const float coherence = escapeWeight > 1e-4
+                              ? length(escapeSum) / escapeWeight : 0.0;
+        const float gate = smoothstep(kEscapeCoherence * 0.6,
+                                      kEscapeCoherence * 1.4, coherence);
+        target = offset + (escapeSum / max(escapeWeight, 1e-4))
+                        * (0.5 * minSpacing) * gate;
+    } else if (dot(pushSum, pushSum) > 1e-8) {
+        // Pressed against a surface. Scaled by the ray count so the step is
+        // independent of the ray budget.
+        target = offset + pushSum * (comfort * kPushGain / float(rayCount));
+    } else if (nearGeometry) {
+        target = offset;   // dead zone: clearance is fine, hold position
+    } else {
+        // Genuinely open space — creep back toward the grid position so a probe
+        // relocated around a since-deleted wall doesn't stay displaced forever.
+        target = offset * 0.98;
+    }
+
+    // Damped move toward the target rather than a jump. The target still wobbles
+    // a little with the per-frame ray rotation; this is the low-pass that turns
+    // that into a stationary probe.
+    offset = mix(offset, target, kRelocateSpeed);
+
+    const float len = length(offset);
+    if (len > maxOffset) offset *= maxOffset / len;
+
+    imageStore(uProbeData, ivec2(probeIndex, 0), vec4(offset, activeFlag));
+}

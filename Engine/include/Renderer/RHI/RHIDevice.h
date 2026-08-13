@@ -68,6 +68,13 @@ public:
     virtual std::unique_ptr<RHIPipeline> CreateRayTracingPipeline(
         const RHIRayTracingPipelineDesc& /*desc*/) { return nullptr; }
 
+    // GPU address of a buffer created with ShaderDeviceAddress usage — what a
+    // shader dereferences through GL_EXT_buffer_reference. DDGI's closest-hit
+    // shader reaches mesh vertex/index data this way instead of through
+    // descriptors, so the per-instance geometry table is just addresses.
+    // Returns 0 on a backend without device addresses, or for a null buffer.
+    virtual uint64_t BufferAddress(RHIBuffer* /*buffer*/) const { return 0; }
+
     // Format of the swapchain color target — feed into RHIPipelineDesc::colorFormat
     // so pipelines match the backbuffer they render to.
     virtual RHIFormat SwapchainFormat() const = 0;

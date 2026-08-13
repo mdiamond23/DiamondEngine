@@ -196,6 +196,25 @@ static json SerializeEntity(Scene& scene, entt::entity entity)
         };
     }
 
+    if (reg.all_of<DDGIVolumeComponent>(entity)) {
+        auto& dv = reg.get<DDGIVolumeComponent>(entity);
+        ej["ddgiVolume"] = {
+            { "extent",            JVec3(dv.extent)     },
+            { "probeCountX",       dv.probeCounts.x     },
+            { "probeCountY",       dv.probeCounts.y     },
+            { "probeCountZ",       dv.probeCounts.z     },
+            { "raysPerProbe",      dv.raysPerProbe      },
+            { "hysteresis",        dv.hysteresis        },
+            { "normalBias",        dv.normalBias        },
+            { "viewBias",          dv.viewBias          },
+            { "energy",            dv.energy            },
+            { "maxRayDistance",    dv.maxRayDistance    },
+            { "backfaceThreshold", dv.backfaceThreshold },
+            { "showProbes",        dv.showProbes        },
+            { "probeRadius",       dv.probeRadius       }
+        };
+    }
+
     if (reg.all_of<CameraComponent>(entity)) {
         auto& cc = reg.get<CameraComponent>(entity);
         ej["camera"] = {
@@ -605,6 +624,24 @@ static void DeserializeEntityComponents(Scene& scene, entt::entity e, const json
         auto& sl = reg.emplace_or_replace<SkyLightComponent>(e);
         sl.environmentPath = sj.value("environmentPath", std::string{});
         sl.intensity       = sj.value("intensity",       1.0f);
+    }
+
+    if (ej.contains("ddgiVolume")) {
+        const auto& dj = ej["ddgiVolume"];
+        auto& dv = reg.emplace_or_replace<DDGIVolumeComponent>(e);
+        if (dj.contains("extent")) dv.extent = ToVec3(dj["extent"]);
+        dv.probeCounts.x     = dj.value("probeCountX",       8);
+        dv.probeCounts.y     = dj.value("probeCountY",       4);
+        dv.probeCounts.z     = dj.value("probeCountZ",       8);
+        dv.raysPerProbe      = dj.value("raysPerProbe",      64);
+        dv.hysteresis        = dj.value("hysteresis",        0.97f);
+        dv.normalBias        = dj.value("normalBias",        0.15f);
+        dv.viewBias          = dj.value("viewBias",          0.10f);
+        dv.energy            = dj.value("energy",            1.0f);
+        dv.maxRayDistance    = dj.value("maxRayDistance",    40.0f);
+        dv.backfaceThreshold = dj.value("backfaceThreshold", 0.25f);
+        dv.showProbes        = dj.value("showProbes",        false);
+        dv.probeRadius       = dj.value("probeRadius",       0.15f);
     }
 
     if (ej.contains("camera")) {
@@ -1187,6 +1224,7 @@ static void RemoveComponentByKey(Scene& scene, entt::entity e, const std::string
     if      (key == "mesh")             reg.remove<MeshComponent>(e);
     else if (key == "light")            reg.remove<LightComponent>(e);
     else if (key == "skylight")         reg.remove<SkyLightComponent>(e);
+    else if (key == "ddgiVolume")       reg.remove<DDGIVolumeComponent>(e);
     else if (key == "camera")           reg.remove<CameraComponent>(e);
     else if (key == "canvas")           reg.remove<CanvasComponent>(e);
     else if (key == "rectTransform")    reg.remove<RectTransformComponent>(e);

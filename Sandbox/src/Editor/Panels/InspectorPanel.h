@@ -84,6 +84,7 @@ private:
     std::optional<MeshComponent>         m_PendingRemovedMesh;
     std::optional<LightComponent>        m_PendingRemovedLight;
     std::optional<SkyLightComponent>     m_PendingRemovedSkyLight;
+    std::optional<DDGIVolumeComponent>   m_PendingRemovedDDGIVolume;
     std::optional<CameraComponent>       m_PendingRemovedCamera;
     std::optional<ColliderComponent>     m_PendingRemovedCollider;
     std::optional<RigidBodyComponent>    m_PendingRemovedRigidbody;

@@ -114,6 +114,7 @@ public:
                      const std::vector<RHITLASInstance>& instances) override;
     std::unique_ptr<RHIPipeline> CreateRayTracingPipeline(
         const RHIRayTracingPipelineDesc& desc) override;
+    uint64_t BufferAddress(RHIBuffer* buffer) const override;
     RHIFormat SwapchainFormat() const override;
     RHIFormat DepthFormat() const override;
     RHICommandList* BeginFrame() override;

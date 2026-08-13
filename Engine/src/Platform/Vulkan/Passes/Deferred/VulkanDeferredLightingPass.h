@@ -112,6 +112,11 @@ public:
                       const std::array<glm::mat4, NUM_SPOTS>& spotMatrices = {},
                       const std::vector<float>& pointRadius = {});
 
+    // The per-frame lighting UBO, so another pass can shade with the same lights
+    // without duplicating SetFrameData's world→view transform work. DDGI's
+    // closest-hit shader binds it and declares the identical std140 block.
+    RHIBuffer* UBO() const { return m_UBO.get(); }
+
     // Hot-reload (editor only): recompiles fullscreen.vert + deferred_lighting.frag
     // from shaderDir's current .spv and rebuilds the pipeline IN PLACE (same
     // 'this' — the graph pass reads m_Pipeline at Execute time, no graph

@@ -135,6 +135,16 @@ struct RHIResourceBinding {
     uint32_t        binding = 0;
     RHIResourceType type    = RHIResourceType::UniformBuffer;
     RHIShaderStage  stages  = RHIShaderStage::None;
+
+    // Descriptor ARRAY size. 1 (the default) is an ordinary single binding.
+    // Greater than 1 declares `uniform sampler2D name[count]` and lets a shader
+    // index it — DDGI's closest-hit shader picks a material's albedo map by
+    // instance, which no per-draw descriptor set can express because a ray hits
+    // whatever it hits. Every slot must be written at set creation (see
+    // RHITextureBinding::arrayIndex); a slot left unwritten is invalid to
+    // access, so callers pad with a default texture rather than relying on the
+    // partially-bound descriptor-indexing feature.
+    uint32_t        count   = 1;
 };
 
 struct RHIPushConstantRange {
@@ -256,6 +266,9 @@ struct RHIBufferBinding {
 struct RHITextureBinding {
     uint32_t    binding = 0;
     RHITexture* texture = nullptr;
+    // Slot within an array binding (RHIResourceBinding::count > 1). Ignored for
+    // ordinary bindings. Repeat the same 'binding' once per slot to fill one.
+    uint32_t    arrayIndex = 0;
 };
 
 struct RHIAccelStructBinding {

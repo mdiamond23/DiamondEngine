@@ -315,7 +315,7 @@ void VulkanRHIPipeline::CreateLayouts(const std::vector<RHIResourceBinding>& set
             VkDescriptorSetLayoutBinding vb{};
             vb.binding         = b.binding;
             vb.descriptorType  = ToVkDescriptorType(b.type);
-            vb.descriptorCount = 1;
+            vb.descriptorCount = std::max(1u, b.count);   // > 1 = descriptor array
             vb.stageFlags      = ToVkShaderStages(b.stages);
             bindings.push_back(vb);
         }
@@ -701,6 +701,10 @@ VulkanRHIResourceSet::VulkanRHIResourceSet(VulkanRHIDevice* device, VulkanRHIPip
             VkWriteDescriptorSet w{ VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
             w.dstSet          = m_Sets[frame];
             w.dstBinding      = textures[i].binding;
+            // One write per slot rather than one ranged write per binding: the
+            // caller hands us an unordered list, and array bindings are a
+            // handful of descriptors, not a per-draw cost.
+            w.dstArrayElement = textures[i].arrayIndex;
             w.descriptorCount = 1;
             w.descriptorType  = type;
             w.pImageInfo      = &imageInfos[i];

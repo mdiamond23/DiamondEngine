@@ -23,6 +23,7 @@
 #include "Platform/Vulkan/Passes/Deferred/VulkanSSAOPass.h"
 #include "Platform/Vulkan/Passes/Deferred/VulkanSSGIPass.h"
 #include "Platform/Vulkan/Passes/Debug/VulkanRTDebugPass.h"
+#include "Platform/Vulkan/Passes/GI/VulkanDDGIPass.h"
 #include "Platform/Vulkan/Passes/Deferred/VulkanSSRPass.h"
 #include "Platform/Vulkan/Passes/Deferred/VulkanDeferredLightingPass.h"
 #include "Platform/Vulkan/Passes/Deferred/VulkanSkyboxPass.h"
@@ -71,6 +72,24 @@ struct MeshVertex {
     glm::vec2 uv;
     glm::vec3 tangent;
 };
+
+// One record per TLAS instance, mirroring DDGIGeometry in
+// ddgi_probe_trace.rchit (std430). The closest-hit shader dereferences the two
+// addresses through GL_EXT_buffer_reference, so mesh geometry needs no
+// descriptor at all — 'customIndex' on the TLAS instance is the only link.
+// Albedo is the material's base-color FACTOR, not a texture sample; see the
+// slice-3 note in Docs/gi-design.md.
+struct RTGeometry {
+    uint64_t   vertexAddress = 0;
+    uint64_t   indexAddress  = 0;
+    glm::vec4  albedo   { 1.0f, 1.0f, 1.0f, 1.0f };   // .a = material UV scale
+    glm::vec4  emissive { 0.0f, 0.0f, 0.0f, 0.0f };
+    // x = slot in the bindless albedo array, y = vertex stride in floats (so the
+    // hit shader never hardcodes a vertex layout), zw unused.
+    glm::uvec4 indices  { 0u, 0u, 0u, 0u };
+};
+static_assert(sizeof(RTGeometry) == 64,
+              "RTGeometry must match ddgi_probe_trace.rchit's std430 DDGIGeometry");
 
 // The skinned mesh vertex — MeshVertex plus glTF bone indices/weights, matching
 // the skinned pipelines' vertex layout (SkinnedVertexAttributes, stride 76). Only
@@ -265,11 +284,7 @@ public:
     void SetEnvironment(const std::string& hdrPath) override {
         m_EnvironmentPath = hdrPath;   // keeps GatherSkyLight from re-baking the same map
         m_IBL->BakeEnvironment(hdrPath);
-        for (auto& v : m_Views) {
-            if (!v) continue;
-            v->lighting->BindIBL(*m_IBL);
-            v->skybox->BindIBL(*m_IBL);
-        }
+        RebindEnvironment();
     }
 
     RHITexture* OutputColor() const override {
@@ -324,6 +339,8 @@ public:
     // Both re-applied per frame in RenderView, so they survive a resize.
     void SetRTDebugEnabled(bool enabled) override { m_RTDebugEnabled = enabled; }
     void SetRTDebugMaxDistance(float distance) override { m_RTDebugMaxDistance = distance; }
+    void SetDDGIEnabled(bool enabled) override { m_DDGIEnabled = enabled; }
+    bool HasDDGIVolume() const override { return m_HasDDGIVolume; }
     bool SupportsRayTracing() const override { return m_Device->SupportsRayTracing(); }
 
     // Drop the baked G-buffer descriptor set(s) for a material edited in the
@@ -571,9 +588,17 @@ public:
         const bool   staticChanged = staticHash != m_LastStaticShadowHash;
         m_LastStaticShadowHash = staticHash;
 
-        // The TLAS describes the same static set, so it rides the same trigger.
-        if (staticChanged) m_TLASDirty = true;
+        // The TLAS gets its OWN trigger. It describes a different set than the
+        // shadow caches — a static mesh with staticShadowCaster on but casting
+        // disabled still occludes and bounces probe rays — so riding the shadow
+        // hash would leave the acceleration structure stale for exactly those.
+        const size_t rtHash = ComputeRTInstanceHash();
+        if (rtHash != m_LastRTInstanceHash) {
+            m_LastRTInstanceHash = rtHash;
+            m_TLASDirty          = true;
+        }
         UpdateTLAS();
+        UpdateRTGeometryBuffer();
 
         m_SpotShadow->ComputeMatrices(m_SpotLights);
         if (staticChanged) m_SpotShadow->MarkStaticDirty();
@@ -765,6 +790,7 @@ private:
         std::unique_ptr<VulkanParticleRenderer>     particles;
         std::unique_ptr<VulkanDebugDrawPass>        debugDraw;   // main view only
         std::unique_ptr<VulkanRTDebugPass>          rtDebug;     // null without RT support
+        std::unique_ptr<VulkanDDGIPass>             ddgi;        // null without RT support
 
         std::vector<DrawItem>        drawList;          // frustum-culled — geometry pass
         std::vector<SkinnedDrawItem> skinnedDraws;      // frustum-culled — skinned geometry
@@ -840,6 +866,45 @@ private:
         m_EnvironmentPath = AssetPaths::Resolve(
             "Assets/Textures/citrus_orchard_road_puresky_4k.hdr");
         m_IBL->BakeEnvironment(m_EnvironmentPath);
+
+        CreateDDGIAtlases();
+    }
+
+    // The shared DDGI probe atlases. Allocated once for the MAXIMUM probe grid
+    // (probe counts are live-editable; these are not) and owned outside any
+    // graph, because the update runs in one view while both views sample the
+    // result. singleBuffered for the same reason a persistent graph texture is:
+    // frame N+1 must read exactly what frame N wrote, not the other frame slot.
+    void CreateDDGIAtlases() {
+        if (!m_Device->SupportsRayTracing()) return;   // tier 1 allocates nothing
+
+        // Slot 0 of the bindless albedo table is the neutral white an untextured
+        // material resolves to, and the pad for the array's unused tail.
+        m_RTTextures.push_back(m_DefaultWhite.get());
+        m_RTTextureSlots.emplace(m_DefaultWhite.get(), 0u);
+
+        auto make = [this](uint32_t w, uint32_t h, RHIFormat fmt, const char* name) {
+            RHITextureDesc d;
+            d.width          = w;
+            d.height         = h;
+            d.format         = fmt;
+            // Written as a storage image by the blend/relocate compute passes,
+            // sampled by the trace and (slice 4) the lighting pass. No pass ever
+            // makes one an attachment.
+            d.usage          = RHITextureUsage::Sampled | RHITextureUsage::Storage;
+            d.singleBuffered = true;
+            d.debugName      = name;
+            return m_Device->CreateTexture(d);
+        };
+
+        m_DDGIIrradiance = make(VulkanDDGIPass::IrradianceWidth(),
+                                VulkanDDGIPass::IrradianceHeight(),
+                                RHIFormat::RGBA16F, "ddgiIrradiance");
+        m_DDGIVisibility = make(VulkanDDGIPass::VisibilityWidth(),
+                                VulkanDDGIPass::VisibilityHeight(),
+                                RHIFormat::RG16F, "ddgiVisibility");
+        m_DDGIProbeData  = make(VulkanDDGIPass::kMaxProbes, 1,
+                                RHIFormat::RGBA16F, "ddgiProbeData");
     }
 
     void ApplyAutoExposureSettings(VulkanAutoExposurePass& pass) const {
@@ -916,6 +981,21 @@ private:
             v->rtDebug->SetTLAS(m_TLAS.get());
         }
 
+        // DDGI probes, main view only. Probes are view-INDEPENDENT, so running
+        // the update in both graphs would double the ray cost for an identical
+        // result. Slice 4 wants the atlases hoisted out of the per-view graph
+        // anyway, so both views can sample one probe set; until then the game
+        // view simply has no probes. Inert without RT support.
+        if (viewIdx == kMainView) {
+            v->ddgi = std::make_unique<VulkanDDGIPass>(
+                m_Device, shaderDir,
+                offscreen ? RHIFormat::RGBA8 : m_Device->SwapchainFormat());
+            v->ddgi->SetEnabled(m_DDGIEnabled);
+            v->ddgi->SetTLAS(m_TLAS.get());
+            v->ddgi->SetGeometryBuffer(m_RTGeometryBuffer.get());
+            v->ddgi->SetLightingUBO(v->lighting->UBO());
+        }
+
         BuildViewGraph(*v, viewIdx);
         return v;
     }
@@ -967,6 +1047,10 @@ private:
             v.rtDebug->SetEnabled(m_RTDebugEnabled);
             v.rtDebug->SetTLAS(m_TLAS.get());
         }
+        // DDGI itself is size-independent (probe atlases, not screen targets) and
+        // survives the resize, but the lighting pass it shares a UBO with was
+        // just recreated — re-point it, or probe rays shade with a dead buffer.
+        if (v.ddgi) v.ddgi->SetLightingUBO(v.lighting->UBO());
 
         v.graph.ResetPasses();
         BuildViewGraph(v, viewIdx);   // re-declares textures + re-binds IBL/point shadows
@@ -1140,6 +1224,49 @@ private:
             v.rtDebug->AddToGraph(g, rtDebugImage, v.outputColor, /*toSwapchain*/ !v.offscreen);
         }
 
+        // DDGI probe update. Nothing downstream samples the atlases in slice 3 —
+        // only the (optional) probe viz does — so the whole subsystem can be
+        // wrong without touching the shipping image. All four resources are
+        // sized for the MAXIMUM probe grid, because probe counts are live-
+        // editable while graph textures are declared once.
+        //
+        // Registered here, after tonemap, purely so the probe viz lands in the
+        // right write-after-write slot on outputColor; the trace/blend/relocate
+        // passes sort themselves by dependency (the trace reads the cascades, so
+        // it ends up after the CSM pass regardless of insertion order).
+        // Every graph imports the shared probe atlases, whether or not it runs
+        // the update: slice 4's lighting pass samples them per view, and an
+        // imported texture is the graph's mechanism for tracking a resource it
+        // doesn't own. The handles are invalid on a non-RT device (nothing was
+        // allocated), which leaves both the update and any future read out.
+        RGTextureHandle ddgiIrradiance, ddgiVisibility, ddgiProbeData;
+        if (m_DDGIIrradiance) {
+            ddgiIrradiance = g.ImportTexture("ddgiIrradiance", m_DDGIIrradiance.get(),
+                { VulkanDDGIPass::IrradianceWidth(), VulkanDDGIPass::IrradianceHeight(),
+                  RHIFormat::RGBA16F, /*storage*/ true, /*persistent*/ true });
+            ddgiVisibility = g.ImportTexture("ddgiVisibility", m_DDGIVisibility.get(),
+                { VulkanDDGIPass::VisibilityWidth(), VulkanDDGIPass::VisibilityHeight(),
+                  RHIFormat::RG16F, /*storage*/ true, /*persistent*/ true });
+            ddgiProbeData = g.ImportTexture("ddgiProbeData", m_DDGIProbeData.get(),
+                { VulkanDDGIPass::kMaxProbes, 1,
+                  RHIFormat::RGBA16F, /*storage*/ true, /*persistent*/ true });
+        }
+
+        // The probe UPDATE runs in one view only (see CreateView) — the ray data
+        // it produces is transient and stays a per-graph texture.
+        if (v.ddgi && v.ddgi->Available() && ddgiIrradiance.IsValid()) {
+            const RGTextureHandle ddgiRayData = g.DeclareTexture("ddgiRayData",
+                { VulkanDDGIPass::kMaxRays, VulkanDDGIPass::kMaxProbes,
+                  RHIFormat::RGBA16F, /*storage*/ true });
+            v.ddgi->AddToGraph(g, ddgiRayData, ddgiIrradiance, ddgiVisibility,
+                               ddgiProbeData, cascades, v.outputColor, gDepth,
+                               /*toSwapchain*/ !v.offscreen);
+            // Same one-time raw bind as the lighting/skybox passes. It also
+            // registers the IBL pass so the deferred trace-set rebuild can
+            // re-apply the cube — that set doesn't exist yet at this point.
+            v.ddgi->BindEnvironment(*m_IBL);
+        }
+
         // Collider/ragdoll/IK/audio debug wireframes — on top of the tonemapped
         // LDR scene, read-only depth test against the G-buffer depth. Matches
         // the GL editor's frame order (scene -> debug draw -> UI canvas).
@@ -1237,6 +1364,15 @@ private:
             v.rtDebug->SetEnabled(m_RTDebugEnabled);
             v.rtDebug->SetMaxDistance(m_RTDebugMaxDistance);
             v.rtDebug->SetCamera(view, proj);
+        }
+        // DDGI: unjittered too — the probe viz is a debug overlay, and the view
+        // matrix the closest-hit shader uses only has to agree with the lighting
+        // UBO's view space (which the jitter never touches).
+        if (v.ddgi) {
+            v.ddgi->SetEnabled(m_DDGIEnabled);
+            v.ddgi->SetFrameData(m_HasDDGIVolume ? &m_DDGIVolume : nullptr,
+                                 m_DDGIVolumeCenter, view, proj,
+                                 m_AmbientIntensity, m_Exposure);
         }
 
         // Adaptation eases per second, so it needs the frame delta; both views in
@@ -1477,8 +1613,83 @@ private:
             m_TLAS = m_Device->CreateTLAS(m_RTInstances);
         }
 
-        for (auto& v : m_Views)
-            if (v && v->rtDebug) v->rtDebug->SetTLAS(m_TLAS.get());
+        for (auto& v : m_Views) {
+            if (!v) continue;
+            if (v->rtDebug) v->rtDebug->SetTLAS(m_TLAS.get());
+            if (v->ddgi) {
+                v->ddgi->SetTLAS(m_TLAS.get());
+                // Geometry the probes trace against changed — whatever the
+                // atlases hold describes the old scene.
+                v->ddgi->InvalidateHistory();
+            }
+        }
+    }
+
+    // Slot in the bindless albedo array for a material's base-color map, adding
+    // it on first sight. Slot 0 is 1×1 white, which is what an untextured
+    // material (or an overflowing table) resolves to — the base-color factor
+    // then stands alone, exactly as it does in the G-buffer pass.
+    //
+    // The array is fixed-size, so growing it invalidates the trace descriptor
+    // set. That only happens when a NEW texture first appears in the RT set, not
+    // per frame; RebuildTraceSet's WaitIdle would be intolerable otherwise.
+    uint32_t RTTextureSlot(const std::shared_ptr<Texture>& tex) {
+        RHITexture* rhi = RhiOrDefault(tex, nullptr);
+        if (!rhi) return 0;
+
+        auto [it, inserted] = m_RTTextureSlots.try_emplace(
+            rhi, static_cast<uint32_t>(m_RTTextures.size()));
+        if (!inserted) return it->second;
+
+        if (m_RTTextures.size() >= VulkanDDGIPass::kMaxTextures) {
+            m_RTTextureSlots[rhi] = 0;   // out of slots — fall back to white
+            return 0;
+        }
+        m_RTTextures.push_back(rhi);
+        m_RTTexturesPinned.push_back(tex);   // the array holds raw pointers
+        m_RTTexturesDirty = true;
+        return it->second;
+    }
+
+    // Fingerprint of the TLAS instance set (BLAS identity + world transform).
+    size_t ComputeRTInstanceHash() const {
+        size_t h = 0;
+        auto mix = [&h](size_t v) { h ^= v + 0x9e3779b97f4a7c15ull + (h << 6) + (h >> 2); };
+        for (const RHITLASInstance& inst : m_RTInstances) {
+            mix(std::hash<const void*>{}(inst.blas));
+            for (int i = 0; i < 12; ++i) mix(std::hash<float>{}(inst.transform[i]));
+        }
+        return h;
+    }
+
+    // Uploads the per-instance geometry table DDGI's closest-hit shader indexes.
+    // Rewritten EVERY frame rather than on change: it's a dynamic buffer with one
+    // copy per frame-in-flight, so a change-gated update would leave the other
+    // slot holding the previous scene. A few hundred 48-byte records is nothing.
+    void UpdateRTGeometryBuffer() {
+        if (!m_Device->SupportsRayTracing() || m_RTGeometry.empty()) return;
+
+        // Push the bindless albedo table only when a new texture actually
+        // entered it — SetAlbedoTextures rebuilds the trace set, which blocks.
+        if (m_RTTexturesDirty) {
+            m_RTTexturesDirty = false;
+            for (auto& v : m_Views)
+                if (v && v->ddgi) v->ddgi->SetAlbedoTextures(m_RTTextures);
+        }
+
+        if (m_RTGeometry.size() > m_RTGeometryCapacity) {
+            m_Device->WaitIdle();   // sets bound to the old buffer die with it
+            m_RTGeometryCapacity = m_RTGeometry.size() + 64;   // rebuild headroom
+            RHIBufferDesc desc;
+            desc.size    = m_RTGeometryCapacity * sizeof(RTGeometry);
+            desc.usage   = RHIBufferUsage::Storage;
+            desc.dynamic = true;
+            m_RTGeometryBuffer = m_Device->CreateBuffer(desc);
+            for (auto& v : m_Views)
+                if (v && v->ddgi) v->ddgi->SetGeometryBuffer(m_RTGeometryBuffer.get());
+        }
+        m_RTGeometryBuffer->Update(m_RTGeometry.data(),
+                                   m_RTGeometry.size() * sizeof(RTGeometry));
     }
 
     void RebuildDrawList(Scene& scene, const Frustum& frustum, const glm::vec3& cameraPos,
@@ -1490,6 +1701,7 @@ private:
                                         // refilling is idempotent
         m_SkinnedShadowDraws.clear();   // (both cleared per rebuild — filled the same for either view)
         m_RTInstances.clear();          // view-independent too: rays don't respect a frustum
+        m_RTGeometry.clear();           // strictly parallel to m_RTInstances
         const TransformSystem& ts = scene.GetTransformSystem();
         for (auto [entity, mc] : scene.GetRegistry().view<MeshComponent>().each()) {
             if (!mc.visible || !mc.mesh) continue;
@@ -1564,6 +1776,21 @@ private:
                     inst.blas        = it->second.blas.get();
                     inst.customIndex = static_cast<uint32_t>(m_RTInstances.size());
                     m_RTInstances.push_back(inst);
+
+                    // Parallel record for DDGI's closest-hit shader, indexed by
+                    // that same customIndex.
+                    RTGeometry g;
+                    g.vertexAddress = m_Device->BufferAddress(it->second.vertexBuffer.get());
+                    g.indexAddress  = m_Device->BufferAddress(it->second.indexBuffer.get());
+                    if (const PBRMaterial* mat = mc.material.get()) {
+                        g.albedo   = glm::vec4(glm::vec3(mat->BaseColorFactor), mat->UVScale);
+                        // No emissive COLOR without a texture fetch, so the
+                        // strength drives a white emitter — enough for a probe.
+                        g.emissive = glm::vec4(glm::vec3(mat->EmissiveStrength), 0.0f);
+                        g.indices.x = RTTextureSlot(mat->Albedo);
+                    }
+                    g.indices.y = sizeof(MeshVertex) / sizeof(float);
+                    m_RTGeometry.push_back(g);
                 }
             }
             if (frustum.TestAABB(worldBounds)) {
@@ -1856,6 +2083,35 @@ private:
         }
 
         GatherSkyLight(scene);
+        GatherDDGIVolume(scene);
+    }
+
+    // The scene's probe volume: first DDGIVolumeComponent wins, same rule as the
+    // sky light. The entity's world transform gives the volume centre; the
+    // component's extent is axis-aligned (a rotated probe grid would break the
+    // trilinear addressing the sampling relies on), so only the translation is
+    // read. Losing or moving the volume invalidates the accumulated atlases —
+    // they describe probes that are no longer where they were.
+    void GatherDDGIVolume(Scene& scene) {
+        const bool      hadVolume = m_HasDDGIVolume;
+        const glm::vec3 oldCenter = m_DDGIVolumeCenter;
+        const glm::vec3 oldExtent = m_DDGIVolume.extent;
+
+        m_HasDDGIVolume = false;
+        const TransformSystem& ts = scene.GetTransformSystem();
+        for (auto [entity, vol] : scene.GetRegistry().view<DDGIVolumeComponent>().each()) {
+            m_DDGIVolume       = vol;
+            m_DDGIVolumeCenter = glm::vec3(ts.GetWorldMatrix(entity)[3]);
+            m_HasDDGIVolume    = true;
+            break;
+        }
+
+        const bool moved = m_HasDDGIVolume != hadVolume
+                        || m_DDGIVolumeCenter != oldCenter
+                        || m_DDGIVolume.extent != oldExtent;
+        if (moved)
+            for (auto& v : m_Views)
+                if (v && v->ddgi) v->ddgi->InvalidateHistory();
     }
 
     // The scene's sky: first SkyLightComponent wins. Re-baking the environment
@@ -1890,6 +2146,11 @@ private:
             if (!v) continue;
             v->lighting->BindIBL(*m_IBL);
             v->skybox->BindIBL(*m_IBL);
+            // DDGI's miss shader samples the same radiance cube as the skybox.
+            if (v->ddgi) {
+                v->ddgi->BindEnvironment(*m_IBL);
+                v->ddgi->InvalidateHistory();   // the sky the probes integrated changed
+            }
         }
     }
 
@@ -2026,6 +2287,33 @@ private:
     std::unique_ptr<RHIAccelStruct> m_TLAS;
     std::vector<RHITLASInstance>    m_RTInstances;
     bool                            m_TLASDirty = true;
+    // Fingerprint of m_RTInstances. TLAS membership is decided independently of
+    // shadow casting (a non-casting static mesh still occludes probe rays), so
+    // riding the static-shadow hash would miss exactly those meshes moving.
+    size_t                          m_LastRTInstanceHash = 0;
+    // Per-instance geometry table for DDGI's closest-hit shader, uploaded into
+    // m_RTGeometryBuffer whenever the TLAS is rebuilt.
+    std::vector<RTGeometry>         m_RTGeometry;
+    std::unique_ptr<RHIBuffer>      m_RTGeometryBuffer;
+    size_t                          m_RTGeometryCapacity = 0;
+
+    // DDGI probe atlases. Owned HERE rather than declared per view graph:
+    // probes are view-independent, the update runs once (main view), and both
+    // views' lighting passes sample the same set in slice 4. Each graph brings
+    // them under its dependency tracking with ImportTexture, which — unlike a
+    // declared texture — is never culled and outlives any one graph.
+    std::unique_ptr<RHITexture> m_DDGIIrradiance;
+    std::unique_ptr<RHITexture> m_DDGIVisibility;
+    std::unique_ptr<RHITexture> m_DDGIProbeData;
+
+    // Bindless albedo table for probe-ray shading. Grow-only and never
+    // compacted: a slot index is baked into every RTGeometry record that
+    // referenced it, and reclaiming one would mean rewriting them all for a few
+    // hundred bytes. Slot 0 is 1×1 white.
+    std::unordered_map<const RHITexture*, uint32_t> m_RTTextureSlots;
+    std::vector<RHITexture*>                        m_RTTextures;
+    std::vector<std::shared_ptr<Texture>>           m_RTTexturesPinned;
+    bool                                            m_RTTexturesDirty = true;
 
     // Per-skinned-entity GPU state (SkinnedInstance defined above), keyed by entity.
     std::unordered_map<entt::entity, SkinnedInstance> m_Skinned;
@@ -2080,6 +2368,14 @@ private:
     bool     m_TAAEnabled = true;
     bool     m_RTDebugEnabled     = false;    // bring-up tool, not a feature
     float    m_RTDebugMaxDistance = 100.0f;
+
+    // DDGI: the scene's single probe volume, resolved per frame by
+    // GatherDDGIVolume. Nothing samples the probes yet (slice 3) — the master
+    // switch exists so the probe update's cost can be A/B'd from the editor.
+    bool                 m_DDGIEnabled = true;
+    bool                 m_HasDDGIVolume = false;
+    DDGIVolumeComponent  m_DDGIVolume{};
+    glm::vec3            m_DDGIVolumeCenter { 0.0f };
     bool     m_SSGIEnabled      = true;
     int      m_SSGIRays         = 8;
     float    m_SSGIIntensity    = 1.0f;

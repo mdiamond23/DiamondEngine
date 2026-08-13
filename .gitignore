@@ -11,6 +11,8 @@ compile_commands.json
 imgui.ini
 Assets/Cache/
 Assets/Models/Sponza
+Assets/Models/Curtains
+Assets/Models/Ivy
 Assets/Scenes/SponzaTest.Scene
 Tools/texconv.exe
 Logs/
