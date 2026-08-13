@@ -342,6 +342,15 @@ public:
     void SetDDGIEnabled(bool enabled) override { m_DDGIEnabled = enabled; }
     bool HasDDGIVolume() const override { return m_HasDDGIVolume; }
     bool SupportsRayTracing() const override { return m_Device->SupportsRayTracing(); }
+    // Atlases only exist under RT, so their presence is the tier-2 gate.
+    int  GIMode() const override {
+        return (m_DDGIIrradiance && m_DDGIEnabled && m_HasDDGIVolume) ? 2 : 1;
+    }
+
+    void  SetSSAOStrength(float strength) override {
+        m_SSAOStrength = std::clamp(strength, 0.0f, 1.0f);
+    }
+    float GetSSAOStrength() const override { return m_SSAOStrength; }
 
     // Drop the baked G-buffer descriptor set(s) for a material edited in the
     // Inspector, so the next frame's GetOrCreateMaterialSet rebuilds it from
@@ -907,6 +916,42 @@ private:
                                 RHIFormat::RGBA16F, "ddgiProbeData");
     }
 
+    // GI tier → the lighting pass's giMode + SSAO strength + probe grid.
+    //
+    // Tier 2 needs everything: RT support (so the atlases exist at all), a
+    // volume in the scene, and the toggle on. Anything missing falls back to the
+    // IBL irradiance cubemap, which is what tiers 0 and 1 have always used —
+    // the branch is uniform across the fullscreen draw, so the fallback costs a
+    // scalar compare, not a permutation.
+    //
+    // The tier also fades SSAO on the indirect diffuse term. Under DDGI the same
+    // crevice is already darkened by the probes' Chebyshev visibility and again
+    // by SSGI's own gather, so full-strength SSAO on top triple-counts it.
+    void ApplyGITier(VulkanDeferredLightingPass& lighting) const {
+        // How much of the user's SSAO strength survives once probes carry their
+        // own occlusion. Tuned by eye, not derived — the honest number depends
+        // on probe density, which is why it stays a constant and not a formula.
+        constexpr float kTier2SSAOScale = 0.5f;
+
+        const bool tier2 = GIMode() == 2;
+
+        VulkanDeferredLightingPass::DDGISampleParams params;
+        if (tier2) {
+            const VulkanDDGIPass::GridLayout grid =
+                VulkanDDGIPass::ComputeGrid(m_DDGIVolume, m_DDGIVolumeCenter);
+            params.origin     = grid.origin;
+            params.spacing    = grid.spacing;
+            params.counts     = grid.counts;
+            params.normalBias = m_DDGIVolume.normalBias;
+            params.viewBias   = m_DDGIVolume.viewBias;
+            params.energy     = std::max(m_DDGIVolume.energy, 0.0f);
+        }
+
+        lighting.SetGIParams(tier2 ? 2 : 1,
+                             m_SSAOStrength * (tier2 ? kTier2SSAOScale : 1.0f),
+                             params);
+    }
+
     void ApplyAutoExposureSettings(VulkanAutoExposurePass& pass) const {
         pass.SetEnabled(m_AutoExposure.enabled);
         pass.SetKeyValue(m_AutoExposure.keyValue);
@@ -1136,13 +1181,37 @@ private:
                               DrawShadow(cmd, lightSpace, m_CSM->SkinnedPipeline());
                           });
 
+        // The shared DDGI probe atlases. EVERY graph imports them, whether or not
+        // it runs the probe update: the lighting pass samples them per view, and
+        // an imported texture is the graph's mechanism for tracking a resource it
+        // doesn't own. Declared before the lighting pass only for readability —
+        // the graph is a topological sort, so registration order decides nothing.
+        // The handles stay invalid on a non-RT device (nothing was allocated),
+        // which leaves both the update and the probe read out of the graph.
+        VulkanDeferredLightingPass::DDGIAtlases ddgiAtlases;
+        ddgiAtlases.fallback = m_DefaultWhite.get();
+        if (m_DDGIIrradiance) {
+            ddgiAtlases.irradiance = g.ImportTexture("ddgiIrradiance", m_DDGIIrradiance.get(),
+                { VulkanDDGIPass::IrradianceWidth(), VulkanDDGIPass::IrradianceHeight(),
+                  RHIFormat::RGBA16F, /*storage*/ true, /*persistent*/ true });
+            ddgiAtlases.visibility = g.ImportTexture("ddgiVisibility", m_DDGIVisibility.get(),
+                { VulkanDDGIPass::VisibilityWidth(), VulkanDDGIPass::VisibilityHeight(),
+                  RHIFormat::RG16F, /*storage*/ true, /*persistent*/ true });
+            ddgiAtlases.probeData = g.ImportTexture("ddgiProbeData", m_DDGIProbeData.get(),
+                { VulkanDDGIPass::kMaxProbes, 1,
+                  RHIFormat::RGBA16F, /*storage*/ true, /*persistent*/ true });
+        }
+
         // Deferred resolve → HDR. Reads all cascade maps (also keeps the unlit
         // ones alive). The spot maps and point-shadow cubes aren't graph
         // textures — both render once pre-graph in RenderToSwapchain; the spot
         // maps bind as pass-owned RHITextures, the cubes bind raw below.
+        // Reading the probe atlases is what pulls the whole DDGI update in front
+        // of this pass, and what keeps it alive through dead-pass culling now
+        // that the debug viz is no longer its only consumer.
         v.lighting->AddToGraph(g, gViewPos, gViewNormal, gAlbedo, gMaterial,
                                ssaoBlurred, gEmissive, cascades,
-                               m_SpotShadow->Maps(), hdrLit, gIndirect);
+                               m_SpotShadow->Maps(), ddgiAtlases, hdrLit, gIndirect);
         v.lighting->BindIBL(*m_IBL);
         v.lighting->BindPointShadows(*m_PointShadow);
 
@@ -1224,42 +1293,22 @@ private:
             v.rtDebug->AddToGraph(g, rtDebugImage, v.outputColor, /*toSwapchain*/ !v.offscreen);
         }
 
-        // DDGI probe update. Nothing downstream samples the atlases in slice 3 —
-        // only the (optional) probe viz does — so the whole subsystem can be
-        // wrong without touching the shipping image. All four resources are
-        // sized for the MAXIMUM probe grid, because probe counts are live-
-        // editable while graph textures are declared once.
+        // DDGI probe update. The atlases were imported further up, ahead of the
+        // lighting pass that now samples them; only the five update passes are
+        // registered here, after tonemap, so the probe viz lands in the right
+        // write-after-write slot on outputColor. Everything else sorts itself by
+        // dependency — the trace reads the cascades so it follows CSM, the blend
+        // writes the atlases so it precedes lighting.
         //
-        // Registered here, after tonemap, purely so the probe viz lands in the
-        // right write-after-write slot on outputColor; the trace/blend/relocate
-        // passes sort themselves by dependency (the trace reads the cascades, so
-        // it ends up after the CSM pass regardless of insertion order).
-        // Every graph imports the shared probe atlases, whether or not it runs
-        // the update: slice 4's lighting pass samples them per view, and an
-        // imported texture is the graph's mechanism for tracking a resource it
-        // doesn't own. The handles are invalid on a non-RT device (nothing was
-        // allocated), which leaves both the update and any future read out.
-        RGTextureHandle ddgiIrradiance, ddgiVisibility, ddgiProbeData;
-        if (m_DDGIIrradiance) {
-            ddgiIrradiance = g.ImportTexture("ddgiIrradiance", m_DDGIIrradiance.get(),
-                { VulkanDDGIPass::IrradianceWidth(), VulkanDDGIPass::IrradianceHeight(),
-                  RHIFormat::RGBA16F, /*storage*/ true, /*persistent*/ true });
-            ddgiVisibility = g.ImportTexture("ddgiVisibility", m_DDGIVisibility.get(),
-                { VulkanDDGIPass::VisibilityWidth(), VulkanDDGIPass::VisibilityHeight(),
-                  RHIFormat::RG16F, /*storage*/ true, /*persistent*/ true });
-            ddgiProbeData = g.ImportTexture("ddgiProbeData", m_DDGIProbeData.get(),
-                { VulkanDDGIPass::kMaxProbes, 1,
-                  RHIFormat::RGBA16F, /*storage*/ true, /*persistent*/ true });
-        }
-
         // The probe UPDATE runs in one view only (see CreateView) — the ray data
         // it produces is transient and stays a per-graph texture.
-        if (v.ddgi && v.ddgi->Available() && ddgiIrradiance.IsValid()) {
+        if (v.ddgi && v.ddgi->Available() && ddgiAtlases.Valid()) {
             const RGTextureHandle ddgiRayData = g.DeclareTexture("ddgiRayData",
                 { VulkanDDGIPass::kMaxRays, VulkanDDGIPass::kMaxProbes,
                   RHIFormat::RGBA16F, /*storage*/ true });
-            v.ddgi->AddToGraph(g, ddgiRayData, ddgiIrradiance, ddgiVisibility,
-                               ddgiProbeData, cascades, v.outputColor, gDepth,
+            v.ddgi->AddToGraph(g, ddgiRayData, ddgiAtlases.irradiance,
+                               ddgiAtlases.visibility, ddgiAtlases.probeData,
+                               cascades, v.outputColor, gDepth,
                                /*toSwapchain*/ !v.offscreen);
             // Same one-time raw bind as the lighting/skybox passes. It also
             // registers the IBL pass so the deferred trace-set rebuild can
@@ -1352,6 +1401,7 @@ private:
         v.transparency->SetCamera(view, jitteredProj);
         m_CSM->ComputeCascades(m_SunDir, view, proj, kNear, kShadowFar, kShadowRes);
         v.lighting->SetAmbientIntensity(m_AmbientIntensity);   // read by SetFrameData below
+        ApplyGITier(*v.lighting);                              // ditto
         v.lighting->SetFrameData(view, m_SunDir, m_SunColor,
                                  m_CSM->GetLightMatrices(), m_CSM->GetSplitDepths(),
                                  m_PointPos, m_PointColor,
@@ -2370,8 +2420,8 @@ private:
     float    m_RTDebugMaxDistance = 100.0f;
 
     // DDGI: the scene's single probe volume, resolved per frame by
-    // GatherDDGIVolume. Nothing samples the probes yet (slice 3) — the master
-    // switch exists so the probe update's cost can be A/B'd from the editor.
+    // GatherDDGIVolume. The master switch is the tier 2 vs tier 1 A/B — off, the
+    // far-field indirect falls back to the IBL irradiance cubemap.
     bool                 m_DDGIEnabled = true;
     bool                 m_HasDDGIVolume = false;
     DDGIVolumeComponent  m_DDGIVolume{};
@@ -2380,6 +2430,9 @@ private:
     int      m_SSGIRays         = 8;
     float    m_SSGIIntensity    = 1.0f;
     float    m_SSGIMaxDistance  = 8.0f;
+    // SSAO's strength on the indirect diffuse term — see ApplyGITier, which
+    // scales it further under tier 2.
+    float    m_SSAOStrength     = 1.0f;
 
     std::unique_ptr<RHITexture> m_DefaultParticleRHI;
     std::shared_ptr<Texture>    m_DefaultParticleTexture;

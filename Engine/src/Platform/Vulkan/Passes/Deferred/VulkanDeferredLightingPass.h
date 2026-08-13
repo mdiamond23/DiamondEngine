@@ -43,6 +43,31 @@ public:
     static constexpr int NUM_CASCADES = VulkanCSMPass::NUM_CASCADES;
     static constexpr int NUM_SPOTS    = VulkanSpotShadowPass::MAX_SPOTS;
 
+    // The shared DDGI probe atlases (SceneRenderer owns them; every view graph
+    // imports them). Handles are invalid on a device without ray tracing, in
+    // which case 'fallback' fills the three bindings so the descriptor set stays
+    // complete — giMode never selects the probe path there, so the contents are
+    // never read.
+    struct DDGIAtlases {
+        RGTextureHandle irradiance;
+        RGTextureHandle visibility;
+        RGTextureHandle probeData;
+        RHITexture*     fallback = nullptr;
+        bool Valid() const { return irradiance.IsValid(); }
+    };
+
+    // Everything DDGISampleIrradiance needs from a volume. View-independent, so
+    // one set of values serves every view. Mirrors the fields VulkanDDGIPass
+    // derives in its own SetFrameData — see SetGIParams.
+    struct DDGISampleParams {
+        glm::vec3  origin{ 0.0f };   // world position of probe (0,0,0)
+        glm::vec3  spacing{ 1.0f };
+        glm::ivec3 counts{ 0 };
+        float      normalBias = 0.1f;
+        float      viewBias   = 0.1f;
+        float      energy     = 1.0f;
+    };
+
     VulkanDeferredLightingPass(RHIDevice* device, const std::string& shaderDir);
     ~VulkanDeferredLightingPass();
 
@@ -62,6 +87,7 @@ public:
                        RGTextureHandle ssao,    RGTextureHandle emissive,
                        const std::array<RGTextureHandle, NUM_CASCADES>& cascades,
                        const std::array<RHITexture*, NUM_SPOTS>& spotShadows,
+                       const DDGIAtlases& ddgi,
                        RGTextureHandle output, RGTextureHandle indirect);
 
     // Graph-handle spot maps (demo scaffolds): resolves the handles and forwards,
@@ -73,6 +99,7 @@ public:
                     RGTextureHandle ssao,    RGTextureHandle emissive,
                     const std::array<RGTextureHandle, NUM_CASCADES>& cascades,
                     const std::array<RGTextureHandle, NUM_SPOTS>& spotShadows,
+                    const DDGIAtlases& ddgi,
                     RGTextureHandle output, RGTextureHandle indirect);
 
     // Sky/IBL ambient multiplier (SkyLightComponent::intensity, default 1). Read
@@ -80,6 +107,20 @@ public:
     // prefiltered specular together — and therefore the 'indirect' MRT output, so
     // the SSGI composite's subtraction stays exact.
     void SetAmbientIntensity(float intensity) { m_AmbientIntensity = intensity; }
+
+    // GI tier + the volume the probe path samples. 'giMode' is 2 for DDGI
+    // probes, 0/1 for the IBL irradiance cubemap — one uniform branch in the
+    // shader, no permutations. 'ssaoIndirectStrength' fades SSAO on the indirect
+    // diffuse term: probe visibility and SSGI's own gather already darken
+    // crevices, so tier 2 wants well under 1 or the same occlusion lands three
+    // times. 'volume' is ignored unless giMode is 2. Read by the next
+    // SetFrameData, so call it before that.
+    void SetGIParams(int giMode, float ssaoIndirectStrength,
+                     const DDGISampleParams& volume) {
+        m_GIMode               = giMode;
+        m_SSAOIndirectStrength = ssaoIndirectStrength;
+        m_DDGIVolume           = volume;
+    }
 
     // Bind the baked IBL maps (irradiance/prefilter cubemaps + BRDF LUT) into the
     // resource set's IBL slots (bindings 11-13). The maps are world-space cubemaps,
@@ -145,7 +186,14 @@ private:
         glm::vec4 spotColor[NUM_SPOTS];     // .xyz radiant intensity, .w range
         glm::vec4 counts;   // x = numPointLights, y = prefilter max LOD,
                             // z = numSpotLights, w = point-shadow far plane
-        glm::vec4 ambient;  // x = sky/IBL intensity
+        glm::vec4 ambient;  // x = sky/IBL intensity, y = giMode,
+                            // z = SSAO strength on the indirect diffuse term
+        // Only the volume fields DDGISampleIrradiance reads — no matrices, the
+        // lookup is view-independent. Junk unless ambient.y selects the probe path.
+        glm::vec4  ddgiOrigin;
+        glm::vec4  ddgiSpacing;
+        glm::ivec4 ddgiCounts;
+        glm::vec4  ddgiParams;   // x = normalBias, y = energy, z = viewBias
     };
 
     RHIDevice*                      m_Device;
@@ -153,6 +201,9 @@ private:
     LightingUBO                     m_UBOData{};
     float                           m_PrefilterMaxLod = 0.0f;
     float                           m_AmbientIntensity = 1.0f;
+    int                             m_GIMode = 0;
+    float                           m_SSAOIndirectStrength = 1.0f;
+    DDGISampleParams                m_DDGIVolume{};
 
     std::unique_ptr<RHIShader>      m_Vert;
     std::unique_ptr<RHIShader>      m_Frag;

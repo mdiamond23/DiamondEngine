@@ -1,4 +1,7 @@
 #version 450
+#extension GL_GOOGLE_include_directive : require
+
+#include "include/ddgi_common.glsl"
 
 // Deferred lighting — Vulkan port of Engine/Shaders/Deferred/lighting.frag. A
 // fullscreen pass that consumes the G-buffer + SSAO + cascaded shadow maps and
@@ -53,7 +56,16 @@ layout(set = 0, binding = 10) uniform LightingUBO {
     vec4 spotColor[4];       // .xyz radiant intensity, .w = range (falloff window)
     vec4 counts;             // x = numPointLights, y = prefilter max LOD,
                              // z = numSpotLights, w = point-shadow far plane
-    vec4 ambient;            // x = sky/IBL intensity (SkyLightComponent), yzw unused
+    vec4 ambient;            // x = sky/IBL intensity (SkyLightComponent)
+                             // y = giMode: 0/1 = IBL far field, 2 = DDGI probes
+                             // z = SSAO strength on the indirect diffuse term
+                             // w unused
+    // DDGI volume, only the fields DDGISampleIrradiance reads (it is
+    // view-independent, so no matrices). Ignored unless giMode == 2.
+    vec4  ddgiOrigin;        // xyz = world position of probe (0,0,0)
+    vec4  ddgiSpacing;       // xyz = probe spacing
+    ivec4 ddgiCounts;        // xyz = probe counts per axis
+    vec4  ddgiParams;        // x = normalBias, y = energy, z = viewBias
 } u;
 
 // IBL maps (world space). Bound after the resource set is created (bake-time views).
@@ -73,6 +85,13 @@ layout(set = 0, binding = 18) uniform samplerCube pointShadow0;
 layout(set = 0, binding = 19) uniform samplerCube pointShadow1;
 layout(set = 0, binding = 20) uniform samplerCube pointShadow2;
 layout(set = 0, binding = 21) uniform samplerCube pointShadow3;
+
+// DDGI probe atlases (SceneRenderer-owned, shared by every view). Bound to 1x1
+// dummies when there is no volume or no ray-tracing support, so the set is
+// always complete and giMode is the only thing that decides whether they matter.
+layout(set = 0, binding = 22) uniform sampler2D ddgiIrradiance;
+layout(set = 0, binding = 23) uniform sampler2D ddgiVisibility;
+layout(set = 0, binding = 24) uniform sampler2D ddgiProbeData;
 
 const float PI = 3.14159265359;
 
@@ -108,6 +127,13 @@ vec3 fresnelSchlick(float cosTheta, vec3 F0) {
 vec3 fresnelSchlickRoughness(float cosTheta, vec3 F0, float roughness) {
     return F0 + (max(vec3(1.0 - roughness), F0) - F0)
               * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
+}
+
+// Lagarde's specular occlusion. A hemispherical AO term is the wrong occluder
+// for a narrow reflection lobe — applying it raw blacks out mirror surfaces in
+// any crevice — so it is widened toward 1 as roughness falls.
+float SpecularOcclusion(float NdotV, float ao, float roughness) {
+    return clamp(pow(NdotV + ao, exp2(-16.0 * roughness - 1.0)) - 1.0 + ao, 0.0, 1.0);
 }
 
 // Single Cook-Torrance light contribution given an incoming radiance.
@@ -206,7 +232,9 @@ void main() {
     // Background pixel — no geometry written (gViewPos cleared to 0).
     if (viewPos.z == 0.0) {
         outColor    = vec4(0.0, 0.0, 0.0, 1.0);
-        outIndirect = vec4(0.0, 0.0, 0.0, 1.0);   // never leave an MRT slot unwritten
+        // Never leave an MRT slot unwritten. The composite early-outs on sky, so
+        // the .a occlusion factor here is only ever a placeholder.
+        outIndirect = vec4(0.0, 0.0, 0.0, 1.0);
         return;
     }
 
@@ -276,19 +304,53 @@ void main() {
     vec3 F  = fresnelSchlickRoughness(NdotV, F0, roughness);
     vec3 kD = (1.0 - F) * (1.0 - metallic);
 
-    // Sky intensity scales BOTH ambient terms. It must be folded in before
+    // Far-field diffuse irradiance — the tier branch. Uniform across the whole
+    // fullscreen draw, so it costs nothing measurable and needs no permutation.
+    //
+    // Sky intensity scales the IBL path only. The probe path already has it: the
+    // trace's miss shader folds skyIntensity in when a ray escapes, so scaling
+    // again here would apply it twice. Either way it must be folded in before
     // outIndirect is written, or SSGI would subtract an unscaled irradiance and
     // over- or under-shoot by exactly this factor.
-    vec3 irradiance      = texture(irradianceMap, worldN).rgb * u.ambient.x;
+    vec3 irradiance;
+    if (u.ambient.y > 1.5) {
+        DDGIVolume vol;
+        vol.origin  = u.ddgiOrigin;
+        vol.spacing = u.ddgiSpacing;
+        vol.counts  = u.ddgiCounts;
+        vol.params  = vec4(0.0, u.ddgiParams.x, 1.0, 0.0);   // energy applied below
+        vol.params2 = vec4(0.0, u.ddgiParams.z, 0.0, 0.0);
+        // The lookup biases toward the viewer, so this is surface → camera.
+        vec3 worldV = normalize(camPosW - worldPos);
+        // Energy is applied HERE, not inside the lookup: the probe trace calls
+        // the same function for its recursive bounce, and a gain in there sits
+        // inside the feedback loop and diverges. See ddgi_common.glsl.
+        irradiance  = DDGISampleIrradiance(vol, ddgiIrradiance, ddgiVisibility,
+                                           ddgiProbeData, worldPos, worldN, worldV)
+                    * u.ddgiParams.y;
+    } else {
+        irradiance = texture(irradianceMap, worldN).rgb * u.ambient.x;
+    }
+
     vec3 diffuse         = irradiance * albedo;
     vec3 prefilteredColor = textureLod(prefilterMap, worldR, roughness * u.counts.y).rgb * u.ambient.x;
     vec2 brdf            = texture(brdfLUT, vec2(NdotV, roughness)).rg;
     vec3 specular        = prefilteredColor * (F * brdf.x + brdf.y);
 
-    // Both baked AO and SSAO attenuate the ambient term.
-    vec3 ambient  = (kD * diffuse + specular) * ao * occlusion;
+    // SSAO now attenuates the indirect DIFFUSE term only, at a tier-dependent
+    // strength. Probe irradiance already carries coarse occlusion (Chebyshev
+    // visibility) and the SSGI composite gathers its own, so a full-strength
+    // ambient multiply here darkens the same crevice three times over. Baked AO
+    // is a material property and stays at full strength.
+    float aoDiffuse = ao * mix(1.0, occlusion, u.ambient.z);
+    float aoSpec    = SpecularOcclusion(NdotV, ao * occlusion, roughness);
+
+    vec3 ambient  = kD * diffuse * aoDiffuse + specular * aoSpec;
     vec3 emissive = texture(gEmissive, vUV).rgb;
 
     outColor    = vec4(ambient + Lo + emissive, 1.0);
-    outIndirect = vec4(irradiance, 1.0);
+    // .a carries the exact diffuse multiplier this pass applied, so the SSGI
+    // composite can reproduce it instead of re-deriving ao × ssao and drifting
+    // out of step with whatever this branch decided.
+    outIndirect = vec4(irradiance, aoDiffuse);
 }

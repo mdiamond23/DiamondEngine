@@ -61,6 +61,9 @@ VulkanDeferredLightingPass::VulkanDeferredLightingPass(RHIDevice* device,
         { 19, RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment }, // pointShadow1 (cube)
         { 20, RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment }, // pointShadow2 (cube)
         { 21, RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment }, // pointShadow3 (cube)
+        { 22, RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment }, // ddgiIrradiance
+        { 23, RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment }, // ddgiVisibility
+        { 24, RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment }, // ddgiProbeData
     };
     // MRT: location 0 = the lit scene, location 1 = the far-field diffuse
     // irradiance this pass used, which ssgi_composite subtracts to replace the
@@ -78,9 +81,17 @@ RGPass& VulkanDeferredLightingPass::AddToGraph(
         RGTextureHandle ssao,    RGTextureHandle emissive,
         const std::array<RGTextureHandle, NUM_CASCADES>& cascades,
         const std::array<RHITexture*, NUM_SPOTS>& spotShadows,
+        const DDGIAtlases& ddgi,
         RGTextureHandle output, RGTextureHandle indirect)
 {
     if (!m_Set) {
+        // The probe atlases resolve to the shared textures when they exist and to
+        // the caller's 1×1 fallback otherwise — the set must be complete either
+        // way, and whether the contents mean anything is giMode's business.
+        RHITexture* ddgiIrr  = ddgi.Valid() ? graph.GetTexture(ddgi.irradiance) : ddgi.fallback;
+        RHITexture* ddgiVis  = ddgi.Valid() ? graph.GetTexture(ddgi.visibility) : ddgi.fallback;
+        RHITexture* ddgiData = ddgi.Valid() ? graph.GetTexture(ddgi.probeData)  : ddgi.fallback;
+
         m_TexBindings = {
             { 0,  graph.GetTexture(viewPos) },     { 1,  graph.GetTexture(viewNormal) },
             { 2,  graph.GetTexture(albedo) },      { 3,  graph.GetTexture(material) },
@@ -89,6 +100,8 @@ RGPass& VulkanDeferredLightingPass::AddToGraph(
             { 8,  graph.GetTexture(cascades[2]) }, { 9,  graph.GetTexture(cascades[3]) },
             { 14, spotShadows[0] },                { 15, spotShadows[1] },
             { 16, spotShadows[2] },                { 17, spotShadows[3] },
+            { 22, ddgiIrr },                       { 23, ddgiVis },
+            { 24, ddgiData },
         };
         m_Set = m_Device->CreateResourceSet(
             m_Pipeline.get(), 0, { { 10, m_UBO.get() } }, m_TexBindings);
@@ -98,7 +111,7 @@ RGPass& VulkanDeferredLightingPass::AddToGraph(
     // this pass after the G-buffer/SSAO/CSM producers. Reading all cascades also
     // keeps them alive through dead-pass culling. The spot maps are NOT graph
     // textures — their owner records + transitions them before the graph runs.
-    return graph.AddPass("DeferredLighting")
+    RGPass& pass = graph.AddPass("DeferredLighting")
         .Read(viewPos).Read(viewNormal).Read(albedo).Read(material)
         .Read(ssao).Read(emissive)
         .Read(cascades[0]).Read(cascades[1]).Read(cascades[2]).Read(cascades[3])
@@ -109,6 +122,16 @@ RGPass& VulkanDeferredLightingPass::AddToGraph(
             cmd->BindResourceSet(0, m_Set.get());
             cmd->Draw(3);
         });
+
+    // These reads are what order this pass after the probe blend/relocate passes
+    // — the graph is a topological sort, so registration order never mattered.
+    // In the view that doesn't run the update they resolve to an imported
+    // texture with no producer this frame, which is exactly the intent: sample
+    // whatever the other view's graph last wrote.
+    if (ddgi.Valid())
+        pass.Read(ddgi.irradiance).Read(ddgi.visibility).Read(ddgi.probeData);
+
+    return pass;
 }
 
 void VulkanDeferredLightingPass::AddToGraph(
@@ -118,6 +141,7 @@ void VulkanDeferredLightingPass::AddToGraph(
         RGTextureHandle ssao,    RGTextureHandle emissive,
         const std::array<RGTextureHandle, NUM_CASCADES>& cascades,
         const std::array<RGTextureHandle, NUM_SPOTS>& spotShadows,
+        const DDGIAtlases& ddgi,
         RGTextureHandle output, RGTextureHandle indirect)
 {
     std::array<RHITexture*, NUM_SPOTS> resolved{};
@@ -125,7 +149,8 @@ void VulkanDeferredLightingPass::AddToGraph(
         resolved[i] = graph.GetTexture(spotShadows[i]);
 
     RGPass& pass = AddToGraph(graph, viewPos, viewNormal, albedo, material,
-                              ssao, emissive, cascades, resolved, output, indirect);
+                              ssao, emissive, cascades, resolved, ddgi,
+                              output, indirect);
     // Graph-owned spot maps rely on this pass's reads for their SampledRead
     // transition (and, when written, producer ordering).
     for (const RGTextureHandle& h : spotShadows)
@@ -253,7 +278,16 @@ void VulkanDeferredLightingPass::SetFrameData(
 
     m_UBOData.counts = glm::vec4(static_cast<float>(np), m_PrefilterMaxLod,
                                  static_cast<float>(ns), pointShadowFar);
-    m_UBOData.ambient = glm::vec4(m_AmbientIntensity, 0.0f, 0.0f, 0.0f);
+    m_UBOData.ambient = glm::vec4(m_AmbientIntensity,
+                                  static_cast<float>(m_GIMode),
+                                  std::clamp(m_SSAOIndirectStrength, 0.0f, 1.0f),
+                                  0.0f);
+
+    m_UBOData.ddgiOrigin  = glm::vec4(m_DDGIVolume.origin, 0.0f);
+    m_UBOData.ddgiSpacing = glm::vec4(m_DDGIVolume.spacing, 0.0f);
+    m_UBOData.ddgiCounts  = glm::ivec4(m_DDGIVolume.counts, 0);
+    m_UBOData.ddgiParams  = glm::vec4(m_DDGIVolume.normalBias, m_DDGIVolume.energy,
+                                      m_DDGIVolume.viewBias, 0.0f);
 
     m_UBO->Update(&m_UBOData, sizeof(LightingUBO));
 }
@@ -298,6 +332,9 @@ void VulkanDeferredLightingPass::Reload()
         { 19, RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment },
         { 20, RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment },
         { 21, RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment },
+        { 22, RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment },
+        { 23, RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment },
+        { 24, RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment },
     };
     desc.colorFormats = { kHDRFormat, kHDRFormat };
     m_Pipeline = m_Device->CreatePipeline(desc);

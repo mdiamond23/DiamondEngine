@@ -15,6 +15,7 @@
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/packing.hpp>   // packHalf1x16 for the equirect upload
 #include <spdlog/spdlog.h>
 
 #include <algorithm>
@@ -33,6 +34,9 @@ namespace {
 // LUT stores its scale+bias in .rg (so no RG16F format is needed anywhere).
 constexpr VkFormat kFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
 
+// Back to 512: the skybox now displays the equirect directly, so this only
+// feeds the irradiance (32^2) and prefilter (128^2) bakes and DDGI's miss
+// shader. None of those resolve anything a larger cube would give them.
 constexpr uint32_t kEnvSize       = 512;
 constexpr uint32_t kIrradianceSz  = 32;
 constexpr uint32_t kPrefilterSz   = 128;
@@ -79,7 +83,10 @@ VulkanIBLPass::VulkanIBLPass(RHIDevice* device, std::string shaderDir)
     : m_Device(static_cast<VulkanRHIDevice*>(device))
     , m_ShaderDir(std::move(shaderDir)) {}
 
-VulkanIBLPass::~VulkanIBLPass() {
+// Release everything BakeEnvironment allocates. Also called at the TOP of a
+// re-bake: every handle below was overwritten in place by the old code, so
+// switching environments leaked the whole previous set.
+void VulkanIBLPass::DestroyBakedResources() {
     VulkanContext& ctx = m_Device->Ctx();
     VkDevice dev = ctx.Device();
     auto destroyCube = [&](Cubemap& c) {
@@ -90,13 +97,27 @@ VulkanIBLPass::~VulkanIBLPass() {
     destroyCube(m_EnvCube);
     destroyCube(m_Irradiance);
     destroyCube(m_Prefilter);
-    if (m_BrdfLUT.image) DestroyImage(ctx, m_BrdfLUT);
-    if (m_Sampler) vkDestroySampler(dev, m_Sampler, nullptr);
+    if (m_BrdfLUT.image)  DestroyImage(ctx, m_BrdfLUT);
+    if (m_Equirect.image) DestroyImage(ctx, m_Equirect);
+    m_BrdfLUT  = {};
+    m_Equirect = {};
+    if (m_Sampler)         vkDestroySampler(dev, m_Sampler, nullptr);
+    if (m_EquirectSampler) vkDestroySampler(dev, m_EquirectSampler, nullptr);
+    m_Sampler         = VK_NULL_HANDLE;
+    m_EquirectSampler = VK_NULL_HANDLE;
 }
+
+VulkanIBLPass::~VulkanIBLPass() { DestroyBakedResources(); }
 
 void VulkanIBLPass::BakeEnvironment(const std::string& hdrPath) {
     VulkanContext& ctx = m_Device->Ctx();
     VkDevice dev = ctx.Device();
+
+    // A re-bake (environment swap) replaces every handle below. Frames in flight
+    // may still sample the old ones through descriptor sets that haven't been
+    // rewritten yet, so drain first — this is a rare editor action.
+    m_Device->WaitIdle();
+    DestroyBakedResources();
 
     // ── Shared sampler (linear, mipmapped, clamp) for the bake sources + baked maps.
     {
@@ -109,11 +130,19 @@ void VulkanIBLPass::BakeEnvironment(const std::string& hdrPath) {
         si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
         si.maxLod       = VK_LOD_CLAMP_NONE;
         VK_CHECK(vkCreateSampler(dev, &si, nullptr, &m_Sampler));
+
+        // Same, but u REPEATs: longitude wraps, so clamping leaves a hard seam
+        // down the ±180° meridian where bilinear can't blend across it. v still
+        // clamps — latitude genuinely ends at the poles.
+        si.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        VK_CHECK(vkCreateSampler(dev, &si, nullptr, &m_EquirectSampler));
     }
 
-    // ── Load the equirectangular HDR → an R32G32B32A32_SFLOAT 2D source image ─────
-    // stb returns 3- or 4-channel float; expand to RGBA (full float dodges any
-    // CPU-side float→half conversion). flip matches the GL loader.
+    // ── Load the equirectangular HDR → an R16G16B16A16_SFLOAT 2D source image ─────
+    // stb returns 3- or 4-channel float; expand to RGBA and pack to half. Half
+    // was full float until the skybox started displaying this image directly —
+    // it now lives for the renderer's lifetime, and 16F halves that to ~67 MB at
+    // 4k. Sky radiance peaks in the hundreds, nowhere near half's 65504 limit.
     FloatImageData hdr = ImageLoader::LoadFloat(hdrPath, /*flipVertically*/ true);
     if (hdr.Pixels.empty()) {
         spdlog::error("[IBL] failed to load HDR environment '{}'", hdrPath);
@@ -121,21 +150,21 @@ void VulkanIBLPass::BakeEnvironment(const std::string& hdrPath) {
     }
     const uint32_t ew = static_cast<uint32_t>(hdr.Width);
     const uint32_t eh = static_cast<uint32_t>(hdr.Height);
-    std::vector<float> rgba(static_cast<size_t>(ew) * eh * 4);
+    std::vector<uint16_t> rgba(static_cast<size_t>(ew) * eh * 4);
     for (size_t i = 0; i < static_cast<size_t>(ew) * eh; ++i) {
         const int   c = hdr.Channels;
         const float* src = &hdr.Pixels[i * c];
-        rgba[i * 4 + 0] = src[0];
-        rgba[i * 4 + 1] = c > 1 ? src[1] : src[0];
-        rgba[i * 4 + 2] = c > 2 ? src[2] : src[0];
-        rgba[i * 4 + 3] = 1.0f;
+        rgba[i * 4 + 0] = glm::packHalf1x16(src[0]);
+        rgba[i * 4 + 1] = glm::packHalf1x16(c > 1 ? src[1] : src[0]);
+        rgba[i * 4 + 2] = glm::packHalf1x16(c > 2 ? src[2] : src[0]);
+        rgba[i * 4 + 3] = glm::packHalf1x16(1.0f);
     }
 
-    VulkanImage equirect = CreateImage(ctx, ew, eh, VK_FORMAT_R32G32B32A32_SFLOAT,
+    VulkanImage equirect = CreateImage(ctx, ew, eh, kFormat,
                                        VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
                                        VK_IMAGE_ASPECT_COLOR_BIT);
     {
-        const VkDeviceSize bytes = rgba.size() * sizeof(float);
+        const VkDeviceSize bytes = rgba.size() * sizeof(uint16_t);
         VmaAllocationInfo stagingInfo{};
         VulkanBuffer staging = CreateBuffer(
             ctx.Allocator(), bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_AUTO,
@@ -447,7 +476,9 @@ void VulkanIBLPass::BakeEnvironment(const std::string& hdrPath) {
 
     // ── Cleanup transient bake resources (submit has retired) ─────────────────────
     for (VkImageView v : transient) vkDestroyImageView(dev, v, nullptr);
-    DestroyImage(ctx, equirect);
+    // The equirect is NOT transient any more — the skybox displays it directly.
+    // Ownership moves to m_Equirect here, after the bake submit has retired.
+    m_Equirect = equirect;
     DestroyBuffer(ctx.Allocator(), cubeVB);
     DestroyBuffer(ctx.Allocator(), cubeIB);
     // Pipelines/shaders release as their unique_ptrs leave scope. The bake

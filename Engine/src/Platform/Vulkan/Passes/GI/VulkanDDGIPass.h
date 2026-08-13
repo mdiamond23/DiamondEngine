@@ -83,6 +83,19 @@ public:
         return kMaxProbesPerAxis * (kVisibilityRes + 2);
     }
 
+    // Where the probes actually sit, derived from the component + the volume's
+    // world centre. Static because the lighting pass has to agree with it
+    // exactly — a probe grid the sampler and the blend disagree about reads
+    // irradiance from the wrong probes — and because the view that samples the
+    // atlases may have no DDGI pass instance of its own.
+    struct GridLayout {
+        glm::vec3  origin;    // world position of probe (0,0,0)
+        glm::vec3  spacing;
+        glm::ivec3 counts;
+    };
+    static GridLayout ComputeGrid(const DDGIVolumeComponent& volume,
+                                  const glm::vec3& center);
+
     // 'debugTargetFormat' is the format of the LDR image the probe viz draws
     // over — dynamic rendering rejects a mismatched pipeline.
     VulkanDDGIPass(RHIDevice* device, const std::string& shaderDir,

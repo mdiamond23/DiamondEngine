@@ -89,16 +89,18 @@ void VulkanSkyboxPass::AddToGraph(RHIRenderGraph& graph,
 
 void VulkanSkyboxPass::BindIBL(const VulkanIBLPass& ibl)
 {
-    // The env cubemap isn't an RHITexture, so write its view into every frame
+    // The source equirect isn't an RHITexture, so write its view into every frame
     // slot of the set by hand (mirrors the lighting/forward passes' BindIBL).
+    // Equirect rather than the env cube — see skybox.frag; sampling a cube makes
+    // its face corners visible on a big smooth sky.
     auto* device = static_cast<VulkanRHIDevice*>(m_Device);
     auto* set    = static_cast<VulkanRHIResourceSet*>(m_Set.get());
     VkDevice dev = device->Ctx().Device();
 
     for (uint32_t frame = 0; frame < VulkanRHIDevice::kFramesInFlight; ++frame) {
         VkDescriptorImageInfo info{};
-        info.sampler     = ibl.Sampler();
-        info.imageView   = ibl.EnvView();
+        info.sampler     = ibl.EquirectSampler();
+        info.imageView   = ibl.EquirectView();
         info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
         VkWriteDescriptorSet w{ VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };

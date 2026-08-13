@@ -12,6 +12,7 @@
 #ifdef DIAMOND_ENABLE_VULKAN
 
 #include "Editor/ThumbnailService.h"
+#include "Editor/RenderSettingsPresets.h"
 #include "Renderer/SceneRenderer.h"
 #include "Renderer/RendererAPI.h"
 #include "Renderer/RHI/RHIDevice.h"
@@ -257,6 +258,18 @@ public:
             return false;
         }
 
+        // Reopen on the look the editor was last left in. ApplyAllSettings runs
+        // unconditionally, not only when a preset matched, so the renderer and
+        // m_Settings agree from frame one either way.
+        m_Presets.Load();
+        if (const RenderSettings* last = m_Presets.Find(m_Presets.LastUsed())) {
+            m_Settings     = *last;
+            m_ActivePreset = m_Presets.LastUsed();
+            std::snprintf(m_PresetName, sizeof(m_PresetName), "%s", m_ActivePreset.c_str());
+            spdlog::info("[RenderSettings] applied preset '{}'", m_ActivePreset);
+        }
+        ApplyAllSettings();
+
         RegisterViewImages(m_ViewportSets, m_Renderer->OutputColor());
 
         // Asset previews for the content browser / inspector — needs the ImGui
@@ -297,36 +310,122 @@ public:
         m_ImGui.BeginFrame();
     }
 
+    // Push the whole settings block at the renderer. Used when a preset loads
+    // and at startup — the per-widget calls below stay as they are so dragging a
+    // slider still costs exactly one setter.
+    void ApplyAllSettings() {
+        m_Renderer->SetExposure(m_Settings.exposure);
+        m_Renderer->SetTonemapper(static_cast<Tonemapper>(m_Settings.tonemapper));
+        m_Renderer->SetTAAEnabled(m_Settings.taa);
+        m_Renderer->SetSSAOStrength(m_Settings.ssaoStrength);
+        m_Renderer->SetSSGIEnabled(m_Settings.ssgiEnabled);
+        m_Renderer->SetSSGIParams(m_Settings.ssgiRays, m_Settings.ssgiIntensity,
+                                  m_Settings.ssgiMaxDistance);
+        m_Renderer->SetDDGIEnabled(m_Settings.ddgiEnabled);
+        m_Renderer->SetAutoExposure(m_Settings.autoExposure);
+        m_Renderer->SetBloomParams(m_Settings.bloomThreshold, m_Settings.bloomIntensity);
+    }
+
+    // Preset row: pick a saved look, overwrite it, or delete it. Selecting from
+    // the combo APPLIES immediately — the point of the feature is a two-click
+    // A/B, and an extra "Load" button would just be a second click every time.
+    void DrawPresetControls() {
+        const std::vector<RenderSettingsStore::Entry>& entries = m_Presets.Entries();
+
+        const char* label = m_ActivePreset.empty() ? "(unsaved)" : m_ActivePreset.c_str();
+        ImGui::SetNextItemWidth(180.0f);
+        if (ImGui::BeginCombo("Preset", label)) {
+            for (const RenderSettingsStore::Entry& e : entries) {
+                const bool selected = (e.name == m_ActivePreset);
+                if (ImGui::Selectable(e.name.c_str(), selected)) {
+                    m_Settings     = e.settings;
+                    m_ActivePreset = e.name;
+                    std::snprintf(m_PresetName, sizeof(m_PresetName), "%s", e.name.c_str());
+                    m_Presets.SetLastUsed(e.name);
+                    m_Presets.Save();
+                    ApplyAllSettings();
+                }
+                if (selected) ImGui::SetItemDefaultFocus();
+            }
+            if (entries.empty()) ImGui::TextDisabled("none saved yet");
+            ImGui::EndCombo();
+        }
+
+        ImGui::SetNextItemWidth(180.0f);
+        ImGui::InputText("##presetname", m_PresetName, sizeof(m_PresetName));
+        ImGui::SameLine();
+        const bool named = m_PresetName[0] != '\0';
+        ImGui::BeginDisabled(!named);
+        if (ImGui::Button("Save")) {
+            m_ActivePreset = m_PresetName;
+            m_Presets.Set(m_ActivePreset, m_Settings);
+            m_Presets.SetLastUsed(m_ActivePreset);
+            m_Presets.Save();
+        }
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        ImGui::BeginDisabled(m_ActivePreset.empty());
+        if (ImGui::Button("Delete")) {
+            m_Presets.Remove(m_ActivePreset);
+            m_Presets.Save();
+            m_ActivePreset.clear();
+            m_PresetName[0] = '\0';
+        }
+        ImGui::EndDisabled();
+        ImGui::TextDisabled("saved to %s",
+                            RenderSettingsStore::FilePath().generic_string().c_str());
+    }
+
     void DrawRendererSettings() override {
         ImGui::Text("Backend: Vulkan (deferred, RHI render graph)");
         ImGui::Text("Scene output: %ux%u", m_SceneW, m_SceneH);
         ImGui::Separator();
+        DrawPresetControls();
+        ImGui::Separator();
         // Global exposure (HDR scale before the tonemap curve; 1.0 = GL parity).
-        if (ImGui::SliderFloat("Exposure", &m_Exposure, 0.1f, 8.0f, "%.2f"))
-            m_Renderer->SetExposure(m_Exposure);
+        if (ImGui::SliderFloat("Exposure", &m_Settings.exposure, 0.1f, 8.0f, "%.2f"))
+            m_Renderer->SetExposure(m_Settings.exposure);
         // Display curve. AgX rolls saturated highlights toward white instead of
         // clipping them with a hue shift — most visible on bloomed emissives.
         const char* kCurves[] = { "ACES (Narkowicz)", "AgX" };
-        if (ImGui::Combo("Tonemapper", &m_Tonemapper, kCurves, IM_ARRAYSIZE(kCurves)))
-            m_Renderer->SetTonemapper(static_cast<Tonemapper>(m_Tonemapper));
+        if (ImGui::Combo("Tonemapper", &m_Settings.tonemapper, kCurves, IM_ARRAYSIZE(kCurves)))
+            m_Renderer->SetTonemapper(static_cast<Tonemapper>(m_Settings.tonemapper));
         // Temporal AA — off also disables the projection jitter + history copy.
-        if (ImGui::Checkbox("TAA", &m_TAAEnabled))
-            m_Renderer->SetTAAEnabled(m_TAAEnabled);
+        if (ImGui::Checkbox("TAA", &m_Settings.taa))
+            m_Renderer->SetTAAEnabled(m_Settings.taa);
 
         ImGui::Separator();
-        // Screen-space GI. Off falls the ambient back to plain IBL, which is
-        // the A/B for judging what the bounce is actually contributing.
+        // Which far-field indirect path is actually live. Worth stating outright:
+        // "DDGI Probes" being ticked is necessary but not sufficient — the scene
+        // also needs a volume, and the GPU needs ray tracing.
+        ImGui::TextUnformatted("Global Illumination");
+        if (m_Renderer->GIMode() == 2)
+            ImGui::TextDisabled("tier 2 — DDGI probes + SSGI");
+        else
+            ImGui::TextDisabled("tier 1 — IBL far field%s",
+                                m_Settings.ssgiEnabled ? " + SSGI" : " only");
+        // SSAO attenuates the indirect DIFFUSE term now, not the whole ambient:
+        // the specular half takes a roughness-aware occlusion instead. Under
+        // tier 2 the effective strength is halved on top of this, because probe
+        // visibility and SSGI already darken the same crevice.
+        if (ImGui::SliderFloat("SSAO on indirect", &m_Settings.ssaoStrength, 0.0f, 1.0f, "%.2f"))
+            m_Renderer->SetSSAOStrength(m_Settings.ssaoStrength);
+
+        ImGui::Separator();
+        // Screen-space GI. Off falls the near-field back to the far-field term,
+        // which is the A/B for judging what the bounce is actually contributing.
         ImGui::TextUnformatted("Screen-Space GI");
-        if (ImGui::Checkbox("SSGI", &m_SSGIEnabled))
-            m_Renderer->SetSSGIEnabled(m_SSGIEnabled);
-        if (m_SSGIEnabled) {
+        if (ImGui::Checkbox("SSGI", &m_Settings.ssgiEnabled))
+            m_Renderer->SetSSGIEnabled(m_Settings.ssgiEnabled);
+        if (m_Settings.ssgiEnabled) {
             bool ssgiDirty = false;
             // ##ssgi: "Intensity" also names a bloom slider in this same window.
-            ssgiDirty |= ImGui::SliderInt("Rays##ssgi", &m_SSGIRays, 1, 32);
-            ssgiDirty |= ImGui::SliderFloat("Intensity##ssgi", &m_SSGIIntensity, 0.0f, 4.0f, "%.2f");
-            ssgiDirty |= ImGui::SliderFloat("Distance##ssgi", &m_SSGIMaxDistance, 0.5f, 40.0f, "%.1f");
+            ssgiDirty |= ImGui::SliderInt("Rays##ssgi", &m_Settings.ssgiRays, 1, 32);
+            ssgiDirty |= ImGui::SliderFloat("Intensity##ssgi", &m_Settings.ssgiIntensity, 0.0f, 4.0f, "%.2f");
+            ssgiDirty |= ImGui::SliderFloat("Distance##ssgi", &m_Settings.ssgiMaxDistance, 0.5f, 40.0f, "%.1f");
             if (ssgiDirty)
-                m_Renderer->SetSSGIParams(m_SSGIRays, m_SSGIIntensity, m_SSGIMaxDistance);
+                m_Renderer->SetSSGIParams(m_Settings.ssgiRays, m_Settings.ssgiIntensity,
+                                          m_Settings.ssgiMaxDistance);
         }
 
         ImGui::Separator();
@@ -343,12 +442,13 @@ public:
                 ImGui::SliderFloat("Ray Length##rt", &m_RTDebugMaxDistance, 1.0f, 500.0f, "%.0f"))
                 m_Renderer->SetRTDebugMaxDistance(m_RTDebugMaxDistance);
 
-            // DDGI probe update (gi-design.md slice 3). The master switch only
-            // decides whether the probes are traced at all — everything that
-            // shapes the result (grid, rays, hysteresis, the probe viz) lives on
-            // the DDGIVolumeComponent, where a scene can have it serialized.
-            if (ImGui::Checkbox("DDGI Probes", &m_DDGIEnabled))
-                m_Renderer->SetDDGIEnabled(m_DDGIEnabled);
+            // DDGI (gi-design.md slice 4). The master switch traces the probes
+            // AND selects them as the far-field indirect term, so unticking it
+            // is the tier 2 vs tier 1 A/B. Everything that shapes the result
+            // (grid, rays, hysteresis, the probe viz) lives on the
+            // DDGIVolumeComponent, where a scene can have it serialized.
+            if (ImGui::Checkbox("DDGI Probes", &m_Settings.ddgiEnabled))
+                m_Renderer->SetDDGIEnabled(m_Settings.ddgiEnabled);
             if (!m_Renderer->HasDDGIVolume())
                 ImGui::TextDisabled("no DDGI Volume in the scene");
             else
@@ -360,29 +460,29 @@ public:
         // slider above, which stays useful as EV compensation while it's on.
         ImGui::TextUnformatted("Auto Exposure");
         bool autoDirty = false;
-        autoDirty |= ImGui::Checkbox("Enabled##autoexp", &m_AutoExposure.enabled);
-        if (m_AutoExposure.enabled) {
-            autoDirty |= ImGui::SliderFloat("Key", &m_AutoExposure.keyValue,
-                                            0.01f, 1.0f, "%.3f");
-            autoDirty |= ImGui::SliderFloat("Adapt speed", &m_AutoExposure.speed,
+        AutoExposureSettings& ae = m_Settings.autoExposure;
+        autoDirty |= ImGui::Checkbox("Enabled##autoexp", &ae.enabled);
+        if (ae.enabled) {
+            autoDirty |= ImGui::SliderFloat("Key", &ae.keyValue, 0.01f, 1.0f, "%.3f");
+            autoDirty |= ImGui::SliderFloat("Adapt speed", &ae.speed,
                                             0.1f, 10.0f, "%.2f stops/s");
-            autoDirty |= ImGui::SliderFloat("Min log luma", &m_AutoExposure.minLogLuminance,
+            autoDirty |= ImGui::SliderFloat("Min log luma", &ae.minLogLuminance,
                                             -16.0f, 0.0f, "%.1f");
-            autoDirty |= ImGui::SliderFloat("Max log luma", &m_AutoExposure.maxLogLuminance,
+            autoDirty |= ImGui::SliderFloat("Max log luma", &ae.maxLogLuminance,
                                             0.0f, 16.0f, "%.1f");
         }
         if (autoDirty)
-            m_Renderer->SetAutoExposure(m_AutoExposure);
+            m_Renderer->SetAutoExposure(ae);
 
         ImGui::Separator();
         // Bloom. Threshold is an absolute linear-HDR luminance cutoff, so it
         // interacts with Exposure above — expect to move both together.
         ImGui::TextUnformatted("Bloom");
         bool bloomDirty = false;
-        bloomDirty |= ImGui::SliderFloat("Threshold", &m_BloomThreshold, 0.0f, 10.0f, "%.2f");
-        bloomDirty |= ImGui::SliderFloat("Intensity", &m_BloomIntensity, 0.0f, 3.0f, "%.2f");
+        bloomDirty |= ImGui::SliderFloat("Threshold", &m_Settings.bloomThreshold, 0.0f, 10.0f, "%.2f");
+        bloomDirty |= ImGui::SliderFloat("Intensity", &m_Settings.bloomIntensity, 0.0f, 3.0f, "%.2f");
         if (bloomDirty)
-            m_Renderer->SetBloomParams(m_BloomThreshold, m_BloomIntensity);
+            m_Renderer->SetBloomParams(m_Settings.bloomThreshold, m_Settings.bloomIntensity);
     }
 
     void RenderFrame(const EditorFrameInput& input) override {
@@ -566,20 +666,19 @@ private:
     ImageSets m_GameSets {};
     ImageSets m_PreviewSets {};
 
-    // All mirror the renderer defaults.
-    float m_Exposure       = 1.0f;
-    int   m_Tonemapper     = static_cast<int>(Tonemapper::ACES);
-    bool  m_TAAEnabled     = true;
-    bool  m_SSGIEnabled      = true;
-    int   m_SSGIRays         = 8;
-    float m_SSGIIntensity    = 1.0f;
-    float m_SSGIMaxDistance  = 8.0f;
+    // The saveable look. Its defaults mirror the renderer's, so an editor that
+    // never touches the panel and a freshly constructed renderer agree.
+    RenderSettings m_Settings{};
+
+    // Named presets on disk + the name box next to the Save button. NOT part of
+    // RenderSettings: the RT hit-distance view is a diagnostic that replaces the
+    // whole image, and nobody wants to restore into it.
+    RenderSettingsStore m_Presets;
+    std::string         m_ActivePreset;
+    char                m_PresetName[64] = "";
+
     bool  m_RTDebugEnabled     = false;
     float m_RTDebugMaxDistance = 100.0f;
-    bool  m_DDGIEnabled        = true;   // matches SceneRendererVk's default
-    float m_BloomThreshold = 1.0f;
-    float m_BloomIntensity = 1.0f;
-    AutoExposureSettings m_AutoExposure {};
 };
 
 } // namespace

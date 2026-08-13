@@ -1,0 +1,65 @@
+{
+  "lastUsed": "Sponza Tuned",
+  "presets": {
+    "Sponza": {
+      "autoExposure": {
+        "enabled": true,
+        "keyValue": 0.18000000715255737,
+        "maxLogLuminance": 4.0,
+        "minLogLuminance": -8.0,
+        "speed": 2.0
+      },
+      "bloomIntensity": 0.0,
+      "bloomThreshold": 0.0,
+      "ddgiEnabled": true,
+      "exposure": 0.10000000149011612,
+      "ssaoStrength": 1.0,
+      "ssgiEnabled": true,
+      "ssgiIntensity": 2.0399999618530273,
+      "ssgiMaxDistance": 21.0,
+      "ssgiRays": 16,
+      "taa": true,
+      "tonemapper": 0
+    },
+    "Sponza Tuned": {
+      "autoExposure": {
+        "enabled": true,
+        "keyValue": 0.18000000715255737,
+        "maxLogLuminance": 4.0,
+        "minLogLuminance": -8.0,
+        "speed": 2.0
+      },
+      "bloomIntensity": 0.4000000059604645,
+      "bloomThreshold": 4.0,
+      "ddgiEnabled": true,
+      "exposure": 1.0,
+      "ssaoStrength": 1.0,
+      "ssgiEnabled": true,
+      "ssgiIntensity": 1.0,
+      "ssgiMaxDistance": 12.0,
+      "ssgiRays": 16,
+      "taa": true,
+      "tonemapper": 0
+    },
+    "Tier 1 (no probes)": {
+      "autoExposure": {
+        "enabled": false,
+        "keyValue": 0.18000000715255737,
+        "maxLogLuminance": 4.0,
+        "minLogLuminance": -8.0,
+        "speed": 2.0
+      },
+      "bloomIntensity": 0.4000000059604645,
+      "bloomThreshold": 4.0,
+      "ddgiEnabled": false,
+      "exposure": 1.0,
+      "ssaoStrength": 1.0,
+      "ssgiEnabled": true,
+      "ssgiIntensity": 1.0,
+      "ssgiMaxDistance": 12.0,
+      "ssgiRays": 16,
+      "taa": true,
+      "tonemapper": 0
+    }
+  }
+}

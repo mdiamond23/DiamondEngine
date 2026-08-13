@@ -46,10 +46,20 @@ public:
     VkImageView IrradianceView() const { return m_Irradiance.cubeView; }
     VkImageView PrefilterView()  const { return m_Prefilter.cubeView; }
     VkImageView BrdfView()       const { return m_BrdfLUT.view; }
-    // The intermediate radiance cubemap — sampled as the skybox background
-    // (PBRSurfacePass::DrawSkybox's environmentMap in the GL renderer).
+    // The intermediate radiance cubemap. Feeds the irradiance/prefilter bakes
+    // and DDGI's miss shader — NOT the visible background, which samples the
+    // equirect directly (see EquirectView).
     VkImageView EnvView()        const { return m_EnvCube.cubeView; }
     VkSampler   Sampler()        const { return m_Sampler; }
+
+    // The source equirect, kept alive past the bake so the skybox can display it
+    // without going through the cube. A cube face's corners cover ~3x the solid
+    // angle per texel that its centre does, so sharpness varies across every
+    // face and the cube's edges become visible on a big smooth sky. Sampling the
+    // equirect has no faces to see. Its sampler REPEATs in u so bilinear blends
+    // across the +/-180 meridian instead of clamping into a seam.
+    VkImageView EquirectView()    const { return m_Equirect.view; }
+    VkSampler   EquirectSampler() const { return m_EquirectSampler; }
 
     // Mip count the prefilter map was baked with (deferred lighting scales roughness
     // by maxLod = NumPrefilterMips - 1 when sampling).
@@ -68,11 +78,16 @@ private:
         VkFormat      format    = VK_FORMAT_UNDEFINED;
     };
 
+    // Frees everything BakeEnvironment allocates — destructor and re-bake.
+    void DestroyBakedResources();
+
     VulkanRHIDevice* m_Device;
     std::string      m_ShaderDir;
 
     VkSampler m_Sampler = VK_NULL_HANDLE;   // shared by all baked maps + bake sources
+    VkSampler m_EquirectSampler = VK_NULL_HANDLE;   // REPEAT in u — see EquirectView
 
+    VulkanImage m_Equirect{};     // source HDR, RGBA16F, outlives the bake (skybox reads it)
     Cubemap     m_EnvCube{};      // intermediate radiance cubemap (mipped, sampled by the convolutions)
     Cubemap     m_Irradiance{};
     Cubemap     m_Prefilter{};

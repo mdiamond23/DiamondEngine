@@ -88,7 +88,10 @@ VulkanDDGIPass::VulkanDDGIPass(RHIDevice* device, const std::string& shaderDir,
         desc.missShader       = m_Miss.get();
         desc.closestHitShader = m_ClosestHit.get();
         desc.resourceBindings = {
-            { 0,  RHIResourceType::AccelerationStructure, RHIShaderStage::RayGen },
+            // ClosestHit too: it casts inline ray-query shadow rays at the same
+            // TLAS the raygen traces.
+            { 0,  RHIResourceType::AccelerationStructure, RHIShaderStage::RayGen
+                                                        | RHIShaderStage::ClosestHit },
             { 1,  RHIResourceType::StorageImage,          RHIShaderStage::RayGen },
             { 2,  RHIResourceType::UniformBuffer,         RHIShaderStage::RayGen
                                                         | RHIShaderStage::ClosestHit
@@ -396,6 +399,23 @@ void VulkanDDGIPass::SetAlbedoTextures(const std::vector<RHITexture*>& textures)
     m_SetDirty       = true;
 }
 
+VulkanDDGIPass::GridLayout VulkanDDGIPass::ComputeGrid(const DDGIVolumeComponent& volume,
+                                                       const glm::vec3& center)
+{
+    GridLayout g;
+    g.counts = glm::clamp(volume.probeCounts, glm::ivec3(1), glm::ivec3(kMaxProbesPerAxis));
+
+    // Probes sit on a regular grid spanning the volume box, corner probes
+    // exactly on the boundary. A single-probe axis degenerates to the centre.
+    const glm::vec3 extent = glm::max(volume.extent, glm::vec3(0.01f));
+    g.spacing = extent;
+    for (int i = 0; i < 3; ++i)
+        if (g.counts[i] > 1) g.spacing[i] = extent[i] / static_cast<float>(g.counts[i] - 1);
+
+    g.origin = center - extent * 0.5f;
+    return g;
+}
+
 void VulkanDDGIPass::SetFrameData(const DDGIVolumeComponent* volume,
                                   const glm::vec3& center,
                                   const glm::mat4& view, const glm::mat4& projection,
@@ -408,8 +428,8 @@ void VulkanDDGIPass::SetFrameData(const DDGIVolumeComponent* volume,
 
     static thread_local std::mt19937 rng{ 0x5EED };
 
-    const glm::ivec3 counts = glm::clamp(volume->probeCounts, glm::ivec3(1),
-                                         glm::ivec3(kMaxProbesPerAxis));
+    const GridLayout grid   = ComputeGrid(*volume, center);
+    const glm::ivec3 counts = grid.counts;
     const int rays = std::clamp(volume->raysPerProbe, 1, kMaxRays);
 
     // A different grid means the atlases describe probes that no longer exist —
@@ -421,19 +441,13 @@ void VulkanDDGIPass::SetFrameData(const DDGIVolumeComponent* volume,
     m_ProbeCount = counts.x * counts.y * counts.z;
     m_ShowProbes = volume->showProbes;
 
-    // Probes sit on a regular grid spanning the volume box, corner probes
-    // exactly on the boundary. A single-probe axis degenerates to the centre.
-    const glm::vec3 extent = glm::max(volume->extent, glm::vec3(0.01f));
-    glm::vec3 spacing = extent;
-    for (int i = 0; i < 3; ++i)
-        if (counts[i] > 1) spacing[i] = extent[i] / static_cast<float>(counts[i] - 1);
-
     m_UBOData.view        = view;
     m_UBOData.viewProj    = projection * view;
     m_UBOData.rayRotation = RandomRotation(rng);
-    m_UBOData.origin      = glm::vec4(center - extent * 0.5f, 0.0f);
-    m_UBOData.spacing     = glm::vec4(spacing,
-                                      std::min({ spacing.x, spacing.y, spacing.z }));
+    m_UBOData.origin      = glm::vec4(grid.origin, 0.0f);
+    m_UBOData.spacing     = glm::vec4(grid.spacing,
+                                      std::min({ grid.spacing.x, grid.spacing.y,
+                                                 grid.spacing.z }));
     m_UBOData.counts      = glm::ivec4(counts, m_ProbeCount);
     // Progressive average over the opening frames: blending frame N into the
     // running mean wants hysteresis N/(N+1), which is 0 on the first frame and

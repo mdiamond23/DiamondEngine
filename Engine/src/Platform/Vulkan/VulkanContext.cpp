@@ -35,10 +35,15 @@ constexpr std::array kRequiredDeviceExtensions = {
 // Vulkan 1.3, so this is the whole extension cost.
 // deferred_host_operations carries no code here — acceleration_structure simply
 // requires it to be enabled.
+// ray_query is for INLINE tracing from inside another shader — DDGI's closest-hit
+// shader casts shadow rays that way. The alternative (recursive traceRayEXT) would
+// need a second miss shader, an SBT with multiple miss records, and recursion
+// depth 2; a ray query needs none of that and cannot recurse by construction.
 constexpr std::array kRayTracingExtensions = {
     VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME,
     VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME,
     VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME,
+    VK_KHR_RAY_QUERY_EXTENSION_NAME,
 };
 
 VKAPI_ATTR VkBool32 VKAPI_CALL DebugCallback(
@@ -152,8 +157,11 @@ bool DeviceSupportsExtensions(VkPhysicalDevice device) {
 bool DeviceSupportsRayTracing(VkPhysicalDevice device) {
     if (!DeviceHasExtensions(device, kRayTracingExtensions)) return false;
 
+    VkPhysicalDeviceRayQueryFeaturesKHR rq{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR };
     VkPhysicalDeviceRayTracingPipelineFeaturesKHR rt{
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_FEATURES_KHR };
+    rt.pNext = &rq;
     VkPhysicalDeviceAccelerationStructureFeaturesKHR as{
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR };
     as.pNext = &rt;
@@ -161,7 +169,10 @@ bool DeviceSupportsRayTracing(VkPhysicalDevice device) {
     f2.pNext = &as;
     vkGetPhysicalDeviceFeatures2(device, &f2);
 
-    return as.accelerationStructure && rt.rayTracingPipeline;
+    // rayQuery is required, not optional: the probe closest-hit shader's SPIR-V
+    // declares the capability, so a device without it could not create the DDGI
+    // pipeline anyway. Reporting tier 1 is the honest answer there.
+    return as.accelerationStructure && rt.rayTracingPipeline && rq.rayQuery;
 }
 
 // Vulkan 1.3 / 1.2 features the renderer relies on. Queried during selection and
@@ -357,6 +368,8 @@ void VulkanContext::CreateLogicalDevice() {
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR };
     VkPhysicalDeviceRayTracingPipelineFeaturesKHR rtFeatures{
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_FEATURES_KHR };
+    VkPhysicalDeviceRayQueryFeaturesKHR rqFeatures{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR };
 
     m_RayTracingSupported = DeviceSupportsRayTracing(m_PhysicalDevice);
     if (m_RayTracingSupported) {
@@ -365,6 +378,7 @@ void VulkanContext::CreateLogicalDevice() {
 
         asFeatures.accelerationStructure = VK_TRUE;
         rtFeatures.rayTracingPipeline    = VK_TRUE;
+        rqFeatures.rayQuery              = VK_TRUE;   // inline shadow rays in the probe chit
 
         // Closest-hit shading indexes an unbounded array of per-instance geometry
         // (slice 3), so the descriptor-indexing bits are enabled up front — they
@@ -378,7 +392,8 @@ void VulkanContext::CreateLogicalDevice() {
         f12.descriptorBindingVariableDescriptorCount     = VK_TRUE;
         f12.descriptorBindingPartiallyBound              = VK_TRUE;
 
-        rtFeatures.pNext = &f13;
+        rqFeatures.pNext = &f13;
+        rtFeatures.pNext = &rqFeatures;
         asFeatures.pNext = &rtFeatures;
         f12.pNext        = &asFeatures;
     }

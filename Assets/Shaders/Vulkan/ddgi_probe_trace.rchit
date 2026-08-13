@@ -1,5 +1,6 @@
 #version 460
 #extension GL_EXT_ray_tracing                    : require
+#extension GL_EXT_ray_query                      : require
 #extension GL_EXT_buffer_reference2              : require
 #extension GL_EXT_nonuniform_qualifier           : require
 #extension GL_GOOGLE_include_directive           : require
@@ -11,8 +12,8 @@
 //   L = albedo/pi * E_direct  +  albedo * E_prev/pi  +  emissive
 //
 // The second term is the previous frame's probe irradiance — the recursive term
-// that buys multi-bounce GI at ray depth 1, which is why maxRecursionDepth stays
-// at 1 and no ray is ever traced from here.
+// that buys multi-bounce GI at ray depth 1. maxRecursionDepth stays at 1: the
+// shadow rays below are ray QUERIES, which traverse inline and cannot recurse.
 //
 // Geometry is reached by DEVICE ADDRESS (GL_EXT_buffer_reference2), not through
 // descriptors: each TLAS instance's gl_InstanceCustomIndexEXT indexes a table of
@@ -23,10 +24,18 @@
 // across a subgroup by nature, hence nonuniformEXT.
 //
 // Direct lighting is DIFFUSE ONLY (probes store irradiance, so the specular lobe
-// would be wrong to include) and shadowed only for the sun, via the same CSM maps
-// the deferred pass uses. Point/spot lights contribute unshadowed. The math is
-// deliberately a trimmed copy of deferred_lighting.frag rather than a shared
-// include: that shader is a working Cook-Torrance resolve and this needs Lambert.
+// would be wrong to include). Every light is shadowed by an inline RAY QUERY
+// against the same TLAS. The math is deliberately a trimmed copy of
+// deferred_lighting.frag rather than a shared include: that shader is a working
+// Cook-Torrance resolve and this needs Lambert.
+//
+// Shadow rays replaced a CSM lookup here. CSM is fitted to the CAMERA frustum,
+// but probes sit wherever the volume is, so any probe outside the current
+// cascades read "unshadowed" and baked full sun into the atlas — including
+// probes indoors whose sun is blocked by a roof. The result was a flat, uniform
+// fill that moved as the camera turned. A ray query has no such coverage limit,
+// costs no second miss shader / SBT record / recursion depth, and also closes
+// the slice-3 gap where point and spot lights leaked through walls into probes.
 
 layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer Verts {
     float f[];
@@ -44,6 +53,7 @@ struct DDGIGeometry {
     uvec4   indices;    // x = albedo array slot, y = vertex stride in FLOATS
 };
 
+layout(set = 0, binding = 0) uniform accelerationStructureEXT uTLAS;   // shadow queries
 layout(set = 0, binding = 2, std140) uniform DDGIBlock { DDGIVolume v; } ddgi;
 layout(set = 0, binding = 3, std430) readonly buffer GeometryBlock {
     DDGIGeometry g[];
@@ -72,10 +82,9 @@ layout(set = 0, binding = 7, std140) uniform LightingUBO {
     vec4 ambient;
 } u;
 
-layout(set = 0, binding = 8)  uniform sampler2D shadowCascade0;
-layout(set = 0, binding = 9)  uniform sampler2D shadowCascade1;
-layout(set = 0, binding = 10) uniform sampler2D shadowCascade2;
-layout(set = 0, binding = 11) uniform sampler2D shadowCascade3;
+// Bindings 8-11 are the CSM cascades. No longer declared — shadowing is traced
+// now. The descriptor set still carries them (harmless; unused descriptors are
+// legal) so the C++ side did not have to change.
 
 // Bindless base-color maps. Slot 0 is 1x1 white, so an untextured material
 // resolves to its base-color factor alone — matching the G-buffer pass.
@@ -84,32 +93,25 @@ layout(set = 0, binding = 13) uniform sampler2D uAlbedoMaps[];
 layout(location = 0) rayPayloadInEXT DDGIPayload payload;
 hitAttributeEXT vec2 attribs;
 
-// ── Shadowing (copied from deferred_lighting.frag, single-tap) ────────────────
-// One tap rather than 3x3 PCF: a probe integrates hundreds of rays, so the
-// filtering the raster pass needs to hide aliasing is wasted work here.
-float SampleCascade(sampler2D smap, vec2 suv, float current, float bias) {
-    if (suv.x < 0.0 || suv.x > 1.0 || suv.y < 0.0 || suv.y > 1.0) return 0.0;
-    if (current > 1.0) return 0.0;
-    return (current - bias > texture(smap, suv).r) ? 1.0 : 0.0;
-}
+// ── Shadowing (inline ray query against the scene TLAS) ──────────────────────
+// Binary: one ray, no PCF. A probe integrates hundreds of rays, which is its own
+// filter. TerminateOnFirstHit + SkipClosestHitShader make this an any-hit
+// visibility test — the traversal stops at the first blocker and never invokes a
+// hit shader, so it is far cheaper than a shading ray.
+//
+// Skinned meshes are absent from the TLAS by design, so a character casts no
+// probe shadow. Same known exclusion as everywhere else in DDGI.
+bool Occluded(vec3 origin, vec3 dir, float maxDist) {
+    const float kBias = 0.02;   // tMin — start off the surface so it can't shadow itself
+    if (maxDist <= kBias) return false;
 
-float SunShadow(vec3 viewPos, vec3 N, vec3 L) {
-    float depth = -viewPos.z;
-    int c = 3;
-    if      (depth < u.cascadeSplits.x) c = 0;
-    else if (depth < u.cascadeSplits.y) c = 1;
-    else if (depth < u.cascadeSplits.z) c = 2;
-
-    vec4  lc      = u.lightFromView[c] * vec4(viewPos, 1.0);
-    vec3  p       = lc.xyz / lc.w;
-    // v flipped: the negative-height viewport wrote light NDC y=+1 to row 0.
-    vec2  suv     = vec2(0.5 * p.x + 0.5, 0.5 - 0.5 * p.y);
-    float bias    = max(0.004 * (1.0 - dot(N, L)), 0.001);
-
-    if      (c == 0) return SampleCascade(shadowCascade0, suv, p.z, bias);
-    else if (c == 1) return SampleCascade(shadowCascade1, suv, p.z, bias);
-    else if (c == 2) return SampleCascade(shadowCascade2, suv, p.z, bias);
-    else             return SampleCascade(shadowCascade3, suv, p.z, bias);
+    rayQueryEXT rq;
+    rayQueryInitializeEXT(rq, uTLAS,
+                          gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT,
+                          0xFF, origin, kBias, dir, maxDist);
+    rayQueryProceedEXT(rq);
+    return rayQueryGetIntersectionTypeEXT(rq, true)
+           != gl_RayQueryCommittedIntersectionNoneEXT;
 }
 
 float Falloff(float dist, float radius) {
@@ -117,32 +119,38 @@ float Falloff(float dist, float radius) {
     return (w * w) / max(dist * dist, 1e-4);
 }
 
-// Total incident irradiance E at a surface, diffuse only.
-vec3 DirectIrradiance(vec3 viewPos, vec3 N) {
+// Total incident irradiance E at a surface, diffuse only. Lights live in VIEW
+// space (the UBO is shared with the deferred pass) while shadow rays need world
+// space, so each direction is rotated out by mat3(invView) before tracing.
+vec3 DirectIrradiance(vec3 viewPos, vec3 N, vec3 worldPos) {
+    const mat3 viewToWorld = mat3(u.invView);
     vec3 E = vec3(0.0);
 
-    {   // Sun, CSM-shadowed. Outside the cascade coverage SampleCascade returns
-        // 0 (unshadowed) — probes far behind the camera see an unoccluded sun.
+    {   // Sun. Directional, so the shadow ray runs to effectively infinity —
+        // anything static between here and the sky blocks it.
         vec3  L     = normalize(-u.sunDirView.xyz);
         float NdotL = max(dot(N, L), 0.0);
-        if (NdotL > 0.0)
-            E += u.sunColor.xyz * NdotL * (1.0 - SunShadow(viewPos, N, L));
+        if (NdotL > 0.0 && !Occluded(worldPos, normalize(viewToWorld * L), 1e4))
+            E += u.sunColor.xyz * NdotL;
     }
 
-    // Point + spot lights, UNSHADOWED (slice 3). Their cube/2D shadow maps are
-    // bound to the deferred pass only; wiring them here is a slice-5 item, and
-    // until then a local light can leak through a wall into a probe.
-    int np = int(u.counts.x);
+    // CLAMPED to the array bounds. counts comes from a dynamic UBO, and a
+    // garbage value here used to just waste light math � now each iteration
+    // costs a BVH traversal, so an out-of-range count is a GPU hang.
+    int np = clamp(int(u.counts.x), 0, 4);
     for (int i = 0; i < np; ++i) {
         vec3  d    = u.pointPos[i].xyz - viewPos;
         float dist = length(d);
         if (dist >= u.pointPos[i].w) continue;
-        float NdotL = max(dot(N, d / dist), 0.0);
+        vec3  L     = d / dist;
+        float NdotL = max(dot(N, L), 0.0);
         if (NdotL <= 0.0) continue;
+        // Ray stops AT the light, so geometry behind it doesn't shadow.
+        if (Occluded(worldPos, normalize(viewToWorld * L), dist)) continue;
         E += u.pointColor[i].xyz * Falloff(dist, u.pointPos[i].w) * NdotL;
     }
 
-    int ns = int(u.counts.z);
+    int ns = clamp(int(u.counts.z), 0, 4);
     for (int i = 0; i < ns; ++i) {
         vec3  d    = u.spotPosView[i].xyz - viewPos;
         float dist = length(d);
@@ -155,6 +163,7 @@ vec3 DirectIrradiance(vec3 viewPos, vec3 N) {
         if (ang <= 0.0) continue;
         float NdotL = max(dot(N, L), 0.0);
         if (NdotL <= 0.0) continue;
+        if (Occluded(worldPos, normalize(viewToWorld * L), dist)) continue;
         E += u.spotColor[i].xyz * Falloff(dist, u.spotColor[i].w) * ang * NdotL;
     }
 
@@ -224,7 +233,7 @@ void main() {
     // atlas already stores E/pi, so the Lambertian albedo/pi * E collapses to a
     // plain multiply on that term. Skipped entirely until the atlas holds
     // anything real.
-    vec3 L = albedo * (DirectIrradiance(viewPos, viewN) / DDGI_PI);
+    vec3 L = albedo * (DirectIrradiance(viewPos, viewN, worldPos) / DDGI_PI);
     if (ddgi.v.params3.x > 0.5) {
         vec3 prev = DDGISampleIrradiance(ddgi.v, uIrradianceAtlas, uVisibilityAtlas,
                                          uProbeData, worldPos, worldN,

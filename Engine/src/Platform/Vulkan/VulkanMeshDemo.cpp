@@ -354,8 +354,15 @@ int RunVulkanMeshDemo() {
     // cascade shadow maps into the HDR target with Cook-Torrance PBR (sun + CSM
     // shadow + the point light). Reading all four cascades also keeps cascades 1-3
     // alive through dead-pass culling.
+    // The demo has no probe volume and never calls SetGIParams, so giMode stays
+    // on the IBL path and the DDGI bindings are never sampled — they just have
+    // to be filled. Any live texture will do; ssaoBlurred is already bound.
+    VulkanDeferredLightingPass::DDGIAtlases noProbes;
+    noProbes.fallback = graph.GetTexture(ssaoBlurred);
+
     lighting.AddToGraph(graph, gViewPos, gViewNormal, gAlbedo, gMaterial,
-                        ssaoBlurred, gEmissive, csmCascades, spotMaps, hdrLit, gIndirect);
+                        ssaoBlurred, gEmissive, csmCascades, spotMaps, noProbes,
+                        hdrLit, gIndirect);
     // Bind the baked IBL maps into the lighting set (raw cube/2D views) now that the
     // set exists. Static maps, so this is a one-time write. The point-shadow cubes
     // bind the same way; the demo never records them, so they keep their creation-

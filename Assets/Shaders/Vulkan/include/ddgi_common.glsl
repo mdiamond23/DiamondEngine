@@ -221,7 +221,14 @@ vec3 DDGISampleIrradiance(DDGIVolume v,
     }
 
     if (wSum <= 1e-6) return vec3(0.0);
-    return (sum / wSum) * v.params.z;   // params.z = energy multiplier
+    // RAW irradiance — the 'energy' multiplier is deliberately NOT applied here.
+    // This function is called both by the final lighting AND by the probe trace's
+    // recursive bounce, which writes back into the atlas this reads. Folding a
+    // gain in here put it inside that feedback loop: the loop gain becomes
+    // energy * albedo, so any energy above ~1/albedo makes probe irradiance grow
+    // every frame until it saturates. Callers that want the artistic gain apply
+    // it themselves, outside the loop.
+    return sum / wSum;
 }
 
 #endif // DDGI_COMMON_GLSL

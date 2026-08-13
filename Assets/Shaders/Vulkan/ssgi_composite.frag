@@ -8,12 +8,13 @@
 //
 //     out = scene + M * (ssgiIrradiance - farIrradiance) * confidence
 //
-// where M is the same diffuse multiplier the lighting pass applied,
-// kD * albedo * ao * ssao. Both irradiances are in the E/PI convention of
+// where M is the same diffuse multiplier the lighting pass applied — kD *
+// albedo * gIndirect.a, the alpha channel being the occlusion factor that pass
+// reports. Both irradiances are in the E/PI convention of
 // irradiance_convolution.frag. At confidence 0 the expression collapses to
 // the scene color, i.e. pure far-field — the same miss path ssr_composite
-// takes. When gIndirect later carries DDGI probe irradiance instead of the
-// IBL sample, nothing here changes.
+// takes. gIndirect carries DDGI probe irradiance under tier 2 and the IBL
+// sample otherwise; nothing here branches on which.
 //
 // Upsampling is bilateral, not bilinear: plain filtering bleeds GI across
 // silhouettes, which reads as a halo around every object.
@@ -27,8 +28,8 @@ layout(set = 0, binding = 2) uniform sampler2D gViewPos;
 layout(set = 0, binding = 3) uniform sampler2D gViewNormal;
 layout(set = 0, binding = 4) uniform sampler2D gAlbedo;
 layout(set = 0, binding = 5) uniform sampler2D gMaterial;      // r=metallic g=roughness b=ao
-layout(set = 0, binding = 6) uniform sampler2D ssaoTex;
-layout(set = 0, binding = 7) uniform sampler2D gIndirect;      // far-field irradiance
+layout(set = 0, binding = 6) uniform sampler2D ssaoTex;        // unused — see gIndirect.a
+layout(set = 0, binding = 7) uniform sampler2D gIndirect;      // rgb far-field irradiance, a = its occlusion factor
 
 layout(push_constant) uniform Push {
     float strength;   // 0 = passthrough, 1 = full
@@ -98,7 +99,6 @@ void main() {
     vec4  matData   = texture(gMaterial, vUV);
     float metallic  = clamp(matData.r, 0.0, 1.0);
     float roughness = clamp(matData.g, 0.0, 1.0);
-    float ao        = matData.b * texture(ssaoTex, vUV).r;
 
     // Camera is at the view-space origin.
     vec3  V     = normalize(-P);
@@ -106,9 +106,14 @@ void main() {
 
     vec3 F0 = mix(vec3(0.04), albedo, metallic);
     vec3 kD = (1.0 - fresnelSchlickRoughness(NdotV, F0, roughness)) * (1.0 - metallic);
-    vec3 M  = kD * albedo * ao;
 
-    vec3 farIrradiance = texture(gIndirect, vUV).rgb;
+    // gIndirect carries the far-field irradiance in rgb and, in .a, the exact
+    // occlusion factor lighting multiplied it by. Reading that back beats
+    // re-deriving ao × ssao here: the lighting pass now fades SSAO by GI tier,
+    // and a reconstruction would silently drift out of step with it.
+    vec4 far           = texture(gIndirect, vUV);
+    vec3 farIrradiance = far.rgb;
+    vec3 M             = kD * albedo * far.a;
     vec3 delta = M * (ssgi.rgb - farIrradiance) * ssgi.a * pc.strength;
 
     FragColor = vec4(max(scene + delta, vec3(0.0)), 1.0);

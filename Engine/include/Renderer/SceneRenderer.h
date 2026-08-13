@@ -212,17 +212,30 @@ public:
     virtual void SetRTDebugEnabled(bool enabled) = 0;
     virtual void SetRTDebugMaxDistance(float distance) = 0;
 
-    // DDGI probe update (Docs/gi-design.md slice 3), default on but inert until
-    // the scene has a DDGIVolumeComponent. In slice 3 the probes light nothing —
-    // only the component's own "Show Probes" viz reads them — so this switch is
-    // purely a cost A/B. Requires ray tracing; a no-op without it. Per-volume
-    // tuning lives on the component, in the inspector, not here.
+    // DDGI probes (Docs/gi-design.md slice 4), default on but inert until the
+    // scene has a DDGIVolumeComponent. When on — and only when ray tracing and a
+    // volume are both present — probe irradiance REPLACES the IBL cubemap as the
+    // far-field indirect diffuse term, which is the tier-2 path. Off falls back
+    // to IBL, so this is the tier 2 vs tier 1 A/B. Per-volume tuning lives on
+    // the component, in the inspector, not here.
     virtual void SetDDGIEnabled(bool enabled) = 0;
     // Whether the scene actually has a probe volume — lets the editor say
     // "add a DDGI Volume" instead of showing dead controls.
     virtual bool HasDDGIVolume() const = 0;
     // Whether this device can ray trace at all — the GI tier-2 gate.
     virtual bool SupportsRayTracing() const = 0;
+    // Which GI tier is actually live this frame: 2 = DDGI probes, 1 = IBL
+    // far field. Editor-facing readout, so the A/B says what it is doing.
+    virtual int  GIMode() const = 0;
+
+    // How strongly SSAO attenuates the INDIRECT DIFFUSE term (0..1, default 1).
+    // It no longer multiplies the whole ambient: baked AO still does, and the
+    // specular term gets a roughness-aware occlusion instead, because a
+    // hemispherical AO factor blacks out sharp reflections in any crevice.
+    // Under tier 2 the effective strength is scaled down further — probe
+    // visibility and SSGI already darken the same crevice.
+    virtual void  SetSSAOStrength(float strength) = 0;
+    virtual float GetSSAOStrength() const = 0;
 
     // Live material edits (Inspector): drop the baked G-buffer descriptor set
     // for 'mat' so the next frame rebuilds it from the material's current

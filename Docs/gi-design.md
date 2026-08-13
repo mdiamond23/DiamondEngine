@@ -24,12 +24,19 @@ anywhere the engine already runs, so the fallback is a real tier, not a cliff:
 
 | Tier | Requires | Far-field indirect | Near-field indirect | Occlusion |
 |---|---|---|---|---|
-| 2 — Full | RT extensions | DDGI probes | SSGI | SSAO on indirect only |
-| 1 — Screen-space | nothing new | IBL irradiance | SSGI | SSAO on indirect only |
-| 0 — Baseline | nothing new | IBL irradiance | none | SSAO on ambient (today) |
+| 2 — Full | RT extensions | DDGI probes | SSGI | SSAO on indirect diffuse, ×0.5 |
+| 1 — Screen-space | nothing new | IBL irradiance | SSGI | SSAO on indirect diffuse |
+| 0 — Baseline | nothing new | IBL irradiance | none | SSAO on indirect diffuse |
 
-Tier 0 is the current shipping path, unmodified — it stays as the floor. Tier 1
-is a genuine upgrade for non-RT hardware, not a consolation prize.
+Tier 1 is a genuine upgrade for non-RT hardware, not a consolation prize, and
+tier 0 stays as the floor: it needs nothing beyond what the engine already ran.
+
+As of slice 4 the occlusion column is the same code in all three tiers, varying
+only by strength — SSAO on indirect diffuse, `SpecularOcclusion` on indirect
+specular. The pre-slice-4 "SSAO multiplies the whole ambient" behaviour is gone
+everywhere, including tier 0. Applying a hemispherical AO term to a narrow
+reflection lobe was wrong at every tier; preserving it for the low tiers would
+have preserved a bug.
 
 Selection: query the RT extensions at device creation to pick a default, and
 expose an explicit override in settings. The override matters — extension
@@ -199,12 +206,28 @@ the fallback gets built and proven before the RT work rather than bolted on afte
      the UV scale and the vertex stride. Verified by pointing the probe viz at
      the downward irradiance and normalizing out magnitude: probes over the lava
      floor read salmon, not white.
-   - **Sun is CSM-shadowed; point and spot lights are unshadowed.** The RT
-     pipeline desc carries one miss and one closest-hit shader, so proper shadow
-     rays would need multiple miss shaders plus recursion depth 2. Sampling the
-     existing cascades costs nothing extra and needs no RHI change. Consequence:
-     probes beyond CSM range see an unoccluded sun, and a local light leaks
-     through walls into probes. Slice 5.
+   - ~~**Sun is CSM-shadowed; point and spot lights are unshadowed.**~~
+     **RESOLVED 2026-08-13 — every light is now shadowed by an inline ray
+     query.** The original reasoning (multiple miss shaders + recursion depth 2)
+     assumed recursive `traceRayEXT`. `VK_KHR_ray_query` traverses inline from
+     inside the closest-hit shader instead: no second miss shader, no extra SBT
+     record, no recursion — `maxRecursionDepth` stays at 1. Cost was one
+     extension + one feature bit in `VulkanContext`, and `rayQuery` joined the
+     tier-2 capability test (the chit's SPIR-V declares the capability, so a
+     device without it could not create the pipeline anyway).
+
+     This mattered far more than "probes beyond CSM range". CSM is fitted to the
+     **camera** frustum while probes sit wherever the volume is, and
+     `SampleCascade` returns 0 (unshadowed) outside the cascade — so most probes,
+     most frames, baked **full unshadowed sun** into the atlas, including probes
+     indoors under a roof. With the Sponza test scene's sun at intensity 19 that
+     turned the probe field into a uniform fill light, which is the flat look
+     that prompted the whole investigation. It also drifted as the camera turned,
+     since which probes fall inside the cascades is view-dependent.
+
+     Bindings 8-11 (the cascades) are no longer declared by the chit. The
+     descriptor set still carries them — unused descriptors are legal, and
+     leaving them avoided touching the set layout. Worth cleaning up in slice 5.
    - **One volume, main view only.** First `DDGIVolumeComponent` wins (the
      `SkyLightComponent` rule). Probes are view-independent, so running the
      update in both view graphs would double the ray cost for an identical
@@ -273,15 +296,90 @@ the fallback gets built and proven before the RT work rather than bolted on afte
 4. **DDGI into lighting** — probe irradiance replaces IBL ambient behind `giMode`;
    SSAO demoted to indirect-only near-field; composite switches its subtracted
    term to the probe lookup. Tier 2 complete, A/B toggle against tier 1.
-   Opens with bindless material albedo and hoisting the atlases out of the
-   per-view graph (see slice 3's notes) — `DDGISampleIrradiance` in
-   `ddgi_common.glsl` is already written and in use by the closest-hit shader's
-   recursive bounce, so the lighting-side change itself is one branch at
-   `deferred_lighting.frag:282`.
+
+   **IMPLEMENTED 2026-08-13.** Full solution builds clean, the Vulkan editor
+   runs with ZERO validation output, and the compiled pass order was machine-
+   checked (see below). Visual play-verify PENDING — nobody has looked at the
+   lit result yet.
+
+   - `deferred_lighting.frag` includes `ddgi_common.glsl` and branches the
+     far-field term on `giMode` (`ambient.y`): 2 = `DDGISampleIrradiance`, else
+     the IBL cubemap. Three new samplers (bindings 22-24) plus the four volume
+     fields the lookup actually reads — no matrices, the lookup is
+     view-independent. The `-I .../include` flag was already global on the
+     shader-compile loop, so the include cost nothing.
+   - **Sky intensity is NOT applied to the probe path.** The IBL sample is
+     scaled by `ambient.x`; probe irradiance already has it, folded in by the
+     trace's miss shader. Scaling again would double-apply it.
+   - **No graph reorder was needed.** `RHIRenderGraph::Compile` is a Kahn
+     topological sort, so registration order decides nothing: adding the three
+     atlas `Read()`s to the lighting pass is what pulls the update in front of
+     it. Verified by logging `m_SortedIndices` — `DDGIProbeTrace > … >
+     DDGIBlendIrradiance > DDGIBlendVisibility > DDGIRelocate > DeferredLighting`,
+     with `DDGIProbeDebug` still after `Tonemap`. Those reads are also what
+     keeps the update alive through dead-pass culling now that the viz is no
+     longer its only consumer.
+   - Volume→grid derivation moved to `VulkanDDGIPass::ComputeGrid`, shared by
+     the blend and the sampler. They MUST agree exactly — a grid they disagree
+     about reads irradiance from the wrong probes — and the sampling view may
+     have no DDGI pass instance at all.
+   - `SceneRenderer::ApplyGITier` picks the tier per frame: atlases exist (RT
+     only) AND a volume AND the toggle. Editor gains a tier readout and an
+     "SSAO on indirect" slider; the DDGI checkbox is now the tier 2/1 A/B.
+
+   **SSAO demotion.** Three things darkened the same crevice: lighting's ambient
+   multiply, probe Chebyshev visibility, and SSGI's own gather. Now:
+   - SSAO attenuates the indirect DIFFUSE term only, at `ssaoStrength`, scaled by
+     a further 0.5 under tier 2 (a tuned constant, not a derivation — the honest
+     factor depends on probe density).
+   - Specular indirect takes Lagarde's `SpecularOcclusion(NdotV, ao*ssao,
+     roughness)` instead of the raw AO, which blacks out sharp reflections in any
+     crevice. **This changes tiers 0/1 too** — deliberate; keeping a raw-AO path
+     for the old tiers would preserve a bug, not a feature.
+   - `outIndirect.a` now carries the exact diffuse multiplier the pass applied,
+     and `ssgi_composite.frag` reads it instead of re-deriving `ao × ssao`. Same
+     reasoning as `gIndirect` itself: reconstruction drifts, a written value
+     can't. Its `ssaoTex` binding is now unused (left declared, harmless).
+
+   NOT verified: the second view's path (imported atlas with no producer in that
+   graph). The game view is off by default, so only the main view's graph ran.
+4.5. **GTAO + bent normals** — replace `ssao.frag` with a GTAO compute pass and
+   feed the bent normal + cone aperture into `DDGISampleIrradiance` in place of
+   the geometric normal, so the probe lookup is *directionally* occluded rather
+   than uniformly multiplied down. That removes the double-count by construction
+   instead of by a tuned 0.5, and it upgrades all three tiers at once because it
+   is still plain screen-space compute. Deliberately its own slice: it changes
+   tier 0's output, so it wants eyeballing separately from the DDGI swap.
+   (RTAO off the existing TLAS was considered and rejected — 1-2 rays/pixel
+   needs a real denoiser, it is tier-2 only, and it re-derives occlusion the
+   probes and SSGI already carry.)
 5. **Polish** — probe budget tuning, Tracy/profiler zones per new pass, editor
    toggles, tier override in settings, Sponza perf baseline per tier.
 
 ## Known traps
+
+- **A loop bound read from a UBO must be clamped before it drives a ray query.**
+  The chit's light loops ran `for (i < int(u.counts.x))` for two slices without
+  trouble — an out-of-range count only wasted arithmetic. The moment each
+  iteration cost a BVH traversal, the same out-of-range count became a
+  **VK_ERROR_DEVICE_LOST** a few seconds in, with validation completely silent.
+  Bisecting proved it: sun-only shadow rays were stable, adding the local-light
+  loops killed the device, and `clamp(int(u.counts.x), 0, 4)` fixed it with every
+  ray enabled. A clamp is a no-op on an in-range value, so this is proof the
+  count really does leave [0,4] sometimes.
+  **OPEN:** *why* it leaves that range is not root-caused. `RHIBuffer::Update`
+  writes only the current frame-in-flight slot and descriptor sets bind the
+  matching per-frame handle, so a never-written slot shouldn't be reachable.
+  `deferred_lighting.frag` loops on the same `counts` and would also be reading
+  garbage on those frames — worth chasing.
+- The skybox must not go through the env cubemap. A cube face's corners cover
+  ~3x the solid angle per texel that its centre does, so sharpness varies across
+  every face and the edges become visible on a large smooth sky. The background
+  samples the equirect source directly; the cube still feeds the irradiance /
+  prefilter bakes and DDGI's miss shader, where the variation is irrelevant.
+  Related: nothing feeding `hdrLit` may display-map — the skybox used to apply
+  Reinhard + gamma in-shader (a verbatim port of a GL quirk) and the tonemap
+  then mapped it again, compressing the whole sky into a 0.13-wide grey wedge.
 
 - The shader compile loop (`Engine/CMakeLists.txt:426`) invokes
   `glslangValidator -V` bare, which targets Vulkan 1.0. RT stages need
