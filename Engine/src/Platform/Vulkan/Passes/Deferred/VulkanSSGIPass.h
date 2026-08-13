@@ -45,7 +45,7 @@ public:
                     RGTextureHandle viewPos, RGTextureHandle viewNormal,
                     RGTextureHandle sceneColor, RGTextureHandle velocity,
                     RGTextureHandle albedo, RGTextureHandle material,
-                    RGTextureHandle ssao, RGTextureHandle indirect,
+                    RGTextureHandle ao,   RGTextureHandle indirect,
                     RGTextureHandle ssgiRaw, RGTextureHandle ssgiResolved,
                     RGTextureHandle ssgiHistory, RGTextureHandle outColor);
 

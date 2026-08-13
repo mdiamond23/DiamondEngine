@@ -9,6 +9,7 @@ compile_commands.json
 *.xcodeproj
 *.xcworkspace
 imgui.ini
+RenderSettings.json
 Assets/Cache/
 Assets/Models/Sponza
 Assets/Models/Curtains

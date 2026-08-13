@@ -4,7 +4,7 @@
 #include "Renderer/RHI/RHIRenderGraph.h"
 #include "Platform/Vulkan/Passes/VulkanPassCommon.h"
 #include "Platform/Vulkan/Passes/Deferred/VulkanGBufferPass.h"
-#include "Platform/Vulkan/Passes/Deferred/VulkanSSAOPass.h"
+#include "Platform/Vulkan/Passes/Deferred/VulkanGTAOPass.h"
 #include "Platform/Vulkan/Passes/Deferred/VulkanDeferredLightingPass.h"
 #include "Platform/Vulkan/Passes/Forward/VulkanPBRSurfacePass.h"
 #include "Platform/Vulkan/Passes/Forward/VulkanTransparencyPass.h"
@@ -195,12 +195,13 @@ int RunVulkanMeshDemo() {
         "gVelocity",   { kOffscreenW, kOffscreenH, RHIFormat::RG16F });
     const RGTextureHandle gDepth      = graph.DeclareTexture(
         "gDepth",      { kOffscreenW, kOffscreenH, RHIFormat::Depth32F });
-    // SSAO targets — single-channel occlusion (raw, then blurred). Declared at the
-    // top level (mirrors the GL graph) so the debug pass can also show the raw one.
-    const RGTextureHandle ssaoRaw     = graph.DeclareTexture(
-        "ssaoRaw",     { kOffscreenW, kOffscreenH, RHIFormat::R16F });
-    const RGTextureHandle ssaoBlurred = graph.DeclareTexture(
-        "ssaoBlurred", { kOffscreenW, kOffscreenH, RHIFormat::R16F });
+    // GTAO targets — rgb = view-space bent normal, a = visibility (raw, then
+    // denoised). Storage, because both passes that write them are compute.
+    // Declared at the top level so the debug pass can also show the raw one.
+    const RGTextureHandle aoRaw     = graph.DeclareTexture(
+        "aoRaw",     { kOffscreenW, kOffscreenH, RHIFormat::RGBA16F, /*storage*/ true });
+    const RGTextureHandle aoBlurred = graph.DeclareTexture(
+        "aoBlurred", { kOffscreenW, kOffscreenH, RHIFormat::RGBA16F, /*storage*/ true });
     // CSM cascade depth targets — one square depth map per cascade (Depth32F, which
     // the graph now also makes Sampled so the debug pass / future lighting can read).
     constexpr uint32_t kShadowRes = 2048;
@@ -243,7 +244,7 @@ int RunVulkanMeshDemo() {
 
     // ── Deferred passes (the ported passes under test) ──────────────────────────
     VulkanGBufferPass          gbuffer(device.get(), shaderDir);
-    VulkanSSAOPass             ssao(device.get(), shaderDir, kOffscreenW, kOffscreenH);
+    VulkanGTAOPass             gtao(device.get(), shaderDir, kOffscreenW, kOffscreenH);
     VulkanCSMPass              csm(device.get(), shaderDir);
     VulkanPointShadowPass      pointShadow(device.get(), shaderDir);   // cubes only bound, never rendered here
     VulkanDeferredLightingPass lighting(device.get(), shaderDir);
@@ -268,7 +269,7 @@ int RunVulkanMeshDemo() {
     const float aspect = static_cast<float>(kOffscreenW) / kOffscreenH;
 
     // Per-draw model matrices. The cube spins (updated per frame); the floor is a
-    // flattened slab the cube sits on, giving SSAO a contact crease to darken (a lone
+    // flattened slab the cube sits on, giving the AO pass a contact crease to darken (a lone
     // convex cube self-occludes almost nothing). The graph is built + compiled once;
     // only these matrices and the per-frame UBOs change.
     glm::mat4 cubeModel{ 1.0f };
@@ -333,8 +334,9 @@ int RunVulkanMeshDemo() {
                            cmd->DrawIndexed(indexCount);
                        });
 
-    // Pass 2+3 — SSAO occlusion + blur over the G-buffer's view-space pos/normal.
-    ssao.AddToGraph(graph, gViewPos, gViewNormal, ssaoRaw, ssaoBlurred);
+    // Pass 2+3 — GTAO horizon search + denoise over the G-buffer's view-space
+    // pos/normal.
+    gtao.AddToGraph(graph, gViewPos, gViewNormal, aoRaw, aoBlurred);
 
     // Shadow passes — render the scene depth into each cascade from the sun. The
     // callback receives the per-cascade light matrix and pushes lightSpace * model.
@@ -350,18 +352,18 @@ int RunVulkanMeshDemo() {
                        cmd->DrawIndexed(indexCount);
                    });
 
-    // Pass 4 — deferred lighting. Resolves the G-buffer + blurred SSAO + the four
+    // Pass 4 — deferred lighting. Resolves the G-buffer + denoised GTAO + the four
     // cascade shadow maps into the HDR target with Cook-Torrance PBR (sun + CSM
     // shadow + the point light). Reading all four cascades also keeps cascades 1-3
     // alive through dead-pass culling.
     // The demo has no probe volume and never calls SetGIParams, so giMode stays
     // on the IBL path and the DDGI bindings are never sampled — they just have
-    // to be filled. Any live texture will do; ssaoBlurred is already bound.
+    // to be filled. Any live texture will do; aoBlurred is already bound.
     VulkanDeferredLightingPass::DDGIAtlases noProbes;
-    noProbes.fallback = graph.GetTexture(ssaoBlurred);
+    noProbes.fallback = graph.GetTexture(aoBlurred);
 
     lighting.AddToGraph(graph, gViewPos, gViewNormal, gAlbedo, gMaterial,
-                        ssaoBlurred, gEmissive, csmCascades, spotMaps, noProbes,
+                        aoBlurred, gEmissive, csmCascades, spotMaps, noProbes,
                         hdrLit, gIndirect);
     // Bind the baked IBL maps into the lighting set (raw cube/2D views) now that the
     // set exists. Static maps, so this is a one-time write. The point-shadow cubes
@@ -429,9 +431,9 @@ int RunVulkanMeshDemo() {
         ubo.prevViewProjUnjittered = ubo.viewProj;
         uniformBuffer->Update(&ubo, sizeof(ubo));
 
-        // SSAO projects view-space samples into screen space — it needs this frame's
+        // GTAO converts its world radius to pixels — it needs this frame's
         // projection (uploaded after BeginFrame idles the buffer slot).
-        ssao.SetProjection(proj);
+        gtao.SetProjection(proj);
 
         cubeModel = glm::rotate(glm::mat4(1.0f), t * 0.5f, glm::vec3(0.0f, 1.0f, 0.0f));
 

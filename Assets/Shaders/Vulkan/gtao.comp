@@ -1,0 +1,182 @@
+#version 450
+
+// Ground-Truth Ambient Occlusion (Jimenez et al. 2016), full resolution.
+// Replaces ssao.frag. Two things make it worth the swap:
+//
+//  1. It solves the visibility integral analytically per slice instead of
+//     counting occluded point samples, so it converges far faster and matches
+//     a ray-traced reference rather than approximating one.
+//  2. It produces a BENT NORMAL — the average unoccluded direction — which
+//     lets the indirect diffuse lookup be directionally occluded instead of
+//     uniformly scaled down. See Docs/gi-design.md slice 4.5.
+//
+// Output: rgb = view-space bent normal, a = visibility in [0,1].
+//
+// Method per slice: pick a screen-space direction, march both ways collecting
+// the maximum horizon angle on each side, project the surface normal into the
+// slice plane, then integrate the arc between the two horizons against the
+// projected normal's cosine lobe.
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0, rgba16f) uniform writeonly image2D aoRaw;
+layout(set = 0, binding = 1) uniform sampler2D gViewPos;
+layout(set = 0, binding = 2) uniform sampler2D gViewNormal;
+
+layout(push_constant) uniform Push {
+    vec2  screenSize;
+    float projScale;     // pixels per view-space unit at z = -1
+    float radius;        // world-space sampling radius
+    float falloffStart;  // fraction of the radius where attenuation begins
+    int   slices;
+    int   steps;         // horizon-march taps per side
+    uint  frameIndex;    // rotates the sample pattern; TAA averages it out
+    float bentNormals;   // < 0.5 writes the geometric normal instead (the A/B)
+} pc;
+
+const float PI       = 3.14159265359;
+const float HALF_PI  = 1.57079632679;
+// Cap on the screen-space search radius. A surface right against the near
+// plane projects the world radius across most of the screen, which is both
+// cache-hostile and meaningless — AO is a near-field effect.
+const float MAX_RADIUS_PIXELS = 192.0;
+
+void main() {
+    ivec2 id = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(vec2(id), pc.screenSize))) return;
+
+    vec2 uv = (vec2(id) + 0.5) / pc.screenSize;
+    vec3 P  = textureLod(gViewPos, uv, 0.0).xyz;
+
+    vec3  nRaw   = textureLod(gViewNormal, uv, 0.0).xyz;
+    float nLenSq = dot(nRaw, nRaw);
+
+    // Background (gViewPos cleared to 0) or a degenerate normal: fully visible,
+    // with a bent normal facing the camera. Lighting early-outs on sky anyway.
+    if (P.z == 0.0 || nLenSq <= 1e-6) {
+        imageStore(aoRaw, id, vec4(0.0, 0.0, 1.0, 1.0));
+        return;
+    }
+
+    vec3 N = nRaw * inversesqrt(nLenSq);
+    vec3 V = normalize(-P);   // camera sits at the view-space origin
+
+    float radiusPixels = min(pc.projScale * pc.radius / max(-P.z, 1e-4),
+                             MAX_RADIUS_PIXELS);
+    // Sub-pixel search radius — distant geometry, nothing to resolve.
+    if (radiusPixels < 1.0) {
+        imageStore(aoRaw, id, vec4(N, 1.0));
+        return;
+    }
+
+    // The paper's spatial noise (a 4x4 pattern in slice angle and step offset),
+    // advanced per frame by two irrational increments so consecutive frames
+    // never repeat and TAA can average the sequence.
+    float dirNoise = (1.0 / 16.0) * float((((id.x + id.y) & 3) << 2) + (id.x & 3));
+    float offNoise = (1.0 /  4.0) * float((id.y - id.x) & 3);
+    dirNoise = fract(dirNoise + float(pc.frameIndex) * 0.6180339887);
+    offNoise = fract(offNoise + float(pc.frameIndex) * 0.4142135624);
+
+    // At least one pixel per step, or the march re-reads the same texel. The
+    // world-space falloff below keeps the extra reach from mattering.
+    float stepPixels  = max(radiusPixels / float(pc.steps), 1.0);
+    float falloffFrom = pc.falloffStart * pc.radius;
+    float falloffLen  = max(pc.radius - falloffFrom, 1e-4);
+
+    float visibility = 0.0;
+    vec3  bentSum    = vec3(0.0);
+    float bentWeight = 0.0;
+
+    for (int s = 0; s < pc.slices; ++s) {
+        float phi = (float(s) + dirNoise) * PI / float(pc.slices);
+        float cp  = cos(phi);
+        float sp  = sin(phi);
+
+        // View-space slice direction, and the matching UV step. The y negation
+        // is the codebase's standing convention: the negative-height viewport
+        // wrote view +y to decreasing v.
+        vec3 omega = vec3(cp, sp, 0.0);
+        vec2 duv   = vec2(cp, -sp) / pc.screenSize;
+
+        // In-slice basis perpendicular to V. Angles below are measured from V,
+        // positive toward T.
+        vec3  T    = omega - V * dot(omega, V);
+        float tLen = length(T);
+        if (tLen < 1e-4) continue;   // slice edge-on to the view — no arc to integrate
+        T /= tLen;
+
+        // The normal projected onto the slice plane. Its length is the slice's
+        // share of the cosine lobe, and is part of the estimator, not a
+        // normalizing weight.
+        vec3  axis      = cross(omega, V);
+        float axisLenSq = dot(axis, axis);
+        vec3  projN     = axisLenSq > 1e-8 ? N - axis * (dot(N, axis) / axisLenSq) : N;
+        float projNLen  = length(projN);
+        if (projNLen < 1e-4) continue;
+        vec3 projNn = projN / projNLen;
+
+        float n = atan(dot(projNn, T), dot(projNn, V));   // signed, from V toward T
+
+        // Horizon march, +T then -T.
+        float horizonCos[2] = float[2](-1.0, -1.0);
+        for (int side = 0; side < 2; ++side) {
+            float dirSign = side == 0 ? 1.0 : -1.0;
+            float horizon = -1.0;
+
+            for (int i = 0; i < pc.steps; ++i) {
+                vec2 suv = uv + duv * (dirSign * (float(i) + offNoise + 0.5) * stepPixels);
+                if (any(lessThan(suv, vec2(0.0))) || any(greaterThan(suv, vec2(1.0))))
+                    break;   // off screen — no information, not an open horizon
+
+                vec3 S = textureLod(gViewPos, suv, 0.0).xyz;
+                if (S.z == 0.0) continue;   // sky texel occludes nothing
+
+                vec3  d    = S - P;
+                float dist = length(d);
+                if (dist < 1e-5) continue;
+
+                // Fade a distant occluder back toward the horizon already
+                // found, so an object leaving the radius releases its shadow
+                // smoothly instead of popping.
+                float falloff = clamp((dist - falloffFrom) / falloffLen, 0.0, 1.0);
+                float c       = mix(dot(d / dist, V), horizon, falloff);
+                horizon       = max(horizon, c);
+            }
+            horizonCos[side] = horizon;
+        }
+
+        // No occluder found leaves cos at -1, i.e. acos = PI, which the clamp
+        // below opens to the full hemisphere.
+        float h2 =  acos(clamp(horizonCos[0], -1.0, 1.0));   // +T side
+        float h1 = -acos(clamp(horizonCos[1], -1.0, 1.0));   // -T side
+
+        // Clamp both horizons into the hemisphere around the projected normal.
+        h1 = n + max(h1 - n, -HALF_PI);
+        h2 = n + min(h2 - n,  HALF_PI);
+
+        // The paper's inner integral: the visible arc weighted by the cosine
+        // lobe around the projected normal.
+        float cosN = cos(n);
+        float sinN = sin(n);
+        float arc  = 0.25 * ((-cos(2.0 * h1 - n) + cosN + 2.0 * h1 * sinN)
+                           + (-cos(2.0 * h2 - n) + cosN + 2.0 * h2 * sinN));
+        visibility += projNLen * arc;
+
+        // Bent direction: the middle of the visible arc, weighted by how much
+        // of the lobe this slice covers AND how open it is, so a sealed slice
+        // barely steers the result.
+        float bentAngle = (h1 + h2) * 0.5;
+        float w         = projNLen * max(arc, 0.0);
+        bentSum    += (V * cos(bentAngle) + T * sin(bentAngle)) * w;
+        bentWeight += w;
+    }
+
+    visibility = clamp(visibility / float(pc.slices), 0.0, 1.0);
+
+    vec3 bentN = bentWeight > 1e-5 ? normalize(bentSum) : N;
+    // A bent normal below the surface is a degenerate fit, not information.
+    if (dot(bentN, N) <= 0.0) bentN = N;
+    if (pc.bentNormals < 0.5) bentN = N;
+
+    imageStore(aoRaw, id, vec4(bentN, visibility));
+}

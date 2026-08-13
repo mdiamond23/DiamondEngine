@@ -34,7 +34,10 @@ layout(set = 0, binding = 0) uniform sampler2D gViewPos;
 layout(set = 0, binding = 1) uniform sampler2D gViewNormal;
 layout(set = 0, binding = 2) uniform sampler2D gAlbedo;
 layout(set = 0, binding = 3) uniform sampler2D gMaterial;   // r=metallic g=roughness b=ao
-layout(set = 0, binding = 4) uniform sampler2D ssaoTex;
+// GTAO (slice 4.5): rgb = view-space bent normal, a = visibility. Replaces the
+// old single-channel SSAO target — the bent normal is what lets the far-field
+// lookup be steered rather than only scaled.
+layout(set = 0, binding = 4) uniform sampler2D aoTex;
 layout(set = 0, binding = 5) uniform sampler2D gEmissive;
 layout(set = 0, binding = 6) uniform sampler2D shadowCascade0;
 layout(set = 0, binding = 7) uniform sampler2D shadowCascade1;
@@ -58,7 +61,7 @@ layout(set = 0, binding = 10) uniform LightingUBO {
                              // z = numSpotLights, w = point-shadow far plane
     vec4 ambient;            // x = sky/IBL intensity (SkyLightComponent)
                              // y = giMode: 0/1 = IBL far field, 2 = DDGI probes
-                             // z = SSAO strength on the indirect diffuse term
+                             // z = AO strength on the indirect diffuse term
                              // w unused
     // DDGI volume, only the fields DDGISampleIrradiance reads (it is
     // view-independent, so no matrices). Ignored unless giMode == 2.
@@ -244,7 +247,8 @@ void main() {
     float metallic  = matData.r;
     float roughness = matData.g;
     float ao        = matData.b;
-    float occlusion = texture(ssaoTex, vUV).r;
+    vec4  aoSample  = texture(aoTex, vUV);
+    float occlusion = aoSample.a;
 
     vec3 V  = normalize(-viewPos);                    // camera at origin in view space
     vec3 F0 = mix(vec3(0.04), albedo, metallic);
@@ -301,6 +305,17 @@ void main() {
     vec3 worldR = normalize(V2W * reflect(-V, N));
     float NdotV = max(dot(N, V), 0.0);
 
+    // The bent normal — GTAO's average unoccluded direction — is what the
+    // far-field DIFFUSE lookup is fetched along, in both tiers. Fetching down
+    // the geometric normal and scaling by AO darkens a crevice uniformly;
+    // fetching down the bent normal picks up the light that actually reaches
+    // it. Degenerate (or the A/B toggled off) collapses to the geometric
+    // normal, which is exactly the pre-4.5 behaviour.
+    vec3  bentV   = aoSample.rgb;
+    float bentLen = dot(bentV, bentV);
+    vec3  worldBentN = bentLen > 1e-6 ? normalize(V2W * (bentV * inversesqrt(bentLen)))
+                                      : worldN;
+
     vec3 F  = fresnelSchlickRoughness(NdotV, F0, roughness);
     vec3 kD = (1.0 - F) * (1.0 - metallic);
 
@@ -325,11 +340,14 @@ void main() {
         // Energy is applied HERE, not inside the lookup: the probe trace calls
         // the same function for its recursive bounce, and a gain in there sits
         // inside the feedback loop and diverges. See ddgi_common.glsl.
-        irradiance  = DDGISampleIrradiance(vol, ddgiIrradiance, ddgiVisibility,
-                                           ddgiProbeData, worldPos, worldN, worldV)
+        // Bent normal steers the atlas fetch; the geometric normal still drives
+        // the bias push-off and the probe backface weight (see ddgi_common).
+        irradiance  = DDGISampleIrradianceBent(vol, ddgiIrradiance, ddgiVisibility,
+                                               ddgiProbeData, worldPos,
+                                               worldN, worldBentN, worldV)
                     * u.ddgiParams.y;
     } else {
-        irradiance = texture(irradianceMap, worldN).rgb * u.ambient.x;
+        irradiance = texture(irradianceMap, worldBentN).rgb * u.ambient.x;
     }
 
     vec3 diffuse         = irradiance * albedo;
@@ -337,10 +355,11 @@ void main() {
     vec2 brdf            = texture(brdfLUT, vec2(NdotV, roughness)).rg;
     vec3 specular        = prefilteredColor * (F * brdf.x + brdf.y);
 
-    // SSAO now attenuates the indirect DIFFUSE term only, at a tier-dependent
-    // strength. Probe irradiance already carries coarse occlusion (Chebyshev
-    // visibility) and the SSGI composite gathers its own, so a full-strength
-    // ambient multiply here darkens the same crevice three times over. Baked AO
+    // GTAO visibility attenuates the indirect DIFFUSE term only. Now that the
+    // irradiance above is fetched along the bent normal, this multiply is the
+    // cone's solid-angle fraction rather than a second occlusion test on top of
+    // the probes' Chebyshev visibility — which is why slice 4's tuned tier-2
+    // halving is gone and both tiers run the user's strength unscaled. Baked AO
     // is a material property and stays at full strength.
     float aoDiffuse = ao * mix(1.0, occlusion, u.ambient.z);
     float aoSpec    = SpecularOcclusion(NdotV, ao * occlusion, roughness);

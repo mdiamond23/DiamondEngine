@@ -1,0 +1,57 @@
+#version 450
+
+// Depth-aware 3x3 denoise for gtao.comp. GTAO's per-pixel slice rotation trades
+// banding for noise; this resolves the spatial half of it, and TAA (downstream
+// of lighting) averages the per-frame rotation.
+//
+// Bilateral on view depth only: a normal-similarity term would refuse to blur
+// exactly where the bent normal varies most, which is where the noise is.
+// Renormalizes the bent normal after averaging — the mean of unit vectors is
+// not a unit vector.
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0, rgba16f) uniform writeonly image2D aoOut;
+layout(set = 0, binding = 1) uniform sampler2D aoIn;       // rgb bent normal, a visibility
+layout(set = 0, binding = 2) uniform sampler2D gViewPos;
+
+const float DEPTH_SCALE = 0.05;   // tolerance as a fraction of view depth
+
+void main() {
+    ivec2 id   = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = textureSize(aoIn, 0);
+    if (any(greaterThanEqual(id, size))) return;
+
+    vec3 P = texelFetch(gViewPos, id, 0).xyz;
+    if (P.z == 0.0) {   // background — nothing to average against
+        imageStore(aoOut, id, texelFetch(aoIn, id, 0));
+        return;
+    }
+
+    vec4  sum  = vec4(0.0);
+    float wsum = 0.0;
+
+    for (int dy = -1; dy <= 1; ++dy) {
+        for (int dx = -1; dx <= 1; ++dx) {
+            ivec2 t = clamp(id + ivec2(dx, dy), ivec2(0), size - 1);
+            vec3  S = texelFetch(gViewPos, t, 0).xyz;
+            if (S.z == 0.0) continue;
+
+            float w = exp(-abs(S.z - P.z) / max(DEPTH_SCALE * abs(P.z), 1e-3));
+            sum  += texelFetch(aoIn, t, 0) * w;
+            wsum += w;
+        }
+    }
+
+    if (wsum <= 1e-6) {
+        imageStore(aoOut, id, texelFetch(aoIn, id, 0));
+        return;
+    }
+
+    vec4  avg   = sum / wsum;
+    float bLen2 = dot(avg.rgb, avg.rgb);
+    vec3  bentN = bLen2 > 1e-8 ? avg.rgb * inversesqrt(bLen2)
+                               : texelFetch(aoIn, id, 0).rgb;
+
+    imageStore(aoOut, id, vec4(bentN, avg.a));
+}

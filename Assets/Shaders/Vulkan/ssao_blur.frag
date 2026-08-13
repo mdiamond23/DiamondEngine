@@ -1,5 +1,8 @@
 #version 450
 
+// RETAINED, UNUSED — superseded by gtao_denoise.comp (gi-design.md slice 4.5).
+// Still compiled so it cannot rot; nothing loads the .spv.
+//
 // SSAO blur pass (Vulkan port of Deferred/ssao_blur.frag). A 4×4 box blur that
 // smooths the noisy raw occlusion — the noise rotation makes the raw result grainy,
 // and a blur the size of the noise tile averages it out. Single-channel in/out.

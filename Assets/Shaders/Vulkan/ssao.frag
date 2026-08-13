@@ -1,5 +1,9 @@
 #version 450
 
+// RETAINED, UNUSED — superseded by gtao.comp (Docs/gi-design.md slice 4.5). Still
+// compiled so it cannot rot; nothing loads the .spv. See VulkanSSAOPass.h for why
+// this is no longer a drop-in (the lighting pass wants a bent normal, not a scalar).
+//
 // SSAO raw-occlusion pass (Vulkan port of Deferred/ssao.frag). A fullscreen pass
 // over the G-buffer: for each fragment it reorients a 64-sample hemisphere kernel
 // to the surface normal (via a tiled 4×4 noise rotation), projects each sample,

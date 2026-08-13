@@ -318,6 +318,8 @@ public:
         m_Renderer->SetTonemapper(static_cast<Tonemapper>(m_Settings.tonemapper));
         m_Renderer->SetTAAEnabled(m_Settings.taa);
         m_Renderer->SetSSAOStrength(m_Settings.ssaoStrength);
+        m_Renderer->SetGTAOParams(m_Settings.gtaoRadius, m_Settings.gtaoSlices,
+                                  m_Settings.gtaoSteps, m_Settings.gtaoBentNormals);
         m_Renderer->SetSSGIEnabled(m_Settings.ssgiEnabled);
         m_Renderer->SetSSGIParams(m_Settings.ssgiRays, m_Settings.ssgiIntensity,
                                   m_Settings.ssgiMaxDistance);
@@ -404,12 +406,27 @@ public:
         else
             ImGui::TextDisabled("tier 1 — IBL far field%s",
                                 m_Settings.ssgiEnabled ? " + SSGI" : " only");
-        // SSAO attenuates the indirect DIFFUSE term now, not the whole ambient:
-        // the specular half takes a roughness-aware occlusion instead. Under
-        // tier 2 the effective strength is halved on top of this, because probe
-        // visibility and SSGI already darken the same crevice.
-        if (ImGui::SliderFloat("SSAO on indirect", &m_Settings.ssaoStrength, 0.0f, 1.0f, "%.2f"))
+        // Occlusion attenuates the indirect DIFFUSE term, not the whole ambient:
+        // the specular half takes a roughness-aware occlusion instead. Since the
+        // irradiance is fetched along the bent normal this is the visible cone's
+        // solid-angle fraction, so it runs at face value in both tiers.
+        ImGui::TextUnformatted("Ambient Occlusion (GTAO)");
+        if (ImGui::SliderFloat("AO on indirect", &m_Settings.ssaoStrength, 0.0f, 1.0f, "%.2f"))
             m_Renderer->SetSSAOStrength(m_Settings.ssaoStrength);
+
+        bool gtaoDirty = false;
+        // The slice-4.5 A/B. Off, the pass emits the geometric normal, so the
+        // indirect lookup is scaled down uniformly the way it was before —
+        // which isolates the bent normal from GTAO's own quality gain.
+        gtaoDirty |= ImGui::Checkbox("Bent Normals", &m_Settings.gtaoBentNormals);
+        gtaoDirty |= ImGui::SliderFloat("Radius##gtao", &m_Settings.gtaoRadius, 0.05f, 4.0f, "%.2f");
+        // Both are linear in cost. Slices trade banding for noise, steps trade
+        // missed thin occluders for bandwidth.
+        gtaoDirty |= ImGui::SliderInt("Slices##gtao", &m_Settings.gtaoSlices, 1, 8);
+        gtaoDirty |= ImGui::SliderInt("Steps##gtao",  &m_Settings.gtaoSteps,  1, 16);
+        if (gtaoDirty)
+            m_Renderer->SetGTAOParams(m_Settings.gtaoRadius, m_Settings.gtaoSlices,
+                                      m_Settings.gtaoSteps, m_Settings.gtaoBentNormals);
 
         ImGui::Separator();
         // Screen-space GI. Off falls the near-field back to the far-field term,

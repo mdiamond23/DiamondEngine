@@ -84,7 +84,7 @@ public:
     RGPass& AddToGraph(RHIRenderGraph& graph,
                        RGTextureHandle viewPos, RGTextureHandle viewNormal,
                        RGTextureHandle albedo,  RGTextureHandle material,
-                       RGTextureHandle ssao,    RGTextureHandle emissive,
+                       RGTextureHandle ao,      RGTextureHandle emissive,
                        const std::array<RGTextureHandle, NUM_CASCADES>& cascades,
                        const std::array<RHITexture*, NUM_SPOTS>& spotShadows,
                        const DDGIAtlases& ddgi,
@@ -96,7 +96,7 @@ public:
     void AddToGraph(RHIRenderGraph& graph,
                     RGTextureHandle viewPos, RGTextureHandle viewNormal,
                     RGTextureHandle albedo,  RGTextureHandle material,
-                    RGTextureHandle ssao,    RGTextureHandle emissive,
+                    RGTextureHandle ao,      RGTextureHandle emissive,
                     const std::array<RGTextureHandle, NUM_CASCADES>& cascades,
                     const std::array<RGTextureHandle, NUM_SPOTS>& spotShadows,
                     const DDGIAtlases& ddgi,
@@ -110,15 +110,16 @@ public:
 
     // GI tier + the volume the probe path samples. 'giMode' is 2 for DDGI
     // probes, 0/1 for the IBL irradiance cubemap — one uniform branch in the
-    // shader, no permutations. 'ssaoIndirectStrength' fades SSAO on the indirect
-    // diffuse term: probe visibility and SSGI's own gather already darken
-    // crevices, so tier 2 wants well under 1 or the same occlusion lands three
-    // times. 'volume' is ignored unless giMode is 2. Read by the next
+    // shader, no permutations. 'aoIndirectStrength' fades GTAO visibility on the
+    // indirect diffuse term; since slice 4.5 that irradiance is fetched along
+    // the bent normal, so the multiply is a solid-angle fraction rather than a
+    // second occlusion test and BOTH tiers pass the user's value straight
+    // through. 'volume' is ignored unless giMode is 2. Read by the next
     // SetFrameData, so call it before that.
-    void SetGIParams(int giMode, float ssaoIndirectStrength,
+    void SetGIParams(int giMode, float aoIndirectStrength,
                      const DDGISampleParams& volume) {
         m_GIMode               = giMode;
-        m_SSAOIndirectStrength = ssaoIndirectStrength;
+        m_SSAOIndirectStrength = aoIndirectStrength;
         m_DDGIVolume           = volume;
     }
 

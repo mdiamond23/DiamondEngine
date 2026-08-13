@@ -28,7 +28,7 @@ layout(set = 0, binding = 2) uniform sampler2D gViewPos;
 layout(set = 0, binding = 3) uniform sampler2D gViewNormal;
 layout(set = 0, binding = 4) uniform sampler2D gAlbedo;
 layout(set = 0, binding = 5) uniform sampler2D gMaterial;      // r=metallic g=roughness b=ao
-layout(set = 0, binding = 6) uniform sampler2D ssaoTex;        // unused — see gIndirect.a
+layout(set = 0, binding = 6) uniform sampler2D aoTex;          // unused — see gIndirect.a
 layout(set = 0, binding = 7) uniform sampler2D gIndirect;      // rgb far-field irradiance, a = its occlusion factor
 
 layout(push_constant) uniform Push {

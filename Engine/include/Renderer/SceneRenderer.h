@@ -228,14 +228,24 @@ public:
     // far field. Editor-facing readout, so the A/B says what it is doing.
     virtual int  GIMode() const = 0;
 
-    // How strongly SSAO attenuates the INDIRECT DIFFUSE term (0..1, default 1).
-    // It no longer multiplies the whole ambient: baked AO still does, and the
-    // specular term gets a roughness-aware occlusion instead, because a
-    // hemispherical AO factor blacks out sharp reflections in any crevice.
-    // Under tier 2 the effective strength is scaled down further — probe
-    // visibility and SSGI already darken the same crevice.
+    // How strongly screen-space occlusion attenuates the INDIRECT DIFFUSE term
+    // (0..1, default 1). It does not multiply the whole ambient: baked AO still
+    // does, and the specular term gets a roughness-aware occlusion instead,
+    // because a hemispherical AO factor blacks out sharp reflections in any
+    // crevice. Applied at face value in every tier since slice 4.5 — the bent
+    // normal makes it a solid-angle fraction, not a second occlusion test.
     virtual void  SetSSAOStrength(float strength) = 0;
     virtual float GetSSAOStrength() const = 0;
+
+    // GTAO quality/look (Docs/gi-design.md slice 4.5). 'radius' is the
+    // world-space horizon-search radius; 'slices' and 'steps' are directions
+    // per pixel and taps per direction, both linear in cost. 'bentNormals' off
+    // makes the pass emit the geometric normal instead of the average
+    // unoccluded direction, which reverts the indirect diffuse lookup to its
+    // pre-4.5 behaviour — the A/B for judging what the bent normal buys.
+    // Defaults are 0.8 / 3 / 6 / on.
+    virtual void SetGTAOParams(float radius, int slices, int steps,
+                               bool bentNormals) = 0;
 
     // Live material edits (Inspector): drop the baked G-buffer descriptor set
     // for 'mat' so the next frame rebuilds it from the material's current

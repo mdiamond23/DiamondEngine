@@ -153,11 +153,24 @@ vec3 DDGIRayDirection(DDGIVolume v, int rayIndex) {
 // term and the paper's Chebyshev visibility test. Returns E/pi, matching what
 // irradiance_convolution.frag stores — so it is a drop-in for the IBL
 // irradiance sample in deferred_lighting.frag (slice 4).
+//
+// Two normals (slice 4.5). 'bentNormal' is the direction the octahedral map is
+// FETCHED along — GTAO's average unoccluded direction, so the probe lookup is
+// directionally occluded rather than fetched down the geometric normal and
+// scaled. 'normal' stays geometric and drives the two things that must respect
+// the actual surface: the normal-bias push-off, and the backface weight that
+// rejects probes behind the shading point. A bent normal lying nearly along a
+// wall would otherwise push the sample point straight into it.
+//
+// Callers still multiply by the visibility scalar. The exact treatment would
+// narrow the cosine lobe to the visibility cone's aperture, which this atlas
+// cannot express — it stores one fixed hemispherical convolution.
 
-vec3 DDGISampleIrradiance(DDGIVolume v,
-                          sampler2D irradianceAtlas, sampler2D visibilityAtlas,
-                          sampler2D probeData,
-                          vec3 worldPos, vec3 normal, vec3 viewDir)
+vec3 DDGISampleIrradianceBent(DDGIVolume v,
+                              sampler2D irradianceAtlas, sampler2D visibilityAtlas,
+                              sampler2D probeData,
+                              vec3 worldPos, vec3 normal, vec3 bentNormal,
+                              vec3 viewDir)
 {
     const vec2 irrSize = vec2(textureSize(irradianceAtlas, 0));
     const vec2 visSize = vec2(textureSize(visibilityAtlas, 0));
@@ -214,7 +227,7 @@ vec3 DDGISampleIrradiance(DDGIVolume v,
         if (weight < crush) weight *= (weight * weight) / (crush * crush);
 
         vec3 E = texture(irradianceAtlas,
-                         DDGIProbeUV(idx, normal, v.counts.xyz,
+                         DDGIProbeUV(idx, bentNormal, v.counts.xyz,
                                      DDGI_IRRADIANCE_RES, irrSize)).rgb;
         sum  += E * weight;
         wSum += weight;
@@ -229,6 +242,18 @@ vec3 DDGISampleIrradiance(DDGIVolume v,
     // every frame until it saturates. Callers that want the artistic gain apply
     // it themselves, outside the loop.
     return sum / wSum;
+}
+
+// Geometric-normal lookup — bent normal == shading normal. What the probe
+// trace's recursive bounce uses: it has no G-buffer and therefore no bent
+// normal, and a second bounce does not need one.
+vec3 DDGISampleIrradiance(DDGIVolume v,
+                          sampler2D irradianceAtlas, sampler2D visibilityAtlas,
+                          sampler2D probeData,
+                          vec3 worldPos, vec3 normal, vec3 viewDir)
+{
+    return DDGISampleIrradianceBent(v, irradianceAtlas, visibilityAtlas, probeData,
+                                    worldPos, normal, normal, viewDir);
 }
 
 #endif // DDGI_COMMON_GLSL

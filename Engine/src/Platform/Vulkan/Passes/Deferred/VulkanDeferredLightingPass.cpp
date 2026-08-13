@@ -43,7 +43,7 @@ VulkanDeferredLightingPass::VulkanDeferredLightingPass(RHIDevice* device,
         { 1,  RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment }, // gViewNormal
         { 2,  RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment }, // gAlbedo
         { 3,  RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment }, // gMaterial
-        { 4,  RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment }, // ssao
+        { 4,  RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment }, // aoTex (GTAO)
         { 5,  RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment }, // gEmissive
         { 6,  RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment }, // shadowCascade0
         { 7,  RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment }, // shadowCascade1
@@ -78,7 +78,7 @@ RGPass& VulkanDeferredLightingPass::AddToGraph(
         RHIRenderGraph& graph,
         RGTextureHandle viewPos, RGTextureHandle viewNormal,
         RGTextureHandle albedo,  RGTextureHandle material,
-        RGTextureHandle ssao,    RGTextureHandle emissive,
+        RGTextureHandle ao,      RGTextureHandle emissive,
         const std::array<RGTextureHandle, NUM_CASCADES>& cascades,
         const std::array<RHITexture*, NUM_SPOTS>& spotShadows,
         const DDGIAtlases& ddgi,
@@ -95,7 +95,7 @@ RGPass& VulkanDeferredLightingPass::AddToGraph(
         m_TexBindings = {
             { 0,  graph.GetTexture(viewPos) },     { 1,  graph.GetTexture(viewNormal) },
             { 2,  graph.GetTexture(albedo) },      { 3,  graph.GetTexture(material) },
-            { 4,  graph.GetTexture(ssao) },        { 5,  graph.GetTexture(emissive) },
+            { 4,  graph.GetTexture(ao) },        { 5,  graph.GetTexture(emissive) },
             { 6,  graph.GetTexture(cascades[0]) }, { 7,  graph.GetTexture(cascades[1]) },
             { 8,  graph.GetTexture(cascades[2]) }, { 9,  graph.GetTexture(cascades[3]) },
             { 14, spotShadows[0] },                { 15, spotShadows[1] },
@@ -113,7 +113,7 @@ RGPass& VulkanDeferredLightingPass::AddToGraph(
     // textures — their owner records + transitions them before the graph runs.
     RGPass& pass = graph.AddPass("DeferredLighting")
         .Read(viewPos).Read(viewNormal).Read(albedo).Read(material)
-        .Read(ssao).Read(emissive)
+        .Read(ao).Read(emissive)
         .Read(cascades[0]).Read(cascades[1]).Read(cascades[2]).Read(cascades[3])
         // Write order is attachment order: output = location 0, indirect = 1.
         .Write(output).Write(indirect)
@@ -138,7 +138,7 @@ void VulkanDeferredLightingPass::AddToGraph(
         RHIRenderGraph& graph,
         RGTextureHandle viewPos, RGTextureHandle viewNormal,
         RGTextureHandle albedo,  RGTextureHandle material,
-        RGTextureHandle ssao,    RGTextureHandle emissive,
+        RGTextureHandle ao,      RGTextureHandle emissive,
         const std::array<RGTextureHandle, NUM_CASCADES>& cascades,
         const std::array<RGTextureHandle, NUM_SPOTS>& spotShadows,
         const DDGIAtlases& ddgi,
@@ -149,7 +149,7 @@ void VulkanDeferredLightingPass::AddToGraph(
         resolved[i] = graph.GetTexture(spotShadows[i]);
 
     RGPass& pass = AddToGraph(graph, viewPos, viewNormal, albedo, material,
-                              ssao, emissive, cascades, resolved, ddgi,
+                              ao, emissive, cascades, resolved, ddgi,
                               output, indirect);
     // Graph-owned spot maps rely on this pass's reads for their SampledRead
     // transition (and, when written, producer ordering).

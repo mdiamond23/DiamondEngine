@@ -16,6 +16,21 @@ class RHIShader;
 class RHIPipeline;
 class RHIResourceSet;
 
+// RETAINED, UNUSED. Superseded by VulkanGTAOPass in slice 4.5 (Docs/gi-design.md)
+// and wired into no render graph; kept in the build only so it cannot rot
+// silently. Nothing constructs it, so its shaders are never loaded at runtime.
+//
+// NOT a drop-in replacement any more. Re-enabling it means more than swapping
+// the constructor back in SceneRenderer:
+//   - It writes R16F occlusion. deferred_lighting.frag's binding 4 now expects
+//     RGBA16F carrying rgb = view-space bent normal, a = visibility, and both
+//     far-field diffuse paths sample the atlas/cubemap ALONG that bent normal.
+//     Feed it this pass's output as-is and the lookup direction is garbage.
+//   - The graph declares aoRaw/aoBlurred as storage textures (GTAO's writers
+//     are compute); this pass writes them as color attachments.
+// The cheapest revival is to have it write vec4(geometric normal, occlusion),
+// which is exactly what the "Bent Normals" toggle already makes GTAO do.
+//
 // Screen-space ambient occlusion — Vulkan port of OpenGLSSAOPass. Two fullscreen
 // passes over the G-buffer: an occlusion pass samples a normal-oriented 64-sample
 // hemisphere kernel (rotated by a tiled 4×4 noise) and compares projected sample

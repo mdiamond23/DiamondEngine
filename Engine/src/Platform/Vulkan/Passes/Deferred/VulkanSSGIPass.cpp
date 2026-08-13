@@ -88,7 +88,7 @@ VulkanSSGIPass::VulkanSSGIPass(RHIDevice* device, const std::string& shaderDir,
             { 3, RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment }, // gViewNormal
             { 4, RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment }, // gAlbedo
             { 5, RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment }, // gMaterial
-            { 6, RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment }, // ssao
+            { 6, RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment }, // ao (unused)
             { 7, RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment }, // gIndirect
         };
         desc.pushConstants = { RHIShaderStage::Fragment, sizeof(CompositePush) };
@@ -115,7 +115,7 @@ void VulkanSSGIPass::AddToGraph(RHIRenderGraph& graph,
                                 RGTextureHandle viewPos, RGTextureHandle viewNormal,
                                 RGTextureHandle sceneColor, RGTextureHandle velocity,
                                 RGTextureHandle albedo, RGTextureHandle material,
-                                RGTextureHandle ssao, RGTextureHandle indirect,
+                                RGTextureHandle ao,   RGTextureHandle indirect,
                                 RGTextureHandle ssgiRaw, RGTextureHandle ssgiResolved,
                                 RGTextureHandle ssgiHistory, RGTextureHandle outColor)
 {
@@ -153,7 +153,7 @@ void VulkanSSGIPass::AddToGraph(RHIRenderGraph& graph,
               { 3, graph.GetTexture(viewNormal) },
               { 4, graph.GetTexture(albedo) },
               { 5, graph.GetTexture(material) },
-              { 6, graph.GetTexture(ssao) },
+              { 6, graph.GetTexture(ao) },
               { 7, graph.GetTexture(indirect) } });
 
     const uint32_t groupsX = (m_HalfW + kLocalSize - 1) / kLocalSize;
@@ -203,7 +203,7 @@ void VulkanSSGIPass::AddToGraph(RHIRenderGraph& graph,
 
     graph.AddPass("SSGIComposite")
         .Read(sceneColor).Read(ssgiResolved).Read(viewPos).Read(viewNormal)
-        .Read(albedo).Read(material).Read(ssao).Read(indirect)
+        .Read(albedo).Read(material).Read(ao).Read(indirect)
         .Write(outColor)
         .SetExecute([this](RHICommandList* cmd) {
             CompositePush push{};

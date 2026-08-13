@@ -20,7 +20,7 @@
 #include "Animation/AnimationComponents.h"
 
 #include "Platform/Vulkan/Passes/Deferred/VulkanGBufferPass.h"
-#include "Platform/Vulkan/Passes/Deferred/VulkanSSAOPass.h"
+#include "Platform/Vulkan/Passes/Deferred/VulkanGTAOPass.h"
 #include "Platform/Vulkan/Passes/Deferred/VulkanSSGIPass.h"
 #include "Platform/Vulkan/Passes/Debug/VulkanRTDebugPass.h"
 #include "Platform/Vulkan/Passes/GI/VulkanDDGIPass.h"
@@ -351,6 +351,15 @@ public:
         m_SSAOStrength = std::clamp(strength, 0.0f, 1.0f);
     }
     float GetSSAOStrength() const override { return m_SSAOStrength; }
+
+    // Re-applied per view per frame in RenderView, so they survive a resize
+    // (which recreates the pass).
+    void SetGTAOParams(float radius, int slices, int steps, bool bentNormals) override {
+        m_GTAORadius      = radius;
+        m_GTAOSlices      = slices;
+        m_GTAOSteps       = steps;
+        m_GTAOBentNormals = bentNormals;
+    }
 
     // Drop the baked G-buffer descriptor set(s) for a material edited in the
     // Inspector, so the next frame's GetOrCreateMaterialSet rebuilds it from
@@ -786,7 +795,7 @@ private:
         bool      hasPrevViewProj = false;
 
         std::unique_ptr<RHIBuffer>                  cameraUBO;
-        std::unique_ptr<VulkanSSAOPass>             ssao;
+        std::unique_ptr<VulkanGTAOPass>             gtao;
         std::unique_ptr<VulkanSSGIPass>             ssgi;
         std::unique_ptr<VulkanSSRPass>              ssr;
         std::unique_ptr<VulkanTAAPass>              taa;
@@ -916,7 +925,7 @@ private:
                                 RHIFormat::RGBA16F, "ddgiProbeData");
     }
 
-    // GI tier → the lighting pass's giMode + SSAO strength + probe grid.
+    // GI tier → the lighting pass's giMode + AO strength + probe grid.
     //
     // Tier 2 needs everything: RT support (so the atlases exist at all), a
     // volume in the scene, and the toggle on. Anything missing falls back to the
@@ -924,15 +933,13 @@ private:
     // the branch is uniform across the fullscreen draw, so the fallback costs a
     // scalar compare, not a permutation.
     //
-    // The tier also fades SSAO on the indirect diffuse term. Under DDGI the same
-    // crevice is already darkened by the probes' Chebyshev visibility and again
-    // by SSGI's own gather, so full-strength SSAO on top triple-counts it.
+    // The AO strength no longer varies by tier. Slice 4 halved it under DDGI
+    // because SSAO's hemispherical multiply double-counted the probes' own
+    // Chebyshev visibility; slice 4.5's bent normal fetches the irradiance
+    // along the unoccluded direction instead, which makes the remaining
+    // multiply a solid-angle fraction rather than a second occlusion test. The
+    // tuned constant is gone rather than retuned.
     void ApplyGITier(VulkanDeferredLightingPass& lighting) const {
-        // How much of the user's SSAO strength survives once probes carry their
-        // own occlusion. Tuned by eye, not derived — the honest number depends
-        // on probe density, which is why it stays a constant and not a formula.
-        constexpr float kTier2SSAOScale = 0.5f;
-
         const bool tier2 = GIMode() == 2;
 
         VulkanDeferredLightingPass::DDGISampleParams params;
@@ -947,9 +954,7 @@ private:
             params.energy     = std::max(m_DDGIVolume.energy, 0.0f);
         }
 
-        lighting.SetGIParams(tier2 ? 2 : 1,
-                             m_SSAOStrength * (tier2 ? kTier2SSAOScale : 1.0f),
-                             params);
+        lighting.SetGIParams(tier2 ? 2 : 1, m_SSAOStrength, params);
     }
 
     void ApplyAutoExposureSettings(VulkanAutoExposurePass& pass) const {
@@ -983,7 +988,7 @@ private:
         v->cameraUBO = m_Device->CreateBuffer(ubo);
 
         const std::string shaderDir = ShaderDir();
-        v->ssao         = std::make_unique<VulkanSSAOPass>(m_Device, shaderDir, width, height);
+        v->gtao         = std::make_unique<VulkanGTAOPass>(m_Device, shaderDir, width, height);
         v->ssgi         = std::make_unique<VulkanSSGIPass>(m_Device, shaderDir, width, height);
         v->ssr          = std::make_unique<VulkanSSRPass>(m_Device, shaderDir, width, height);
         v->taa          = std::make_unique<VulkanTAAPass>(m_Device, shaderDir);
@@ -1061,7 +1066,7 @@ private:
         // graph-texture sets and their pipelines are size-independent, so they
         // re-wire as-is.
         const std::string shaderDir = ShaderDir();
-        v.ssao     = std::make_unique<VulkanSSAOPass>(m_Device, shaderDir, width, height);
+        v.gtao     = std::make_unique<VulkanGTAOPass>(m_Device, shaderDir, width, height);
         // Half-res targets change size too, and the recreated pass resets its
         // history-valid flag so the first post-resize frame passes through.
         v.ssgi     = std::make_unique<VulkanSSGIPass>(m_Device, shaderDir, width, height);
@@ -1113,8 +1118,14 @@ private:
         const RGTextureHandle gEmissive   = g.DeclareTexture("gEmissive",   { v.width, v.height, RHIFormat::RGBA16F });
         const RGTextureHandle gVelocity   = g.DeclareTexture("gVelocity",   { v.width, v.height, RHIFormat::RG16F   });
         const RGTextureHandle gDepth      = g.DeclareTexture("gDepth",      { v.width, v.height, RHIFormat::Depth32F });
-        const RGTextureHandle ssaoRaw     = g.DeclareTexture("ssaoRaw",     { v.width, v.height, RHIFormat::R16F     });
-        const RGTextureHandle ssaoBlurred = g.DeclareTexture("ssaoBlurred", { v.width, v.height, RHIFormat::R16F     });
+        // GTAO output, not a bare occlusion scalar: rgb = view-space bent normal,
+        // a = visibility. Storage, because both passes that write them are
+        // compute. The bent normal is what lets the lighting pass steer its
+        // far-field lookup instead of only scaling it (gi-design.md slice 4.5).
+        const RGTextureHandle aoRaw     = g.DeclareTexture("aoRaw",
+            { v.width, v.height, RHIFormat::RGBA16F, /*storage*/ true });
+        const RGTextureHandle aoBlurred = g.DeclareTexture("aoBlurred",
+            { v.width, v.height, RHIFormat::RGBA16F, /*storage*/ true });
         const RGTextureHandle ssrColor    = g.DeclareTexture("ssrColor",    { v.width, v.height, RHIFormat::RGBA16F });
         const RGTextureHandle hdrLit      = g.DeclareTexture("hdrLit",      { v.width, v.height, RHIFormat::RGBA16F });
         // Lighting's second MRT: the far-field diffuse irradiance it applied,
@@ -1170,8 +1181,8 @@ private:
                               gVelocity, gDepth,
                               [this, &v](RHICommandList* cmd) { DrawGeometry(cmd, v); });
 
-        // SSAO occlusion + blur over the G-buffer.
-        v.ssao->AddToGraph(g, gViewPos, gViewNormal, ssaoRaw, ssaoBlurred);
+        // GTAO horizon search + denoise over the G-buffer.
+        v.gtao->AddToGraph(g, gViewPos, gViewNormal, aoRaw, aoBlurred);
 
         // Shadow cascades — scene depth from the sun; push lightSpace * model.
         // The pass is shared across views: its light matrices are read at record
@@ -1210,7 +1221,7 @@ private:
         // of this pass, and what keeps it alive through dead-pass culling now
         // that the debug viz is no longer its only consumer.
         v.lighting->AddToGraph(g, gViewPos, gViewNormal, gAlbedo, gMaterial,
-                               ssaoBlurred, gEmissive, cascades,
+                               aoBlurred, gEmissive, cascades,
                                m_SpotShadow->Maps(), ddgiAtlases, hdrLit, gIndirect);
         v.lighting->BindIBL(*m_IBL);
         v.lighting->BindPointShadows(*m_PointShadow);
@@ -1229,7 +1240,7 @@ private:
         // replaces gIndirect's far-field term where the rays hit, and falls
         // back to it where they miss. Everything after this consumes hdrGI.
         v.ssgi->AddToGraph(g, gViewPos, gViewNormal, hdrLit, gVelocity,
-                           gAlbedo, gMaterial, ssaoBlurred, gIndirect,
+                           gAlbedo, gMaterial, aoBlurred, gIndirect,
                            ssgiRaw, ssgiResolved, ssgiHistory, hdrGI);
 
         // SSR — reflections ray-marched off the GI-composited scene (post-skybox
@@ -1394,7 +1405,8 @@ private:
         ubo.prevViewProjUnjittered  = v.prevViewProj;
         v.cameraUBO->Update(&ubo, sizeof(ubo));
 
-        v.ssao->SetProjection(jitteredProj);
+        v.gtao->SetProjection(jitteredProj);
+        v.gtao->SetParams(m_GTAORadius, m_GTAOSlices, m_GTAOSteps, m_GTAOBentNormals);
         v.ssgi->SetProjection(jitteredProj);
         v.ssr->SetProjection(jitteredProj);
         v.skybox->SetFrameData(view, jitteredProj);
@@ -2430,9 +2442,17 @@ private:
     int      m_SSGIRays         = 8;
     float    m_SSGIIntensity    = 1.0f;
     float    m_SSGIMaxDistance  = 8.0f;
-    // SSAO's strength on the indirect diffuse term — see ApplyGITier, which
-    // scales it further under tier 2.
+    // GTAO visibility's strength on the indirect diffuse term. Applied at face
+    // value in every tier since slice 4.5 — see ApplyGITier.
     float    m_SSAOStrength     = 1.0f;
+    // GTAO quality/look. Defaults must match VulkanGTAOPass's own, or a view
+    // recreated by a resize would render differently until something moves a
+    // slider. Bent normals off is the slice-4.5 A/B: the pass emits the
+    // geometric normal, which is exactly the pre-4.5 lighting.
+    float    m_GTAORadius       = 0.8f;
+    int      m_GTAOSlices       = 3;
+    int      m_GTAOSteps        = 6;
+    bool     m_GTAOBentNormals  = true;
 
     std::unique_ptr<RHITexture> m_DefaultParticleRHI;
     std::shared_ptr<Texture>    m_DefaultParticleTexture;

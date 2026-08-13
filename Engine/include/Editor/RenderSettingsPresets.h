@@ -32,7 +32,13 @@ struct RenderSettings {
     int   tonemapper = static_cast<int>(Tonemapper::ACES);
     bool  taa        = true;
 
-    float ssaoStrength = 1.0f;
+    // Screen-space occlusion. 'ssaoStrength' is how much GTAO visibility
+    // attenuates the indirect diffuse; the rest is GTAO's own quality/look.
+    float ssaoStrength     = 1.0f;
+    float gtaoRadius       = 0.8f;
+    int   gtaoSlices       = 3;
+    int   gtaoSteps        = 6;
+    bool  gtaoBentNormals  = true;
 
     bool  ssgiEnabled     = true;
     int   ssgiRays        = 8;
@@ -54,6 +60,10 @@ inline nlohmann::json ToJson(const RenderSettings& s)
         { "tonemapper",      s.tonemapper },
         { "taa",             s.taa },
         { "ssaoStrength",    s.ssaoStrength },
+        { "gtaoRadius",      s.gtaoRadius },
+        { "gtaoSlices",      s.gtaoSlices },
+        { "gtaoSteps",       s.gtaoSteps },
+        { "gtaoBentNormals", s.gtaoBentNormals },
         { "ssgiEnabled",     s.ssgiEnabled },
         { "ssgiRays",        s.ssgiRays },
         { "ssgiIntensity",   s.ssgiIntensity },
@@ -80,6 +90,10 @@ inline RenderSettings RenderSettingsFromJson(const nlohmann::json& j)
     s.tonemapper      = j.value("tonemapper",      s.tonemapper);
     s.taa             = j.value("taa",             s.taa);
     s.ssaoStrength    = j.value("ssaoStrength",    s.ssaoStrength);
+    s.gtaoRadius      = j.value("gtaoRadius",      s.gtaoRadius);
+    s.gtaoSlices      = j.value("gtaoSlices",      s.gtaoSlices);
+    s.gtaoSteps       = j.value("gtaoSteps",       s.gtaoSteps);
+    s.gtaoBentNormals = j.value("gtaoBentNormals", s.gtaoBentNormals);
     s.ssgiEnabled     = j.value("ssgiEnabled",     s.ssgiEnabled);
     s.ssgiRays        = j.value("ssgiRays",        s.ssgiRays);
     s.ssgiIntensity   = j.value("ssgiIntensity",   s.ssgiIntensity);

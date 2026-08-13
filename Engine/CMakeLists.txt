@@ -354,6 +354,9 @@ if(DIAMOND_ENABLE_VULKAN)
         src/Platform/Vulkan/Passes/PostProcess/VulkanBloomPass.cpp
         src/Platform/Vulkan/Passes/PostProcess/VulkanAutoExposurePass.cpp
         src/Platform/Vulkan/Passes/Deferred/VulkanGBufferPass.cpp
+        src/Platform/Vulkan/Passes/Deferred/VulkanGTAOPass.cpp
+        # Superseded by VulkanGTAOPass and wired into no graph. Still built so
+        # it cannot rot silently — see the header for what re-enabling costs.
         src/Platform/Vulkan/Passes/Deferred/VulkanSSAOPass.cpp
         src/Platform/Vulkan/RHI/VulkanRHIAccelStruct.cpp
         src/Platform/Vulkan/Passes/Debug/VulkanRTDebugPass.cpp
@@ -413,7 +416,9 @@ if(DIAMOND_ENABLE_VULKAN)
                     luma_extract.frag luma_reduce.frag exposure_adapt.frag
                     gbuffer.vert gbuffer.frag gbuffer_debug.frag
                     gbuffer_skinned.vert
-                    ssao.frag ssao_blur.frag ssr.frag ssr_composite.frag
+                    gtao.comp gtao_denoise.comp
+                    ssao.frag ssao_blur.frag   # retained, unused (see VulkanSSAOPass.h)
+                    ssr.frag ssr_composite.frag
                     ssgi.comp ssgi_temporal.comp ssgi_composite.frag
                     ddgi_blend_irradiance.comp ddgi_blend_visibility.comp
                     ddgi_relocate.comp

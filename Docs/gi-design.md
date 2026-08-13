@@ -24,19 +24,21 @@ anywhere the engine already runs, so the fallback is a real tier, not a cliff:
 
 | Tier | Requires | Far-field indirect | Near-field indirect | Occlusion |
 |---|---|---|---|---|
-| 2 — Full | RT extensions | DDGI probes | SSGI | SSAO on indirect diffuse, ×0.5 |
-| 1 — Screen-space | nothing new | IBL irradiance | SSGI | SSAO on indirect diffuse |
-| 0 — Baseline | nothing new | IBL irradiance | none | SSAO on indirect diffuse |
+| 2 — Full | RT extensions | DDGI probes, bent-normal lookup | SSGI | GTAO on indirect diffuse |
+| 1 — Screen-space | nothing new | IBL irradiance, bent-normal lookup | SSGI | GTAO on indirect diffuse |
+| 0 — Baseline | nothing new | IBL irradiance, bent-normal lookup | none | GTAO on indirect diffuse |
 
 Tier 1 is a genuine upgrade for non-RT hardware, not a consolation prize, and
 tier 0 stays as the floor: it needs nothing beyond what the engine already ran.
 
-As of slice 4 the occlusion column is the same code in all three tiers, varying
-only by strength — SSAO on indirect diffuse, `SpecularOcclusion` on indirect
-specular. The pre-slice-4 "SSAO multiplies the whole ambient" behaviour is gone
-everywhere, including tier 0. Applying a hemispherical AO term to a narrow
-reflection lobe was wrong at every tier; preserving it for the low tiers would
-have preserved a bug.
+As of slice 4.5 the occlusion column is the same code at the same strength in
+all three tiers — GTAO visibility on indirect diffuse, `SpecularOcclusion` on
+indirect specular, and the far-field diffuse fetched along GTAO's bent normal
+whichever source it comes from. The pre-slice-4 "SSAO multiplies the whole
+ambient" behaviour is gone everywhere, including tier 0, and so is slice 4's
+tier-2-only ×0.5. Applying a hemispherical AO term to a narrow reflection lobe
+was wrong at every tier; preserving it for the low tiers would have preserved a
+bug.
 
 Selection: query the RT extensions at device creation to pick a default, and
 expose an explicit override in settings. The override matters — extension
@@ -58,6 +60,8 @@ GI change has to be eyeballed in tier 1 as well as tier 2.
 
 - `deferred_lighting.frag:210,275` — SSAO's only job today is attenuating the
   ambient IBL term. That is exactly the slot probe irradiance takes over.
+  (Slice 4.5 replaced SSAO outright: the binding is now GTAO's RGBA16F bent
+  normal + visibility.)
 - `ssr.frag` — the view-space march, `ProjectToUV` y-flip, thickness/bias
   rejection and edge fade are all directly reusable by SSGI.
 - `ssr_composite.frag` — the confidence-weighted resolve-into-a-new-target
@@ -153,9 +157,9 @@ matching E/π estimate is `(1/N)·ΣL` — SSGI must *not* multiply by π. The t
 divides by the hit count rather than the ray count, which makes the confidence
 lerp exactly the "unknown directions look like the far field" assumption.
 
-Pass order becomes: G-buffer → SSAO → lighting (DDGI) → skybox → **SSGI
-composite** → SSR → TAA → transparency → particles → bloom → tonemap. SSR reads
-`hdrGI` instead of `hdrLit`.
+Pass order becomes: G-buffer → GTAO (+denoise) → lighting (DDGI) → skybox →
+**SSGI composite** → SSR → TAA → transparency → particles → bloom → tonemap.
+SSR reads `hdrGI` instead of `hdrLit`.
 
 ## Slices
 
@@ -353,6 +357,58 @@ the fallback gets built and proven before the RT work rather than bolted on afte
    (RTAO off the existing TLAS was considered and rejected — 1-2 rays/pixel
    needs a real denoiser, it is tier-2 only, and it re-derives occlusion the
    probes and SSGI already carry.)
+
+   **IMPLEMENTED 2026-08-13.** Full solution builds clean, the Vulkan editor
+   runs 20 s with ZERO validation output on an RTX 5070 at tier 2, and the
+   compiled pass order was machine-checked (`GBuffer > … > GTAO > … >
+   GTAODenoise > … > DeferredLighting`, both AO passes surviving dead-pass
+   culling). Visual play-verify PENDING.
+
+   - `gtao.comp` (full res, 8×8) + `gtao_denoise.comp` replace `ssao.frag` and
+     `ssao_blur.frag`. The SSAO pass and its two shaders are RETAINED but wired
+     into no graph — still compiled so they cannot rot silently, and no longer
+     drop-in (they write an R16F scalar where the lighting pass now wants the
+     RGBA16F bent normal + visibility; see `VulkanSSAOPass.h`). Per slice: march both
+     screen-space directions for horizon angles, project the normal into the
+     slice plane, evaluate the paper's analytic arc integral, and accumulate a
+     bent direction weighted by the slice's lobe share × how open it is.
+   - **The output contract is the point, not the algorithm.** Both targets went
+     R16F → **RGBA16F: rgb = view-space bent normal, a = visibility**. A scalar
+     can only scale the far-field term; a direction can steer it.
+   - `DDGISampleIrradianceBent` takes both normals. The bent normal drives the
+     octahedral fetch; the **geometric** normal keeps the bias push-off and the
+     probe backface weight — a bent normal lying along a wall would otherwise
+     push the sample point into it. The old `DDGISampleIrradiance` is now a
+     wrapper passing `normal` twice, so the probe trace's recursive bounce is
+     untouched (it has no G-buffer and so no bent normal).
+   - Both far-field paths use it, DDGI *and* the IBL cubemap, so tiers 0/1
+     gain the directional lookup too — as intended, this slice is not tier-2
+     work.
+   - **Slice 4's `kTier2SSAOScale = 0.5` is deleted, not retuned.** With the
+     irradiance fetched along the unoccluded direction, the remaining multiply
+     is the visible cone's solid-angle fraction rather than a second occlusion
+     test stacked on the probes' Chebyshev visibility. Both tiers now pass the
+     user's strength through at face value.
+   - No temporal AO pass. GTAO's slice rotation advances per frame by two
+     irrational increments and TAA sits downstream of lighting, so it already
+     averages the sequence; the denoise only has to resolve the spatial half.
+   - A/B is a **Bent Normals** toggle that makes the pass emit the geometric
+     normal — exactly the pre-4.5 lighting — so the directional change can be
+     judged separately from GTAO's own quality gain. Radius/slices/steps join
+     it in `RenderSettings`.
+
+   **Where this falls short of the design line above.** "Bent normal + cone
+   aperture" overstates what the atlas can do: the aperture has no input to
+   feed, because the irradiance atlas stores one fixed hemispherical cosine
+   convolution. The exact treatment would narrow the lobe to the cone; what is
+   implemented is direction-from-the-bent-normal plus magnitude-from-visibility,
+   the standard approximation. The double-count is removed in the sense that
+   matters (no tuned constant, and occluded directions no longer contribute),
+   but it is not an exact solid-angle derivation.
+
+   Deferred deliberately: Jimenez's albedo-aware AO multi-bounce curve. It
+   targets the same over-darkening, and landing it in the same slice would have
+   made the eyeball test ambiguous about which change did what.
 5. **Polish** — probe budget tuning, Tracy/profiler zones per new pass, editor
    toggles, tier override in settings, Sponza perf baseline per tier.
 
