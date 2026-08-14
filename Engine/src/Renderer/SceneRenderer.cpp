@@ -21,6 +21,7 @@
 
 #include "Platform/Vulkan/Passes/Deferred/VulkanGBufferPass.h"
 #include "Platform/Vulkan/Passes/Deferred/VulkanGTAOPass.h"
+#include "Platform/Vulkan/Passes/Deferred/VulkanDepthPyramidPass.h"
 #include "Platform/Vulkan/Passes/GI/VulkanRTReflectionPass.h"
 #include "Platform/Vulkan/Passes/Deferred/VulkanSSGIPass.h"
 #include "Platform/Vulkan/Passes/Debug/VulkanRTDebugPass.h"
@@ -798,6 +799,10 @@ private:
 
         std::unique_ptr<RHIBuffer>                  cameraUBO;
         std::unique_ptr<VulkanGTAOPass>             gtao;
+        // Linear view-depth pyramid GTAO's horizon march taps instead of
+        // gViewPos — 4x less bandwidth per tap, and wide strides hit a small
+        // level instead of thrashing the full-res target.
+        std::unique_ptr<VulkanDepthPyramidPass>     depthPyramid;
         std::unique_ptr<VulkanSSGIPass>             ssgi;
         std::unique_ptr<VulkanSSRPass>              ssr;
         std::unique_ptr<VulkanTAAPass>              taa;
@@ -1003,6 +1008,7 @@ private:
 
         const std::string shaderDir = ShaderDir();
         v->gtao         = std::make_unique<VulkanGTAOPass>(m_Device, shaderDir, width, height);
+        v->depthPyramid = std::make_unique<VulkanDepthPyramidPass>(m_Device, shaderDir, width, height);
         v->ssgi         = std::make_unique<VulkanSSGIPass>(m_Device, shaderDir, width, height);
         v->ssr          = std::make_unique<VulkanSSRPass>(m_Device, shaderDir, width, height);
         v->rtReflect    = std::make_unique<VulkanRTReflectionPass>(m_Device, shaderDir, width, height);
@@ -1088,6 +1094,7 @@ private:
         // re-wire as-is.
         const std::string shaderDir = ShaderDir();
         v.gtao     = std::make_unique<VulkanGTAOPass>(m_Device, shaderDir, width, height);
+        v.depthPyramid = std::make_unique<VulkanDepthPyramidPass>(m_Device, shaderDir, width, height);
         // Half-res targets change size too, and the recreated pass resets its
         // history-valid flag so the first post-resize frame passes through.
         v.ssgi     = std::make_unique<VulkanSSGIPass>(m_Device, shaderDir, width, height);
@@ -1214,7 +1221,19 @@ private:
                               [this, &v](RHICommandList* cmd) { DrawGeometry(cmd, v); });
 
         // GTAO horizon search + denoise over the G-buffer.
-        v.gtao->AddToGraph(g, gViewPos, gViewNormal, aoRaw, aoBlurred);
+        // Linear depth pyramid first — GTAO's horizon march taps it instead of
+        // gViewPos (2 bytes/tap vs 8, and wide strides read a small level).
+        // Levels are separate textures because the RHI has no per-mip views.
+        std::array<RGTextureHandle, VulkanDepthPyramidPass::kLevels> depthLevels;
+        for (int i = 0; i < VulkanDepthPyramidPass::kLevels; ++i)
+            depthLevels[i] = g.DeclareTexture(
+                "depthPyramid" + std::to_string(i),
+                { VulkanDepthPyramidPass::LevelSize(v.width,  i),
+                  VulkanDepthPyramidPass::LevelSize(v.height, i),
+                  RHIFormat::R16F, /*storage*/ true });
+        v.depthPyramid->AddToGraph(g, gViewPos, depthLevels);
+
+        v.gtao->AddToGraph(g, gViewPos, gViewNormal, depthLevels, aoRaw, aoBlurred);
 
         // Shadow cascades — scene depth from the sun; push lightSpace * model.
         // The pass is shared across views: its light matrices are read at record

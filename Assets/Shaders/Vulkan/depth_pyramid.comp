@@ -1,0 +1,60 @@
+#version 450
+
+// Linear view-depth pyramid, feeding GTAO's horizon march.
+//
+// Two problems with marching gViewPos directly, both fixed here:
+//
+//  1. BANDWIDTH. gViewPos is RGBA16F (8 bytes/texel) and the horizon loop only
+//     ever needs depth — it fetches S purely to compute S - P. Storing linear
+//     depth alone in R16F is 2 bytes, a 4x cut across the single hottest tap
+//     loop in the renderer. View position is reconstructed from UV + depth,
+//     which is exact for a standard perspective matrix.
+//  2. CACHE LOCALITY. GTAO strides up to ~32 pixels between taps, so at full
+//     res essentially every tap misses. Each level here halves resolution, so
+//     a wide stride can read a small, cache-resident image instead.
+//
+// Levels are SEPARATE textures rather than mips of one image: the RHI has no
+// per-mip views for render targets (generateMips is upload-only), and four
+// bindings cost far less than adding mip plumbing to the RHI.
+//
+// Depth is stored POSITIVE (-viewZ, increasing away from the camera). 0 means
+// sky, matching gViewPos's cleared background — every consumer already tests
+// against 0.
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0, r16f) uniform writeonly image2D uDst;
+layout(set = 0, binding = 1) uniform sampler2D uSrc;
+
+layout(push_constant) uniform Push {
+    ivec2 dstSize;
+    int   mode;    // 0 = extract from gViewPos, 1 = min-downsample a level
+} pc;
+
+void main() {
+    ivec2 id = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(id, pc.dstSize))) return;
+
+    if (pc.mode == 0) {
+        // gViewPos.z is negative in front of the camera; sky is exactly 0 and
+        // must stay 0 rather than becoming a very near surface.
+        float z = texelFetch(uSrc, id, 0).z;
+        imageStore(uDst, id, vec4(z == 0.0 ? 0.0 : -z, 0.0, 0.0, 0.0));
+        return;
+    }
+
+    // Min-downsample: keep the NEAREST real surface of the 2x2. Averaging would
+    // invent a depth that exists nowhere across a silhouette and fabricate
+    // horizons; taking the nearest is the conservative choice for an occlusion
+    // search. Sky texels (0) are skipped rather than winning the min outright.
+    ivec2 base = id * 2;
+    float best = 0.0;
+    for (int y = 0; y < 2; ++y) {
+        for (int x = 0; x < 2; ++x) {
+            float d = texelFetch(uSrc, base + ivec2(x, y), 0).r;
+            if (d <= 0.0) continue;              // sky — no surface here
+            best = (best <= 0.0) ? d : min(best, d);
+        }
+    }
+    imageStore(uDst, id, vec4(best, 0.0, 0.0, 0.0));
+}

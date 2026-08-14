@@ -20,11 +20,19 @@
 layout(local_size_x = 8, local_size_y = 8) in;
 
 layout(set = 0, binding = 0, rgba16f) uniform writeonly image2D aoRaw;
-layout(set = 0, binding = 1) uniform sampler2D gViewPos;
-layout(set = 0, binding = 2) uniform sampler2D gViewNormal;
+layout(set = 0, binding = 1) uniform sampler2D gViewNormal;
+// Linear view-depth pyramid (depth_pyramid.comp). R16F, 2 bytes/tap against
+// gViewPos's 8, and the wide strides read a small cache-resident level. Level
+// L is 1/2^L resolution; separate textures because the RHI has no per-mip
+// views for render targets.
+layout(set = 0, binding = 2) uniform sampler2D uDepth0;
+layout(set = 0, binding = 3) uniform sampler2D uDepth1;
+layout(set = 0, binding = 4) uniform sampler2D uDepth2;
+layout(set = 0, binding = 5) uniform sampler2D uDepth3;
 
 layout(push_constant) uniform Push {
     vec2  screenSize;
+    vec2  invProj;       // (1/proj[0][0], 1/proj[1][1]) — unprojects UV + depth
     float projScale;     // pixels per view-space unit at z = -1
     float radius;        // world-space sampling radius
     float falloffStart;  // fraction of the radius where attenuation begins
@@ -33,6 +41,24 @@ layout(push_constant) uniform Push {
     uint  frameIndex;    // rotates the sample pattern; TAA averages it out
     float bentNormals;   // < 0.5 writes the geometric normal instead (the A/B)
 } pc;
+
+// One level for the whole pixel: the stride is fixed before the slice loop, so
+// this is uniform per invocation and a plain branch beats a dynamically-indexed
+// sampler array (which would need nonuniform indexing).
+float SampleDepth(vec2 uv, int lod) {
+    if (lod <= 0) return textureLod(uDepth0, uv, 0.0).r;
+    if (lod == 1) return textureLod(uDepth1, uv, 0.0).r;
+    if (lod == 2) return textureLod(uDepth2, uv, 0.0).r;
+    return textureLod(uDepth3, uv, 0.0).r;
+}
+
+// Exact inverse of the projection for a standard perspective matrix. The v flip
+// is the codebase convention: the negative-height viewport wrote NDC y=+1 into
+// texel row 0, so uv.y = 0.5 - 0.5*ndc.y.
+vec3 ViewFromDepth(vec2 uv, float linearDepth) {
+    vec2 ndc = vec2(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
+    return vec3(ndc * linearDepth * pc.invProj, -linearDepth);
+}
 
 const float PI       = 3.14159265359;
 const float HALF_PI  = 1.57079632679;
@@ -45,15 +71,16 @@ void main() {
     ivec2 id = ivec2(gl_GlobalInvocationID.xy);
     if (any(greaterThanEqual(vec2(id), pc.screenSize))) return;
 
-    vec2 uv = (vec2(id) + 0.5) / pc.screenSize;
-    vec3 P  = textureLod(gViewPos, uv, 0.0).xyz;
+    vec2  uv     = (vec2(id) + 0.5) / pc.screenSize;
+    float centreD = textureLod(uDepth0, uv, 0.0).r;
+    vec3  P       = ViewFromDepth(uv, centreD);
 
     vec3  nRaw   = textureLod(gViewNormal, uv, 0.0).xyz;
     float nLenSq = dot(nRaw, nRaw);
 
-    // Background (gViewPos cleared to 0) or a degenerate normal: fully visible,
-    // with a bent normal facing the camera. Lighting early-outs on sky anyway.
-    if (P.z == 0.0 || nLenSq <= 1e-6) {
+    // Background (depth 0) or a degenerate normal: fully visible, with a bent
+    // normal facing the camera. Lighting early-outs on sky anyway.
+    if (centreD <= 0.0 || nLenSq <= 1e-6) {
         imageStore(aoRaw, id, vec4(0.0, 0.0, 1.0, 1.0));
         return;
     }
@@ -80,6 +107,11 @@ void main() {
     // At least one pixel per step, or the march re-reads the same texel. The
     // world-space falloff below keeps the extra reach from mattering.
     float stepPixels  = max(radiusPixels / float(pc.steps), 1.0);
+    // Match the level's texel footprint to the stride: a 32-pixel stride read
+    // from level 0 misses cache on every tap, from level 3 it walks 4 texels of
+    // a small image. Half a stride keeps two taps per texel, which is enough to
+    // avoid stepping over a thin occluder entirely.
+    int   lod         = clamp(int(floor(log2(max(stepPixels, 1.0)))) - 1, 0, 3);
     float falloffFrom = pc.falloffStart * pc.radius;
     float falloffLen  = max(pc.radius - falloffFrom, 1e-4);
 
@@ -128,8 +160,9 @@ void main() {
                 if (any(lessThan(suv, vec2(0.0))) || any(greaterThan(suv, vec2(1.0))))
                     break;   // off screen — no information, not an open horizon
 
-                vec3 S = textureLod(gViewPos, suv, 0.0).xyz;
-                if (S.z == 0.0) continue;   // sky texel occludes nothing
+                float sd = SampleDepth(suv, lod);
+                if (sd <= 0.0) continue;    // sky texel occludes nothing
+                vec3  S  = ViewFromDepth(suv, sd);
 
                 vec3  d    = S - P;
                 float dist = length(d);

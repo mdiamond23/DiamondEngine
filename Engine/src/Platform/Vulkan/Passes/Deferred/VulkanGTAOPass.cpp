@@ -32,8 +32,11 @@ VulkanGTAOPass::VulkanGTAOPass(RHIDevice* device, const std::string& shaderDir,
         desc.computeShader    = m_GTAOComp.get();
         desc.resourceBindings = {
             { 0, RHIResourceType::StorageImage,         RHIShaderStage::Compute }, // aoRaw
-            { 1, RHIResourceType::CombinedImageSampler, RHIShaderStage::Compute }, // gViewPos
-            { 2, RHIResourceType::CombinedImageSampler, RHIShaderStage::Compute }, // gViewNormal
+            { 1, RHIResourceType::CombinedImageSampler, RHIShaderStage::Compute }, // gViewNormal
+            { 2, RHIResourceType::CombinedImageSampler, RHIShaderStage::Compute }, // depth L0
+            { 3, RHIResourceType::CombinedImageSampler, RHIShaderStage::Compute }, // depth L1
+            { 4, RHIResourceType::CombinedImageSampler, RHIShaderStage::Compute }, // depth L2
+            { 5, RHIResourceType::CombinedImageSampler, RHIShaderStage::Compute }, // depth L3
         };
         desc.pushConstants = { RHIShaderStage::Compute, sizeof(GTAOPush) };
         m_GTAOPipeline = device->CreateComputePipeline(desc);
@@ -55,6 +58,7 @@ VulkanGTAOPass::~VulkanGTAOPass() = default;
 
 void VulkanGTAOPass::AddToGraph(RHIRenderGraph& graph,
                                 RGTextureHandle viewPos, RGTextureHandle viewNormal,
+                                const std::array<RGTextureHandle, 4>& depthLevels,
                                 RGTextureHandle aoRaw, RGTextureHandle aoBlurred)
 {
     // Sets are built once — graph textures keep their identity across frames.
@@ -65,8 +69,11 @@ void VulkanGTAOPass::AddToGraph(RHIRenderGraph& graph,
         m_GTAOSet = m_Device->CreateResourceSet(
             m_GTAOPipeline.get(), 0, {},
             { { 0, graph.GetTexture(aoRaw) },
-              { 1, graph.GetTexture(viewPos) },
-              { 2, graph.GetTexture(viewNormal) } });
+              { 1, graph.GetTexture(viewNormal) },
+              { 2, graph.GetTexture(depthLevels[0]) },
+              { 3, graph.GetTexture(depthLevels[1]) },
+              { 4, graph.GetTexture(depthLevels[2]) },
+              { 5, graph.GetTexture(depthLevels[3]) } });
 
     if (!m_DenoiseSet)
         m_DenoiseSet = m_Device->CreateResourceSet(
@@ -79,12 +86,15 @@ void VulkanGTAOPass::AddToGraph(RHIRenderGraph& graph,
     const uint32_t groupsY = (m_Height + kLocalSize - 1) / kLocalSize;
 
     graph.AddPass("GTAO").AsCompute()
-        .Read(viewPos).Read(viewNormal)
+        .Read(viewNormal)
+        .Read(depthLevels[0]).Read(depthLevels[1])
+        .Read(depthLevels[2]).Read(depthLevels[3])
         .Write(aoRaw)
         .SetExecute([this, groupsX, groupsY](RHICommandList* cmd) {
             GTAOPush push{};
             push.screenSize   = glm::vec2(static_cast<float>(m_Width),
                                           static_cast<float>(m_Height));
+            push.invProj      = m_InvProj;
             push.projScale    = m_ProjScale;
             push.radius       = m_Radius;
             push.falloffStart = kFalloffStart;
@@ -114,6 +124,9 @@ void VulkanGTAOPass::SetProjection(const glm::mat4& projection)
     // converts that to pixels. The projection is right-handed with a negative
     // viewport height here, so take the magnitude.
     m_ProjScale = std::abs(projection[1][1]) * 0.5f * static_cast<float>(m_Height);
+    // Reciprocals of the same scales: ndc * depth * invProj recovers view x/y
+    // exactly for a standard perspective matrix (clip.w == -viewZ).
+    m_InvProj = glm::vec2(1.0f / projection[0][0], 1.0f / projection[1][1]);
 }
 
 void VulkanGTAOPass::SetParams(float radius, int slices, int steps, bool bentNormals)

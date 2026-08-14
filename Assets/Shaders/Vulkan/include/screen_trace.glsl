@@ -26,47 +26,79 @@ float EdgeFade(vec2 uv) {
     return f.x * f.y;
 }
 
-// Coarse linear march to the first depth crossing, then a short binary
+// Screen-space DDA march to the first depth crossing, then a short binary
 // refinement. Returns true on hit and writes the hit's screen UV.
+//
+// The projection happens TWICE — once per endpoint — instead of once per step.
+// A straight line in view space stays straight under a projective transform, so
+// screen position is affine in a screen-space parameter, and 1/w is affine in
+// that same parameter. Interpolating both is exact, not an approximation, and
+// it removes a mat4 multiply from the innermost loop (SSGI was doing ~180M of
+// them per frame at 16 rays x 22 steps).
+//
+// It also samples BETTER: stepping uniformly in view space clusters taps near
+// the origin in screen space and strides over distant geometry. Uniform screen
+// steps put one tap every few pixels along the whole ray.
 bool TraceScreenRay(sampler2D gViewPos, mat4 proj, vec3 origin, vec3 dir,
                     float maxDistance, int steps, float thickness, float bias,
                     out vec2 hitUV)
 {
     hitUV = vec2(0.0);
 
-    vec3 rayStep = dir * (maxDistance / float(steps));
-    vec3 pos     = origin;
-    vec3 prev    = pos;
-    bool hit     = false;
+    // Clip the segment to stay in front of the camera BEFORE projecting. With a
+    // per-step projection a ray crossing the near plane produced garbage UVs
+    // that the bounds test happened to reject; interpolated endpoints have no
+    // such safety net, so a segment straddling w = 0 must be shortened here.
+    const float kMinViewZ = -0.05;   // just in front of the camera
+    float endT = maxDistance;
+    if (origin.z + dir.z * endT > kMinViewZ) {
+        if (dir.z <= 1e-6) return false;              // parallel or receding
+        endT = (kMinViewZ - origin.z) / dir.z;
+        if (endT <= 1e-4) return false;               // origin already at the plane
+    }
 
-    for (int i = 0; i < steps; ++i) {
-        prev = pos;
-        pos += rayStep;
+    vec4 c0 = proj * vec4(origin, 1.0);
+    vec4 c1 = proj * vec4(origin + dir * endT, 1.0);
+    if (c0.w <= 0.0 || c1.w <= 0.0) return false;
 
-        vec2 uv = ProjectToUV(proj, pos);
+    const vec2  uv0 = vec2(0.5 * c0.x / c0.w + 0.5, 0.5 - 0.5 * c0.y / c0.w);
+    const vec2  uv1 = vec2(0.5 * c1.x / c1.w + 0.5, 0.5 - 0.5 * c1.y / c1.w);
+    // w == -viewZ for a standard perspective matrix, so 1/w recovers view depth.
+    const float iw0 = 1.0 / c0.w;
+    const float iw1 = 1.0 / c1.w;
+
+    float prevT = 0.0;
+    float hitT  = -1.0;
+
+    for (int i = 1; i <= steps; ++i) {
+        float t  = float(i) / float(steps);
+        vec2  uv = mix(uv0, uv1, t);
         if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) return false;
 
+        float rayZ   = -1.0 / mix(iw0, iw1, t);
         float sceneZ = textureLod(gViewPos, uv, 0.0).z;
-        if (sceneZ == 0.0) continue;   // ray is over a sky pixel
+        if (sceneZ == 0.0) { prevT = t; continue; }   // ray is over a sky pixel
 
-        // View z is negative; the ray is behind stored geometry once pos.z
-        // drops below sceneZ. thickness rejects crossings far behind thin geo.
-        if (sceneZ >= pos.z + bias && sceneZ - pos.z < thickness) {
-            hit = true;
-            break;
-        }
+        // View z is negative; the ray is behind stored geometry once rayZ drops
+        // below sceneZ. thickness rejects crossings far behind thin geometry.
+        if (sceneZ >= rayZ + bias && sceneZ - rayZ < thickness) { hitT = t; break; }
+        prevT = t;
     }
 
-    if (!hit) return false;
+    if (hitT < 0.0) return false;
 
+    // Bisect between the last miss and the hit, in the same interpolated space.
+    float lo = prevT;
+    float hi = hitT;
     for (int i = 0; i < SCREEN_TRACE_REFINE_STEPS; ++i) {
-        vec3  mid    = 0.5 * (prev + pos);
-        float sceneZ = textureLod(gViewPos, ProjectToUV(proj, mid), 0.0).z;
-        if (sceneZ != 0.0 && sceneZ >= mid.z + bias) pos = mid;
-        else                                         prev = mid;
+        float mid    = 0.5 * (lo + hi);
+        float rayZ   = -1.0 / mix(iw0, iw1, mid);
+        float sceneZ = textureLod(gViewPos, mix(uv0, uv1, mid), 0.0).z;
+        if (sceneZ != 0.0 && sceneZ >= rayZ + bias) hi = mid;
+        else                                        lo = mid;
     }
 
-    hitUV = ProjectToUV(proj, pos);
+    hitUV = mix(uv0, uv1, hi);
     return true;
 }
 

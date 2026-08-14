@@ -4,6 +4,7 @@
 
 #include <glm/glm.hpp>
 
+#include <array>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -41,8 +42,13 @@ public:
     // aoRaw (+ viewPos for the bilateral weight) and writes aoBlurred. Both are
     // caller-declared RGBA16F **storage** textures — compute writes them as
     // storage images and later passes sample them. Sets are built once.
+    // 'depthLevels' is the linear view-depth pyramid (VulkanDepthPyramidPass)
+    // the horizon march taps INSTEAD of viewPos — 2 bytes per tap rather than 8,
+    // with wide strides reading a smaller, cache-resident level. viewPos is
+    // still bound for the denoise pass's bilateral weight.
     void AddToGraph(RHIRenderGraph& graph,
                     RGTextureHandle viewPos, RGTextureHandle viewNormal,
+                    const std::array<RGTextureHandle, 4>& depthLevels,
                     RGTextureHandle aoRaw, RGTextureHandle aoBlurred);
 
     // The world-radius → screen-pixels conversion needs the projection's
@@ -60,6 +66,7 @@ private:
     // 4-byte scalars after the leading vec2, so the natural layout is exact.
     struct GTAOPush {
         glm::vec2 screenSize;
+        glm::vec2 invProj;      // (1/proj[0][0], 1/proj[1][1]) — unprojects a tap
         float     projScale;
         float     radius;
         float     falloffStart;
@@ -74,7 +81,10 @@ private:
     uint32_t   m_Height;
 
     // Pixels per view-space unit at z = -1, from the projection's [1][1].
-    float    m_ProjScale   = 1.0f;
+    float     m_ProjScale = 1.0f;
+    // Reciprocal projection scales, so a depth tap can be turned back into a
+    // view-space position without carrying the full matrix.
+    glm::vec2 m_InvProj { 1.0f };
     float    m_Radius      = 0.8f;
     int      m_Slices      = 3;
     int      m_Steps       = 6;

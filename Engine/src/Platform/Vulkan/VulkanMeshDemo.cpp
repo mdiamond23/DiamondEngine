@@ -5,6 +5,7 @@
 #include "Platform/Vulkan/Passes/VulkanPassCommon.h"
 #include "Platform/Vulkan/Passes/Deferred/VulkanGBufferPass.h"
 #include "Platform/Vulkan/Passes/Deferred/VulkanGTAOPass.h"
+#include "Platform/Vulkan/Passes/Deferred/VulkanDepthPyramidPass.h"
 #include "Platform/Vulkan/Passes/Deferred/VulkanDeferredLightingPass.h"
 #include "Platform/Vulkan/Passes/Forward/VulkanPBRSurfacePass.h"
 #include "Platform/Vulkan/Passes/Forward/VulkanTransparencyPass.h"
@@ -202,6 +203,16 @@ int RunVulkanMeshDemo() {
         "aoRaw",     { kOffscreenW, kOffscreenH, RHIFormat::RGBA16F, /*storage*/ true });
     const RGTextureHandle aoBlurred = graph.DeclareTexture(
         "aoBlurred", { kOffscreenW, kOffscreenH, RHIFormat::RGBA16F, /*storage*/ true });
+    // Linear view-depth pyramid GTAO's horizon march taps (R16F, 2 bytes/tap
+    // against gViewPos's 8). Separate textures per level — the RHI has no
+    // per-mip views for render targets.
+    std::array<RGTextureHandle, VulkanDepthPyramidPass::kLevels> depthLevels;
+    for (int i = 0; i < VulkanDepthPyramidPass::kLevels; ++i)
+        depthLevels[i] = graph.DeclareTexture(
+            "depthPyramid" + std::to_string(i),
+            { VulkanDepthPyramidPass::LevelSize(kOffscreenW, i),
+              VulkanDepthPyramidPass::LevelSize(kOffscreenH, i),
+              RHIFormat::R16F, /*storage*/ true });
     // CSM cascade depth targets — one square depth map per cascade (Depth32F, which
     // the graph now also makes Sampled so the debug pass / future lighting can read).
     constexpr uint32_t kShadowRes = 2048;
@@ -245,6 +256,7 @@ int RunVulkanMeshDemo() {
     // ── Deferred passes (the ported passes under test) ──────────────────────────
     VulkanGBufferPass          gbuffer(device.get(), shaderDir);
     VulkanGTAOPass             gtao(device.get(), shaderDir, kOffscreenW, kOffscreenH);
+    VulkanDepthPyramidPass     depthPyramid(device.get(), shaderDir, kOffscreenW, kOffscreenH);
     VulkanCSMPass              csm(device.get(), shaderDir);
     VulkanPointShadowPass      pointShadow(device.get(), shaderDir);   // cubes only bound, never rendered here
     VulkanDeferredLightingPass lighting(device.get(), shaderDir);
@@ -336,7 +348,8 @@ int RunVulkanMeshDemo() {
 
     // Pass 2+3 — GTAO horizon search + denoise over the G-buffer's view-space
     // pos/normal.
-    gtao.AddToGraph(graph, gViewPos, gViewNormal, aoRaw, aoBlurred);
+    depthPyramid.AddToGraph(graph, gViewPos, depthLevels);
+    gtao.AddToGraph(graph, gViewPos, gViewNormal, depthLevels, aoRaw, aoBlurred);
 
     // Shadow passes — render the scene depth into each cascade from the sun. The
     // callback receives the per-cascade light matrix and pushes lightSpace * model.
