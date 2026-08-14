@@ -135,6 +135,19 @@ namespace Physics {
     // hit-reactions and get-up blends. Only affects Powered mode.
     void SetRagdollStrength(RagdollComponent& rag, float strength);
 
+    // High-level activity currently owning an active ragdoll. Powered alone is not
+    // enough to mean gameplay systems may drive it: flinches and procedural get-up
+    // both temporarily use Powered bodies while physics owns the pose/root. Movement
+    // and combat should suspend their commands until this returns None.
+    enum class RagdollActivity {
+        None,
+        Flinching,
+        GettingUp,
+        BlendingToAnimation
+    };
+
+    RagdollActivity GetRagdollActivity(const RagdollComponent& rag);
+
     // The rig's standing hip clearance, measured from the .ragdoll's bind pose at
     // build time (hips body height above the lowest body). The natural hip-height
     // target for a locomotion controller -- the same reference the procedural get-up
@@ -166,6 +179,27 @@ namespace Physics {
     // (Powered/Limp) rig. Returns false if the ragdoll isn't built or the bone has
     // no body.
     bool AddRagdollBoneImpulse(const RagdollComponent& rag, int boneIndex, glm::vec3 impulse);
+
+    // Explicit gameplay impact on the ragdoll body nearest worldPoint. Unlike the
+    // generic automatic impact thresholds, this is called only after a combat system
+    // has recognized a real attack, so footsteps and ordinary floor contacts cannot
+    // become punches. The reaction is applied before the impulse so Animated rigs are
+    // made dynamic in time to receive it.
+    enum class RagdollHitReaction {
+        None,
+        Flinch,
+        Knockdown
+    };
+
+    struct RagdollImpactResult {
+        bool applied = false;
+        int boneIndex = -1;
+        RagdollHitReaction reaction = RagdollHitReaction::None;
+    };
+
+    RagdollImpactResult ApplyRagdollImpact(
+        RagdollComponent& rag, glm::vec3 worldPoint,
+        glm::vec3 impulse, RagdollHitReaction reaction);
 
     // Continuous world-space torque (N*m) on the body mapped to a skeleton bone, applied
     // for one step like AddForce. SIMBICON's virtual PD controllers (torso attitude, swing

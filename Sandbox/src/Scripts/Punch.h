@@ -8,6 +8,7 @@
 #include "Animation/IKComponent.h"
 #include "Animation/AnimationComponents.h"
 #include "Animation/AnimationSampler.h"
+#include "PlayerInput.h"
 #include <imgui.h>
 #include <nlohmann/json.hpp>
 #include <glm/glm.hpp>
@@ -33,7 +34,7 @@
 // TARGET pose — the motors swing the physical arm after it, so the punch lands
 // with real momentum and can be blocked/deflected by the world.
 //
-// Grab: while a bumper is held, a sphere cast leaves that hand along the punch
+// Optional grab (disabled by default): while a bumper is held, a sphere cast leaves that hand along the punch
 // direction. The first dynamic body it finds is pinned to a kinematic "hand proxy"
 // (which tracks the IK hand) by a force-limited motorized joint (ConstraintType::Grab)
 // — so every held punch doubles as a grab. The motor's force cap (`grabStrength`)
@@ -69,7 +70,20 @@ struct PunchComponent
     float punchImpulse   = 12.0f;
     float shoulderHeight = 1.3f;   // FALLBACK anchor height above the entity origin (used only if the shoulder bone can't be resolved)
 
+    // --- combat hit ---
+    // A swept sphere follows the physical fist from its previous position to a short
+    // distance ahead. Only an actively thrown, forward-moving fist can register, and
+    // each press can damage at most one victim. Speed selects flinch vs knockdown;
+    // impulse scales with that measured physical speed and is capped for stability.
+    float hitRadius          = 0.13f;
+    float hitForwardReach    = 0.10f;
+    float flinchSpeed        = 1.25f;
+    float knockdownSpeed     = 4.0f;
+    float hitImpulsePerSpeed = 2.0f;
+    float maxHitImpulse      = 20.0f;
+
     // --- grab ---
+    bool  grabbingEnabled = false; // opt-in; default gameplay is pure punching
     float grabRadius   = 0.15f;    // sphere-cast radius for the grab probe
     float grabRange    = 0.35f;    // how far past the hand the grab probe sweeps
     float grabStrength = 800.0f;   // motor force budget (N). Lifts up to ~grabStrength/9.81 kg; heavier sags
@@ -85,6 +99,10 @@ struct PunchComponent
         uint32_t _objOrigGroup  = Physics::kUngroupedCollision;        // grabbed object's collision group before grab
         bool     _ownsObjGroup  = false;                               // this arm restores the object's group on release
         bool     _holderRef     = false;                               // this grab holds a ref on the holder's exclusion group
+        glm::vec3 _previousHandPos { 0.0f };                           // previous physical fist sample for swept hits
+        bool     _havePreviousHand = false;
+        bool     _hitConsumed = true;                                  // one victim maximum per button press
+        bool     _requiresRelease = false;                              // recovery cannot turn a held bumper into a new punch
     };
     Arm _arms[2];   // 0 = left, 1 = right
 
@@ -112,14 +130,28 @@ inline void DrawComponentInspector<PunchComponent>(PunchComponent& c)
     ImGui::DragFloat("Punch Ease",      &c.punchEase,      0.01f, 0.0f,  1.0f, "%.2f s");
     ImGui::DragFloat("Punch Impulse",   &c.punchImpulse,   1.0f,  0.0f,  500.0f, "%.0f N*s");
     ImGui::DragFloat("Shoulder Height", &c.shoulderHeight, 0.01f, 0.0f,  3.0f);
-    ImGui::DragFloat("Grab Radius",     &c.grabRadius,     0.01f, 0.0f,  1.0f);
-    ImGui::DragFloat("Grab Range",      &c.grabRange,      0.01f, 0.0f,  2.0f);
-    ImGui::DragFloat("Grab Strength",   &c.grabStrength,   5.0f,  0.0f, 10000.0f, "%.0f N");
-    ImGui::DragFloat("Grab Response",   &c.grabResponse,   0.1f,  0.5f, 15.0f,    "%.1f Hz");
-    ImGui::Checkbox("Ignore Holder Collision", &c.grabIgnoreHolder);
-    ImGui::TextDisabled("Lifts up to ~%.0f kg; heavier sags", c.grabStrength / 9.81f);
+    ImGui::SeparatorText("Combat Hit");
+    ImGui::DragFloat("Hit Radius",       &c.hitRadius,          0.01f, 0.01f, 1.0f, "%.2f m");
+    ImGui::DragFloat("Hit Forward Reach",&c.hitForwardReach,    0.01f, 0.0f,  1.0f, "%.2f m");
+    ImGui::DragFloat("Flinch Speed",     &c.flinchSpeed,        0.1f,  0.0f, 30.0f, "%.1f m/s");
+    ImGui::DragFloat("Knockdown Speed",  &c.knockdownSpeed,     0.1f,  0.0f, 50.0f, "%.1f m/s");
+    ImGui::DragFloat("Hit Impulse / Speed", &c.hitImpulsePerSpeed, 0.1f, 0.0f, 20.0f, "%.1f kg");
+    ImGui::DragFloat("Max Hit Impulse",  &c.maxHitImpulse,      0.5f,  0.0f, 100.0f, "%.1f N*s");
+    ImGui::SeparatorText("Grab");
+    ImGui::Checkbox("Enable Grabbing", &c.grabbingEnabled);
+    if (c.grabbingEnabled) {
+        ImGui::DragFloat("Grab Radius",     &c.grabRadius,     0.01f, 0.0f,  1.0f);
+        ImGui::DragFloat("Grab Range",      &c.grabRange,      0.01f, 0.0f,  2.0f);
+        ImGui::DragFloat("Grab Strength",   &c.grabStrength,   5.0f,  0.0f, 10000.0f, "%.0f N");
+        ImGui::DragFloat("Grab Response",   &c.grabResponse,   0.1f,  0.5f, 15.0f,    "%.1f Hz");
+        ImGui::Checkbox("Ignore Holder Collision", &c.grabIgnoreHolder);
+        ImGui::TextDisabled("Lifts up to ~%.0f kg; heavier sags", c.grabStrength / 9.81f);
+    } else {
+        ImGui::TextDisabled("Disabled: bumpers only punch.");
+    }
     ImGui::TextDisabled("LB/RB = punch that arm (play mode); hold to keep it out");
-    ImGui::TextDisabled("A held punch grabs what it touches; release to drop");
+    if (c.grabbingEnabled)
+        ImGui::TextDisabled("A held punch grabs what it touches; release to drop");
 }
 
 // ---- Serialization ----------------------------------------------------------
@@ -135,6 +167,13 @@ inline std::string SerializeComponent<PunchComponent>(const PunchComponent& c)
     j["punchEase"]        = c.punchEase;
     j["punchImpulse"]     = c.punchImpulse;
     j["shoulderHeight"]   = c.shoulderHeight;
+    j["hitRadius"]          = c.hitRadius;
+    j["hitForwardReach"]    = c.hitForwardReach;
+    j["flinchSpeed"]        = c.flinchSpeed;
+    j["knockdownSpeed"]     = c.knockdownSpeed;
+    j["hitImpulsePerSpeed"] = c.hitImpulsePerSpeed;
+    j["maxHitImpulse"]      = c.maxHitImpulse;
+    j["grabbingEnabled"]  = c.grabbingEnabled;
     j["grabRadius"]       = c.grabRadius;
     j["grabRange"]        = c.grabRange;
     j["grabStrength"]     = c.grabStrength;
@@ -155,6 +194,13 @@ inline void DeserializeComponent<PunchComponent>(PunchComponent& c, const std::s
     c.punchEase        = j.value("punchEase",      0.08f);
     c.punchImpulse     = j.value("punchImpulse",   12.0f);
     c.shoulderHeight   = j.value("shoulderHeight", 1.3f);
+    c.hitRadius          = j.value("hitRadius",          0.13f);
+    c.hitForwardReach    = j.value("hitForwardReach",    0.10f);
+    c.flinchSpeed        = j.value("flinchSpeed",        1.25f);
+    c.knockdownSpeed     = j.value("knockdownSpeed",     4.0f);
+    c.hitImpulsePerSpeed = j.value("hitImpulsePerSpeed", 2.0f);
+    c.maxHitImpulse      = j.value("maxHitImpulse",      20.0f);
+    c.grabbingEnabled  = j.value("grabbingEnabled", false);
     c.grabRadius       = j.value("grabRadius",     0.15f);
     c.grabRange        = j.value("grabRange",      0.35f);
     c.grabStrength     = j.value("grabStrength",   800.0f);
@@ -172,10 +218,10 @@ class PunchSystem : public GameSystem
 {
     DECLARE_SYSTEM(PunchSystem, 100)
 public:
-    void OnStart(Scene& scene) override
+    void OnStart(Scene&) override
     {
-        Input::BindAction("PunchLeft",   GamepadButton::LeftBumper);
-        Input::BindAction("PunchRight",  GamepadButton::RightBumper);
+        // Scene cycling remains an editor/demo shortcut owned by controller one.
+        // Character actions are sampled per entity through PlayerInputComponent.
         Input::BindAction("ChangeScene", GamepadButton::South);
     }
 
@@ -189,11 +235,32 @@ public:
                 (SceneSystem::CurrentIndex() + 1) % SceneSystem::SceneList().size());
         }
 
-        const bool held[2]    = { Input::IsHeld("PunchLeft"),    Input::IsHeld("PunchRight") };
-        const bool pressed[2] = { Input::IsPressed("PunchLeft"), Input::IsPressed("PunchRight") };
-
         for (auto [entity, punch] : scene.View<PunchComponent>().each())
         {
+            // An incapacitated character cannot keep an old punch pose alive or
+            // launch attacks while physics owns its body. Clearing the previous-hand
+            // sample also prevents the get-up/re-root displacement becoming a hit sweep.
+            if (scene.Has<RagdollComponent>(entity)) {
+                const auto& rag = scene.Get<RagdollComponent>(entity);
+                const bool canAttack = rag.mode == RagdollMode::Powered
+                    && Physics::GetRagdollActivity(rag)
+                        == Physics::RagdollActivity::None;
+                if (!canAttack) {
+                    SuspendPunching(scene, entity, punch);
+                    continue;
+                }
+            }
+
+            const PlayerCommandState command = PlayerInput::ReadCommandOrDefault(scene, entity);
+            const bool held[2] = {
+                command.punchLeftHeld,
+                command.punchRightHeld
+            };
+            const bool pressed[2] = {
+                command.punchLeftPressed,
+                command.punchRightPressed
+            };
+
             // UpdateIK only runs on entities with a skinned mesh + animator; without
             // them there is no arm to drive.
             if (!scene.Has<SkinnedMeshComponent>(entity) || !scene.Has<AnimatorComponent>(entity))
@@ -218,6 +285,9 @@ public:
             {
                 PunchComponent::Arm& arm = punch._arms[side];
                 const std::string& handBone = side == 0 ? punch.leftHandBone : punch.rightHandBone;
+                if (!held[side]) arm._requiresRelease = false;
+                const bool punchHeld = held[side] && !arm._requiresRelease;
+                const bool punchPressed = pressed[side] && !arm._requiresRelease;
 
                 // Lazily provision an IK chain per hand bone the first time we see the
                 // entity in play mode (an inspector-authored chain with a matching end
@@ -241,7 +311,7 @@ public:
 
                 chain->targetEntity   = entt::null;
                 chain->targetWorldPos = anchor + poseDir * punch.reach;
-                chain->weight         = held[side] ? 1.0f : 0.0f;   // eased by punchEase
+                chain->weight         = punchHeld ? 1.0f : 0.0f;   // eased by punchEase
 
                 // --- Grab (same bumper: a held punch grabs what it touches) ----
                 // Grabbing happens in PHYSICAL space: the proxy and the probe use the
@@ -255,26 +325,46 @@ public:
                 // Launch: kick the fist's momentum on the press edge (the motors then
                 // ride it out to the IK pose and hold). Without this the punch reads
                 // as a slow reach — see punchImpulse.
-                if (pressed[side])
+                if (punchPressed) {
+                    arm._hitConsumed = false;
                     LaunchPunch(scene, entity, worldMat, handBone, punch.modelForward, punch.punchImpulse);
+                }
 
-                entt::entity proxy = EnsureHandProxy(scene, arm, side == 0 ? "HandProxyL" : "HandProxyR");
-                if (haveHand && proxy != entt::null && scene.Has<TransformComponent>(proxy))
-                    scene.Get<TransformComponent>(proxy).position = handPos;
+                if (punchHeld && !arm._hitConsumed && haveHand
+                    && chain->_curWeight > 0.10f)
+                    TryHit(scene, entity, punch, arm, handBone, handPos, castDir);
+                if (!punchHeld) arm._hitConsumed = true;
 
-                const bool proxyLive = proxy != entt::null && scene.Has<RigidBodyComponent>(proxy) &&
-                                       scene.Get<RigidBodyComponent>(proxy)._bodyId != 0xFFFFFFFFu;
+                if (punch.grabbingEnabled) {
+                    entt::entity proxy = EnsureHandProxy(
+                        scene, arm, side == 0 ? "HandProxyL" : "HandProxyR");
+                    if (haveHand && proxy != entt::null && scene.Has<TransformComponent>(proxy))
+                        scene.Get<TransformComponent>(proxy).position = handPos;
 
-                if (!held[side]) {
-                    ReleaseGrab(scene, entity, punch, side);   // releasing the bumper drops + retracts
-                } else if (arm._grab == Physics::kInvalidConstraint && haveHand && proxyLive &&
-                           chain->_curWeight > 0.25f) {
-                    // Punch in flight or held out — probe past the fist for a grab.
-                    TryGrab(scene, entity, punch, side, castDir);
-                } else if (arm._grab != Physics::kInvalidConstraint &&
-                           (!scene.GetRegistry().valid(arm._grabbed) ||
-                            !scene.Has<RigidBodyComponent>(arm._grabbed))) {
-                    ReleaseGrab(scene, entity, punch, side);   // grabbed entity went away
+                    const bool proxyLive = proxy != entt::null
+                        && scene.Has<RigidBodyComponent>(proxy)
+                        && scene.Get<RigidBodyComponent>(proxy)._bodyId != 0xFFFFFFFFu;
+
+                    if (!punchHeld) {
+                        ReleaseGrab(scene, entity, punch, side);
+                    } else if (arm._grab == Physics::kInvalidConstraint && haveHand
+                               && proxyLive && chain->_curWeight > 0.25f) {
+                        TryGrab(scene, entity, punch, side, castDir);
+                    } else if (arm._grab != Physics::kInvalidConstraint
+                               && (!scene.GetRegistry().valid(arm._grabbed)
+                                   || !scene.Has<RigidBodyComponent>(arm._grabbed))) {
+                        ReleaseGrab(scene, entity, punch, side);
+                    }
+                } else {
+                    // Also handles disabling the option during play while holding an object.
+                    ReleaseGrab(scene, entity, punch, side);
+                }
+
+                if (haveHand) {
+                    arm._previousHandPos = handPos;
+                    arm._havePreviousHand = true;
+                } else {
+                    arm._havePreviousHand = false;
                 }
             }
         }
@@ -290,6 +380,27 @@ public:
     }
 
 private:
+    void SuspendPunching(Scene& scene, entt::entity entity,
+                         PunchComponent& punch)
+    {
+        IKComponent* ik = scene.GetRegistry().try_get<IKComponent>(entity);
+        for (int side = 0; side < 2; ++side) {
+            PunchComponent::Arm& arm = punch._arms[side];
+            arm._hitConsumed = true;
+            arm._havePreviousHand = false;
+            arm._requiresRelease = true;
+            ReleaseGrab(scene, entity, punch, side);
+
+            if (ik) {
+                const std::string& handBone = side == 0
+                    ? punch.leftHandBone : punch.rightHandBone;
+                for (IKChain& chain : ik->chains)
+                    if (chain.endEffectorBone == handBone)
+                        chain.weight = 0.0f;
+            }
+        }
+    }
+
     // Make sure the entity has an IKComponent with a chain for the given hand bone,
     // creating them if needed. Returns the chain to drive (valid until the next
     // EnsureChain call — the vector may reallocate).
@@ -440,6 +551,72 @@ private:
             if (glm::length(d) > 1e-4f) dirOut = glm::normalize(d);
         }
         return true;
+    }
+
+    // Sweep the physical fist between render-frame samples. This catches fast jabs
+    // without turning the IK reach volume into a damage volume. The hand body's live
+    // forward speed selects a stagger or knockdown, while _hitConsumed guarantees a
+    // held bumper cannot repeatedly damage the same (or several) characters.
+    static void TryHit(Scene& scene, entt::entity self, PunchComponent& punch,
+                       PunchComponent::Arm& arm, const std::string& handBone,
+                       glm::vec3 handPos, glm::vec3 forward)
+    {
+        if (!arm._havePreviousHand || !scene.Has<RagdollComponent>(self)) return;
+        if (glm::length(forward) < 1e-4f) return;
+        forward = glm::normalize(forward);
+
+        const Diamond::Skeleton& skeleton = scene.Get<SkinnedMeshComponent>(self).skeleton;
+        const int handBoneIndex = skeleton.Find(handBone);
+        if (handBoneIndex < 0) return;
+
+        bool velocityValid = false;
+        const glm::vec3 handVelocity = Physics::GetRagdollBoneLinearVelocity(
+            scene.Get<RagdollComponent>(self), handBoneIndex, &velocityValid);
+        if (!velocityValid) return;
+
+        const float forwardSpeed = glm::dot(handVelocity, forward);
+        const float flinchSpeed = glm::max(punch.flinchSpeed, 0.0f);
+        if (forwardSpeed < flinchSpeed) return;
+
+        glm::vec3 start = arm._previousHandPos;
+        // Ignore discontinuities from teleports, respawns, or a get-up re-root.
+        if (glm::length(handPos - start) > 0.75f) start = handPos;
+        const glm::vec3 trace = handPos
+            + forward * glm::max(punch.hitForwardReach, 0.0f) - start;
+        const float distance = glm::length(trace);
+        if (distance < 1e-4f || punch.hitRadius <= 0.0f) return;
+
+        const auto hits = Physics::SphereCastMulti(
+            start, punch.hitRadius, trace / distance, distance, self);
+        for (const HitResult& hit : hits) {
+            if (hit.entity == entt::null || hit.entity == self
+                || !scene.Has<RagdollComponent>(hit.entity))
+                continue;
+
+            const float knockdownSpeed = glm::max(punch.knockdownSpeed, flinchSpeed);
+            const Physics::RagdollHitReaction reaction =
+                forwardSpeed >= knockdownSpeed
+                    ? Physics::RagdollHitReaction::Knockdown
+                    : Physics::RagdollHitReaction::Flinch;
+            const float impulseMagnitude = glm::clamp(
+                forwardSpeed * glm::max(punch.hitImpulsePerSpeed, 0.0f),
+                0.0f, glm::max(punch.maxHitImpulse, 0.0f));
+            const Physics::RagdollImpactResult result = Physics::ApplyRagdollImpact(
+                scene.Get<RagdollComponent>(hit.entity), hit.point,
+                forward * impulseMagnitude, reaction);
+            if (!result.applied) continue;
+
+            arm._hitConsumed = true;
+            spdlog::info(
+                "Punch hit: attacker={} victim={} speed={:.2f}m/s impulse={:.2f}N*s "
+                "reaction={} bone={}",
+                entt::to_integral(self), entt::to_integral(hit.entity),
+                forwardSpeed, impulseMagnitude,
+                reaction == Physics::RagdollHitReaction::Knockdown
+                    ? "knockdown" : "flinch",
+                result.boneIndex);
+            return;
+        }
     }
 
     // Sphere-cast past the fist; pin the first dynamic body found to this arm's proxy

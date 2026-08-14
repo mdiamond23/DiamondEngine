@@ -99,6 +99,10 @@ enum class GamepadAxis : int
 
 namespace Input
 {
+    // GLFW joystick slots polled by the engine. Gamepad ids passed to every API below
+    // are zero-based and must be in [0, MaxGamepads).
+    inline constexpr int MaxGamepads = 4;
+
     void Init(GLFWwindow* window);
     void Update();
     void SetEnabled(bool enabled);
@@ -109,7 +113,7 @@ namespace Input
     void BindAxis(const std::string& name, Key positiveKey, Key negativeKey);
 
     // --- Named bindings (gamepad) ---
-    // gamepadId is 0-based: 0 = first controller, up to 3.
+    // gamepadId is 0-based: 0 = first controller, up to MaxGamepads - 1.
     void BindAction(const std::string& name, GamepadButton button, int gamepadId = 0);
     void BindAxis(const std::string& name, GamepadAxis axis, int gamepadId = 0);
 

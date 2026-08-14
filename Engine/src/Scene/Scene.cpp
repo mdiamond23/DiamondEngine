@@ -141,6 +141,14 @@ void Scene::StartPlay()
 {
     if (m_Playing) return;
     m_Playing = true;
+
+    // Systems may consume world transforms during OnStart (physics builds
+    // ragdolls and bodies here). A freshly deserialized scene has only local
+    // TransformComponents; its transform cache is still empty until the first
+    // TickFrame. Prime it now so startup uses the authored world placements
+    // instead of GetWorldMatrix's identity fallback.
+    m_TransformSystem.Update(m_Registry);
+
     m_Systems = SystemRegistry::Get().CreateSystems();
     for (auto& system : m_Systems)
         system->OnStart(*this);

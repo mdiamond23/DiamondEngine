@@ -70,6 +70,10 @@ struct RagdollComponent {
     // a debug-draw/floor-render mismatch.
     float _locomotionFootPenetration[2] { 0.0f, 0.0f };
     float _locomotionFootSoleMinY[2] { 0.0f, 0.0f };
+    // World-Y component of the foot collision box's sole normal. A value near +1
+    // means the sole is flat and facing upward; locomotion uses this to avoid
+    // beginning a gait while a post-recovery foot is still rolled onto an edge.
+    float _locomotionFootSoleUpY[2] { 0.0f, 0.0f };
 
     // Validation-only runtime motor mask. Each entry names the CHILD bone whose joint
     // motor is muted. SyncRagdollPowered reapplies this every substep and restores Position

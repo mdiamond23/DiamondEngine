@@ -60,6 +60,7 @@
 #include <cstdint>
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <thread>
 
 // ---------------------------------------------------------------------------
@@ -2609,13 +2610,35 @@ static void StartRagdollGetUpBlend(PhysicsSystem::Impl& impl, RagdollInstance& i
     spdlog::info("Ragdoll {}: get-up blending to animation ({:.2f}s)", rag._ragdollId, r.duration);
 }
 
-// True if every body of the rig has nearly stopped moving (settled on the floor).
-static bool RagdollAtRest(JPH::BodyInterface& bi, const RagdollInstance& inst)
+// Small distal bodies can chatter against the floor long after the character has
+// visibly come to rest. Requiring every hand and foot to stay below a tight threshold
+// made automatic recovery take tens of seconds. Gate primarily on the pelvis, while
+// retaining aggregate and peak limits so recovery cannot begin while the rig is still
+// tumbling or a limb is moving violently.
+static bool RagdollReadyToGetUp(JPH::BodyInterface& bi, const RagdollInstance& inst)
 {
-    for (const RagdollBody& b : inst.bodies)
-        if (bi.GetLinearVelocity(b.id).Length()  > 0.25f ||
-            bi.GetAngularVelocity(b.id).Length() > 1.5f) return false;
-    return true;
+    if (inst.rootBodySlot < 0 || inst.rootBodySlot >= static_cast<int>(inst.bodies.size()))
+        return false;
+
+    const RagdollBody& root = inst.bodies[inst.rootBodySlot];
+    if (bi.GetLinearVelocity(root.id).Length() > 0.60f
+        || bi.GetAngularVelocity(root.id).Length() > 3.0f)
+        return false;
+
+    float linearSum = 0.0f;
+    float angularSum = 0.0f;
+    for (const RagdollBody& body : inst.bodies) {
+        const float linearSpeed = bi.GetLinearVelocity(body.id).Length();
+        const float angularSpeed = bi.GetAngularVelocity(body.id).Length();
+        if (linearSpeed > 2.0f || angularSpeed > 10.0f)
+            return false;
+        linearSum += linearSpeed;
+        angularSum += angularSpeed;
+    }
+    const float bodyCount = static_cast<float>(inst.bodies.size());
+    return bodyCount > 0.0f
+        && linearSum / bodyCount <= 0.75f
+        && angularSum / bodyCount <= 4.0f;
 }
 
 // Per frame: (1) advance an active flinch/get-up reaction, ramping strength with a smooth
@@ -2708,7 +2731,7 @@ static void TickRagdollReactions(Scene& scene, PhysicsSystem::Impl& impl, float 
 
         // (2) auto get-up: a settled limp rig heaves itself up after a dwell.
         if (inst.mode == RagdollMode::Limp && rag->config && rag->config->getupDelay > 0.0f) {
-            if (RagdollAtRest(bi, inst)) {
+            if (RagdollReadyToGetUp(bi, inst)) {
                 inst.restTimer += dt;
                 if (inst.restTimer >= rag->config->getupDelay)
                     StartRagdollGetUp(impl, inst, *rag);
@@ -2741,6 +2764,7 @@ static void UpdateRagdollFootContacts(PhysicsSystem::Impl& impl, Scene& scene,
             rag->_locomotionFootContactPoint[i] = glm::vec3(0.0f);
             rag->_locomotionFootPenetration[i] = 0.0f;
             rag->_locomotionFootSoleMinY[i] = 0.0f;
+            rag->_locomotionFootSoleUpY[i] = 0.0f;
         }
 
         // Measure the real live wrapper shape, not the foot-bone pivot. For an oriented
@@ -2753,13 +2777,16 @@ static void UpdateRagdollFootContacts(PhysicsSystem::Impl& impl, Scene& scene,
             const glm::quat bodyRot = FromJolt(bi.GetRotation(body.id));
             const glm::vec3 center = bodyPos + bodyRot * body.localOffset;
             const glm::quat rotation = glm::normalize(bodyRot * body.localRotation);
+            const float soleUpY = (rotation * glm::vec3(0.0f, 1.0f, 0.0f)).y;
             const float extentY =
                 std::abs((rotation * glm::vec3(body.halfExtents.x, 0.0f, 0.0f)).y) +
                 std::abs((rotation * glm::vec3(0.0f, body.halfExtents.y, 0.0f)).y) +
                 std::abs((rotation * glm::vec3(0.0f, 0.0f, body.halfExtents.z)).y);
             for (int i = 0; i < 2; ++i) {
-                if (rag->_locomotionFootBones[i] == body.boneIndex)
+                if (rag->_locomotionFootBones[i] == body.boneIndex) {
                     rag->_locomotionFootSoleMinY[i] = center.y - extentY;
+                    rag->_locomotionFootSoleUpY[i] = soleUpY;
+                }
             }
         }
 
@@ -3210,6 +3237,23 @@ void SetRagdollStrength(RagdollComponent& rag, float strength) {
     rag.strength = glm::clamp(strength, 0.0f, 4.0f);
 }
 
+RagdollActivity GetRagdollActivity(const RagdollComponent& rag) {
+    if (!s_Impl || rag._ragdollId == 0xFFFFFFFFu) return RagdollActivity::None;
+    auto it = s_Impl->ragdolls.find(rag._ragdollId);
+    if (it == s_Impl->ragdolls.end()) return RagdollActivity::None;
+
+    switch (it->second.reaction.kind) {
+        case RagReaction::Kind::Flinch:
+            return RagdollActivity::Flinching;
+        case RagReaction::Kind::GetUp:
+            return RagdollActivity::GettingUp;
+        case RagReaction::Kind::GetUpBlend:
+            return RagdollActivity::BlendingToAnimation;
+        default:
+            return RagdollActivity::None;
+    }
+}
+
 // Bind-pose standing hip clearance -- 0 until the ragdoll is built.
 float GetRagdollStandHipClearance(const RagdollComponent& rag) {
     if (!s_Impl || rag._ragdollId == 0xFFFFFFFFu) return 0.0f;
@@ -3257,6 +3301,52 @@ bool AddRagdollBoneImpulse(const RagdollComponent& rag, int boneIndex, glm::vec3
         return true;
     }
     return false;
+}
+
+RagdollImpactResult ApplyRagdollImpact(
+    RagdollComponent& rag, glm::vec3 worldPoint,
+    glm::vec3 impulse, RagdollHitReaction reaction)
+{
+    RagdollImpactResult result;
+    result.reaction = reaction;
+    if (!s_Impl || rag._ragdollId == 0xFFFFFFFFu
+        || !std::isfinite(worldPoint.x) || !std::isfinite(worldPoint.y)
+        || !std::isfinite(worldPoint.z) || !std::isfinite(impulse.x)
+        || !std::isfinite(impulse.y) || !std::isfinite(impulse.z))
+        return result;
+
+    auto it = s_Impl->ragdolls.find(rag._ragdollId);
+    if (it == s_Impl->ragdolls.end() || it->second.bodies.empty()) return result;
+    RagdollInstance& inst = it->second;
+    JPH::BodyInterface& bi = s_Impl->joltSystem->GetBodyInterface();
+
+    int nearestSlot = -1;
+    float nearestDistanceSq = std::numeric_limits<float>::max();
+    for (int slot = 0; slot < static_cast<int>(inst.bodies.size()); ++slot) {
+        const glm::vec3 center = FromJolt(bi.GetPosition(inst.bodies[slot].id));
+        const float distanceSq = glm::dot(center - worldPoint, center - worldPoint);
+        if (distanceSq < nearestDistanceSq) {
+            nearestDistanceSq = distanceSq;
+            nearestSlot = slot;
+        }
+    }
+    if (nearestSlot < 0) return result;
+
+    // A limp victim is already knocked down; keep it limp but still let follow-up
+    // hits move it. Flinch never promotes a limp body back to Powered.
+    if (reaction == RagdollHitReaction::Knockdown) {
+        if (inst.mode != RagdollMode::Limp)
+            SetRagdollMode(rag, RagdollMode::Limp);
+    } else if (reaction == RagdollHitReaction::Flinch
+               && inst.mode != RagdollMode::Limp) {
+        StartRagdollFlinch(*s_Impl, inst, rag);
+    }
+
+    const RagdollBody& struck = inst.bodies[nearestSlot];
+    bi.AddImpulse(struck.id, ToJolt(impulse), ToJolt(worldPoint));
+    result.applied = true;
+    result.boneIndex = struck.boneIndex;
+    return result;
 }
 
 // Per-step world torque on a bone's body -- the actuator for SIMBICON's virtual PD

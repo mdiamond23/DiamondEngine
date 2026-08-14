@@ -1084,11 +1084,18 @@
             rag, comp._legR.footIdx);
         const float horizontalSpeed = glm::length(glm::vec2(
             rag._locomotionRootVel.x, rag._locomotionRootVel.z));
+        // Contact and low velocity are not sufficient after a get-up: a foot can be
+        // motionless while resting on its side. Do not capture that pose as the new
+        // walking reference. Twenty degrees still tolerates ordinary ankle compliance.
+        constexpr float kStandingSoleUpY = 0.9396926f; // cos(20 degrees)
+        const bool solesWalkable = rag._locomotionFootSoleUpY[0] >= kStandingSoleUpY
+            && rag._locomotionFootSoleUpY[1] >= kStandingSoleUpY;
         const bool settledStanding = comp._physicalStepContactL && comp._physicalStepContactR
             && glm::length(leftVelocity) < 0.15f
             && glm::length(rightVelocity) < 0.15f
             && horizontalSpeed < 0.15f
-            && tiltDeg < 15.0f;
+            && tiltDeg < 15.0f
+            && solesWalkable;
         if (gameplayCommand && comp._physicalStepPhase == kIdle
             && !comp._gaitRunning
             && !comp._runtimeRestartBlocked
@@ -1706,6 +1713,11 @@
                         if (rotationOk) {
                             leg.groundReferenceFootHeadingLocalRotation = glm::normalize(
                                 glm::conjugate(startHeading) * footWorld);
+                            // Both legs become planted below. Initialize their actual
+                            // world anchors here as part of the same atomic gait-start
+                            // capture; leaving this at the reset identity made the first
+                            // post-get-up plan see a fictitious 30-180 degree sole error.
+                            leg.plantedFootWorldRotation = footWorld;
                         }
 
                         const glm::vec3 hip = physicalPosition(leg.hipIdx);
@@ -11778,8 +11790,12 @@
                                        && comp._physicalStepPhase <= kTouchdownWait;
             const float footTargetStep = previousFootOwned && currentFootOwned
                 ? glm::length(desiredFoot - previousDesiredFoot) : 0.0f;
-            const float supportTargetStep = glm::length(
-                supportTarget - previousSupportTarget);
+            // IDLE has no owned support command. Comparing a fresh world-space COM
+            // target to ResetPhysicalGait's zero sentinel produced bogus multi-meter
+            // jumps in recovery logs even though no command discontinuity occurred.
+            const float supportTargetStep = phaseAtFrameStart == kIdle
+                ? 0.0f
+                : glm::length(supportTarget - previousSupportTarget);
             const float supportCurveT = comp._gaitSupportCurveActive
                 ? comp._gaitSupportCurveTime
                     / glm::max(comp._gaitSupportCurveDuration, 0.01f)

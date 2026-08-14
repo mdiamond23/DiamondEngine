@@ -5,8 +5,8 @@
   "icon": "Assets/Materials/Lava004_2K-PNG/Lava004_2K-PNG_Color.png",
   "outputDir": "C:\\Dev\\Builds\\Test",
   "scenes": [
-    "Assets/Scenes/ProceduralTest.scene",
-    "Assets/Scenes/PhysicsTesting.scene"
+    "Assets/Scenes/CharacterTest.scene",
+    "Assets/Scenes/CamTest.scene"
   ],
   "title": "DiamondEngine",
   "width": 1600

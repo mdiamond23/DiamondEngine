@@ -24,7 +24,6 @@ namespace
 
     // ---- Gamepad state ----------------------------------------------------
 
-    constexpr int MaxGamepads        = 4;
     constexpr int GamepadButtonCount = 15; // GLFW_GAMEPAD_BUTTON_LAST + 1
     constexpr int GamepadAxisCount   = 6;  // GLFW_GAMEPAD_AXIS_LAST  + 1
     constexpr float StickDeadzone   = 0.1f;
@@ -38,7 +37,7 @@ namespace
         std::array<float, GamepadAxisCount>   axes{};
     };
 
-    std::array<GamepadState, MaxGamepads> s_gamepads;
+    std::array<GamepadState, Input::MaxGamepads> s_gamepads;
 
     // ---- Named bindings ---------------------------------------------------
 
@@ -136,7 +135,7 @@ namespace Input
         s_scrollY = 0.0f;
 
         // Poll all gamepads
-        for (int gid = 0; gid < MaxGamepads; ++gid)
+        for (int gid = 0; gid < Input::MaxGamepads; ++gid)
         {
             GamepadState& gs = s_gamepads[gid];
             gs.pressed.fill(false);

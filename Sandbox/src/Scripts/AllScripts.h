@@ -6,6 +6,7 @@
 #include "Move.h"
 #include "TriggerTest.h"
 #include "ArmControl.h"
+#include "PlayerInput.h"
 #include "Punch.h"
 #include "CameraDirector.h"
 #include "ParticleEmitterEditor.h"

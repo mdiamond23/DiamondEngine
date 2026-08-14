@@ -1,0 +1,262 @@
+{
+  "prefab": {
+    "entities": [
+      {
+        "animator": {
+          "clip": -1,
+          "loop": true,
+          "playing": true,
+          "speed": 1.0,
+          "time": 202.58544921875
+        },
+        "ik": {
+          "chains": [
+            {
+              "ankleHeight": 0.07999999821186066,
+              "boneCount": 2,
+              "castOffset": 0.5,
+              "easeTime": 0.07999999821186066,
+              "endEffectorBone": "Skeleton_arm_joint_L__2_",
+              "isFootChain": false,
+              "maxStepHeight": 0.5,
+              "poleOffset": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "solver": 0,
+              "swingThreshold": 0.10000000149011612,
+              "targetOffset": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "targetWorldPos": [
+                -1.817501425743103,
+                1.510084629058838,
+                -4.671512603759766
+              ],
+              "tiltToNormal": true,
+              "tiltWeight": 0.800000011920929,
+              "weight": 0.0
+            },
+            {
+              "ankleHeight": 0.07999999821186066,
+              "boneCount": 2,
+              "castOffset": 0.5,
+              "easeTime": 0.07999999821186066,
+              "endEffectorBone": "Skeleton_arm_joint_R__3_",
+              "isFootChain": false,
+              "maxStepHeight": 0.5,
+              "poleOffset": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "solver": 0,
+              "swingThreshold": 0.10000000149011612,
+              "targetOffset": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "targetWorldPos": [
+                -1.6355000734329224,
+                1.5100843906402588,
+                -4.671512603759766
+              ],
+              "tiltToNormal": true,
+              "tiltWeight": 0.800000011920929,
+              "weight": 0.0
+            }
+          ],
+          "maxPelvisDrop": 0.5,
+          "pelvisBone": "torso_joint_3",
+          "pelvisEaseTime": 0.10000000149011612
+        },
+        "name": "RagdollPlayer",
+        "ragdoll": {
+          "assetPath": "Assets/Models/CesiumMan.ragdoll",
+          "mode": 2
+        },
+        "scriptComponents": {
+          "CameraTarget": {},
+          "LocamotionController": {
+            "arrivalHeight": 0.05000000074505806,
+            "arrivalSettleDuration": 0.05000000074505806,
+            "arrivalTimeout": 0.4000000059604645,
+            "arrivalTolerance": 0.019999999552965164,
+            "consciousness": 1.0,
+            "contactSettleDuration": 0.30000001192092896,
+            "deadzone": 0.20000000298023224,
+            "debug": true,
+            "descentDuration": 0.20000000298023224,
+            "driftGrowthTolerance": 0.014999999664723873,
+            "facingOffsetDeg": 0.0,
+            "footTargetTolerance": 0.03999999910593033,
+            "gaitAdaptationEnabled": true,
+            "gaitAdaptationResponse": 0.25,
+            "gaitAssistedTurnEnabled": true,
+            "gaitAssistedTurnMaxSpeedDeg": 360.0,
+            "gaitAssistedTurnStrength": 1.0,
+            "gaitBlendTime": 0.10000000149011612,
+            "gaitCadenceFloorScale": 0.3499999940395355,
+            "gaitCrouchTime": 0.20000000298023224,
+            "gaitDesiredSpeed": 0.15000000596046448,
+            "gaitFootPositionGain": 0.699999988079071,
+            "gaitFootVelocityLeadTime": 0.11999999731779099,
+            "gaitHeadingDamping": 70.0,
+            "gaitHeadingMaxTorque": 140.0,
+            "gaitHeadingStiffness": 260.0,
+            "gaitInterStepHeadingLimit": 8.0,
+            "gaitInterStepRecenterTime": 0.20000000298023224,
+            "gaitInterStepTiltLimit": 15.0,
+            "gaitLandingLinearDampingTime": 0.07999999821186066,
+            "gaitMaxFootCorrection": 0.05999999865889549,
+            "gaitMaxFootSeparation": 0.18000000715255737,
+            "gaitMaxPeriodSlowdown": 0.4000000059604645,
+            "gaitMaxStepLength": 0.18000000715255737,
+            "gaitMaxStrideCorrection": 0.019999999552965164,
+            "gaitMaxTurnStepDeg": 20.0,
+            "gaitMinStepLength": 0.07999999821186066,
+            "gaitNominalAdvance": 0.11999999731779099,
+            "gaitPlacementGain": 0.75,
+            "gaitReachCrouch": 0.02500000037252903,
+            "gaitSoleAngularAcceleration": 18.0,
+            "gaitSoleAngularSpeedLimit": 3.25,
+            "gaitSoleLevelTime": 0.18000000715255737,
+            "gaitStopHoldTime": 0.5,
+            "gaitStopTime": 1.0,
+            "gaitStressStopThreshold": 3.0,
+            "gaitSupportMaxSpeed": 0.4000000059604645,
+            "gaitSupportTransportSpeed": 0.15000000596046448,
+            "gaitSwingAcceleration": 24.0,
+            "gaitSwingSpeedLimit": 2.0,
+            "gaitTargetStepPeriod": 0.5,
+            "gaitTurnAngularAcceleration": 18.0,
+            "gaitTurnAngularSpeedLimit": 3.25,
+            "gaitTurnFullAdvanceDeg": 10.0,
+            "gaitTurnInsideSwingSpeedLimit": 0.949999988079071,
+            "gaitTurnLinearAcceleration": 3.5,
+            "gaitTurnOutsideSwingSpeedLimit": 0.800000011920929,
+            "gaitTurnZeroAdvanceDeg": 30.0,
+            "gaitUprightDamping": 100.0,
+            "gaitUprightMaxTorque": 250.0,
+            "gaitUprightStiffness": 700.0,
+            "gaitUsableReachFraction": 0.9750000238418579,
+            "gaitValidationFloorScale": 0.20000000298023224,
+            "groundRayLength": 1.2000000476837158,
+            "hipLimitMarginDeg": 3.0,
+            "ikWriteEnabled": true,
+            "interStepDuration": 0.10000000149011612,
+            "leftFootBone": "leg_joint_L_5",
+            "liftFrequency": 8.0,
+            "liftMaxForce": 320.0,
+            "maxLegReachFraction": 0.9399999976158142,
+            "maxSpeed": 1.0,
+            "minWalkSpeed": 0.15000000596046448,
+            "plantAcquireDuration": 0.05000000074505806,
+            "plantAcquireMaxSpeed": 0.07999999821186066,
+            "plantAcquireTimeout": 0.6000000238418579,
+            "plantTimeout": 0.3499999940395355,
+            "poseWeight": 1.0,
+            "postPoweredGrace": 0.4000000059604645,
+            "rightFootBone": "leg_joint_R_5",
+            "safeReachFraction": 0.9900000095367432,
+            "standingPoseResponse": 0.10000000149011612,
+            "stepLength": 0.22499999403953552,
+            "supportBias": 0.9200000166893005,
+            "supportFrequency": 2.200000047683716,
+            "supportMaxAcceleration": 5.0,
+            "swingDuration": 0.5,
+            "swingHeight": 0.10000000149011612,
+            "takeoffHeight": 0.05000000074505806,
+            "takeoffTimeout": 0.5,
+            "torsoBone": "torso_joint_3",
+            "touchdownMaxAngularSpeed": 3.0,
+            "touchdownMaxCommandSpeed": 0.25,
+            "touchdownMaxHorizontalSpeed": 0.6499999761581421,
+            "touchdownMaxVerticalSpeed": 0.5,
+            "touchdownMinNormalY": 0.699999988079071,
+            "touchdownMinTrajectoryProgress": 0.9200000166893005,
+            "transferComTolerance": 0.03999999910593033,
+            "transferDuration": 0.4000000059604645,
+            "transferHoldDuration": 0.5,
+            "transferSupportBias": 0.75,
+            "transferTimeout": 1.0,
+            "uprightScale": 1.0,
+            "weightShiftDuration": 0.6000000238418579
+          },
+          "PlayerInput": {
+            "gamepadId": 0,
+            "inputEnabled": true
+          },
+          "Punch": {
+            "grabIgnoreHolder": true,
+            "grabRadius": 0.15000000596046448,
+            "grabRange": 0.3499999940395355,
+            "grabResponse": 4.0,
+            "grabStrength": 800.0,
+            "leftHandBone": "Skeleton_arm_joint_L__2_",
+            "modelForward": [
+              1.0,
+              0.0,
+              0.0
+            ],
+            "punchEase": 0.07999999821186066,
+            "punchImpulse": 12.0,
+            "reach": 5.0,
+            "rightHandBone": "Skeleton_arm_joint_R__3_",
+            "shoulderHeight": 1.2999999523162842
+          }
+        },
+        "skinnedMesh": {
+          "albedoPath": "",
+          "alphaCutoff": 0.5,
+          "alphaMode": "opaque",
+          "aoPath": "",
+          "baseColorFactor": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "castsShadow": true,
+          "emissivePath": "",
+          "emissiveStrength": 0.0,
+          "meshPath": "Assets/Models/CesiumMan.glb",
+          "metallicPath": "",
+          "normalPath": "",
+          "roughnessPath": "",
+          "uvScale": 1.0,
+          "visible": true
+        },
+        "transform": {
+          "eulerDegrees": [
+            -90.0,
+            90.0,
+            0.0
+          ],
+          "position": [
+            -1.721505045890808,
+            0.436084508895874,
+            0.32423630356788635
+          ],
+          "rotation": [
+            -0.49999958276748657,
+            0.500000536441803,
+            -0.499999463558197,
+            -0.5000004172325134
+          ],
+          "scale": [
+            0.9999998211860657,
+            0.9999998211860657,
+            0.9999998211860657
+          ]
+        },
+        "uuid": 6818450401873832087
+      }
+    ],
+    "root": 6818450401873832087
+  }
+}

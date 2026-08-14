@@ -1921,6 +1921,38 @@ void InspectorPanel::OnImGuiRender() {
             ImGui::Text("%zu bones, %zu submeshes, %zu clips",
                         smc.skeleton.bones.size(), smc.meshes.size(), smc.clips.size());
 
+            // Per-instance color multiply. Scene loading gives each skinned entity a
+            // private material copy, so tinting one prefab instance never recolors its
+            // siblings. The renderer already consumes BaseColorFactor for skinned draws;
+            // this is the missing authoring control for it.
+            if (!smc.material)
+                smc.material = std::make_shared<PBRMaterial>();
+            ImGui::Spacing();
+            ImGui::TextDisabled("Appearance");
+            glm::vec4& skinnedTint = smc.material->BaseColorFactor;
+            if (ImGui::ColorEdit3("Tint##SkinnedMesh", glm::value_ptr(skinnedTint))) {
+                if (m_MaterialInvalidator)
+                    m_MaterialInvalidator(smc.material.get());
+            }
+            if (ImGui::IsItemActivated()) s_uiOldVec4 = skinnedTint;
+            if (ImGui::IsItemDeactivatedAfterEdit()) {
+                const glm::vec4 oldTint = s_uiOldVec4;
+                const glm::vec4 newTint = skinnedTint;
+                const auto invalidate = m_MaterialInvalidator;
+                auto applyTint = [scene, entity, invalidate](const glm::vec4& tint) {
+                    auto& mesh = scene->GetRegistry().get<SkinnedMeshComponent>(entity);
+                    if (!mesh.material)
+                        mesh.material = std::make_shared<PBRMaterial>();
+                    mesh.material->BaseColorFactor = tint;
+                    if (invalidate) invalidate(mesh.material.get());
+                };
+                m_Context->Commands.RecordCommand(std::make_unique<FunctionCommand>(
+                    [applyTint, newTint]() { applyTint(newTint); },
+                    [applyTint, oldTint]() { applyTint(oldTint); },
+                    "Change Skinned Mesh Tint"));
+            }
+            ImGui::TextDisabled("Multiplies the imported albedo; white keeps its original color.");
+
             if (!smc.clips.empty()) {
                 ImGui::Spacing();
                 ImGui::TextDisabled("Clips");

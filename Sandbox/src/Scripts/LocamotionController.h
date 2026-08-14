@@ -11,6 +11,7 @@
 #include "DebugDraw.h"
 #include "CameraDirector.h"
 #include "LocomotionGaitRuntime.h"
+#include "PlayerInput.h"
 
 #include <imgui.h>
 #include <nlohmann/json.hpp>
@@ -1149,52 +1150,43 @@ class LocamotionControllerSystem : public GameSystem
     using Leg  = LocamotionControllerComponent::LegState;
 
 public:
-    void OnStart(Scene&) override
-    {
-        // Input::BindAxis("MoveX", Key::D, Key::A);
-        // Input::BindAxis("MoveY", Key::S, Key::W);
-
-        Input::BindAxis("MoveX", GamepadAxis::LeftX);
-        Input::BindAxis("MoveY", GamepadAxis::LeftY);
-    }
-
     void OnUpdate(Scene& scene, float dt) override
     {
-        const float inputX = Input::GetAxis("MoveX");
-        const float inputY = -Input::GetAxis("MoveY");
-        const float magnitude = glm::min(
-            glm::length(glm::vec2(inputX, inputY)), 1.0f);
-
         glm::vec3 cameraRight, cameraForward;
         CameraRelativeBasis(scene, cameraRight, cameraForward);
 
         for (auto [entity, comp] : scene.View<Comp>().each()) {
             if (!scene.Has<RagdollComponent>(entity)
                 || !scene.Has<TransformComponent>(entity)) continue;
+            const PlayerCommandState command = PlayerInput::ReadCommandOrDefault(scene, entity);
+            const float inputX = command.move.x;
+            const float inputY = command.move.y;
+            const float magnitude = glm::min(
+                glm::length(command.move), 1.0f);
             auto& rag = scene.Get<RagdollComponent>(entity);
             auto& transform = scene.Get<TransformComponent>(entity);
 
+            // Flinch/get-up temporarily use Powered bodies too, but physics owns the
+            // pose and pelvis during those moves. Never let the gait capture plants,
+            // support targets, or phase state from a recovery pose.
+            if (Physics::GetRagdollActivity(rag)
+                != Physics::RagdollActivity::None) {
+                SuspendLocomotion(comp, rag);
+                comp._timeSincePowered = 0.0f;
+                continue;
+            }
+
             if (rag.mode == RagdollMode::Animated) {
+                // Initial activation and the get-up handoff both pass through
+                // Animated. Start from a clean standing state before reclaiming the
+                // dynamic rig; otherwise pre-knockdown foot plants survive recovery.
+                SuspendLocomotion(comp, rag);
                 Physics::SetRagdollMode(rag, RagdollMode::Powered);
                 comp._timeSincePowered = 0.0f;
             }
             if (rag.mode != RagdollMode::Powered) {
-                rag.locomotionActive = false;
-                rag.locomotionTorqueUpright = false;
-                rag.locomotionSimbicon = false;
-                rag.locomotionSimbiconBlend = 0.0f;
-                rag.locomotionHipTorque[0] =
-                    rag.locomotionHipTorque[1] = glm::vec3(0.0f);
-                rag.locomotionHipBones[0] = rag.locomotionHipBones[1] = -1;
-                rag.locomotionLiftBone = -1;
-                rag.locomotionFootLockBones[0] =
-                    rag.locomotionFootLockBones[1] = -1;
-                rag.locomotionFootLockWeights[0] =
-                    rag.locomotionFootLockWeights[1] = 0.0f;
-                rag.locomotionHeightOffset = 0.0f;
-                comp._gaitEnabled = false;
-                ResetGait(comp);
-                ResetPhysicalGait(comp);
+                SuspendLocomotion(comp, rag);
+                comp._timeSincePowered = 0.0f;
                 continue;
             }
 
@@ -1551,6 +1543,31 @@ private:
         c._desiredVelocity = glm::vec3(0.0f);
         c._legL = {};
         c._legR = {};
+    }
+
+    static void SuspendLocomotion(Comp& c, RagdollComponent& rag)
+    {
+        rag.locomotionActive = false;
+        rag.locomotionTorqueUpright = false;
+        rag.locomotionSimbicon = false;
+        rag.locomotionSimbiconBlend = 0.0f;
+        rag.locomotionTargetVel = glm::vec3(0.0f);
+        rag.locomotionSupportTargetWeight = 0.0f;
+        rag.locomotionSupportTargetVel = glm::vec3(0.0f);
+        rag.locomotionHipTorque[0] =
+            rag.locomotionHipTorque[1] = glm::vec3(0.0f);
+        rag.locomotionHipBones[0] = rag.locomotionHipBones[1] = -1;
+        rag.locomotionLiftBone = -1;
+        rag.locomotionFootLockBones[0] =
+            rag.locomotionFootLockBones[1] = -1;
+        rag.locomotionFootLockWeights[0] =
+            rag.locomotionFootLockWeights[1] = 0.0f;
+        rag.locomotionHeightOffset = 0.0f;
+        for (int& bone : rag.locomotionDisabledMotorBones) bone = -1;
+
+        c._gaitEnabled = false;
+        ResetGait(c);
+        ResetPhysicalGait(c);
     }
 
 #include "LocomotionPhysicalGait.inl"
