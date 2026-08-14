@@ -1,0 +1,2766 @@
+{
+  "entities": [
+    {
+      "light": {
+        "color": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "innerConeAngle": 15.0,
+        "intensity": 137.0,
+        "outerConeAngle": 30.0,
+        "radius": 10.0,
+        "type": 0
+      },
+      "name": "Sun",
+      "skylight": {
+        "environmentPath": "Assets/Skyboxes/citrus_orchard_puresky_4k.hdr",
+        "intensity": 2.559999942779541
+      },
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "position": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 11512232230528117879
+    },
+    {
+      "ddgiVolume": {
+        "backfaceThreshold": 0.25,
+        "energy": 1.0,
+        "extent": [
+          24.0,
+          10.0,
+          24.0
+        ],
+        "hysteresis": 0.9700000286102295,
+        "maxRayDistance": 40.0,
+        "normalBias": 0.15000000596046448,
+        "probeCountX": 16,
+        "probeCountY": 8,
+        "probeCountZ": 8,
+        "probeRadius": 0.15000000596046448,
+        "raysPerProbe": 64,
+        "showProbes": false,
+        "viewBias": 0.10000000149011612
+      },
+      "name": "DDGI Volume",
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "position": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 12606632449759212988
+    },
+    {
+      "mesh": {
+        "albedoPath": "",
+        "alphaCutoff": 0.5,
+        "alphaMode": "opaque",
+        "aoPath": "",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "castsShadow": true,
+        "emissivePath": "",
+        "emissiveStrength": 0.0,
+        "materialPath": "",
+        "meshPath": "Assets/Models/ABeautifulGame.glb",
+        "meshSubIndex": 14,
+        "metallicPath": "",
+        "normalPath": "",
+        "receivesShadow": true,
+        "roughnessPath": "",
+        "staticShadowCaster": true,
+        "transparent": false,
+        "uvScale": 1.0,
+        "visible": true
+      },
+      "name": "Bishop_W1",
+      "parentUuid": 10776734247461800114,
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          -0.0,
+          0.0
+        ],
+        "position": [
+          0.090296670794487,
+          0.01697981357574463,
+          -0.2176361083984375
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 18185709107552311179
+    },
+    {
+      "name": "ABeautifulGame",
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "position": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 10776734247461800114
+    },
+    {
+      "mesh": {
+        "albedoPath": "",
+        "alphaCutoff": 0.5,
+        "alphaMode": "opaque",
+        "aoPath": "",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "castsShadow": true,
+        "emissivePath": "",
+        "emissiveStrength": 0.0,
+        "materialPath": "",
+        "meshPath": "Assets/Models/ABeautifulGame.glb",
+        "meshSubIndex": 14,
+        "metallicPath": "",
+        "normalPath": "",
+        "receivesShadow": true,
+        "roughnessPath": "",
+        "staticShadowCaster": true,
+        "transparent": false,
+        "uvScale": 1.0,
+        "visible": true
+      },
+      "name": "Bishop_W2",
+      "parentUuid": 10776734247461800114,
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          -0.0,
+          0.0
+        ],
+        "position": [
+          -0.09416553378105164,
+          0.01697981357574463,
+          -0.22063007950782776
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 18326066969277851268
+    },
+    {
+      "mesh": {
+        "albedoPath": "",
+        "alphaCutoff": 0.5,
+        "alphaMode": "opaque",
+        "aoPath": "",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "castsShadow": true,
+        "emissivePath": "",
+        "emissiveStrength": 0.0,
+        "materialPath": "",
+        "meshPath": "Assets/Models/ABeautifulGame.glb",
+        "meshSubIndex": 0,
+        "metallicPath": "",
+        "normalPath": "",
+        "receivesShadow": true,
+        "roughnessPath": "",
+        "staticShadowCaster": true,
+        "transparent": false,
+        "uvScale": 1.0,
+        "visible": true
+      },
+      "name": "King_B",
+      "parentUuid": 10776734247461800114,
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          -0.0,
+          0.0
+        ],
+        "position": [
+          -0.03142297640442848,
+          0.0174538753926754,
+          0.22009074687957764
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 14811963663302523628
+    },
+    {
+      "mesh": {
+        "albedoPath": "",
+        "alphaCutoff": 0.5,
+        "alphaMode": "opaque",
+        "aoPath": "",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "castsShadow": true,
+        "emissivePath": "",
+        "emissiveStrength": 0.0,
+        "materialPath": "",
+        "meshPath": "Assets/Models/ABeautifulGame.glb",
+        "meshSubIndex": 6,
+        "metallicPath": "",
+        "normalPath": "",
+        "receivesShadow": true,
+        "roughnessPath": "",
+        "staticShadowCaster": true,
+        "transparent": false,
+        "uvScale": 1.0,
+        "visible": true
+      },
+      "name": "Pawn_Body_W7",
+      "parentUuid": 10776734247461800114,
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          -0.0,
+          0.0
+        ],
+        "position": [
+          -0.1564229130744934,
+          0.014927003532648087,
+          -0.1564216911792755
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 9023329924361135252
+    },
+    {
+      "mesh": {
+        "albedoPath": "",
+        "alphaCutoff": 0.5,
+        "alphaMode": "opaque",
+        "aoPath": "",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "castsShadow": true,
+        "emissivePath": "",
+        "emissiveStrength": 0.0,
+        "materialPath": "",
+        "meshPath": "Assets/Models/ABeautifulGame.glb",
+        "meshSubIndex": 1,
+        "metallicPath": "",
+        "normalPath": "",
+        "receivesShadow": true,
+        "roughnessPath": "",
+        "staticShadowCaster": true,
+        "transparent": false,
+        "uvScale": 1.0,
+        "visible": true
+      },
+      "name": "King_W",
+      "parentUuid": 10776734247461800114,
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          -0.0,
+          0.0
+        ],
+        "position": [
+          -0.03176186978816986,
+          0.01745394617319107,
+          -0.22027580440044403
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 4444692655253916281
+    },
+    {
+      "mesh": {
+        "albedoPath": "",
+        "alphaCutoff": 0.5,
+        "alphaMode": "opaque",
+        "aoPath": "",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          0.828000009059906,
+          1.0
+        ],
+        "castsShadow": true,
+        "emissivePath": "",
+        "emissiveStrength": 0.0,
+        "materialPath": "",
+        "meshPath": "Assets/Models/ABeautifulGame.glb",
+        "meshSubIndex": 5,
+        "metallicPath": "",
+        "normalPath": "",
+        "receivesShadow": true,
+        "roughnessPath": "",
+        "staticShadowCaster": true,
+        "transparent": false,
+        "uvScale": 1.0,
+        "visible": true
+      },
+      "name": "Pawn_Top_W7",
+      "parentUuid": 10776734247461800114,
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          -0.0,
+          0.0
+        ],
+        "position": [
+          -0.1876729130744934,
+          3.725290298461914e-09,
+          -0.1251716911792755
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 11475922752028419807
+    },
+    {
+      "mesh": {
+        "albedoPath": "",
+        "alphaCutoff": 0.5,
+        "alphaMode": "opaque",
+        "aoPath": "",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "castsShadow": true,
+        "emissivePath": "",
+        "emissiveStrength": 0.0,
+        "materialPath": "",
+        "meshPath": "Assets/Models/ABeautifulGame.glb",
+        "meshSubIndex": 2,
+        "metallicPath": "",
+        "normalPath": "",
+        "receivesShadow": true,
+        "roughnessPath": "",
+        "staticShadowCaster": true,
+        "transparent": false,
+        "uvScale": 1.0,
+        "visible": true
+      },
+      "name": "Queen_B",
+      "parentUuid": 10776734247461800114,
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          -0.0,
+          0.0
+        ],
+        "position": [
+          0.030731208622455597,
+          0.01762339472770691,
+          0.21983970701694489
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 16724345509023088763
+    },
+    {
+      "mesh": {
+        "albedoPath": "",
+        "alphaCutoff": 0.5,
+        "alphaMode": "opaque",
+        "aoPath": "",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "castsShadow": true,
+        "emissivePath": "",
+        "emissiveStrength": 0.0,
+        "materialPath": "",
+        "meshPath": "Assets/Models/ABeautifulGame.glb",
+        "meshSubIndex": 3,
+        "metallicPath": "",
+        "normalPath": "",
+        "receivesShadow": true,
+        "roughnessPath": "",
+        "staticShadowCaster": true,
+        "transparent": false,
+        "uvScale": 1.0,
+        "visible": true
+      },
+      "name": "Queen_W",
+      "parentUuid": 10776734247461800114,
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          -0.0,
+          0.0
+        ],
+        "position": [
+          0.03090556710958481,
+          0.01686232164502144,
+          -0.22027580440044403
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 11034418315851740468
+    },
+    {
+      "mesh": {
+        "albedoPath": "",
+        "alphaCutoff": 0.5,
+        "alphaMode": "opaque",
+        "aoPath": "",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "castsShadow": true,
+        "emissivePath": "",
+        "emissiveStrength": 0.0,
+        "materialPath": "",
+        "meshPath": "Assets/Models/ABeautifulGame.glb",
+        "meshSubIndex": 4,
+        "metallicPath": "",
+        "normalPath": "",
+        "receivesShadow": true,
+        "roughnessPath": "",
+        "staticShadowCaster": true,
+        "transparent": false,
+        "uvScale": 1.0,
+        "visible": true
+      },
+      "name": "Chessboard",
+      "parentUuid": 10776734247461800114,
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          -0.0,
+          0.0
+        ],
+        "position": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 17227386708616804694
+    },
+    {
+      "mesh": {
+        "albedoPath": "",
+        "alphaCutoff": 0.5,
+        "alphaMode": "opaque",
+        "aoPath": "",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "castsShadow": true,
+        "emissivePath": "",
+        "emissiveStrength": 0.0,
+        "materialPath": "",
+        "meshPath": "Assets/Models/ABeautifulGame.glb",
+        "meshSubIndex": 6,
+        "metallicPath": "",
+        "normalPath": "",
+        "receivesShadow": true,
+        "roughnessPath": "",
+        "staticShadowCaster": true,
+        "transparent": false,
+        "uvScale": 1.0,
+        "visible": true
+      },
+      "name": "Pawn_Body_W1",
+      "parentUuid": 10776734247461800114,
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          -0.0,
+          0.0
+        ],
+        "position": [
+          0.21845926344394684,
+          0.014926999807357788,
+          -0.15599016845226288
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 5786332135208010309
+    },
+    {
+      "mesh": {
+        "albedoPath": "",
+        "alphaCutoff": 0.5,
+        "alphaMode": "opaque",
+        "aoPath": "",
+        "baseColorFactor": [
+          0.2994999885559082,
+          0.5,
+          0.44999998807907104,
+          1.0
+        ],
+        "castsShadow": true,
+        "emissivePath": "",
+        "emissiveStrength": 0.0,
+        "materialPath": "",
+        "meshPath": "Assets/Models/ABeautifulGame.glb",
+        "meshSubIndex": 7,
+        "metallicPath": "",
+        "normalPath": "",
+        "receivesShadow": true,
+        "roughnessPath": "",
+        "staticShadowCaster": true,
+        "transparent": false,
+        "uvScale": 1.0,
+        "visible": true
+      },
+      "name": "Pawn_Top_B1",
+      "parentUuid": 10776734247461800114,
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          -0.0,
+          0.0
+        ],
+        "position": [
+          -0.2504820227622986,
+          7.450580596923828e-09,
+          0.18763446807861328
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 17167543913201814392
+    },
+    {
+      "mesh": {
+        "albedoPath": "",
+        "alphaCutoff": 0.5,
+        "alphaMode": "opaque",
+        "aoPath": "",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          0.828000009059906,
+          1.0
+        ],
+        "castsShadow": true,
+        "emissivePath": "",
+        "emissiveStrength": 0.0,
+        "materialPath": "",
+        "meshPath": "Assets/Models/ABeautifulGame.glb",
+        "meshSubIndex": 5,
+        "metallicPath": "",
+        "normalPath": "",
+        "receivesShadow": true,
+        "roughnessPath": "",
+        "staticShadowCaster": true,
+        "transparent": false,
+        "uvScale": 1.0,
+        "visible": true
+      },
+      "name": "Pawn_Top_W1",
+      "parentUuid": 10776734247461800114,
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          -0.0,
+          0.0
+        ],
+        "position": [
+          0.18720926344394684,
+          0.0,
+          -0.12474016845226288
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 11921049713990773847
+    },
+    {
+      "mesh": {
+        "albedoPath": "",
+        "alphaCutoff": 0.5,
+        "alphaMode": "opaque",
+        "aoPath": "",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "castsShadow": true,
+        "emissivePath": "",
+        "emissiveStrength": 0.0,
+        "materialPath": "",
+        "meshPath": "Assets/Models/ABeautifulGame.glb",
+        "meshSubIndex": 8,
+        "metallicPath": "",
+        "normalPath": "",
+        "receivesShadow": true,
+        "roughnessPath": "",
+        "staticShadowCaster": true,
+        "transparent": false,
+        "uvScale": 1.0,
+        "visible": true
+      },
+      "name": "Pawn_Body_B2",
+      "parentUuid": 10776734247461800114,
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          -0.0,
+          0.0
+        ],
+        "position": [
+          -0.15673714876174927,
+          0.014927007257938385,
+          0.15617261826992035
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 12531107154412482028
+    },
+    {
+      "mesh": {
+        "albedoPath": "",
+        "alphaCutoff": 0.5,
+        "alphaMode": "opaque",
+        "aoPath": "",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "castsShadow": true,
+        "emissivePath": "",
+        "emissiveStrength": 0.0,
+        "materialPath": "",
+        "meshPath": "Assets/Models/ABeautifulGame.glb",
+        "meshSubIndex": 6,
+        "metallicPath": "",
+        "normalPath": "",
+        "receivesShadow": true,
+        "roughnessPath": "",
+        "staticShadowCaster": true,
+        "transparent": false,
+        "uvScale": 1.0,
+        "visible": true
+      },
+      "name": "Pawn_Body_W2",
+      "parentUuid": 10776734247461800114,
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          -0.0,
+          0.0
+        ],
+        "position": [
+          0.15633293986320496,
+          0.014926999807357788,
+          -0.15608981251716614
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 10102988085129198824
+    },
+    {
+      "mesh": {
+        "albedoPath": "",
+        "alphaCutoff": 0.5,
+        "alphaMode": "opaque",
+        "aoPath": "",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          0.828000009059906,
+          1.0
+        ],
+        "castsShadow": true,
+        "emissivePath": "",
+        "emissiveStrength": 0.0,
+        "materialPath": "",
+        "meshPath": "Assets/Models/ABeautifulGame.glb",
+        "meshSubIndex": 5,
+        "metallicPath": "",
+        "normalPath": "",
+        "receivesShadow": true,
+        "roughnessPath": "",
+        "staticShadowCaster": true,
+        "transparent": false,
+        "uvScale": 1.0,
+        "visible": true
+      },
+      "name": "Pawn_Top_W2",
+      "parentUuid": 10776734247461800114,
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          -0.0,
+          0.0
+        ],
+        "position": [
+          0.12508293986320496,
+          0.0,
+          -0.12483981251716614
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 15593796627193318456
+    },
+    {
+      "mesh": {
+        "albedoPath": "",
+        "alphaCutoff": 0.5,
+        "alphaMode": "opaque",
+        "aoPath": "",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "castsShadow": true,
+        "emissivePath": "",
+        "emissiveStrength": 0.0,
+        "materialPath": "",
+        "meshPath": "Assets/Models/ABeautifulGame.glb",
+        "meshSubIndex": 6,
+        "metallicPath": "",
+        "normalPath": "",
+        "receivesShadow": true,
+        "roughnessPath": "",
+        "staticShadowCaster": true,
+        "transparent": false,
+        "uvScale": 1.0,
+        "visible": true
+      },
+      "name": "Pawn_Body_W3",
+      "parentUuid": 10776734247461800114,
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          -0.0,
+          0.0
+        ],
+        "position": [
+          0.09358328580856323,
+          0.014926999807357788,
+          -0.09414908289909363
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 6259673724422689236
+    },
+    {
+      "mesh": {
+        "albedoPath": "",
+        "alphaCutoff": 0.5,
+        "alphaMode": "opaque",
+        "aoPath": "",
+        "baseColorFactor": [
+          0.2994999885559082,
+          0.5,
+          0.44999998807907104,
+          1.0
+        ],
+        "castsShadow": true,
+        "emissivePath": "",
+        "emissiveStrength": 0.0,
+        "materialPath": "",
+        "meshPath": "Assets/Models/ABeautifulGame.glb",
+        "meshSubIndex": 7,
+        "metallicPath": "",
+        "normalPath": "",
+        "receivesShadow": true,
+        "roughnessPath": "",
+        "staticShadowCaster": true,
+        "transparent": false,
+        "uvScale": 1.0,
+        "visible": true
+      },
+      "name": "Pawn_Top_B3",
+      "parentUuid": 10776734247461800114,
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          -0.0,
+          0.0
+        ],
+        "position": [
+          -0.1250685751438141,
+          7.450580596923828e-09,
+          0.1875285506248474
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 4911825393095371885
+    },
+    {
+      "mesh": {
+        "albedoPath": "",
+        "alphaCutoff": 0.5,
+        "alphaMode": "opaque",
+        "aoPath": "",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          0.828000009059906,
+          1.0
+        ],
+        "castsShadow": true,
+        "emissivePath": "",
+        "emissiveStrength": 0.0,
+        "materialPath": "",
+        "meshPath": "Assets/Models/ABeautifulGame.glb",
+        "meshSubIndex": 5,
+        "metallicPath": "",
+        "normalPath": "",
+        "receivesShadow": true,
+        "roughnessPath": "",
+        "staticShadowCaster": true,
+        "transparent": false,
+        "uvScale": 1.0,
+        "visible": true
+      },
+      "name": "Pawn_Top_W3",
+      "parentUuid": 10776734247461800114,
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          -0.0,
+          0.0
+        ],
+        "position": [
+          0.06233328580856323,
+          0.0,
+          -0.06289908289909363
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 7010166767246917191
+    },
+    {
+      "mesh": {
+        "albedoPath": "",
+        "alphaCutoff": 0.5,
+        "alphaMode": "opaque",
+        "aoPath": "",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "castsShadow": true,
+        "emissivePath": "",
+        "emissiveStrength": 0.0,
+        "materialPath": "",
+        "meshPath": "Assets/Models/ABeautifulGame.glb",
+        "meshSubIndex": 8,
+        "metallicPath": "",
+        "normalPath": "",
+        "receivesShadow": true,
+        "roughnessPath": "",
+        "staticShadowCaster": true,
+        "transparent": false,
+        "uvScale": 1.0,
+        "visible": true
+      },
+      "name": "Pawn_Body_B4",
+      "parentUuid": 10776734247461800114,
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          -0.0,
+          0.0
+        ],
+        "position": [
+          -0.03132370114326477,
+          0.014927007257938385,
+          0.09357181191444397
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 17029883064901173621
+    },
+    {
+      "mesh": {
+        "albedoPath": "",
+        "alphaCutoff": 0.5,
+        "alphaMode": "opaque",
+        "aoPath": "",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "castsShadow": true,
+        "emissivePath": "",
+        "emissiveStrength": 0.0,
+        "materialPath": "",
+        "meshPath": "Assets/Models/ABeautifulGame.glb",
+        "meshSubIndex": 6,
+        "metallicPath": "",
+        "normalPath": "",
+        "receivesShadow": true,
+        "roughnessPath": "",
+        "staticShadowCaster": true,
+        "transparent": false,
+        "uvScale": 1.0,
+        "visible": true
+      },
+      "name": "Pawn_Body_W4",
+      "parentUuid": 10776734247461800114,
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          -0.0,
+          0.0
+        ],
+        "position": [
+          0.03124999813735485,
+          0.014926999807357788,
+          -0.03124999813735485
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 13651624763830351031
+    },
+    {
+      "mesh": {
+        "albedoPath": "",
+        "alphaCutoff": 0.5,
+        "alphaMode": "opaque",
+        "aoPath": "",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          0.828000009059906,
+          1.0
+        ],
+        "castsShadow": true,
+        "emissivePath": "",
+        "emissiveStrength": 0.0,
+        "materialPath": "",
+        "meshPath": "Assets/Models/ABeautifulGame.glb",
+        "meshSubIndex": 5,
+        "metallicPath": "",
+        "normalPath": "",
+        "receivesShadow": true,
+        "roughnessPath": "",
+        "staticShadowCaster": true,
+        "transparent": false,
+        "uvScale": 1.0,
+        "visible": true
+      },
+      "name": "Pawn_Top_W4",
+      "parentUuid": 10776734247461800114,
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          -0.0,
+          0.0
+        ],
+        "position": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 17814870280813943366
+    },
+    {
+      "mesh": {
+        "albedoPath": "",
+        "alphaCutoff": 0.5,
+        "alphaMode": "opaque",
+        "aoPath": "",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "castsShadow": true,
+        "emissivePath": "",
+        "emissiveStrength": 0.0,
+        "materialPath": "",
+        "meshPath": "Assets/Models/ABeautifulGame.glb",
+        "meshSubIndex": 6,
+        "metallicPath": "",
+        "normalPath": "",
+        "receivesShadow": true,
+        "roughnessPath": "",
+        "staticShadowCaster": true,
+        "transparent": false,
+        "uvScale": 1.0,
+        "visible": true
+      },
+      "name": "Pawn_Body_W5",
+      "parentUuid": 10776734247461800114,
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          -0.0,
+          0.0
+        ],
+        "position": [
+          -0.031169699504971504,
+          0.014926999807357788,
+          -0.1564261019229889
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 9084705569321640395
+    },
+    {
+      "mesh": {
+        "albedoPath": "",
+        "alphaCutoff": 0.5,
+        "alphaMode": "opaque",
+        "aoPath": "",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          0.828000009059906,
+          1.0
+        ],
+        "castsShadow": true,
+        "emissivePath": "",
+        "emissiveStrength": 0.0,
+        "materialPath": "",
+        "meshPath": "Assets/Models/ABeautifulGame.glb",
+        "meshSubIndex": 5,
+        "metallicPath": "",
+        "normalPath": "",
+        "receivesShadow": true,
+        "roughnessPath": "",
+        "staticShadowCaster": true,
+        "transparent": false,
+        "uvScale": 1.0,
+        "visible": true
+      },
+      "name": "Pawn_Top_W5",
+      "parentUuid": 10776734247461800114,
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          -0.0,
+          0.0
+        ],
+        "position": [
+          -0.062419697642326355,
+          0.0,
+          -0.1251761019229889
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 11117998531301149967
+    },
+    {
+      "mesh": {
+        "albedoPath": "",
+        "alphaCutoff": 0.5,
+        "alphaMode": "opaque",
+        "aoPath": "",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "castsShadow": true,
+        "emissivePath": "",
+        "emissiveStrength": 0.0,
+        "materialPath": "",
+        "meshPath": "Assets/Models/ABeautifulGame.glb",
+        "meshSubIndex": 6,
+        "metallicPath": "",
+        "normalPath": "",
+        "receivesShadow": true,
+        "roughnessPath": "",
+        "staticShadowCaster": true,
+        "transparent": false,
+        "uvScale": 1.0,
+        "visible": true
+      },
+      "name": "Pawn_Body_W6",
+      "parentUuid": 10776734247461800114,
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          -0.0,
+          0.0
+        ],
+        "position": [
+          -0.09379050135612488,
+          0.014926999807357788,
+          -0.1562434285879135
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 3046701246469053075
+    },
+    {
+      "mesh": {
+        "albedoPath": "",
+        "alphaCutoff": 0.5,
+        "alphaMode": "opaque",
+        "aoPath": "",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          0.828000009059906,
+          1.0
+        ],
+        "castsShadow": true,
+        "emissivePath": "",
+        "emissiveStrength": 0.0,
+        "materialPath": "",
+        "meshPath": "Assets/Models/ABeautifulGame.glb",
+        "meshSubIndex": 5,
+        "metallicPath": "",
+        "normalPath": "",
+        "receivesShadow": true,
+        "roughnessPath": "",
+        "staticShadowCaster": true,
+        "transparent": false,
+        "uvScale": 1.0,
+        "visible": true
+      },
+      "name": "Pawn_Top_W6",
+      "parentUuid": 10776734247461800114,
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          -0.0,
+          0.0
+        ],
+        "position": [
+          -0.12504050135612488,
+          0.0,
+          -0.12499342858791351
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 9218669218808583802
+    },
+    {
+      "mesh": {
+        "albedoPath": "",
+        "alphaCutoff": 0.5,
+        "alphaMode": "opaque",
+        "aoPath": "",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "castsShadow": true,
+        "emissivePath": "",
+        "emissiveStrength": 0.0,
+        "materialPath": "",
+        "meshPath": "Assets/Models/ABeautifulGame.glb",
+        "meshSubIndex": 6,
+        "metallicPath": "",
+        "normalPath": "",
+        "receivesShadow": true,
+        "roughnessPath": "",
+        "staticShadowCaster": true,
+        "transparent": false,
+        "uvScale": 1.0,
+        "visible": true
+      },
+      "name": "Pawn_Body_W8",
+      "parentUuid": 10776734247461800114,
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          -0.0,
+          0.0
+        ],
+        "position": [
+          -0.21923202276229858,
+          0.014927007257938385,
+          -0.15629565715789795
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 6966564341060768829
+    },
+    {
+      "mesh": {
+        "albedoPath": "",
+        "alphaCutoff": 0.5,
+        "alphaMode": "opaque",
+        "aoPath": "",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          0.828000009059906,
+          1.0
+        ],
+        "castsShadow": true,
+        "emissivePath": "",
+        "emissiveStrength": 0.0,
+        "materialPath": "",
+        "meshPath": "Assets/Models/ABeautifulGame.glb",
+        "meshSubIndex": 5,
+        "metallicPath": "",
+        "normalPath": "",
+        "receivesShadow": true,
+        "roughnessPath": "",
+        "staticShadowCaster": true,
+        "transparent": false,
+        "uvScale": 1.0,
+        "visible": true
+      },
+      "name": "Pawn_Top_W8",
+      "parentUuid": 10776734247461800114,
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          -0.0,
+          0.0
+        ],
+        "position": [
+          -0.2504820227622986,
+          7.450580596923828e-09,
+          -0.12504565715789795
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 12504630099959772691
+    },
+    {
+      "mesh": {
+        "albedoPath": "",
+        "alphaCutoff": 0.5,
+        "alphaMode": "opaque",
+        "aoPath": "",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "castsShadow": true,
+        "emissivePath": "",
+        "emissiveStrength": 0.0,
+        "materialPath": "",
+        "meshPath": "Assets/Models/ABeautifulGame.glb",
+        "meshSubIndex": 8,
+        "metallicPath": "",
+        "normalPath": "",
+        "receivesShadow": true,
+        "roughnessPath": "",
+        "staticShadowCaster": true,
+        "transparent": false,
+        "uvScale": 1.0,
+        "visible": true
+      },
+      "name": "Pawn_Body_B1",
+      "parentUuid": 10776734247461800114,
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          -0.0,
+          0.0
+        ],
+        "position": [
+          -0.21923202276229858,
+          0.014927007257938385,
+          0.15638446807861328
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 17883850231312456202
+    },
+    {
+      "mesh": {
+        "albedoPath": "",
+        "alphaCutoff": 0.5,
+        "alphaMode": "opaque",
+        "aoPath": "",
+        "baseColorFactor": [
+          0.2994999885559082,
+          0.5,
+          0.44999998807907104,
+          1.0
+        ],
+        "castsShadow": true,
+        "emissivePath": "",
+        "emissiveStrength": 0.0,
+        "materialPath": "",
+        "meshPath": "Assets/Models/ABeautifulGame.glb",
+        "meshSubIndex": 7,
+        "metallicPath": "",
+        "normalPath": "",
+        "receivesShadow": true,
+        "roughnessPath": "",
+        "staticShadowCaster": true,
+        "transparent": false,
+        "uvScale": 1.0,
+        "visible": true
+      },
+      "name": "Pawn_Top_B2",
+      "parentUuid": 10776734247461800114,
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          -0.0,
+          0.0
+        ],
+        "position": [
+          -0.18798714876174927,
+          7.450580596923828e-09,
+          0.18742261826992035
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 10539053970622898706
+    },
+    {
+      "mesh": {
+        "albedoPath": "",
+        "alphaCutoff": 0.5,
+        "alphaMode": "opaque",
+        "aoPath": "",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "castsShadow": true,
+        "emissivePath": "",
+        "emissiveStrength": 0.0,
+        "materialPath": "",
+        "meshPath": "Assets/Models/ABeautifulGame.glb",
+        "meshSubIndex": 8,
+        "metallicPath": "",
+        "normalPath": "",
+        "receivesShadow": true,
+        "roughnessPath": "",
+        "staticShadowCaster": true,
+        "transparent": false,
+        "uvScale": 1.0,
+        "visible": true
+      },
+      "name": "Pawn_Body_B3",
+      "parentUuid": 10776734247461800114,
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          -0.0,
+          0.0
+        ],
+        "position": [
+          -0.09381857514381409,
+          0.014927007257938385,
+          0.1562785506248474
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 13338691583135371811
+    },
+    {
+      "mesh": {
+        "albedoPath": "",
+        "alphaCutoff": 0.5,
+        "alphaMode": "opaque",
+        "aoPath": "",
+        "baseColorFactor": [
+          0.2994999885559082,
+          0.5,
+          0.44999998807907104,
+          1.0
+        ],
+        "castsShadow": true,
+        "emissivePath": "",
+        "emissiveStrength": 0.0,
+        "materialPath": "",
+        "meshPath": "Assets/Models/ABeautifulGame.glb",
+        "meshSubIndex": 7,
+        "metallicPath": "",
+        "normalPath": "",
+        "receivesShadow": true,
+        "roughnessPath": "",
+        "staticShadowCaster": true,
+        "transparent": false,
+        "uvScale": 1.0,
+        "visible": true
+      },
+      "name": "Pawn_Top_B4",
+      "parentUuid": 10776734247461800114,
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          -0.0,
+          0.0
+        ],
+        "position": [
+          -0.06257370114326477,
+          7.450580596923828e-09,
+          0.12482181191444397
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 2277520395521423055
+    },
+    {
+      "mesh": {
+        "albedoPath": "",
+        "alphaCutoff": 0.5,
+        "alphaMode": "opaque",
+        "aoPath": "",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "castsShadow": true,
+        "emissivePath": "",
+        "emissiveStrength": 0.0,
+        "materialPath": "",
+        "meshPath": "Assets/Models/ABeautifulGame.glb",
+        "meshSubIndex": 8,
+        "metallicPath": "",
+        "normalPath": "",
+        "receivesShadow": true,
+        "roughnessPath": "",
+        "staticShadowCaster": true,
+        "transparent": false,
+        "uvScale": 1.0,
+        "visible": true
+      },
+      "name": "Pawn_Body_B5",
+      "parentUuid": 10776734247461800114,
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          -0.0,
+          0.0
+        ],
+        "position": [
+          0.031245321035385132,
+          0.014927007257938385,
+          0.15634210407733917
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 10875937275099793000
+    },
+    {
+      "mesh": {
+        "albedoPath": "",
+        "alphaCutoff": 0.5,
+        "alphaMode": "opaque",
+        "aoPath": "",
+        "baseColorFactor": [
+          0.2994999885559082,
+          0.5,
+          0.44999998807907104,
+          1.0
+        ],
+        "castsShadow": true,
+        "emissivePath": "",
+        "emissiveStrength": 0.0,
+        "materialPath": "",
+        "meshPath": "Assets/Models/ABeautifulGame.glb",
+        "meshSubIndex": 7,
+        "metallicPath": "",
+        "normalPath": "",
+        "receivesShadow": true,
+        "roughnessPath": "",
+        "staticShadowCaster": true,
+        "transparent": false,
+        "uvScale": 1.0,
+        "visible": true
+      },
+      "name": "Pawn_Top_B5",
+      "parentUuid": 10776734247461800114,
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          -0.0,
+          0.0
+        ],
+        "position": [
+          -4.677101969718933e-06,
+          7.450580596923828e-09,
+          0.18759210407733917
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 11218031851850638827
+    },
+    {
+      "mesh": {
+        "albedoPath": "",
+        "alphaCutoff": 0.5,
+        "alphaMode": "opaque",
+        "aoPath": "",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "castsShadow": true,
+        "emissivePath": "",
+        "emissiveStrength": 0.0,
+        "materialPath": "",
+        "meshPath": "Assets/Models/ABeautifulGame.glb",
+        "meshSubIndex": 8,
+        "metallicPath": "",
+        "normalPath": "",
+        "receivesShadow": true,
+        "roughnessPath": "",
+        "staticShadowCaster": true,
+        "transparent": false,
+        "uvScale": 1.0,
+        "visible": true
+      },
+      "name": "Pawn_Body_B6",
+      "parentUuid": 10776734247461800114,
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          -0.0,
+          0.0
+        ],
+        "position": [
+          0.09381434321403503,
+          0.014927007257938385,
+          0.15609847009181976
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 16686765193945713636
+    },
+    {
+      "mesh": {
+        "albedoPath": "",
+        "alphaCutoff": 0.5,
+        "alphaMode": "opaque",
+        "aoPath": "",
+        "baseColorFactor": [
+          0.2994999885559082,
+          0.5,
+          0.44999998807907104,
+          1.0
+        ],
+        "castsShadow": true,
+        "emissivePath": "",
+        "emissiveStrength": 0.0,
+        "materialPath": "",
+        "meshPath": "Assets/Models/ABeautifulGame.glb",
+        "meshSubIndex": 7,
+        "metallicPath": "",
+        "normalPath": "",
+        "receivesShadow": true,
+        "roughnessPath": "",
+        "staticShadowCaster": true,
+        "transparent": false,
+        "uvScale": 1.0,
+        "visible": true
+      },
+      "name": "Pawn_Top_B6",
+      "parentUuid": 10776734247461800114,
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          -0.0,
+          0.0
+        ],
+        "position": [
+          0.06256434321403503,
+          7.450580596923828e-09,
+          0.18734847009181976
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 1160069313489964134
+    },
+    {
+      "mesh": {
+        "albedoPath": "",
+        "alphaCutoff": 0.5,
+        "alphaMode": "opaque",
+        "aoPath": "",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "castsShadow": true,
+        "emissivePath": "",
+        "emissiveStrength": 0.0,
+        "materialPath": "",
+        "meshPath": "Assets/Models/ABeautifulGame.glb",
+        "meshSubIndex": 8,
+        "metallicPath": "",
+        "normalPath": "",
+        "receivesShadow": true,
+        "roughnessPath": "",
+        "staticShadowCaster": true,
+        "transparent": false,
+        "uvScale": 1.0,
+        "visible": true
+      },
+      "name": "Pawn_Body_B7",
+      "parentUuid": 10776734247461800114,
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          -0.0,
+          0.0
+        ],
+        "position": [
+          0.15611860156059265,
+          0.014927007257938385,
+          0.15625736117362976
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 17994617879686116405
+    },
+    {
+      "mesh": {
+        "albedoPath": "",
+        "alphaCutoff": 0.5,
+        "alphaMode": "opaque",
+        "aoPath": "",
+        "baseColorFactor": [
+          0.2994999885559082,
+          0.5,
+          0.44999998807907104,
+          1.0
+        ],
+        "castsShadow": true,
+        "emissivePath": "",
+        "emissiveStrength": 0.0,
+        "materialPath": "",
+        "meshPath": "Assets/Models/ABeautifulGame.glb",
+        "meshSubIndex": 7,
+        "metallicPath": "",
+        "normalPath": "",
+        "receivesShadow": true,
+        "roughnessPath": "",
+        "staticShadowCaster": true,
+        "transparent": false,
+        "uvScale": 1.0,
+        "visible": true
+      },
+      "name": "Pawn_Top_B7",
+      "parentUuid": 10776734247461800114,
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          -0.0,
+          0.0
+        ],
+        "position": [
+          0.12486860156059265,
+          7.450580596923828e-09,
+          0.18750736117362976
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 13164861377278504358
+    },
+    {
+      "mesh": {
+        "albedoPath": "",
+        "alphaCutoff": 0.5,
+        "alphaMode": "opaque",
+        "aoPath": "",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "castsShadow": true,
+        "emissivePath": "",
+        "emissiveStrength": 0.0,
+        "materialPath": "",
+        "meshPath": "Assets/Models/ABeautifulGame.glb",
+        "meshSubIndex": 8,
+        "metallicPath": "",
+        "normalPath": "",
+        "receivesShadow": true,
+        "roughnessPath": "",
+        "staticShadowCaster": true,
+        "transparent": false,
+        "uvScale": 1.0,
+        "visible": true
+      },
+      "name": "Pawn_Body_B8",
+      "parentUuid": 10776734247461800114,
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          -0.0,
+          0.0
+        ],
+        "position": [
+          0.21876174211502075,
+          0.014927007257938385,
+          0.15628913044929504
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 5103542457870040556
+    },
+    {
+      "mesh": {
+        "albedoPath": "",
+        "alphaCutoff": 0.5,
+        "alphaMode": "opaque",
+        "aoPath": "",
+        "baseColorFactor": [
+          0.2994999885559082,
+          0.5,
+          0.44999998807907104,
+          1.0
+        ],
+        "castsShadow": true,
+        "emissivePath": "",
+        "emissiveStrength": 0.0,
+        "materialPath": "",
+        "meshPath": "Assets/Models/ABeautifulGame.glb",
+        "meshSubIndex": 7,
+        "metallicPath": "",
+        "normalPath": "",
+        "receivesShadow": true,
+        "roughnessPath": "",
+        "staticShadowCaster": true,
+        "transparent": false,
+        "uvScale": 1.0,
+        "visible": true
+      },
+      "name": "Pawn_Top_B8",
+      "parentUuid": 10776734247461800114,
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          -0.0,
+          0.0
+        ],
+        "position": [
+          0.18751174211502075,
+          7.450580596923828e-09,
+          0.18753913044929504
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 7692583894127958070
+    },
+    {
+      "mesh": {
+        "albedoPath": "",
+        "alphaCutoff": 0.5,
+        "alphaMode": "opaque",
+        "aoPath": "",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "castsShadow": true,
+        "emissivePath": "",
+        "emissiveStrength": 0.0,
+        "materialPath": "",
+        "meshPath": "Assets/Models/ABeautifulGame.glb",
+        "meshSubIndex": 9,
+        "metallicPath": "",
+        "normalPath": "",
+        "receivesShadow": true,
+        "roughnessPath": "",
+        "staticShadowCaster": true,
+        "transparent": false,
+        "uvScale": 1.0,
+        "visible": true
+      },
+      "name": "Castle_B1",
+      "parentUuid": 10776734247461800114,
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          -0.0,
+          0.0
+        ],
+        "position": [
+          -0.21881157159805298,
+          0.01800301857292652,
+          0.21959251165390015
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 253924302197176553
+    },
+    {
+      "mesh": {
+        "albedoPath": "",
+        "alphaCutoff": 0.5,
+        "alphaMode": "opaque",
+        "aoPath": "",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "castsShadow": true,
+        "emissivePath": "",
+        "emissiveStrength": 0.0,
+        "materialPath": "",
+        "meshPath": "Assets/Models/ABeautifulGame.glb",
+        "meshSubIndex": 9,
+        "metallicPath": "",
+        "normalPath": "",
+        "receivesShadow": true,
+        "roughnessPath": "",
+        "staticShadowCaster": true,
+        "transparent": false,
+        "uvScale": 1.0,
+        "visible": true
+      },
+      "name": "Castle_B2",
+      "parentUuid": 10776734247461800114,
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          -0.0,
+          0.0
+        ],
+        "position": [
+          0.22001203894615173,
+          0.01800301857292652,
+          0.2196142077445984
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 9879667845196966236
+    },
+    {
+      "mesh": {
+        "albedoPath": "",
+        "alphaCutoff": 0.5,
+        "alphaMode": "opaque",
+        "aoPath": "",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "castsShadow": true,
+        "emissivePath": "",
+        "emissiveStrength": 0.0,
+        "materialPath": "",
+        "meshPath": "Assets/Models/ABeautifulGame.glb",
+        "meshSubIndex": 10,
+        "metallicPath": "",
+        "normalPath": "",
+        "receivesShadow": true,
+        "roughnessPath": "",
+        "staticShadowCaster": true,
+        "transparent": false,
+        "uvScale": 1.0,
+        "visible": true
+      },
+      "name": "Castle_W1",
+      "parentUuid": 10776734247461800114,
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          -0.0,
+          0.0
+        ],
+        "position": [
+          0.21969175338745117,
+          0.016820574179291725,
+          -0.21970760822296143
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 14434205929497350607
+    },
+    {
+      "mesh": {
+        "albedoPath": "",
+        "alphaCutoff": 0.5,
+        "alphaMode": "opaque",
+        "aoPath": "",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "castsShadow": true,
+        "emissivePath": "",
+        "emissiveStrength": 0.0,
+        "materialPath": "",
+        "meshPath": "Assets/Models/ABeautifulGame.glb",
+        "meshSubIndex": 10,
+        "metallicPath": "",
+        "normalPath": "",
+        "receivesShadow": true,
+        "roughnessPath": "",
+        "staticShadowCaster": true,
+        "transparent": false,
+        "uvScale": 1.0,
+        "visible": true
+      },
+      "name": "Castle_W2",
+      "parentUuid": 10776734247461800114,
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          -0.0,
+          0.0
+        ],
+        "position": [
+          -0.21860846877098083,
+          0.01710103079676628,
+          -0.22002007067203522
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 10511540023746489169
+    },
+    {
+      "mesh": {
+        "albedoPath": "",
+        "alphaCutoff": 0.5,
+        "alphaMode": "opaque",
+        "aoPath": "",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "castsShadow": true,
+        "emissivePath": "",
+        "emissiveStrength": 0.0,
+        "materialPath": "",
+        "meshPath": "Assets/Models/ABeautifulGame.glb",
+        "meshSubIndex": 11,
+        "metallicPath": "",
+        "normalPath": "",
+        "receivesShadow": true,
+        "roughnessPath": "",
+        "staticShadowCaster": true,
+        "transparent": false,
+        "uvScale": 1.0,
+        "visible": true
+      },
+      "name": "Knight_B1",
+      "parentUuid": 10776734247461800114,
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          -0.0,
+          0.0
+        ],
+        "position": [
+          -0.15675804018974304,
+          0.01697981357574463,
+          0.22001084685325623
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 499554597489779801
+    },
+    {
+      "mesh": {
+        "albedoPath": "",
+        "alphaCutoff": 0.5,
+        "alphaMode": "opaque",
+        "aoPath": "",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "castsShadow": true,
+        "emissivePath": "",
+        "emissiveStrength": 0.0,
+        "materialPath": "",
+        "meshPath": "Assets/Models/ABeautifulGame.glb",
+        "meshSubIndex": 11,
+        "metallicPath": "",
+        "normalPath": "",
+        "receivesShadow": true,
+        "roughnessPath": "",
+        "staticShadowCaster": true,
+        "transparent": false,
+        "uvScale": 1.0,
+        "visible": true
+      },
+      "name": "Knight_B2",
+      "parentUuid": 10776734247461800114,
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          -0.0,
+          0.0
+        ],
+        "position": [
+          0.1584867238998413,
+          0.01697981357574463,
+          0.2197423279285431
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 12250144007643755283
+    },
+    {
+      "mesh": {
+        "albedoPath": "",
+        "alphaCutoff": 0.5,
+        "alphaMode": "opaque",
+        "aoPath": "",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "castsShadow": true,
+        "emissivePath": "",
+        "emissiveStrength": 0.0,
+        "materialPath": "",
+        "meshPath": "Assets/Models/ABeautifulGame.glb",
+        "meshSubIndex": 12,
+        "metallicPath": "",
+        "normalPath": "",
+        "receivesShadow": true,
+        "roughnessPath": "",
+        "staticShadowCaster": true,
+        "transparent": false,
+        "uvScale": 1.0,
+        "visible": true
+      },
+      "name": "Knight_W1",
+      "parentUuid": 10776734247461800114,
+      "transform": {
+        "eulerDegrees": [
+          180.0,
+          -5.008956122765085e-06,
+          180.0
+        ],
+        "position": [
+          0.15809699892997742,
+          0.016979999840259552,
+          -0.22098299860954285
+        ],
+        "rotation": [
+          -4.371138828673793e-08,
+          0.0,
+          1.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 12980109110216565413
+    },
+    {
+      "mesh": {
+        "albedoPath": "",
+        "alphaCutoff": 0.5,
+        "alphaMode": "opaque",
+        "aoPath": "",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "castsShadow": true,
+        "emissivePath": "",
+        "emissiveStrength": 0.0,
+        "materialPath": "",
+        "meshPath": "Assets/Models/ABeautifulGame.glb",
+        "meshSubIndex": 12,
+        "metallicPath": "",
+        "normalPath": "",
+        "receivesShadow": true,
+        "roughnessPath": "",
+        "staticShadowCaster": true,
+        "transparent": false,
+        "uvScale": 1.0,
+        "visible": true
+      },
+      "name": "Knight_W2",
+      "parentUuid": 10776734247461800114,
+      "transform": {
+        "eulerDegrees": [
+          180.0,
+          -5.008956122765085e-06,
+          180.0
+        ],
+        "position": [
+          -0.15665100514888763,
+          0.016979999840259552,
+          -0.22008299827575684
+        ],
+        "rotation": [
+          -4.371138828673793e-08,
+          0.0,
+          1.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 12556328442053584078
+    },
+    {
+      "mesh": {
+        "albedoPath": "",
+        "alphaCutoff": 0.5,
+        "alphaMode": "opaque",
+        "aoPath": "",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "castsShadow": true,
+        "emissivePath": "",
+        "emissiveStrength": 0.0,
+        "materialPath": "",
+        "meshPath": "Assets/Models/ABeautifulGame.glb",
+        "meshSubIndex": 13,
+        "metallicPath": "",
+        "normalPath": "",
+        "receivesShadow": true,
+        "roughnessPath": "",
+        "staticShadowCaster": true,
+        "transparent": false,
+        "uvScale": 1.0,
+        "visible": true
+      },
+      "name": "Bishop_B1",
+      "parentUuid": 10776734247461800114,
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          -0.0,
+          0.0
+        ],
+        "position": [
+          -0.09403245151042938,
+          0.01697981357574463,
+          0.21908524632453918
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 8733057447013821024
+    },
+    {
+      "mesh": {
+        "albedoPath": "",
+        "alphaCutoff": 0.5,
+        "alphaMode": "opaque",
+        "aoPath": "",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "castsShadow": true,
+        "emissivePath": "",
+        "emissiveStrength": 0.0,
+        "materialPath": "",
+        "meshPath": "Assets/Models/ABeautifulGame.glb",
+        "meshSubIndex": 13,
+        "metallicPath": "",
+        "normalPath": "",
+        "receivesShadow": true,
+        "roughnessPath": "",
+        "staticShadowCaster": true,
+        "transparent": false,
+        "uvScale": 1.0,
+        "visible": true
+      },
+      "name": "Bishop_B2",
+      "parentUuid": 10776734247461800114,
+      "transform": {
+        "eulerDegrees": [
+          0.0,
+          -0.0,
+          0.0
+        ],
+        "position": [
+          0.08951026201248169,
+          0.01697981357574463,
+          0.21954728662967682
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "uuid": 12401847309460560445
+    }
+  ]
+}

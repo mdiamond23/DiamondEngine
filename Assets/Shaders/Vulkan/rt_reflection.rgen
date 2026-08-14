@@ -1,0 +1,107 @@
+#version 460
+#extension GL_EXT_ray_tracing : require
+
+// Ray-traced reflections (Docs/rt-reflections-design.md), slice 5.2.
+//
+// RT is a FALLBACK under SSR, not a replacement. SSR resolves on-screen
+// reflections cheaply and well and fails on off-screen geometry, backfaces and
+// rays that leave the frame; those failures are the pixels traced here. The
+// output merges both into one target so ssr_composite.frag samples a single
+// texture and never learns RT exists.
+//
+// Three early-outs before any ray is fired, cheapest first: SSR already owns
+// the pixel, there is no geometry here, or the surface is too rough for a sharp
+// reflection to be right. The roughness gate is not just a cost lever — above
+// it the composite's own fade hands the pixel to prefiltered IBL anyway, so a
+// mirror-sharp ray there would be wrong as well as wasted.
+//
+// NO UV FLIP ANYWHERE. Read the G-buffer with texelFetch at gl_LaunchIDEXT and
+// write with imageStore at the same coord — launch ID and texel row agree. The
+// flip in rt_debug.rgen exists only for its UV->NDC unprojection, which this
+// pass never does: view-space position comes straight out of gViewPos.
+
+layout(set = 0, binding = 0, rgba16f) uniform writeonly image2D uReflection;
+layout(set = 0, binding = 1) uniform accelerationStructureEXT uTLAS;
+layout(set = 0, binding = 2) uniform sampler2D uSSR;          // rgb reflection, a confidence
+layout(set = 0, binding = 3) uniform sampler2D gViewPos;
+layout(set = 0, binding = 4) uniform sampler2D gViewNormal;
+layout(set = 0, binding = 5) uniform sampler2D gMaterial;     // r metallic, g roughness, b ao
+
+layout(set = 0, binding = 6, std140) uniform ReflectBlock {
+    mat4  view;         // world -> view
+    mat4  invView;      // view  -> world
+    vec4  ddgiOrigin;
+    vec4  ddgiSpacing;
+    ivec4 ddgiCounts;
+    vec4  ddgiParams;   // x normalBias, y energy, z viewBias, w giMode
+    vec4  params;       // x maxRayDistance, y skyIntensity, z/w unused
+} r;
+
+layout(push_constant) uniform Push {
+    float confidenceThreshold;   // SSR alpha above which SSR keeps the pixel
+    float roughnessCutoff;       // above this the IBL fade owns the pixel
+    float maxRayDistance;
+} pc;
+
+layout(location = 0) rayPayloadEXT vec3 payload;   // incoming radiance
+
+// Lifts the ray origin off its own surface. A mirror floor is the worst case
+// for self-intersection, and 5.3 revisits this as a distance-scaled bias.
+const float ORIGIN_BIAS = 0.02;
+const float RAY_TMIN    = 0.01;
+
+void main() {
+    const ivec2 coord = ivec2(gl_LaunchIDEXT.xy);
+    const vec4  ssr   = texelFetch(uSSR, coord, 0);
+
+    // SSR keeps every pixel its march was confident about. Confidence is a
+    // FADE, not a boolean: too high double-counts, too low leaves a seam where
+    // the screen-space march gives up. 5.3 tunes this against EdgeFade's ramp.
+    if (ssr.a > pc.confidenceThreshold) {
+        imageStore(uReflection, coord, ssr);
+        return;
+    }
+
+    const vec3 P = texelFetch(gViewPos, coord, 0).xyz;
+    // Background — no geometry written. Confidence 0 passes the scene through
+    // the composite untouched, which is what keeps the sky from reflecting.
+    if (P.z == 0.0) {
+        imageStore(uReflection, coord, vec4(0.0));
+        return;
+    }
+
+    // Too rough for a sharp reflection. The composite fades to prefiltered IBL
+    // over the same range, so this hands the pixel back rather than dropping it.
+    const float roughness = texelFetch(gMaterial, coord, 0).g;
+    if (roughness > pc.roughnessCutoff) {
+        imageStore(uReflection, coord, vec4(0.0));
+        return;
+    }
+
+    const vec3  n      = texelFetch(gViewNormal, coord, 0).xyz;
+    const float nLenSq = dot(n, n);
+    if (nLenSq <= 1e-6) {
+        imageStore(uReflection, coord, vec4(0.0));
+        return;
+    }
+
+    const vec3 N = n * inversesqrt(nLenSq);
+    const vec3 V = normalize(-P);            // camera sits at the view-space origin
+    const vec3 R = reflect(-V, N);
+
+    // Rays are traced in world space; the G-buffer is view space.
+    const vec3 worldPos = (r.invView * vec4(P, 1.0)).xyz;
+    const vec3 worldN   = normalize(mat3(r.invView) * N);
+    const vec3 worldDir = normalize(mat3(r.invView) * R);
+
+    payload = vec3(0.0);
+    traceRayEXT(uTLAS, gl_RayFlagsOpaqueEXT, 0xFF,
+                0 /*sbtOffset*/, 0 /*sbtStride*/, 0 /*missIndex*/,
+                worldPos + worldN * ORIGIN_BIAS, RAY_TMIN,
+                worldDir, pc.maxRayDistance, 0 /*payload*/);
+
+    // Full confidence for anything traced, hit or sky: a miss returns the
+    // environment, which is a legitimate reflection rather than a failure. The
+    // composite still weights this by fresnel and roughness.
+    imageStore(uReflection, coord, vec4(payload, 1.0));
+}

@@ -21,6 +21,7 @@
 
 #include "Platform/Vulkan/Passes/Deferred/VulkanGBufferPass.h"
 #include "Platform/Vulkan/Passes/Deferred/VulkanGTAOPass.h"
+#include "Platform/Vulkan/Passes/GI/VulkanRTReflectionPass.h"
 #include "Platform/Vulkan/Passes/Deferred/VulkanSSGIPass.h"
 #include "Platform/Vulkan/Passes/Debug/VulkanRTDebugPass.h"
 #include "Platform/Vulkan/Passes/GI/VulkanDDGIPass.h"
@@ -340,6 +341,7 @@ public:
     void SetRTDebugEnabled(bool enabled) override { m_RTDebugEnabled = enabled; }
     void SetRTDebugMaxDistance(float distance) override { m_RTDebugMaxDistance = distance; }
     void SetDDGIEnabled(bool enabled) override { m_DDGIEnabled = enabled; }
+    void SetRTReflectionsEnabled(bool enabled) override { m_RTReflectionsEnabled = enabled; }
     bool HasDDGIVolume() const override { return m_HasDDGIVolume; }
     bool SupportsRayTracing() const override { return m_Device->SupportsRayTracing(); }
     // Atlases only exist under RT, so their presence is the tier-2 gate.
@@ -809,6 +811,9 @@ private:
         std::unique_ptr<VulkanDebugDrawPass>        debugDraw;   // main view only
         std::unique_ptr<VulkanRTDebugPass>          rtDebug;     // null without RT support
         std::unique_ptr<VulkanDDGIPass>             ddgi;        // null without RT support
+        // RT reflections fill SSR's misses. Per-view (unlike DDGI): the input
+        // is this view's screen-space trace. Inert without RT support.
+        std::unique_ptr<VulkanRTReflectionPass>     rtReflect;
 
         std::vector<DrawItem>        drawList;          // frustum-culled — geometry pass
         std::vector<SkinnedDrawItem> skinnedDraws;      // frustum-culled — skinned geometry
@@ -939,7 +944,9 @@ private:
     // along the unoccluded direction instead, which makes the remaining
     // multiply a solid-angle fraction rather than a second occlusion test. The
     // tuned constant is gone rather than retuned.
-    void ApplyGITier(VulkanDeferredLightingPass& lighting) const {
+    // 'view' is passed rather than read from m_FrameView: this runs mid-frame
+    // setup and should not depend on which member was assigned first.
+    void ApplyGITier(View& v, const glm::mat4& view) const {
         const bool tier2 = GIMode() == 2;
 
         VulkanDeferredLightingPass::DDGISampleParams params;
@@ -954,7 +961,14 @@ private:
             params.energy     = std::max(m_DDGIVolume.energy, 0.0f);
         }
 
-        lighting.SetGIParams(tier2 ? 2 : 1, m_SSAOStrength, params);
+        v.lighting->SetGIParams(tier2 ? 2 : 1, m_SSAOStrength, params);
+
+        // Reflection hits take their indirect term from the same probe field —
+        // without it, a reflection of anything in shadow is black. It needs the
+        // view matrix too, to shade hits with the view-space light set.
+        if (v.rtReflect)
+            v.rtReflect->SetFrameData(view, tier2 ? 2 : 1, params,
+                                      m_AmbientIntensity);
     }
 
     void ApplyAutoExposureSettings(VulkanAutoExposurePass& pass) const {
@@ -991,6 +1005,11 @@ private:
         v->gtao         = std::make_unique<VulkanGTAOPass>(m_Device, shaderDir, width, height);
         v->ssgi         = std::make_unique<VulkanSSGIPass>(m_Device, shaderDir, width, height);
         v->ssr          = std::make_unique<VulkanSSRPass>(m_Device, shaderDir, width, height);
+        v->rtReflect    = std::make_unique<VulkanRTReflectionPass>(m_Device, shaderDir, width, height);
+        v->rtReflect->SetEnabled(m_RTReflectionsEnabled);
+        v->rtReflect->SetTLAS(m_TLAS.get());
+        v->rtReflect->SetGeometryBuffer(m_RTGeometryBuffer.get());
+        v->rtReflect->SetAlbedoTextures(m_RTTextures);
         v->taa          = std::make_unique<VulkanTAAPass>(m_Device, shaderDir);
         v->lighting     = std::make_unique<VulkanDeferredLightingPass>(m_Device, shaderDir);
         v->skybox       = std::make_unique<VulkanSkyboxPass>(m_Device, shaderDir);
@@ -1045,6 +1064,8 @@ private:
             v->ddgi->SetGeometryBuffer(m_RTGeometryBuffer.get());
             v->ddgi->SetLightingUBO(v->lighting->UBO());
         }
+        // Reflection hits shade with the deferred pass's lights, same as probes.
+        v->rtReflect->SetLightingUBO(v->lighting->UBO());
 
         BuildViewGraph(*v, viewIdx);
         return v;
@@ -1071,6 +1092,10 @@ private:
         // history-valid flag so the first post-resize frame passes through.
         v.ssgi     = std::make_unique<VulkanSSGIPass>(m_Device, shaderDir, width, height);
         v.ssr      = std::make_unique<VulkanSSRPass>(m_Device, shaderDir, width, height);
+        // Launch grid and both descriptor sets are size-dependent.
+        v.rtReflect = std::make_unique<VulkanRTReflectionPass>(m_Device, shaderDir, width, height);
+        v.rtReflect->SetEnabled(m_RTReflectionsEnabled);
+        v.rtReflect->SetTLAS(m_TLAS.get());
         // TAA's descriptor sets sample size-dependent graph textures (including
         // the history); recreating the pass also resets its history-valid flag,
         // so the first post-resize frame passes through.
@@ -1101,6 +1126,13 @@ private:
         // survives the resize, but the lighting pass it shares a UBO with was
         // just recreated — re-point it, or probe rays shade with a dead buffer.
         if (v.ddgi) v.ddgi->SetLightingUBO(v.lighting->UBO());
+        // Recreated above, so it needs the whole set again — the lighting UBO
+        // it shares was just replaced too.
+        if (v.rtReflect) {
+            v.rtReflect->SetLightingUBO(v.lighting->UBO());
+            v.rtReflect->SetGeometryBuffer(m_RTGeometryBuffer.get());
+            v.rtReflect->SetAlbedoTextures(m_RTTextures);
+        }
 
         v.graph.ResetPasses();
         BuildViewGraph(v, viewIdx);   // re-declares textures + re-binds IBL/point shadows
@@ -1246,7 +1278,26 @@ private:
         // SSR — reflections ray-marched off the GI-composited scene (post-skybox
         // so rays can hit the sky), then material-weighted and resolved with the
         // scene into hdrSSR. Later passes composite over hdrSSR, not hdrGI.
-        v.ssr->AddToGraph(g, gViewPos, gViewNormal, hdrGI, ssrColor, gMaterial, hdrSSR);
+        // RT reflections (Docs/rt-reflections-design.md) fill only the pixels
+        // SSR's march gave up on, merging both into one target the composite
+        // samples. Without RT support nothing is declared or registered and the
+        // composite stays on ssrColor, so tier 1 is bit-for-bit unchanged.
+        RGTextureHandle reflectionSource{};
+        if (v.rtReflect && v.rtReflect->Available()) {
+            const RGTextureHandle rtReflection = g.DeclareTexture("rtReflection",
+                { v.width, v.height, RHIFormat::RGBA16F, /*storage*/ true });
+            v.rtReflect->AddToGraph(g, ssrColor, rtReflection,
+                                    gViewPos, gViewNormal, gMaterial, ddgiAtlases);
+            // Same one-time raw bind as the lighting/skybox/DDGI passes: the
+            // env cube isn't an RHITexture, and the trace set it belongs to
+            // doesn't exist yet — registering the IBL pass here lets the
+            // deferred rebuild re-apply it.
+            v.rtReflect->BindEnvironment(*m_IBL);
+            reflectionSource = rtReflection;
+        }
+
+        v.ssr->AddToGraph(g, gViewPos, gViewNormal, hdrGI, ssrColor, gMaterial, hdrSSR,
+                          reflectionSource);
 
         // TAA — accumulates the jittered frames against the persistent history,
         // reprojected through gVelocity. Before transparency/particles: neither
@@ -1413,7 +1464,7 @@ private:
         v.transparency->SetCamera(view, jitteredProj);
         m_CSM->ComputeCascades(m_SunDir, view, proj, kNear, kShadowFar, kShadowRes);
         v.lighting->SetAmbientIntensity(m_AmbientIntensity);   // read by SetFrameData below
-        ApplyGITier(*v.lighting);                              // ditto
+        ApplyGITier(v, view);                                  // ditto
         v.lighting->SetFrameData(view, m_SunDir, m_SunColor,
                                  m_CSM->GetLightMatrices(), m_CSM->GetSplitDepths(),
                                  m_PointPos, m_PointColor,
@@ -1427,6 +1478,7 @@ private:
             v.rtDebug->SetMaxDistance(m_RTDebugMaxDistance);
             v.rtDebug->SetCamera(view, proj);
         }
+        if (v.rtReflect) v.rtReflect->SetEnabled(m_RTReflectionsEnabled);
         // DDGI: unjittered too — the probe viz is a debug overlay, and the view
         // matrix the closest-hit shader uses only has to agree with the lighting
         // UBO's view space (which the jitter never touches).
@@ -1677,7 +1729,8 @@ private:
 
         for (auto& v : m_Views) {
             if (!v) continue;
-            if (v->rtDebug) v->rtDebug->SetTLAS(m_TLAS.get());
+            if (v->rtDebug)   v->rtDebug->SetTLAS(m_TLAS.get());
+            if (v->rtReflect) v->rtReflect->SetTLAS(m_TLAS.get());
             if (v->ddgi) {
                 v->ddgi->SetTLAS(m_TLAS.get());
                 // Geometry the probes trace against changed — whatever the
@@ -1735,8 +1788,11 @@ private:
         // entered it — SetAlbedoTextures rebuilds the trace set, which blocks.
         if (m_RTTexturesDirty) {
             m_RTTexturesDirty = false;
-            for (auto& v : m_Views)
-                if (v && v->ddgi) v->ddgi->SetAlbedoTextures(m_RTTextures);
+            for (auto& v : m_Views) {
+                if (!v) continue;
+                if (v->ddgi)      v->ddgi->SetAlbedoTextures(m_RTTextures);
+                if (v->rtReflect) v->rtReflect->SetAlbedoTextures(m_RTTextures);
+            }
         }
 
         if (m_RTGeometry.size() > m_RTGeometryCapacity) {
@@ -1747,8 +1803,11 @@ private:
             desc.usage   = RHIBufferUsage::Storage;
             desc.dynamic = true;
             m_RTGeometryBuffer = m_Device->CreateBuffer(desc);
-            for (auto& v : m_Views)
-                if (v && v->ddgi) v->ddgi->SetGeometryBuffer(m_RTGeometryBuffer.get());
+            for (auto& v : m_Views) {
+                if (!v) continue;
+                if (v->ddgi)      v->ddgi->SetGeometryBuffer(m_RTGeometryBuffer.get());
+                if (v->rtReflect) v->rtReflect->SetGeometryBuffer(m_RTGeometryBuffer.get());
+            }
         }
         m_RTGeometryBuffer->Update(m_RTGeometry.data(),
                                    m_RTGeometry.size() * sizeof(RTGeometry));
@@ -2213,6 +2272,8 @@ private:
                 v->ddgi->BindEnvironment(*m_IBL);
                 v->ddgi->InvalidateHistory();   // the sky the probes integrated changed
             }
+            // Reflection misses sample the same radiance cube.
+            if (v->rtReflect) v->rtReflect->BindEnvironment(*m_IBL);
         }
     }
 
@@ -2435,6 +2496,10 @@ private:
     // GatherDDGIVolume. The master switch is the tier 2 vs tier 1 A/B — off, the
     // far-field indirect falls back to the IBL irradiance cubemap.
     bool                 m_DDGIEnabled = true;
+    // RT reflections (rt-reflections-design.md). Off routes the pass through
+    // its passthrough copy, so the composite still receives SSR's result —
+    // this is the "what is RT actually adding" A/B.
+    bool                 m_RTReflectionsEnabled = true;
     bool                 m_HasDDGIVolume = false;
     DDGIVolumeComponent  m_DDGIVolume{};
     glm::vec3            m_DDGIVolumeCenter { 0.0f };

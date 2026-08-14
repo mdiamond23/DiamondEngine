@@ -51,10 +51,17 @@ public:
     // (caller-declared, RGBA16F) — downstream passes must consume outColor, not
     // sceneColor. Insert after lighting + skybox and before transparency, so
     // glass/particles draw over reflections.
+    //
+    // 'compositeSource' is the reflection texture the COMPOSITE samples, which
+    // is not always the one the trace wrote: RT reflections (see
+    // VulkanRTReflectionPass) fill SSR's misses into a separate target and hand
+    // that in here. Left invalid it defaults to ssrColor, which is exactly the
+    // tier 0/1 path — no RT hardware, no behaviour change.
     void AddToGraph(RHIRenderGraph& graph,
                     RGTextureHandle viewPos, RGTextureHandle viewNormal,
                     RGTextureHandle sceneColor, RGTextureHandle ssrColor,
-                    RGTextureHandle gMaterial, RGTextureHandle outColor);
+                    RGTextureHandle gMaterial, RGTextureHandle outColor,
+                    RGTextureHandle compositeSource = {});
 
     // Upload the current frame's projection into the UBO (used to project marched
     // view-space positions to screen UVs). Call after RHIDevice::BeginFrame (which

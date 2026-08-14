@@ -1,0 +1,11 @@
+Model Information:
+* title:	Marble table
+* source:	https://sketchfab.com/3d-models/marble-table-7b7f0f81a369421aba73d39a2f9ad56d
+* author:	diapant95 (https://sketchfab.com/3DCraftsman)
+
+Model License:
+* license type:	CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
+* requirements:	Author must be credited. Commercial use is allowed.
+
+If you use this 3D model in your project be sure to copy paste this credit wherever you share it:
+This work is based on "Marble table" (https://sketchfab.com/3d-models/marble-table-7b7f0f81a369421aba73d39a2f9ad56d) by diapant95 (https://sketchfab.com/3DCraftsman) licensed under CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)

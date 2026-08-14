@@ -324,6 +324,7 @@ public:
         m_Renderer->SetSSGIParams(m_Settings.ssgiRays, m_Settings.ssgiIntensity,
                                   m_Settings.ssgiMaxDistance);
         m_Renderer->SetDDGIEnabled(m_Settings.ddgiEnabled);
+        m_Renderer->SetRTReflectionsEnabled(m_Settings.rtReflections);
         m_Renderer->SetAutoExposure(m_Settings.autoExposure);
         m_Renderer->SetBloomParams(m_Settings.bloomThreshold, m_Settings.bloomIntensity);
     }
@@ -470,6 +471,15 @@ public:
                 ImGui::TextDisabled("no DDGI Volume in the scene");
             else
                 ImGui::TextDisabled("tune on the DDGI Volume component");
+
+            // RT reflections (rt-reflections-design.md). A FALLBACK under SSR:
+            // only pixels whose screen-space march failed get traced, so off
+            // is the A/B for what RT adds over SSR alone. SLICE 5.1 fills
+            // those pixels with flat magenta instead of tracing.
+            if (ImGui::Checkbox("RT Reflections", &m_Settings.rtReflections))
+                m_Renderer->SetRTReflectionsEnabled(m_Settings.rtReflections);
+            if (m_Settings.rtReflections)
+                ImGui::TextDisabled("slice 5.1: magenta = SSR missed here");
         }
 
         ImGui::Separator();

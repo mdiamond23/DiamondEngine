@@ -1,0 +1,24 @@
+#version 450
+
+// Copies ssrColor into rtReflection unchanged.
+//
+// Not an optimization — a correctness requirement. Once the SSR composite is
+// re-pointed at rtReflection, that target must be written EVERY frame, and the
+// RT pass cannot always write it: the TLAS is null in any scene with no static
+// opaque meshes, and reflections are user-toggleable. Skipping the write would
+// leave whatever the pooled texture last held. This is that fallback, selected
+// in C++ (see VulkanRTReflectionPass) rather than branched in the raygen, so
+// the "cannot trace" path never touches the RT pipeline at all.
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0, rgba16f) uniform writeonly image2D uOut;
+layout(set = 0, binding = 1) uniform sampler2D uSSR;
+
+void main() {
+    ivec2 coord = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size  = imageSize(uOut);
+    if (any(greaterThanEqual(coord, size))) return;
+
+    imageStore(uOut, coord, texelFetch(uSSR, coord, 0));
+}

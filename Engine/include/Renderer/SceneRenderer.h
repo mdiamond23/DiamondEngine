@@ -219,6 +219,13 @@ public:
     // to IBL, so this is the tier 2 vs tier 1 A/B. Per-volume tuning lives on
     // the component, in the inspector, not here.
     virtual void SetDDGIEnabled(bool enabled) = 0;
+
+    // Ray-traced reflections (Docs/rt-reflections-design.md), default on but
+    // inert without ray-tracing hardware. RT is a FALLBACK under SSR: it fills
+    // only the pixels SSR's screen-space march gave up on — off-screen
+    // geometry, backfaces, rays that leave the frame. Off hands the composite
+    // SSR's result unchanged, which is the A/B for what RT is contributing.
+    virtual void SetRTReflectionsEnabled(bool enabled) = 0;
     // Whether the scene actually has a probe volume — lets the editor say
     // "add a DDGI Volume" instead of showing dead controls.
     virtual bool HasDDGIVolume() const = 0;

@@ -355,6 +355,7 @@ if(DIAMOND_ENABLE_VULKAN)
         src/Platform/Vulkan/Passes/PostProcess/VulkanAutoExposurePass.cpp
         src/Platform/Vulkan/Passes/Deferred/VulkanGBufferPass.cpp
         src/Platform/Vulkan/Passes/Deferred/VulkanGTAOPass.cpp
+        src/Platform/Vulkan/Passes/GI/VulkanRTReflectionPass.cpp
         # Superseded by VulkanGTAOPass and wired into no graph. Still built so
         # it cannot rot silently — see the header for what re-enabling costs.
         src/Platform/Vulkan/Passes/Deferred/VulkanSSAOPass.cpp
@@ -417,6 +418,7 @@ if(DIAMOND_ENABLE_VULKAN)
                     gbuffer.vert gbuffer.frag gbuffer_debug.frag
                     gbuffer_skinned.vert
                     gtao.comp gtao_denoise.comp
+                    rt_reflection_passthrough.comp
                     ssao.frag ssao_blur.frag   # retained, unused (see VulkanSSAOPass.h)
                     ssr.frag ssr_composite.frag
                     ssgi.comp ssgi_temporal.comp ssgi_composite.frag
@@ -455,7 +457,9 @@ if(DIAMOND_ENABLE_VULKAN)
     # verified against the 1.0 target keep compiling byte-identically.
     set(_vk_rt_shaders rt_debug.rgen rt_debug.rmiss rt_debug.rchit
                        ddgi_probe_trace.rgen ddgi_probe_trace.rmiss
-                       ddgi_probe_trace.rchit)
+                       ddgi_probe_trace.rchit
+                       rt_reflection.rgen rt_reflection.rmiss
+                       rt_reflection.rchit)
     foreach(_shader ${_vk_rt_shaders})
         add_custom_command(
             OUTPUT  ${_vk_spv_dir}/${_shader}.spv

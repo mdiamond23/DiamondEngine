@@ -74,7 +74,13 @@ VulkanSSRPass::~VulkanSSRPass() = default;
 void VulkanSSRPass::AddToGraph(RHIRenderGraph& graph,
                                RGTextureHandle viewPos, RGTextureHandle viewNormal,
                                RGTextureHandle sceneColor, RGTextureHandle ssrColor,
-                               RGTextureHandle gMaterial, RGTextureHandle outColor) {
+                               RGTextureHandle gMaterial, RGTextureHandle outColor,
+                               RGTextureHandle compositeSource) {
+    // Where the composite reads reflections from. Defaults to what the trace
+    // wrote; RT reflections substitute their own merged target.
+    const RGTextureHandle reflection =
+        compositeSource.IsValid() ? compositeSource : ssrColor;
+
     // Set is built once — graph textures keep their identity across frames.
     if (!m_SSRSet)
         m_SSRSet = m_Device->CreateResourceSet(
@@ -86,7 +92,7 @@ void VulkanSSRPass::AddToGraph(RHIRenderGraph& graph,
     if (!m_SSRCompositeSet)
         m_SSRCompositeSet = m_Device->CreateResourceSet(
             m_SSRCompositePipeline.get(), 0, {},
-            { { 0, graph.GetTexture(ssrColor) },
+            { { 0, graph.GetTexture(reflection) },
               { 1, graph.GetTexture(viewPos) },
               { 2, graph.GetTexture(viewNormal) },
               { 3, graph.GetTexture(gMaterial) },
@@ -105,7 +111,7 @@ void VulkanSSRPass::AddToGraph(RHIRenderGraph& graph,
     // Fullscreen resolve into outColor: every pixel outputs either its scene
     // color (weight 0) or the lerp toward the reflection.
     graph.AddPass("SSRComposite")
-        .Read(ssrColor).Read(viewPos).Read(viewNormal).Read(gMaterial).Read(sceneColor)
+        .Read(reflection).Read(viewPos).Read(viewNormal).Read(gMaterial).Read(sceneColor)
         .Write(outColor)
         .SetExecute([this](RHICommandList* cmd) {
             cmd->BindPipeline(m_SSRCompositePipeline.get());

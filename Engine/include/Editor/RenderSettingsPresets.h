@@ -46,6 +46,8 @@ struct RenderSettings {
     float ssgiMaxDistance = 8.0f;
 
     bool  ddgiEnabled = true;
+    // RT reflections fill SSR's misses; off leaves SSR's result untouched.
+    bool  rtReflections = true;
 
     float bloomThreshold = 1.0f;
     float bloomIntensity = 1.0f;
@@ -69,6 +71,7 @@ inline nlohmann::json ToJson(const RenderSettings& s)
         { "ssgiIntensity",   s.ssgiIntensity },
         { "ssgiMaxDistance", s.ssgiMaxDistance },
         { "ddgiEnabled",     s.ddgiEnabled },
+        { "rtReflections",   s.rtReflections },
         { "bloomThreshold",  s.bloomThreshold },
         { "bloomIntensity",  s.bloomIntensity },
         { "autoExposure", {
@@ -99,6 +102,7 @@ inline RenderSettings RenderSettingsFromJson(const nlohmann::json& j)
     s.ssgiIntensity   = j.value("ssgiIntensity",   s.ssgiIntensity);
     s.ssgiMaxDistance = j.value("ssgiMaxDistance", s.ssgiMaxDistance);
     s.ddgiEnabled     = j.value("ddgiEnabled",     s.ddgiEnabled);
+    s.rtReflections   = j.value("rtReflections",   s.rtReflections);
     s.bloomThreshold  = j.value("bloomThreshold",  s.bloomThreshold);
     s.bloomIntensity  = j.value("bloomIntensity",  s.bloomIntensity);
 
