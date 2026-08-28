@@ -16,6 +16,14 @@ enum class RHIFormat {
     BGRA8,        // swapchain format (UNORM — shaders apply gamma manually, GL parity)
     BGRA8_SRGB,   // sRGB variant (hardware-encoded; unused by the swapchain, see BGRA8)
     RGBA16F,
+    // Packed 32-bit HDR: 11/11/10 unsigned float, NO alpha. Half the bytes of
+    // RGBA16F for the scene-color chain, which is written and read back once per
+    // post stage — at 4K that chain is the largest single source of framebuffer
+    // traffic in the frame. Unsigned is fine here: the one shader that can
+    // produce negatives (taa_resolve's YCoCg round-trip) already clamps to 0.
+    // Only for targets whose alpha is genuinely unused — hdrSSR carries SSR's
+    // reflection weight in alpha and must stay RGBA16F.
+    R11G11B10F,
     R16F,
     RG16F,        // 2-channel HDR (screen-space motion vectors)
     Depth32F,
@@ -38,6 +46,7 @@ inline uint64_t RHIFormatLevelSize(RHIFormat format, uint32_t width, uint32_t he
         case RHIFormat::RGBA16F: return uint64_t(width) * height * 8;
         case RHIFormat::R16F:    return uint64_t(width) * height * 2;
         case RHIFormat::RG16F:   return uint64_t(width) * height * 4;
+        case RHIFormat::R11G11B10F: return uint64_t(width) * height * 4;
         default:                 return uint64_t(width) * height * 4;   // 8-bit RGBA variants, Depth32F
     }
 }

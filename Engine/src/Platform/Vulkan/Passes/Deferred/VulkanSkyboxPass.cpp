@@ -36,7 +36,7 @@ VulkanSkyboxPass::VulkanSkyboxPass(RHIDevice* device, const std::string& shaderD
         { 0, RHIResourceType::UniformBuffer,        RHIShaderStage::Vertex },
         { 1, RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment },
     };
-    desc.colorFormat  = RHIFormat::RGBA16F;
+    desc.colorFormat  = kSceneColorFormat;   // hdrLit
     desc.cullMode     = RHICullMode::None;          // viewed from inside the cube
     desc.depthFormat  = RHIFormat::Depth32F;
     desc.depthTest    = true;
@@ -144,7 +144,7 @@ void VulkanSkyboxPass::Reload()
         { 0, RHIResourceType::UniformBuffer,        RHIShaderStage::Vertex },
         { 1, RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment },
     };
-    desc.colorFormat  = RHIFormat::RGBA16F;
+    desc.colorFormat  = kSceneColorFormat;   // hdrLit
     desc.cullMode     = RHICullMode::None;
     desc.depthFormat  = RHIFormat::Depth32F;
     desc.depthTest    = true;

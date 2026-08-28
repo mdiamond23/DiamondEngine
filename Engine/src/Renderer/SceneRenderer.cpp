@@ -1026,7 +1026,7 @@ private:
         v->autoExposure = std::make_unique<VulkanAutoExposurePass>(m_Device, shaderDir);
         ApplyAutoExposureSettings(*v->autoExposure);
         v->bloom = std::make_unique<VulkanBloomPass>(
-            m_Device, shaderDir, BloomScale(width), BloomScale(height), RHIFormat::RGBA16F);
+            m_Device, shaderDir, BloomScale(width), BloomScale(height), kSceneColorFormat);
         v->bloom->SetParams(m_BloomThreshold, m_BloomIntensity);
         v->bloom->SetExposure(m_Exposure);
         // Offscreen views tonemap into an LDR texture ImGui can sample; the
@@ -1036,7 +1036,7 @@ private:
             offscreen ? RHIFormat::RGBA8 : m_Device->SwapchainFormat());
         v->tonemap->SetExposure(m_Exposure);
         v->tonemap->SetTonemapper(m_Tonemapper);
-        v->particles = std::make_unique<VulkanParticleRenderer>(m_Device, shaderDir, RHIFormat::RGBA16F);
+        v->particles = std::make_unique<VulkanParticleRenderer>(m_Device, shaderDir, kSceneColorFormat);
 
         // Collider/ragdoll/IK/audio debug wireframes — only the main (editor)
         // view draws them, matching the GL editor's DrawColliders/DrawAudioDebug
@@ -1111,7 +1111,7 @@ private:
         v.autoExposure = std::make_unique<VulkanAutoExposurePass>(m_Device, shaderDir);
         ApplyAutoExposureSettings(*v.autoExposure);
         v.bloom    = std::make_unique<VulkanBloomPass>(
-            m_Device, shaderDir, BloomScale(width), BloomScale(height), RHIFormat::RGBA16F);
+            m_Device, shaderDir, BloomScale(width), BloomScale(height), kSceneColorFormat);
         v.bloom->SetParams(m_BloomThreshold, m_BloomIntensity);
         v.bloom->SetExposure(m_Exposure);
         // Same format split as CreateView: offscreen tonemaps into the LDR
@@ -1157,27 +1157,42 @@ private:
         const RGTextureHandle gEmissive   = g.DeclareTexture("gEmissive",   { v.width, v.height, RHIFormat::RGBA16F });
         const RGTextureHandle gVelocity   = g.DeclareTexture("gVelocity",   { v.width, v.height, RHIFormat::RG16F   });
         const RGTextureHandle gDepth      = g.DeclareTexture("gDepth",      { v.width, v.height, RHIFormat::Depth32F });
+        // Shared half-res grid for every screen-space effect below that traces
+        // or marches per pixel — GTAO's horizon search, SSGI's hemisphere rays,
+        // and RT reflections' ray-per-pixel cost all scale with pixel count,
+        // and 4K has 4x 1080p's. Declared once and reused rather than one
+        // std::max(1u, ...) per effect.
+        const uint32_t halfW = std::max(1u, v.width  / 2);
+        const uint32_t halfH = std::max(1u, v.height / 2);
         // GTAO output, not a bare occlusion scalar: rgb = view-space bent normal,
-        // a = visibility. Storage, because both passes that write them are
+        // a = visibility. Storage, because all three passes that touch them are
         // compute. The bent normal is what lets the lighting pass steer its
         // far-field lookup instead of only scaling it (gi-design.md slice 4.5).
-        const RGTextureHandle aoRaw     = g.DeclareTexture("aoRaw",
-            { v.width, v.height, RHIFormat::RGBA16F, /*storage*/ true });
-        const RGTextureHandle aoBlurred = g.DeclareTexture("aoBlurred",
+        // The horizon search and denoise run at HALF res (aoRaw/aoDenoised);
+        // aoBlurred is the bilateral-upsampled FULL-res result
+        // deferred_lighting.frag actually samples.
+        const RGTextureHandle aoRaw      = g.DeclareTexture("aoRaw",
+            { halfW, halfH, RHIFormat::RGBA16F, /*storage*/ true });
+        const RGTextureHandle aoDenoised = g.DeclareTexture("aoDenoised",
+            { halfW, halfH, RHIFormat::RGBA16F, /*storage*/ true });
+        const RGTextureHandle aoBlurred  = g.DeclareTexture("aoBlurred",
             { v.width, v.height, RHIFormat::RGBA16F, /*storage*/ true });
         const RGTextureHandle ssrColor    = g.DeclareTexture("ssrColor",    { v.width, v.height, RHIFormat::RGBA16F });
-        const RGTextureHandle hdrLit      = g.DeclareTexture("hdrLit",      { v.width, v.height, RHIFormat::RGBA16F });
+        // The HDR scene chain (hdrLit -> hdrGI -> hdrTAA -> hdrBloom, plus TAA's
+        // history pair) is packed to 32 bits — see kSceneColorFormat. hdrSSR and
+        // gIndirect below deliberately stay RGBA16F: their alpha is read
+        // downstream (SSR reflection weight / far-field occlusion factor).
+        const RGTextureHandle hdrLit      = g.DeclareTexture("hdrLit",      { v.width, v.height, kSceneColorFormat });
         // Lighting's second MRT: the far-field diffuse irradiance it applied,
         // before the kD/albedo/AO multiplier. SSGI subtracts it so its bounce
         // REPLACES that term rather than stacking on it; it carries DDGI probe
         // irradiance once probes exist, with no change to the composite.
         const RGTextureHandle gIndirect   = g.DeclareTexture("gIndirect",   { v.width, v.height, RHIFormat::RGBA16F });
-        // SSGI traces at half res — the pass is far too expensive at full res
-        // and the result is low-frequency enough to upsample bilaterally.
-        // Raw/resolved are compute-written (storage); the history is written by
-        // an ordinary raster copy and only needs to survive the frame boundary.
-        const uint32_t halfW = std::max(1u, v.width  / 2);
-        const uint32_t halfH = std::max(1u, v.height / 2);
+        // SSGI traces at half res (the shared halfW/halfH above) — the pass is
+        // far too expensive at full res and the result is low-frequency enough
+        // to upsample bilaterally. Raw/resolved are compute-written (storage);
+        // the history is written by an ordinary raster copy and only needs to
+        // survive the frame boundary.
         const RGTextureHandle ssgiRaw      = g.DeclareTexture("ssgiRaw",
             { halfW, halfH, RHIFormat::RGBA16F, /*storage*/ true });
         const RGTextureHandle ssgiResolved = g.DeclareTexture("ssgiResolved",
@@ -1186,7 +1201,7 @@ private:
             { halfW, halfH, RHIFormat::RGBA16F, /*storage*/ false, /*persistent*/ true });
         // Scene + screen-space GI. Separate target for the same reason as
         // hdrSSR below — the composite reads the scene it modifies.
-        const RGTextureHandle hdrGI       = g.DeclareTexture("hdrGI",       { v.width, v.height, RHIFormat::RGBA16F });
+        const RGTextureHandle hdrGI       = g.DeclareTexture("hdrGI",       { v.width, v.height, kSceneColorFormat });
         // Scene + reflections resolved by SSRComposite. A separate target (not a
         // blend into hdrLit) because the graph points readers at a texture's LAST
         // writer — the SSR trace reading hdrLit while a later pass writes it back
@@ -1194,17 +1209,17 @@ private:
         const RGTextureHandle hdrSSR      = g.DeclareTexture("hdrSSR",      { v.width, v.height, RHIFormat::RGBA16F });
         // TAA-resolved scene — same separate-target rule as hdrSSR. Everything
         // after the resolve (transparency/particles/tonemap) consumes this.
-        const RGTextureHandle hdrTAA      = g.DeclareTexture("hdrTAA",      { v.width, v.height, RHIFormat::RGBA16F });
+        const RGTextureHandle hdrTAA      = g.DeclareTexture("hdrTAA",      { v.width, v.height, kSceneColorFormat });
         // Second MRT copy of the resolve, untouched by transparency/particles —
         // the history copy pass reads this, never hdrTAA (see VulkanTAAPass).
-        const RGTextureHandle taaHistorySrc = g.DeclareTexture("taaHistorySrc", { v.width, v.height, RHIFormat::RGBA16F });
+        const RGTextureHandle taaHistorySrc = g.DeclareTexture("taaHistorySrc", { v.width, v.height, kSceneColorFormat });
         // TAA accumulation buffer — persistent, so frame N's copy is exactly what
         // frame N+1 resolves against rather than the frame before that.
         const RGTextureHandle taaHistory  = g.DeclareTexture("taaHistory",
-            { v.width, v.height, RHIFormat::RGBA16F, /*storage*/ false, /*persistent*/ true });
+            { v.width, v.height, kSceneColorFormat, /*storage*/ false, /*persistent*/ true });
         // Scene + bloom, still HDR. Separate target for the same reason as hdrSSR:
         // the composite reads the scene it adds onto, so it can't write it back.
-        const RGTextureHandle hdrBloom    = g.DeclareTexture("hdrBloom",    { v.width, v.height, RHIFormat::RGBA16F });
+        const RGTextureHandle hdrBloom    = g.DeclareTexture("hdrBloom",    { v.width, v.height, kSceneColorFormat });
         // 1x1 auto-exposure multiplier, produced by the metering chain and read
         // by both the bloom bright pass and the tonemap.
         const RGTextureHandle exposureTex = g.DeclareTexture("exposure",    { 1, 1, RHIFormat::R16F });
@@ -1216,6 +1231,14 @@ private:
 
         // G-buffer — fill from the view's draw list; each draw binds its
         // material's descriptor set (built lazily by GetOrCreateMaterialSet).
+        // Depth prepass, then the G-buffer. The prepass lays exact depth with a
+        // null fragment shader; the G-buffer then loads it and tests LessEqual,
+        // so early-Z kills occluded fragments before the six-sample, six-MRT
+        // shader runs. Registered first only for readability — the graph is a
+        // topological sort, and the real ordering comes from the G-buffer
+        // loading the depth this pass writes.
+        m_GBuffer->AddDepthPrepassToGraph(g, gDepth,
+                              [this, &v](RHICommandList* cmd) { DrawGeometryDepthOnly(cmd, v); });
         m_GBuffer->AddToGraph(g, gViewPos, gViewNormal, gAlbedo, gMaterial, gEmissive,
                               gVelocity, gDepth,
                               [this, &v](RHICommandList* cmd) { DrawGeometry(cmd, v); });
@@ -1233,7 +1256,7 @@ private:
                   RHIFormat::R16F, /*storage*/ true });
         v.depthPyramid->AddToGraph(g, gViewPos, depthLevels);
 
-        v.gtao->AddToGraph(g, gViewPos, gViewNormal, depthLevels, aoRaw, aoBlurred);
+        v.gtao->AddToGraph(g, gViewPos, gViewNormal, depthLevels, aoRaw, aoDenoised, aoBlurred);
 
         // Shadow cascades — scene depth from the sun; push lightSpace * model.
         // The pass is shared across views: its light matrices are read at record
@@ -1558,6 +1581,39 @@ private:
         };
         tex(mat->Albedo); tex(mat->Normal); tex(mat->Metallic);
         tex(mat->Roughness); tex(mat->AO); tex(mat->Emissive);
+    }
+
+    // Depth-only replay of the same draw list, for the prepass. Identical to
+    // DrawGeometry minus the material-set churn's purpose: the sets are still
+    // bound (gbuffer.vert reads the camera UBO from set 0 binding 0) but the
+    // fragment stage is empty, so none of the six maps are sampled.
+    void DrawGeometryDepthOnly(RHICommandList* cmd, const View& v) {
+        RHIResourceSet* bound = nullptr;
+        for (const DrawItem& d : v.drawList) {
+            if (d.material != bound) {
+                cmd->BindResourceSet(0, d.material);
+                bound = d.material;
+            }
+            cmd->BindVertexBuffer(d.mesh->vertexBuffer.get());
+            cmd->BindIndexBuffer(d.mesh->indexBuffer.get(), RHIIndexType::U32);
+            const GBufferPushConstants pc{ d.world, d.prevWorld };
+            cmd->PushConstants(RHIShaderStage::Vertex, 0, sizeof(pc), &pc);
+            cmd->DrawIndexed(d.mesh->indexCount);
+        }
+
+        if (v.skinnedDraws.empty()) return;
+        cmd->BindPipeline(m_GBuffer->DepthSkinnedPipeline());
+        RHIResourceSet* boundMat  = nullptr;
+        RHIResourceSet* boundBone = nullptr;
+        for (const SkinnedDrawItem& d : v.skinnedDraws) {
+            if (d.material != boundMat)  { cmd->BindResourceSet(0, d.material); boundMat  = d.material; }
+            if (d.bones    != boundBone) { cmd->BindResourceSet(1, d.bones);    boundBone = d.bones;    }
+            cmd->BindVertexBuffer(d.mesh->vertexBuffer.get());
+            cmd->BindIndexBuffer(d.mesh->indexBuffer.get(), RHIIndexType::U32);
+            const GBufferPushConstants pc{ d.world, d.prevWorld };
+            cmd->PushConstants(RHIShaderStage::Vertex, 0, sizeof(pc), &pc);
+            cmd->DrawIndexed(d.mesh->indexCount);
+        }
     }
 
     void DrawGeometry(RHICommandList* cmd, const View& v) {

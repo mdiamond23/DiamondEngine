@@ -61,6 +61,27 @@ public:
                     RGTextureHandle depth,
                     std::function<void(RHICommandList*)> drawScene);
 
+    // Depth prepass — the same geometry, depth only, registered BEFORE
+    // AddToGraph so the G-buffer can load the result instead of clearing it.
+    //
+    // The G-buffer's fragment shader is the most expensive in the frame (six
+    // texture samples, six MRT writes), and in a scene with real depth
+    // complexity — Sponza being the canonical case — most of those fragments
+    // are overwritten by something nearer. Laying depth down first with a null
+    // fragment shader lets early-Z reject them before that shader ever runs,
+    // for the cost of a second geometry pass that does no shading at all.
+    //
+    // 'drawScene' records the same draws as the G-buffer's callback but binds
+    // DepthPipeline()/DepthSkinnedPipeline(). Material sets are still bound:
+    // gbuffer.vert reads the camera UBO from set 0 binding 0. Both depth
+    // pipelines declare the identical set-0 layout, so the material sets built
+    // against the main pipeline bind to them unchanged.
+    void AddDepthPrepassToGraph(RHIRenderGraph& graph, RGTextureHandle depth,
+                                std::function<void(RHICommandList*)> drawScene);
+
+    RHIPipeline* DepthPipeline() const        { return m_DepthPipeline.get(); }
+    RHIPipeline* DepthSkinnedPipeline() const { return m_DepthSkinnedPipeline.get(); }
+
     // The skinned-geometry pipeline: identical set-0 material layout to the static
     // pipeline (so material sets are reused unchanged), a wider vertex layout with
     // bone indices/weights, and set 1 = the per-entity bone palette. drawScene
@@ -85,8 +106,11 @@ private:
     std::unique_ptr<RHIShader>   m_Vert;
     std::unique_ptr<RHIShader>   m_Frag;
     std::unique_ptr<RHIShader>   m_SkinnedVert;
+    std::unique_ptr<RHIShader>   m_DepthFrag;   // empty main() — csm_depth.frag
     std::unique_ptr<RHIPipeline> m_Pipeline;
     std::unique_ptr<RHIPipeline> m_SkinnedPipeline;
+    std::unique_ptr<RHIPipeline> m_DepthPipeline;
+    std::unique_ptr<RHIPipeline> m_DepthSkinnedPipeline;
 };
 
 } // namespace Diamond

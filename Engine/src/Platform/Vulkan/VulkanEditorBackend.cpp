@@ -175,10 +175,13 @@ public:
         // backbuffer belongs to ImGui.
         int fbW = 0, fbH = 0;
         glfwGetFramebufferSize(m_Window, &fbW, &fbH);
-        m_SceneW = (uint32_t)std::max(fbW, 64);
-        m_SceneH = (uint32_t)std::max(fbH, 64);
-        m_WantW  = m_SceneW;
-        m_WantH  = m_SceneH;
+        m_WantW  = (uint32_t)std::max(fbW, 64);
+        m_WantH  = (uint32_t)std::max(fbH, 64);
+        // Scene targets are the window size scaled by the render-scale setting;
+        // m_WantW/H stay the WINDOW size, which is what ApplyPendingResize
+        // re-derives the scaled target from.
+        m_SceneW = ScaledDim(m_WantW);
+        m_SceneH = ScaledDim(m_WantH);
 
         m_Renderer = SceneRenderer::Create(m_Device.get(), m_SceneW, m_SceneH,
                                            /*offscreen*/ true);
@@ -382,6 +385,33 @@ public:
     void DrawRendererSettings() override {
         ImGui::Text("Backend: Vulkan (deferred, RHI render graph)");
         ImGui::Text("Scene output: %ux%u", m_SceneW, m_SceneH);
+        // Render scale — the scene renders at this fraction of the window and
+        // the viewport panel stretches it back up (bilinear, the RHI's default
+        // filter). Nearly every cost in this pipeline is per-pixel: the G-buffer,
+        // lighting, GTAO, SSGI, SSR, RT reflections, TAA, bloom, and the chain of
+        // full-res RGBA16F intermediates the scene is copied through. One knob
+        // scales all of them together, which is why this beats shrinking any
+        // single effect — the softness is uniform and TAA absorbs it, instead of
+        // one pass going visibly blocky. ImGui itself stays at native res.
+        {
+            // The slider edits m_RenderScalePct live, but the resize is committed
+            // only on RELEASE (IsItemDeactivatedAfterEdit). A resize is a
+            // WaitIdle plus a full pass/target rebuild — applying it per drag
+            // tick would fire dozens of them and hitch the whole editor.
+            ImGui::SliderInt("Render Scale", &m_RenderScalePct, 25, 100, "%d%%");
+            if (ImGui::IsItemDeactivatedAfterEdit()) {
+                const float wanted = static_cast<float>(m_RenderScalePct) / 100.0f;
+                if (wanted != m_RenderScale) {
+                    m_RenderScale = wanted;
+                    // Bypass the resize debounce: the window size did not change,
+                    // so ApplyPendingResize's settle counter would never fire.
+                    m_RenderScaleDirty = true;
+                }
+            }
+            ImGui::TextDisabled("%.2f MPx/frame%s",
+                                (m_SceneW * m_SceneH) / 1.0e6f,
+                                m_RenderScale < 1.0f ? " (upscaled to fit)" : " (native)");
+        }
         ImGui::Separator();
         DrawPresetControls();
         ImGui::Separator();
@@ -611,8 +641,19 @@ public:
 private:
     static constexpr int kResizeSettleFrames = 15;
 
+    // The window framebuffer size scaled by the render-scale setting, floored at
+    // 64 so a tiny window or an extreme scale can never produce a 0-sized target.
+    uint32_t ScaledDim(uint32_t windowDim) const {
+        const float scaled = static_cast<float>(windowDim) * m_RenderScale;
+        return std::max(64u, static_cast<uint32_t>(scaled + 0.5f));
+    }
+
     // Track the window framebuffer size, debounced: a Resize is a WaitIdle +
     // pass rebuild, so only fire once the size has settled for a run of frames.
+    //
+    // The comparison is against the SCALED target size, not the window size —
+    // with a render scale below 1 those differ permanently, and comparing the
+    // raw window size would re-resize every single frame.
     void ApplyPendingResize() {
         int fbW = 0, fbH = 0;
         glfwGetFramebufferSize(m_Window, &fbW, &fbH);
@@ -625,11 +666,20 @@ private:
             m_WantH = (uint32_t)fbH;
             m_SizeStableFrames = 0;
         }
-        if ((m_WantW != m_SceneW || m_WantH != m_SceneH) &&
-            m_SizeStableFrames >= kResizeSettleFrames) {
-            m_SceneW = m_WantW;
-            m_SceneH = m_WantH;
+
+        const uint32_t desiredW = ScaledDim(m_WantW);
+        const uint32_t desiredH = ScaledDim(m_WantH);
+
+        // A render-scale change needs no settle period — the window is already
+        // stable, only our interpretation of it moved.
+        if ((desiredW != m_SceneW || desiredH != m_SceneH) &&
+            (m_SizeStableFrames >= kResizeSettleFrames || m_RenderScaleDirty)) {
+            m_RenderScaleDirty = false;
+            m_SceneW = desiredW;
+            m_SceneH = desiredH;
             m_Renderer->Resize(m_SceneW, m_SceneH);
+            // The targets were just recreated, so ImGui's descriptor sets point
+            // at destroyed images until these are rebuilt.
             RegisterViewImages(m_ViewportSets, m_Renderer->OutputColor());
             if (m_GameViewCreated) {
                 m_GameW = m_SceneW;
@@ -678,7 +728,12 @@ private:
 
     EditorFrameInput m_Frame;   // latest frame's state, read by overlay lambdas
 
-    uint32_t m_SceneW = 0, m_SceneH = 0;   // main-view render size
+    uint32_t m_SceneW = 0, m_SceneH = 0;   // main-view render size (window size x m_RenderScale)
+    // Fraction of the window the scene renders at; the viewport panel stretches
+    // the result back to full size. 1.0 = native.
+    float m_RenderScale      = 1.0f;
+    int   m_RenderScalePct   = 100;     // slider's live value; committed on release
+    bool  m_RenderScaleDirty = false;   // scale moved — resize without waiting to settle
     uint32_t m_GameW  = 0, m_GameH  = 0;   // game-view render size
     uint32_t m_WantW  = 0, m_WantH  = 0;   // debounced framebuffer size
     int      m_SizeStableFrames = 0;

@@ -332,7 +332,9 @@ void RHIRenderGraph::Execute(RHICommandList* cmd)
                     if (e.isDepth)
                     {
                         rp.depthTexture = e.texture;
-                        rp.clearDepth   = pass.clear;
+                        // Both flags: Load() still suppresses the depth clear as
+                        // before, and LoadDepth() suppresses only this one.
+                        rp.clearDepth   = pass.clear && pass.clearDepth;
                     }
                     else
                     {

@@ -101,7 +101,12 @@ private:
     uint32_t m_FrameIndex   = 0;
     bool     m_Enabled      = true;
     bool     m_HistoryValid = false;   // alpha = 1 passthrough until seeded
-    int32_t  m_RayCount     = 8;
+    // Rays per half-res pixel per frame. 4 rather than 8: the trace is the
+    // second-most expensive pass in the frame and its cost is linear in this
+    // number, while the temporal pass accumulates across frames — so halving it
+    // roughly halves the cost and mostly costs convergence time, not steady-state
+    // quality. Live-tunable via SetRayCount.
+    int32_t  m_RayCount     = 4;
     float    m_Intensity    = 1.0f;
     float    m_MaxDistance  = 8.0f;    // view-space units
     float    m_Alpha        = 0.1f;    // steady-state temporal blend

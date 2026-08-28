@@ -15,7 +15,8 @@
 namespace Diamond {
 
 namespace {
-constexpr RHIFormat kHDRFormat = RHIFormat::RGBA16F;   // HDR scene color
+constexpr RHIFormat kHDRFormat = kSceneColorFormat;      // hdrLit (MRT 0)
+constexpr RHIFormat kIndirectFormat = RHIFormat::RGBA16F;  // gIndirect (MRT 1) — .a is the occlusion factor
 } // namespace
 
 VulkanDeferredLightingPass::VulkanDeferredLightingPass(RHIDevice* device,
@@ -68,7 +69,7 @@ VulkanDeferredLightingPass::VulkanDeferredLightingPass(RHIDevice* device,
     // MRT: location 0 = the lit scene, location 1 = the far-field diffuse
     // irradiance this pass used, which ssgi_composite subtracts to replace the
     // term rather than stack on it.
-    desc.colorFormats = { kHDRFormat, kHDRFormat };
+    desc.colorFormats = { kHDRFormat, kIndirectFormat };
     m_Pipeline = device->CreatePipeline(desc);
 }
 
@@ -336,7 +337,7 @@ void VulkanDeferredLightingPass::Reload()
         { 23, RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment },
         { 24, RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment },
     };
-    desc.colorFormats = { kHDRFormat, kHDRFormat };
+    desc.colorFormats = { kHDRFormat, kIndirectFormat };
     m_Pipeline = m_Device->CreatePipeline(desc);
 
     // AddToGraph only runs once at graph-build time, so rebuild the set eagerly

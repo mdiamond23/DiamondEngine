@@ -85,6 +85,12 @@ struct RGPass {
     std::vector<RGBufferHandle>  bufferWrites;
     bool                         toSwapchain = false;  // write the backbuffer instead of textures
     bool                         clear       = true;   // CLEAR vs LOAD the write targets
+    // Depth's clear, separable from the color one above. A depth PREPASS needs
+    // exactly this split: the G-buffer that follows must still CLEAR its color
+    // targets (gViewPos = 0 is what marks a background pixel downstream) while
+    // LOADING the depth the prepass just wrote, so early-Z can reject the
+    // fragments it already knows are occluded.
+    bool                         clearDepth  = true;
     std::array<float, 4>         clearColor  { 0.0f, 0.0f, 0.0f, 1.0f };
     std::function<void(RHICommandList*)> execute;
 
@@ -97,6 +103,8 @@ struct RGPass {
     RGPass& WriteSwapchain()          { toSwapchain = true;  return *this; }
     RGPass& SetClearColor(std::array<float, 4> c) { clear = true; clearColor = c; return *this; }
     RGPass& Load()                    { clear = false;       return *this; }
+    // Keep the color clear, but LOAD depth (see clearDepth above).
+    RGPass& LoadDepth()               { clearDepth = false;  return *this; }
     RGPass& SetExecute(std::function<void(RHICommandList*)> fn) { execute = std::move(fn); return *this; }
 };
 

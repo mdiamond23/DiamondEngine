@@ -13,6 +13,9 @@ inline VkFormat ToVkFormat(RHIFormat f) {
         case RHIFormat::BGRA8:      return VK_FORMAT_B8G8R8A8_UNORM;
         case RHIFormat::BGRA8_SRGB: return VK_FORMAT_B8G8R8A8_SRGB;
         case RHIFormat::RGBA16F:    return VK_FORMAT_R16G16B16A16_SFLOAT;
+        // B10G11R11 is the packing Vulkan names it by; the channel order in the
+        // shader is still rgb (the format's B field is the low 10 bits).
+        case RHIFormat::R11G11B10F: return VK_FORMAT_B10G11R11_UFLOAT_PACK32;
         case RHIFormat::R16F:       return VK_FORMAT_R16_SFLOAT;
         case RHIFormat::RG16F:      return VK_FORMAT_R16G16_SFLOAT;
         case RHIFormat::Depth32F:   return VK_FORMAT_D32_SFLOAT;
@@ -30,6 +33,7 @@ inline RHIFormat FromVkFormat(VkFormat f) {
         case VK_FORMAT_B8G8R8A8_UNORM:      return RHIFormat::BGRA8;
         case VK_FORMAT_B8G8R8A8_SRGB:       return RHIFormat::BGRA8_SRGB;
         case VK_FORMAT_R16G16B16A16_SFLOAT: return RHIFormat::RGBA16F;
+        case VK_FORMAT_B10G11R11_UFLOAT_PACK32: return RHIFormat::R11G11B10F;
         case VK_FORMAT_R16_SFLOAT:          return RHIFormat::R16F;
         case VK_FORMAT_R16G16_SFLOAT:       return RHIFormat::RG16F;
         case VK_FORMAT_D32_SFLOAT:          return RHIFormat::Depth32F;

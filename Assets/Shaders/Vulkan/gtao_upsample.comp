@@ -1,0 +1,73 @@
+#version 450
+
+// Bilateral upsample of half-res denoised GTAO into the full-res target
+// deferred_lighting.frag samples. Mirrors ssgi_composite.frag's
+// BilateralUpsample (4 half-res taps weighted by depth + normal agreement
+// with the full-res pixel) — plain bilinear would bleed occlusion and bent
+// normals across silhouette edges.
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0, rgba16f) uniform writeonly image2D aoOut;      // full res
+layout(set = 0, binding = 1) uniform sampler2D aoIn;         // half res, rgb bent normal, a visibility
+layout(set = 0, binding = 2) uniform sampler2D gViewPos;     // full res
+layout(set = 0, binding = 3) uniform sampler2D gViewNormal;  // full res
+
+const float NORMAL_POWER = 8.0;    // bilateral normal falloff
+const float DEPTH_SCALE  = 0.05;   // depth tolerance as a fraction of view depth
+
+void main() {
+    ivec2 id   = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = textureSize(gViewPos, 0);
+    if (any(greaterThanEqual(id, size))) return;
+
+    vec3 P = texelFetch(gViewPos, id, 0).xyz;
+    if (P.z == 0.0) {   // background — geometric normal facing camera, fully visible
+        imageStore(aoOut, id, vec4(0.0, 0.0, 1.0, 1.0));
+        return;
+    }
+
+    vec3  nRaw   = texelFetch(gViewNormal, id, 0).xyz;
+    float nLenSq = dot(nRaw, nRaw);
+    if (nLenSq <= 1e-6) {
+        imageStore(aoOut, id, vec4(0.0, 0.0, 1.0, 1.0));
+        return;
+    }
+    vec3 N = nRaw * inversesqrt(nLenSq);
+
+    vec2  halfSize = vec2(textureSize(aoIn, 0));
+    vec2  uv       = (vec2(id) + 0.5) / vec2(size);
+    vec2  coord    = uv * halfSize - 0.5;
+    vec2  base     = floor(coord);
+    vec2  f        = coord - base;
+
+    float bw[4] = float[4]((1.0 - f.x) * (1.0 - f.y),
+                                  f.x  * (1.0 - f.y),
+                           (1.0 - f.x) *        f.y,
+                                  f.x  *        f.y);
+    ivec2 offs[4] = ivec2[4](ivec2(0, 0), ivec2(1, 0), ivec2(0, 1), ivec2(1, 1));
+
+    vec4  sum  = vec4(0.0);
+    float wsum = 0.0;
+
+    for (int i = 0; i < 4; ++i) {
+        ivec2 t = clamp(ivec2(base) + offs[i], ivec2(0), ivec2(halfSize) - 1);
+
+        vec2 tuv = (vec2(t) + 0.5) / halfSize;
+        vec3 sp  = textureLod(gViewPos,    tuv, 0.0).xyz;
+        vec3 sn  = textureLod(gViewNormal, tuv, 0.0).xyz;
+
+        float wd = exp(-abs(sp.z - P.z) / max(DEPTH_SCALE * abs(P.z), 1e-3));
+        float wn = pow(max(dot(normalize(sn), N), 0.0), NORMAL_POWER);
+        float w  = bw[i] * wd * wn + 1e-6;
+
+        sum  += texelFetch(aoIn, t, 0) * w;
+        wsum += w;
+    }
+
+    vec4  avg   = sum / wsum;
+    float bLen2 = dot(avg.rgb, avg.rgb);
+    vec3  bentN = bLen2 > 1e-8 ? avg.rgb * inversesqrt(bLen2) : N;
+
+    imageStore(aoOut, id, vec4(bentN, clamp(avg.a, 0.0, 1.0)));
+}

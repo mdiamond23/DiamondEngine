@@ -16,6 +16,31 @@
 // in the device/backend types.
 namespace Diamond {
 
+// ── Scene-color format ───────────────────────────────────────────────────────
+// The format of the HDR scene image as it is passed down the post chain:
+//
+//   hdrLit -> hdrGI -> hdrSSR -> hdrTAA -> hdrBloom -> outputColor
+//
+// Every link is a full-resolution read plus a full-resolution write, because
+// the render graph resolves readers to a texture's LAST writer and so a pass
+// cannot blend back into the target it sampled. At 4K that chain is the single
+// largest source of framebuffer traffic in the frame, and halving the pixel
+// size halves all of it.
+//
+// R11G11B10F drops alpha and some mantissa. Both are affordable HERE and only
+// here — the targets below carry radiance and nothing else. Three neighbours in
+// the same chain must stay RGBA16F because their alpha is load-bearing:
+//
+//   hdrSSR    - taa_resolve.frag reads .a as the SSR reflection weight
+//   gIndirect - ssgi_composite.frag reads .a as the far-field occlusion factor
+//   ssrColor / ssgiRaw / ssgiResolved - .a is ray-hit confidence
+//
+// Declared once so the target declarations in SceneRenderer and every pipeline
+// that writes one of them cannot drift apart; Vulkan's dynamic rendering
+// requires the two to match exactly, so a mismatch is a validation error rather
+// than a silent bug.
+constexpr RHIFormat kSceneColorFormat = RHIFormat::R11G11B10F;
+
 // ── Skinned vertex layout ────────────────────────────────────────────────────
 // The SceneRenderer uploads skinned meshes as pos/normal/uv/tangent + bone indices
 // (ivec4) + weights (vec4). Every skinned pipeline (G-buffer, CSM/spot, point

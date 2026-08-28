@@ -1,28 +1,38 @@
 #version 450
 
-// Depth-aware 3x3 denoise for gtao.comp. GTAO's per-pixel slice rotation trades
-// banding for noise; this resolves the spatial half of it, and TAA (downstream
-// of lighting) averages the per-frame rotation.
+// Depth-aware 3x3 denoise for gtao.comp, HALF resolution (both aoIn and aoOut
+// are the half-res grid gtao.comp dispatched on). GTAO's per-pixel slice
+// rotation trades banding for noise; this resolves the spatial half of it, and
+// TAA (downstream of lighting) averages the per-frame rotation.
 //
 // Bilateral on view depth only: a normal-similarity term would refuse to blur
 // exactly where the bent normal varies most, which is where the noise is.
 // Renormalizes the bent normal after averaging — the mean of unit vectors is
 // not a unit vector.
+//
+// gViewPos is full res — a half-res grid position, so its depth is read via a
+// normalized UV lookup (matching gtao.comp's own convention) rather than
+// texelFetch, which would otherwise address the wrong texel entirely.
 
 layout(local_size_x = 8, local_size_y = 8) in;
 
 layout(set = 0, binding = 0, rgba16f) uniform writeonly image2D aoOut;
-layout(set = 0, binding = 1) uniform sampler2D aoIn;       // rgb bent normal, a visibility
-layout(set = 0, binding = 2) uniform sampler2D gViewPos;
+layout(set = 0, binding = 1) uniform sampler2D aoIn;       // half res, rgb bent normal, a visibility
+layout(set = 0, binding = 2) uniform sampler2D gViewPos;   // full res
 
 const float DEPTH_SCALE = 0.05;   // tolerance as a fraction of view depth
+
+vec3 ViewPosAt(ivec2 halfId, ivec2 halfSize) {
+    vec2 uv = (vec2(halfId) + 0.5) / vec2(halfSize);
+    return textureLod(gViewPos, uv, 0.0).xyz;
+}
 
 void main() {
     ivec2 id   = ivec2(gl_GlobalInvocationID.xy);
     ivec2 size = textureSize(aoIn, 0);
     if (any(greaterThanEqual(id, size))) return;
 
-    vec3 P = texelFetch(gViewPos, id, 0).xyz;
+    vec3 P = ViewPosAt(id, size);
     if (P.z == 0.0) {   // background — nothing to average against
         imageStore(aoOut, id, texelFetch(aoIn, id, 0));
         return;
@@ -34,7 +44,7 @@ void main() {
     for (int dy = -1; dy <= 1; ++dy) {
         for (int dx = -1; dx <= 1; ++dx) {
             ivec2 t = clamp(id + ivec2(dx, dy), ivec2(0), size - 1);
-            vec3  S = texelFetch(gViewPos, t, 0).xyz;
+            vec3  S = ViewPosAt(t, size);
             if (S.z == 0.0) continue;
 
             float w = exp(-abs(S.z - P.z) / max(DEPTH_SCALE * abs(P.z), 1e-3));

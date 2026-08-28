@@ -6,7 +6,9 @@
 namespace Diamond {
 
 namespace {
-constexpr RHIFormat kHDRFormat = RHIFormat::RGBA16F;   // scene chain + history
+constexpr RHIFormat kHDRFormat = kSceneColorFormat;    // hdrTAA + taaHistorySrc + taaHistory
+// NOTE: uScene (hdrSSR) stays RGBA16F — taa_resolve reads its .a as the SSR
+// reflection weight. Only the TARGETS this pass writes are packed.
 } // namespace
 
 VulkanTAAPass::VulkanTAAPass(RHIDevice* device, const std::string& shaderDir)

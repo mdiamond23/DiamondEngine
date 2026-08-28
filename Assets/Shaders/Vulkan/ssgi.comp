@@ -34,7 +34,14 @@ layout(push_constant) uniform Push {
     float intensity;
 } pc;
 
-const int   TRACE_STEPS   = 16;
+// Cost is linear in rayCount x TRACE_STEPS, and this trace is the single most
+// expensive pass in the frame at 4K. 8 rather than 16: the march terminates at
+// the first depth crossing, so halving the budget mostly costs REACH — long
+// rays that would have found a distant hit now miss, and the composite falls
+// back to the far-field (DDGI/IBL) term for those directions, which is exactly
+// what its confidence weighting is built to do. Near-field bounce, which is
+// what SSGI is actually for, is unaffected.
+const int   TRACE_STEPS   = 8;
 const float THICKNESS     = 0.6;
 const float BIAS          = 0.05;
 const float NORMAL_PUSH   = 0.05;   // lifts the origin off its own surface

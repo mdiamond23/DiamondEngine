@@ -25,6 +25,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <spdlog/spdlog.h>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -197,12 +198,17 @@ int RunVulkanMeshDemo() {
     const RGTextureHandle gDepth      = graph.DeclareTexture(
         "gDepth",      { kOffscreenW, kOffscreenH, RHIFormat::Depth32F });
     // GTAO targets — rgb = view-space bent normal, a = visibility (raw, then
-    // denoised). Storage, because both passes that write them are compute.
-    // Declared at the top level so the debug pass can also show the raw one.
-    const RGTextureHandle aoRaw     = graph.DeclareTexture(
-        "aoRaw",     { kOffscreenW, kOffscreenH, RHIFormat::RGBA16F, /*storage*/ true });
-    const RGTextureHandle aoBlurred = graph.DeclareTexture(
-        "aoBlurred", { kOffscreenW, kOffscreenH, RHIFormat::RGBA16F, /*storage*/ true });
+    // denoised, both half res; then bilaterally upsampled to full res).
+    // Storage, because all three passes that touch them are compute. Declared
+    // at the top level so the debug pass can also show the raw one.
+    constexpr uint32_t kGTAOHalfW = std::max(1u, kOffscreenW / 2);
+    constexpr uint32_t kGTAOHalfH = std::max(1u, kOffscreenH / 2);
+    const RGTextureHandle aoRaw      = graph.DeclareTexture(
+        "aoRaw",      { kGTAOHalfW, kGTAOHalfH, RHIFormat::RGBA16F, /*storage*/ true });
+    const RGTextureHandle aoDenoised = graph.DeclareTexture(
+        "aoDenoised", { kGTAOHalfW, kGTAOHalfH, RHIFormat::RGBA16F, /*storage*/ true });
+    const RGTextureHandle aoBlurred  = graph.DeclareTexture(
+        "aoBlurred",  { kOffscreenW, kOffscreenH, RHIFormat::RGBA16F, /*storage*/ true });
     // Linear view-depth pyramid GTAO's horizon march taps (R16F, 2 bytes/tap
     // against gViewPos's 8). Separate textures per level — the RHI has no
     // per-mip views for render targets.
@@ -349,7 +355,7 @@ int RunVulkanMeshDemo() {
     // Pass 2+3 — GTAO horizon search + denoise over the G-buffer's view-space
     // pos/normal.
     depthPyramid.AddToGraph(graph, gViewPos, depthLevels);
-    gtao.AddToGraph(graph, gViewPos, gViewNormal, depthLevels, aoRaw, aoBlurred);
+    gtao.AddToGraph(graph, gViewPos, gViewNormal, depthLevels, aoRaw, aoDenoised, aoBlurred);
 
     // Shadow passes — render the scene depth into each cascade from the sun. The
     // callback receives the per-cascade light matrix and pushes lightSpace * model.

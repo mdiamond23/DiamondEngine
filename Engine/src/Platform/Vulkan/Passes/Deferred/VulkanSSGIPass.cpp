@@ -92,7 +92,10 @@ VulkanSSGIPass::VulkanSSGIPass(RHIDevice* device, const std::string& shaderDir,
             { 7, RHIResourceType::CombinedImageSampler, RHIShaderStage::Fragment }, // gIndirect
         };
         desc.pushConstants = { RHIShaderStage::Fragment, sizeof(CompositePush) };
-        desc.colorFormat   = kSSGIFormat;
+        // The composite resolves into hdrGI — scene color, no alpha. The trace
+        // and history targets above/below keep kSSGIFormat: their .a is the
+        // ray-hit confidence the composite weights by.
+        desc.colorFormat   = kSceneColorFormat;
         m_CompositePipeline = device->CreatePipeline(desc);
     }
 

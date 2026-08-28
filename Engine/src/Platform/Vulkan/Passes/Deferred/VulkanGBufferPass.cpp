@@ -87,6 +87,12 @@ void VulkanGBufferPass::Build(bool isReload)
     desc.depthFormat = RHIFormat::Depth32F;
     desc.depthTest   = true;
     desc.depthWrite  = true;
+    // LessEqual, not Less: the depth prepass has already written the exact depth
+    // of every visible fragment, so the surviving ones arrive here EQUAL and
+    // must still pass. Occluded fragments compare greater and are killed by
+    // early-Z before the fragment shader runs, which is the whole point.
+    // Unchanged when no prepass runs — nothing is ever equal to a cleared 1.0.
+    desc.depthCompare = RHICompareOp::LessEqual;
     m_Pipeline = m_Device->CreatePipeline(desc);
 
     // Skinned variant: same material set-0 layout, push constant, and MRT — so a
@@ -103,6 +109,36 @@ void VulkanGBufferPass::Build(bool isReload)
     skinned.vertexLayout.attributes  = SkinnedVertexAttributes();
     skinned.resourceBindings1        = BonesSetBindings();
     m_SkinnedPipeline = m_Device->CreatePipeline(skinned);
+
+    // ── Depth prepass variants ───────────────────────────────────────────────
+    // Same vertex stages, same set-0 layout (so material sets bind unchanged —
+    // gbuffer.vert still needs the camera UBO at binding 0), but NO color
+    // attachments and a fragment shader that is literally `void main() {}`.
+    // csm_depth.frag is reused rather than adding an identical empty shader.
+    const std::vector<uint32_t> dfs = TryLoadSpirv(m_ShaderDir, "csm_depth.frag.spv");
+    if (dfs.empty()) {
+        if (isReload) {
+            spdlog::warn("[VulkanGBufferPass] depth-prepass reload skipped — missing SPIR-V");
+            return;
+        }
+        spdlog::critical("[Vulkan] failed to open csm_depth.frag.spv for the depth prepass");
+        std::abort();
+    }
+    RHIShaderDesc dfsDesc{ RHIShaderStage::Fragment, dfs.data(), dfs.size() };
+    m_DepthFrag = m_Device->CreateShader(dfsDesc);
+
+    RHIPipelineDesc depthOnly = desc;
+    depthOnly.fragmentShader = m_DepthFrag.get();
+    depthOnly.colorFormats.clear();          // depth attachment only
+    depthOnly.depthCompare = RHICompareOp::Less;   // this pass is what LAYS the depth
+    m_DepthPipeline = m_Device->CreatePipeline(depthOnly);
+
+    RHIPipelineDesc depthSkinned = depthOnly;
+    depthSkinned.vertexShader            = m_SkinnedVert.get();
+    depthSkinned.vertexLayout.stride     = kSkinnedVertexStride;
+    depthSkinned.vertexLayout.attributes = SkinnedVertexAttributes();
+    depthSkinned.resourceBindings1       = BonesSetBindings();
+    m_DepthSkinnedPipeline = m_Device->CreatePipeline(depthSkinned);
 }
 
 std::unique_ptr<RHIResourceSet> VulkanGBufferPass::CreateMaterialSet(
@@ -139,8 +175,22 @@ void VulkanGBufferPass::AddToGraph(RHIRenderGraph& graph,
         .Write(velocity)
         .Write(depth)
         .SetClearColor({ 0.0f, 0.0f, 0.0f, 1.0f })
+        // Colors still clear (gViewPos = 0 is the background marker every
+        // downstream pass tests), but depth LOADS what the prepass wrote.
+        .LoadDepth()
         .SetExecute([this, drawScene = std::move(drawScene)](RHICommandList* cmd) {
             cmd->BindPipeline(m_Pipeline.get());
+            drawScene(cmd);
+        });
+}
+
+void VulkanGBufferPass::AddDepthPrepassToGraph(RHIRenderGraph& graph, RGTextureHandle depth,
+                                               std::function<void(RHICommandList*)> drawScene)
+{
+    graph.AddPass("DepthPrepass")
+        .Write(depth)
+        .SetExecute([this, drawScene = std::move(drawScene)](RHICommandList* cmd) {
+            cmd->BindPipeline(m_DepthPipeline.get());
             drawScene(cmd);
         });
 }

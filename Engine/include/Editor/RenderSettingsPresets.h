@@ -41,7 +41,11 @@ struct RenderSettings {
     bool  gtaoBentNormals  = true;
 
     bool  ssgiEnabled     = true;
-    int   ssgiRays        = 8;
+    // Rays per half-res pixel per frame. The trace's cost is linear in this and
+    // it is one of the two most expensive passes in the frame; the temporal pass
+    // accumulates across frames, so halving it mostly costs convergence time
+    // rather than steady-state quality. Slider goes to 32 if you want it back.
+    int   ssgiRays        = 4;
     float ssgiIntensity   = 1.0f;
     float ssgiMaxDistance = 8.0f;
 

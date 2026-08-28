@@ -23,7 +23,14 @@ layout(set = 0, binding = 3) uniform SSRUBO {
     vec2 screenSize;
 } ubo;
 
-const int   MAX_STEPS    = 32;     // coarse linear march
+// Coarse linear march. 16 rather than 32: cost is linear in this, and unlike a
+// resolution cut it costs no SHARPNESS — the trace still runs per full-res
+// pixel, so a hit is resolved exactly where it was before. What shrinks is
+// REACH: with MAX_DISTANCE fixed, each step is now twice as long, so thin or
+// distant geometry is likelier to be stepped over and the pixel falls back to
+// the prefiltered IBL the composite already fades toward. The binary
+// refinement below still pins the hit point precisely once a crossing is found.
+const int   MAX_STEPS    = 16;
 const int   REFINE_STEPS = 6;      // binary-search refinement after a crossing
 const float MAX_DISTANCE = 20.0;   // view-space units the ray may travel
 const float THICKNESS    = 0.6;    // how "deep" a surface counts as solid

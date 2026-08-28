@@ -8,7 +8,7 @@
 namespace Diamond {
 
 namespace {
-constexpr RHIFormat kHDRFormat   = RHIFormat::RGBA16F;
+constexpr RHIFormat kHDRFormat   = kSceneColorFormat;   // blends into hdrTAA
 constexpr RHIFormat kDepthFormat = RHIFormat::Depth32F;
 constexpr uint32_t  kVertexStride = sizeof(glm::vec3) * 3 + sizeof(glm::vec2);  // 44 (pos/normal/uv/tangent)
 

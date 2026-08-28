@@ -47,6 +47,7 @@
 #include "Profiling/CPUProfiler.h"
 #include "AssetPipeline/TextureCooker.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -339,11 +340,52 @@ int main(int argc, char** argv)
     ImFont* iconFont = nullptr;
     {
         ImGuiIO& io = ImGui::GetIO();
-        io.Fonts->AddFontDefault();
+
+        // Scale the font + widget metrics for high-resolution displays. Without
+        // this a 4K panel renders ImGui's fixed ~13px default font at native
+        // pixel size, which reads as tiny.
+        //
+        // The OS's own display-scaling percentage (glfwGetMonitorContentScale —
+        // 150%, 200%, ...) is the authoritative signal and wins whenever it is
+        // set: the user already told Windows how big they want UI, and GLFW
+        // makes the process per-monitor DPI aware, so the framebuffer is
+        // physical pixels and that percentage applies directly. Deriving a
+        // SECOND factor from the monitor's raw resolution and taking the max
+        // double-counts — a 4K panel at 150% would scale 2.0x and overshoot.
+        //
+        // Resolution is only a FALLBACK, for a high-DPI monitor left at 100%
+        // scaling (plenty of people do that to avoid scaling's blur in other
+        // apps). There content scale reads 1.0 and can't tell us anything, but
+        // the panel still needs a bigger font.
+        //
+        // No window exists yet at this point (glfwCreateWindow happens inside
+        // backend->Init below) so this uses glfwGetMonitorContentScale, not
+        // glfwGetWindowContentScale — the monitor-level query needs no window.
+        // Must run BEFORE AddFontDefault: this atlas is built once and shared by
+        // both backends' ImGuiLayer::Init, so a font added here at the wrong
+        // size can't be fixed up later — nothing downstream re-selects a
+        // different default font out of the atlas.
+        float xscale = 1.0f, yscale = 1.0f;
+        float resScale = 1.0f;
+        if (GLFWmonitor* monitor = glfwGetPrimaryMonitor()) {
+            glfwGetMonitorContentScale(monitor, &xscale, &yscale);
+            if (const GLFWvidmode* mode = glfwGetVideoMode(monitor))
+                resScale = static_cast<float>(mode->height) / 1080.0f;
+        }
+        const float osScale  = std::max(xscale, yscale);
+        const float dpiScale = osScale > 1.0f ? osScale : resScale;
+
+        ImFontConfig fontConfig;
+        fontConfig.SizePixels = 13.0f * dpiScale;
+        io.Fonts->AddFontDefault(&fontConfig);
+        if (dpiScale > 1.0f)
+            ImGui::GetStyle().ScaleAllSizes(dpiScale);
+
         static const ImWchar icon_ranges[] = { ICON_MIN_FA, ICON_MAX_FA, 0 };
         ImFontConfig icon_cfg;
         icon_cfg.PixelSnapH = true;
-        iconFont = io.Fonts->AddFontFromFileTTF(FONTS_DIR "/fa-solid-900.ttf", 16.0f, &icon_cfg, icon_ranges);
+        iconFont = io.Fonts->AddFontFromFileTTF(FONTS_DIR "/fa-solid-900.ttf",
+                                                 16.0f * dpiScale, &icon_cfg, icon_ranges);
     }
 
     std::unique_ptr<EditorBackend> backend;
