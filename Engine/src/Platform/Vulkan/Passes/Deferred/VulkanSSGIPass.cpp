@@ -17,8 +17,8 @@ constexpr uint32_t  kLocalSize  = 8;                   // matches both .comp loc
 VulkanSSGIPass::VulkanSSGIPass(RHIDevice* device, const std::string& shaderDir,
                                uint32_t width, uint32_t height)
     : m_Device(device),
-      m_HalfW(std::max(1u, width  / 2)),
-      m_HalfH(std::max(1u, height / 2))
+      m_HalfW(TraceDim(width)),
+      m_HalfH(TraceDim(height))
 {
     m_UBOData.halfSize = glm::vec2(m_HalfW, m_HalfH);
 
@@ -56,6 +56,8 @@ VulkanSSGIPass::VulkanSSGIPass(RHIDevice* device, const std::string& shaderDir,
             { 2, RHIResourceType::CombinedImageSampler, RHIShaderStage::Compute }, // gViewNormal
             { 3, RHIResourceType::CombinedImageSampler, RHIShaderStage::Compute }, // sceneColor
             { 4, RHIResourceType::UniformBuffer,        RHIShaderStage::Compute }, // SSGIUBO
+            { 5, RHIResourceType::CombinedImageSampler, RHIShaderStage::Compute }, // linearDepth
+            { 6, RHIResourceType::CombinedImageSampler, RHIShaderStage::Compute }, // coarseDepth
         };
         desc.pushConstants = { RHIShaderStage::Compute, sizeof(TracePush) };
         m_TracePipeline = device->CreateComputePipeline(desc);
@@ -116,6 +118,7 @@ VulkanSSGIPass::~VulkanSSGIPass() = default;
 
 void VulkanSSGIPass::AddToGraph(RHIRenderGraph& graph,
                                 RGTextureHandle viewPos, RGTextureHandle viewNormal,
+                                RGTextureHandle linearDepth, RGTextureHandle coarseDepth,
                                 RGTextureHandle sceneColor, RGTextureHandle velocity,
                                 RGTextureHandle albedo, RGTextureHandle material,
                                 RGTextureHandle ao,   RGTextureHandle indirect,
@@ -132,7 +135,9 @@ void VulkanSSGIPass::AddToGraph(RHIRenderGraph& graph,
             { { 0, graph.GetTexture(ssgiRaw) },
               { 1, graph.GetTexture(viewPos) },
               { 2, graph.GetTexture(viewNormal) },
-              { 3, graph.GetTexture(sceneColor) } });
+              { 3, graph.GetTexture(sceneColor) },
+              { 5, graph.GetTexture(linearDepth) },
+              { 6, graph.GetTexture(coarseDepth) } });
 
     if (!m_TemporalSet)
         m_TemporalSet = m_Device->CreateResourceSet(
@@ -163,7 +168,8 @@ void VulkanSSGIPass::AddToGraph(RHIRenderGraph& graph,
     const uint32_t groupsY = (m_HalfH + kLocalSize - 1) / kLocalSize;
 
     graph.AddPass("SSGITrace").AsCompute()
-        .Read(viewPos).Read(viewNormal).Read(sceneColor)
+        .Read(viewPos).Read(viewNormal).Read(linearDepth).Read(coarseDepth)
+        .Read(sceneColor)
         .Write(ssgiRaw)
         .SetExecute([this, groupsX, groupsY](RHICommandList* cmd) {
             if (!m_Enabled) return;   // skip the expensive dispatch outright
@@ -210,7 +216,7 @@ void VulkanSSGIPass::AddToGraph(RHIRenderGraph& graph,
         .Write(outColor)
         .SetExecute([this](RHICommandList* cmd) {
             CompositePush push{};
-            push.strength = m_Enabled ? 1.0f : 0.0f;
+            push.strength = m_Enabled ? m_Strength : 0.0f;
             cmd->BindPipeline(m_CompositePipeline.get());
             cmd->BindResourceSet(0, m_CompositeSet.get());
             cmd->PushConstants(RHIShaderStage::Fragment, 0, sizeof(push), &push);
@@ -232,6 +238,7 @@ void VulkanSSGIPass::SetEnabled(bool enabled)
     m_HistoryValid = false;
 }
 
+void VulkanSSGIPass::SetStrength(float strength)    { m_Strength = std::clamp(strength, 0.0f, 1.0f); }
 void VulkanSSGIPass::SetRayCount(int rays)          { m_RayCount = std::max(1, rays); }
 void VulkanSSGIPass::SetIntensity(float intensity)  { m_Intensity = std::max(0.0f, intensity); }
 void VulkanSSGIPass::SetMaxDistance(float distance) { m_MaxDistance = std::max(0.01f, distance); }

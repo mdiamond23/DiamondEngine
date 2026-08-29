@@ -202,7 +202,11 @@ public:
     virtual void SetSSGIEnabled(bool enabled) = 0;
     // Ray count per half-res pixel, gathered radiance scale, and view-space
     // march distance. Live-tunable; the defaults are 8 / 1.0 / 8.0.
-    virtual void SetSSGIParams(int rayCount, float intensity, float maxDistance) = 0;
+    // 'strength' scales how far the composite moves the image off the far-field
+    // baseline (see VulkanSSGIPass::SetStrength) — the lever for "the GI is too
+    // dark" that does not just crank exposure back up over the whole frame.
+    virtual void SetSSGIParams(int rayCount, float intensity, float maxDistance,
+                               float strength) = 0;
 
     // Ray-tracing bring-up view (Docs/gi-design.md slice 2), default off: traces
     // one primary ray per pixel against the scene TLAS and replaces the finished

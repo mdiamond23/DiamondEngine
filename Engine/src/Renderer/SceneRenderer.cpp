@@ -332,10 +332,12 @@ public:
     // degrades to a passthrough draw while off (invalid history → alpha 1).
     void SetTAAEnabled(bool enabled) override { m_TAAEnabled = enabled; }
     void SetSSGIEnabled(bool enabled) override { m_SSGIEnabled = enabled; }
-    void SetSSGIParams(int rayCount, float intensity, float maxDistance) override {
+    void SetSSGIParams(int rayCount, float intensity, float maxDistance,
+                       float strength) override {
         m_SSGIRays        = rayCount;
         m_SSGIIntensity   = intensity;
         m_SSGIMaxDistance = maxDistance;
+        m_SSGIStrength    = strength;
     }
 
     // Both re-applied per frame in RenderView, so they survive a resize.
@@ -1177,6 +1179,15 @@ private:
             { halfW, halfH, RHIFormat::RGBA16F, /*storage*/ true });
         const RGTextureHandle aoBlurred  = g.DeclareTexture("aoBlurred",
             { v.width, v.height, RHIFormat::RGBA16F, /*storage*/ true });
+        // SSR's ray march runs on the shared half-res grid and writes only WHERE
+        // each ray landed (rg = hit UV, b = confidence). ssrColor is the full-res
+        // resolve of that: mirrors re-traced per pixel, everything rougher
+        // reusing the four low-res rays under it, weighted by its own GGX lobe —
+        // reflected COLOUR is never blended between pixels, which is what a
+        // bilateral upsample of SSR gets wrong. See ssr_resolve.frag.
+        const RGTextureHandle ssrHit      = g.DeclareTexture("ssrHit",
+            { VulkanSSRPass::TraceDim(v.width), VulkanSSRPass::TraceDim(v.height),
+              RHIFormat::RGBA16F });
         const RGTextureHandle ssrColor    = g.DeclareTexture("ssrColor",    { v.width, v.height, RHIFormat::RGBA16F });
         // The HDR scene chain (hdrLit -> hdrGI -> hdrTAA -> hdrBloom, plus TAA's
         // history pair) is packed to 32 bits — see kSceneColorFormat. hdrSSR and
@@ -1193,12 +1204,14 @@ private:
         // to upsample bilaterally. Raw/resolved are compute-written (storage);
         // the history is written by an ordinary raster copy and only needs to
         // survive the frame boundary.
+        const uint32_t ssgiW = VulkanSSGIPass::TraceDim(v.width);
+        const uint32_t ssgiH = VulkanSSGIPass::TraceDim(v.height);
         const RGTextureHandle ssgiRaw      = g.DeclareTexture("ssgiRaw",
-            { halfW, halfH, RHIFormat::RGBA16F, /*storage*/ true });
+            { ssgiW, ssgiH, RHIFormat::RGBA16F, /*storage*/ true });
         const RGTextureHandle ssgiResolved = g.DeclareTexture("ssgiResolved",
-            { halfW, halfH, RHIFormat::RGBA16F, /*storage*/ true });
+            { ssgiW, ssgiH, RHIFormat::RGBA16F, /*storage*/ true });
         const RGTextureHandle ssgiHistory  = g.DeclareTexture("ssgiHistory",
-            { halfW, halfH, RHIFormat::RGBA16F, /*storage*/ false, /*persistent*/ true });
+            { ssgiW, ssgiH, RHIFormat::RGBA16F, /*storage*/ false, /*persistent*/ true });
         // Scene + screen-space GI. Separate target for the same reason as
         // hdrSSR below — the composite reads the scene it modifies.
         const RGTextureHandle hdrGI       = g.DeclareTexture("hdrGI",       { v.width, v.height, kSceneColorFormat });
@@ -1313,7 +1326,9 @@ private:
         // temporally accumulated, then composited into hdrGI. Its bounce
         // replaces gIndirect's far-field term where the rays hit, and falls
         // back to it where they miss. Everything after this consumes hdrGI.
-        v.ssgi->AddToGraph(g, gViewPos, gViewNormal, hdrLit, gVelocity,
+        v.ssgi->AddToGraph(g, gViewPos, gViewNormal, depthLevels[0],
+                           depthLevels[VulkanDepthPyramidPass::kScreenTraceCoarseLevel],
+                           hdrLit, gVelocity,
                            gAlbedo, gMaterial, aoBlurred, gIndirect,
                            ssgiRaw, ssgiResolved, ssgiHistory, hdrGI);
 
@@ -1338,8 +1353,9 @@ private:
             reflectionSource = rtReflection;
         }
 
-        v.ssr->AddToGraph(g, gViewPos, gViewNormal, hdrGI, ssrColor, gMaterial, hdrSSR,
-                          reflectionSource);
+        v.ssr->AddToGraph(g, gViewPos, gViewNormal, depthLevels[0],
+                          depthLevels[VulkanDepthPyramidPass::kScreenTraceCoarseLevel],
+                          hdrGI, ssrHit, ssrColor, gMaterial, hdrSSR, reflectionSource);
 
         // TAA — accumulates the jittered frames against the persistent history,
         // reprojected through gVelocity. Before transparency/particles: neither
@@ -1549,6 +1565,7 @@ private:
         v.ssgi->SetRayCount(m_SSGIRays);
         v.ssgi->SetIntensity(m_SSGIIntensity);
         v.ssgi->SetMaxDistance(m_SSGIMaxDistance);
+        v.ssgi->SetStrength(m_SSGIStrength);
 
         v.graph.Execute(cmd);
 
@@ -2582,6 +2599,7 @@ private:
     int      m_SSGIRays         = 8;
     float    m_SSGIIntensity    = 1.0f;
     float    m_SSGIMaxDistance  = 8.0f;
+    float    m_SSGIStrength     = 1.0f;
     // GTAO visibility's strength on the indirect diffuse term. Applied at face
     // value in every tier since slice 4.5 — see ApplyGITier.
     float    m_SSAOStrength     = 1.0f;

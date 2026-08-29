@@ -45,8 +45,20 @@ vec3 fresnelSchlickRoughness(float cosTheta, vec3 F0, float roughness) {
 }
 
 // 4 half-res taps, weighted by depth + normal agreement with this full-res pixel.
+//
+// The weights are computed against the EXACT full-res texel each half-res
+// sample was traced from (ssgi.comp's anchor, id * scale), not against a
+// bilinear read at the half-res texel centre. Those are different values, and
+// the difference is precisely the case this filter exists to catch: at a
+// silhouette a filtered read returns a depth halfway between the two surfaces,
+// so a tap belonging entirely to the far surface scores a middling weight
+// instead of ~0 and its GI leaks across the edge. Reading the anchor texel
+// makes the test exact.
 vec4 BilateralUpsample(vec2 uv, vec3 P, vec3 N) {
     vec2  halfSize = vec2(textureSize(ssgiResolved, 0));
+    ivec2 fullSize = textureSize(gViewPos, 0);
+    ivec2 scale    = max(ivec2(round(vec2(fullSize) / halfSize)), ivec2(1));
+
     vec2  coord    = uv * halfSize - 0.5;
     vec2  base     = floor(coord);
     vec2  f        = coord - base;
@@ -63,13 +75,19 @@ vec4 BilateralUpsample(vec2 uv, vec3 P, vec3 N) {
     for (int i = 0; i < 4; ++i) {
         ivec2 t = clamp(ivec2(base) + offs[i], ivec2(0), ivec2(halfSize) - 1);
 
-        // The G-buffer at that half-res texel's location.
-        vec2 tuv = (vec2(t) + 0.5) / halfSize;
-        vec3 sp  = textureLod(gViewPos,    tuv, 0.0).xyz;
-        vec3 sn  = textureLod(gViewNormal, tuv, 0.0).xyz;
+        // The G-buffer texel that half-res sample actually traced from.
+        ivec2 anchor = min(t * scale, fullSize - 1);
+        vec3  sp     = texelFetch(gViewPos,    anchor, 0).xyz;
+        vec3  sn     = texelFetch(gViewNormal, anchor, 0).xyz;
+
+        // An unwritten normal would make normalize() return NaN, and a single
+        // NaN weight poisons the whole sum.
+        float snLenSq = dot(sn, sn);
 
         float wd = exp(-abs(sp.z - P.z) / max(DEPTH_SCALE * abs(P.z), 1e-3));
-        float wn = pow(max(dot(normalize(sn), N), 0.0), NORMAL_POWER);
+        float wn = snLenSq > 1e-6
+                 ? pow(max(dot(sn * inversesqrt(snLenSq), N), 0.0), NORMAL_POWER)
+                 : 0.0;
         float w  = bw[i] * wd * wn + 1e-6;
 
         sum  += texelFetch(ssgiResolved, t, 0) * w;

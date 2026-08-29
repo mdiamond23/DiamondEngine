@@ -30,19 +30,40 @@ class RHIResourceSet;
 // at a texture's last writer, so reading hdrLit and writing it back would cycle.
 class VulkanSSGIPass {
 public:
-    // 'width'/'height' is the full-res G-buffer size; the trace runs at half.
+    // Trace resolution divisor. 2 = half res. 4 (quarter) is the next perf
+    // lever, and the machinery for it is already in place: ssgi.comp derives its
+    // footprint from textureSize and rotates which texel of that footprint it
+    // samples per frame, and ssgi_composite.frag's bilateral weights are read
+    // from whichever texel the trace actually used — neither shader assumes a
+    // ratio. Changing this constant is the whole change; SceneRenderer sizes
+    // ssgiRaw/Resolved/History through TraceDim below.
+    static constexpr uint32_t kTraceDivisor = 4;
+
+    // Trace resolution along one axis, given the full-res extent. The single
+    // definition this pass and SceneRenderer's target declarations share.
+    static uint32_t TraceDim(uint32_t fullDim) {
+        return fullDim / kTraceDivisor > 1u ? fullDim / kTraceDivisor : 1u;
+    }
+
+    // 'width'/'height' is the full-res G-buffer size; the trace runs at
+    // TraceDim of it.
     VulkanSSGIPass(RHIDevice* device, const std::string& shaderDir,
                    uint32_t width, uint32_t height);
     ~VulkanSSGIPass();
 
-    // ssgiRaw/ssgiResolved must be declared HALF res with storage = true (both
-    // are compute-written). ssgiHistory is half res and persistent = true but
-    // needs NO storage flag — the raster copy writes it, the temporal pass
+    // ssgiRaw/ssgiResolved must be declared at TraceDim() with storage = true
+    // (both are compute-written). ssgiHistory is the same size and
+    // persistent = true but needs NO storage flag — the raster copy writes it, the temporal pass
     // samples it. 'indirect' is deferred_lighting's second MRT output. Insert
     // after lighting + skybox and before SSR, which then consumes outColor
     // instead of hdrLit.
+    // 'linearDepth' is depth_pyramid.comp's level 0 (R16F, positive linear view
+    // depth, 0 = sky) — what the ray march taps. viewPos/viewNormal are still
+    // read, but only for per-pixel ray SETUP, which is four fetches against the
+    // march's hundreds.
     void AddToGraph(RHIRenderGraph& graph,
                     RGTextureHandle viewPos, RGTextureHandle viewNormal,
+                    RGTextureHandle linearDepth, RGTextureHandle coarseDepth,
                     RGTextureHandle sceneColor, RGTextureHandle velocity,
                     RGTextureHandle albedo, RGTextureHandle material,
                     RGTextureHandle ao,   RGTextureHandle indirect,
@@ -63,12 +84,24 @@ public:
     // like a camera teleport.
     void InvalidateHistory() { m_HistoryValid = false; }
 
-    // Live tuning. Rays are per half-res pixel per frame; alpha is the temporal
+    // Live tuning. Rays are per trace-res pixel per frame; alpha is the temporal
     // blend toward the current frame (lower = smoother, more lag).
     void SetRayCount(int rays);
     void SetIntensity(float intensity);
     void SetMaxDistance(float distance);
     void SetBlendFactor(float alpha);
+
+    // How far the composite is allowed to move the image away from the
+    // far-field (DDGI/IBL) baseline — it scales the whole delta, so it pulls
+    // back over-darkening and over-brightening alike. 1 = full replacement.
+    //
+    // Below 1 is not a cheat. A single screen-space bounce systematically
+    // UNDERSHOOTS: it gathers only what one bounce off visible geometry
+    // delivers, and every further bounce that would have carried light back
+    // into an enclosed space is missing. So the honest reconstruction of an
+    // interior is darker than the room really is, and pulling the replacement
+    // back is the cheapest stand-in for the energy the trace cannot see.
+    void SetStrength(float strength);
 
 private:
     // std140, matching ssgi.comp's SSGIUBO.
@@ -108,6 +141,7 @@ private:
     // quality. Live-tunable via SetRayCount.
     int32_t  m_RayCount     = 4;
     float    m_Intensity    = 1.0f;
+    float    m_Strength     = 1.0f;    // composite delta scale, see SetStrength
     float    m_MaxDistance  = 8.0f;    // view-space units
     float    m_Alpha        = 0.1f;    // steady-state temporal blend
 

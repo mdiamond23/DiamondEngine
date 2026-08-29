@@ -20,6 +20,14 @@ layout(set = 0, binding = 0, rgba16f) uniform writeonly image2D ssgiRaw;
 layout(set = 0, binding = 1) uniform sampler2D gViewPos;      // full res
 layout(set = 0, binding = 2) uniform sampler2D gViewNormal;   // full res
 layout(set = 0, binding = 3) uniform sampler2D sceneColor;    // hdrLit, post-skybox
+// Linear view depth (positive, 0 = sky), full res — depth_pyramid.comp level 0.
+// The march taps this and NOT gViewPos: 2 bytes per tap instead of 8, which is
+// the difference between a 16 MB working set that lives in L2 at 4K and a 66 MB
+// one that does not. See screen_trace.glsl.
+layout(set = 0, binding = 5) uniform sampler2D linearDepth;
+// A min-reduced level of the same pyramid — the march's conservative reject
+// filter. See TraceScreenRay.
+layout(set = 0, binding = 6) uniform sampler2D coarseDepth;
 
 layout(set = 0, binding = 4) uniform SSGIUBO {
     mat4 projection;
@@ -42,6 +50,11 @@ layout(push_constant) uniform Push {
 // what its confidence weighting is built to do. Near-field bounce, which is
 // what SSGI is actually for, is unaffected.
 const int   TRACE_STEPS   = 8;
+// Two bisections, not SSR's six. The hit UV here only picks whose radiance
+// joins a cosine-weighted diffuse gather, so a few pixels of slop is invisible;
+// on a scene where most rays hit, those four extra taps would be a quarter of
+// the entire trace loop.
+const int   REFINE_STEPS  = 2;
 const float THICKNESS     = 0.6;
 const float BIAS          = 0.05;
 const float NORMAL_PUSH   = 0.05;   // lifts the origin off its own surface
@@ -83,8 +96,17 @@ void main() {
     ivec2 id = ivec2(gl_GlobalInvocationID.xy);
     if (any(greaterThanEqual(vec2(id), ubo.halfSize))) return;
 
-    vec2 uv      = (vec2(id) + 0.5) / ubo.halfSize;
-    vec3 fragPos = textureLod(gViewPos, uv, 0.0).xyz;
+    // Every ray fires from an EXACT full-res texel, never a filtered one. The
+    // previous origin — textureLod at the half-res texel centre — sat between
+    // four full-res texels and got a BILINEAR blend of them, which across a
+    // silhouette is a position and a normal belonging to no surface at all. It
+    // also broke the composite's bilateral upsample, whose weights are computed
+    // against the very G-buffer values this pass is supposed to have used.
+    ivec2 fullSize = textureSize(gViewPos, 0);
+    ivec2 scale    = max(ivec2(round(vec2(fullSize) / ubo.halfSize)), ivec2(1));
+    ivec2 anchor   = min(id * scale, fullSize - 1);
+
+    vec3 fragPos = texelFetch(gViewPos, anchor, 0).xyz;
 
     // Background pixel — no geometry written here.
     if (fragPos.z == 0.0) {
@@ -92,13 +114,52 @@ void main() {
         return;
     }
 
-    vec3  normal = textureLod(gViewNormal, uv, 0.0).xyz;
+    vec3  normal = texelFetch(gViewNormal, anchor, 0).xyz;
     float nLenSq = dot(normal, normal);
     if (nLenSq <= 1e-6) {
         imageStore(ssgiRaw, id, vec4(0.0));
         return;
     }
     vec3 N = normal * inversesqrt(nLenSq);
+
+    // Rotate WHICH texel of the footprint that is, one per frame. A fixed
+    // anchor resamples the same sub-pixel forever, so the temporal pass
+    // averages the same estimate over and over and everything between the
+    // anchors is pure invention by the upsample filter; rotating turns the
+    // accumulation into coverage of the whole footprint, which is what lets the
+    // trace resolution drop without the result going blocky.
+    //
+    // The candidate is taken only if it lies on the SAME surface as the anchor.
+    // Without that test a footprint straddling a silhouette would alternate
+    // between two surfaces and accumulate their average — the exact cross-edge
+    // bleeding the composite's bilateral weights exist to prevent, reintroduced
+    // through the time axis where no spatial filter can see it.
+    // The rotation is capped at a 2x2 sub-footprint no matter how large the
+    // divisor gets. Rotating over the FULL footprint sounds better — more
+    // coverage — but it is a bad trade: at a divisor of 4 it moves the origin up
+    // to three texels between frames, and every one of those moves is a genuinely
+    // different surface point whose GI differs, so the temporal pass sees a
+    // signal that jumps every frame and has to absorb it. That is flicker. A
+    // 2x2 cap still breaks the fixed-grid resampling that made the accumulation
+    // pointless, at a per-frame origin delta of one texel.
+    ivec2 jscale = min(scale, ivec2(2));
+    int   lanes  = jscale.x * jscale.y;
+    if (lanes > 1) {
+        // Odd stride, so the four lanes are visited in a rotated order rather
+        // than raster order; with four of them every step is still adjacent.
+        int   j    = int((pc.frameIndex * 3u) % uint(lanes));
+        ivec2 cand = min(anchor + ivec2(j % jscale.x, j / jscale.x), fullSize - 1);
+        if (cand != anchor) {
+            vec3  cp  = texelFetch(gViewPos,    cand, 0).xyz;
+            vec3  cn  = texelFetch(gViewNormal, cand, 0).xyz;
+            float cl2 = dot(cn, cn);
+            if (cp.z != 0.0 && abs(cp.z - fragPos.z) <= 0.05 * abs(fragPos.z)
+                && cl2 > 1e-6 && dot(cn * inversesqrt(cl2), N) >= 0.9) {
+                fragPos = cp;
+                N       = cn * inversesqrt(cl2);
+            }
+        }
+    }
 
     vec3  origin = fragPos + N * NORMAL_PUSH;
     vec3  sum    = vec3(0.0);
@@ -108,8 +169,9 @@ void main() {
         vec3 dir = CosineSample(N, Hash2(uvec2(id), uint(i), pc.frameIndex));
 
         vec2 hitUV;
-        if (!TraceScreenRay(gViewPos, ubo.projection, origin, dir,
-                            pc.maxDistance, TRACE_STEPS, THICKNESS, BIAS, hitUV))
+        if (!TraceScreenRay(linearDepth, coarseDepth, ubo.projection, origin, dir,
+                            pc.maxDistance, TRACE_STEPS, REFINE_STEPS,
+                            THICKNESS, BIAS, hitUV))
             continue;
 
         // Weight the sample by the edge fade instead of the radiance, so the

@@ -37,6 +37,12 @@ public:
     // / steps, which lands inside level 3 for any sane step count.
     static constexpr int kLevels = 4;
 
+    // The level SSGI's and SSR's screen marches use as their conservative
+    // reject filter (see screen_trace.glsl). 2 is the balance point: coarser
+    // footprints are cheaper to keep resident but their min is smaller, so they
+    // report more candidates that the level-0 confirmation then throws away.
+    static constexpr int kScreenTraceCoarseLevel = 2;
+
     VulkanDepthPyramidPass(RHIDevice* device, const std::string& shaderDir,
                            uint32_t width, uint32_t height);
     ~VulkanDepthPyramidPass();

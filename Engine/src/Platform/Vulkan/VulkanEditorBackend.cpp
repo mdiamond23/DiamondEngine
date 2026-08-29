@@ -325,7 +325,7 @@ public:
                                   m_Settings.gtaoSteps, m_Settings.gtaoBentNormals);
         m_Renderer->SetSSGIEnabled(m_Settings.ssgiEnabled);
         m_Renderer->SetSSGIParams(m_Settings.ssgiRays, m_Settings.ssgiIntensity,
-                                  m_Settings.ssgiMaxDistance);
+                                  m_Settings.ssgiMaxDistance, m_Settings.ssgiStrength);
         m_Renderer->SetDDGIEnabled(m_Settings.ddgiEnabled);
         m_Renderer->SetRTReflectionsEnabled(m_Settings.rtReflections);
         m_Renderer->SetAutoExposure(m_Settings.autoExposure);
@@ -471,9 +471,14 @@ public:
             ssgiDirty |= ImGui::SliderInt("Rays##ssgi", &m_Settings.ssgiRays, 1, 32);
             ssgiDirty |= ImGui::SliderFloat("Intensity##ssgi", &m_Settings.ssgiIntensity, 0.0f, 4.0f, "%.2f");
             ssgiDirty |= ImGui::SliderFloat("Distance##ssgi", &m_Settings.ssgiMaxDistance, 0.5f, 40.0f, "%.1f");
+            // How far the composite may move the image off the far-field
+            // baseline. Pull it down when interiors read too dark: a single
+            // screen-space bounce cannot see the further bounces that light an
+            // enclosed room, so full replacement systematically undershoots.
+            ssgiDirty |= ImGui::SliderFloat("Strength##ssgi", &m_Settings.ssgiStrength, 0.0f, 1.0f, "%.2f");
             if (ssgiDirty)
                 m_Renderer->SetSSGIParams(m_Settings.ssgiRays, m_Settings.ssgiIntensity,
-                                          m_Settings.ssgiMaxDistance);
+                                          m_Settings.ssgiMaxDistance, m_Settings.ssgiStrength);
         }
 
         ImGui::Separator();

@@ -154,7 +154,12 @@ private:
 
     bool  m_Enabled             = true;
     bool  m_SetDirty            = true;
-    float m_ConfidenceThreshold = 0.05f;
+    // A "skip the ray" cutoff, not the merge point — see rt_reflection.rgen,
+    // which blends by ssr.a below this. Held high on purpose: as a low boolean
+    // cutoff it made coverage-fade pixels swap between the screen-space and
+    // ray-traced images frame to frame. Most solidly reflective pixels still sit
+    // at ~1.0 and skip; what now traces is the partial-coverage minority.
+    float m_ConfidenceThreshold = 0.90f;
     // Sharp reflections only. The composite fades to prefiltered IBL from
     // roughness 0.30, so tracing past that is both wasted and wrong-looking.
     float m_RoughnessCutoff = 0.30f;

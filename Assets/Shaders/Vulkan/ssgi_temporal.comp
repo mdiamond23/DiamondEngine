@@ -61,9 +61,23 @@ void main() {
         return;
     }
 
+    // Reproject with the velocity of the EXACT full-res texel the trace fired
+    // from (ssgi.comp's anchor, id * scale) — point-fetched, not filtered.
+    //
+    // A filtered read at this low-res texel's centre is wrong twice over. It
+    // samples the middle of the footprint while the trace sampled its corner —
+    // two full-res texels apart at a divisor of 4 — and it blends four velocity
+    // vectors, so anywhere a silhouette crosses the footprint it returns a
+    // motion that belongs to neither surface. Either one fetches history from
+    // the wrong place, and history from the wrong place is what temporal
+    // flicker looks like.
+    ivec2 fullSize = textureSize(gVelocity, 0);
+    ivec2 scale    = max(ivec2(round(vec2(fullSize) / vec2(size))), ivec2(1));
+    ivec2 anchor   = min(id * scale, fullSize - 1);
+
     // Stale reprojection can divide through w <= 0 and write Inf/NaN — never
     // trust the raw velocity.
-    vec2 velocity = textureLod(gVelocity, uv, 0.0).rg;
+    vec2 velocity = texelFetch(gVelocity, anchor, 0).rg;
     if (any(isnan(velocity)) || any(isinf(velocity))) velocity = vec2(0.0);
 
     vec2 histUV = uv - velocity;

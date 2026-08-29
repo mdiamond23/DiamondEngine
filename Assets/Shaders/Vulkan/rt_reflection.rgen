@@ -50,38 +50,65 @@ layout(location = 0) rayPayloadEXT vec3 payload;   // incoming radiance
 const float ORIGIN_BIAS = 0.02;
 const float RAY_TMIN    = 0.01;
 
+// Half-width of the roughness band over which the ray fades out, centred on
+// pc.roughnessCutoff. A HARD cutoff is a per-pixel coin flip on any surface
+// carrying a roughness texture: neighbouring texels straddle the line, so some
+// show a ray-traced reflection and some the screen-space one — two differently
+// shaded images interleaved at pixel scale, with TAA's projection jitter
+// re-rolling which side each pixel falls on every frame.
+const float ROUGHNESS_FADE = 0.05;
+
 void main() {
     const ivec2 coord = ivec2(gl_LaunchIDEXT.xy);
     const vec4  ssr   = texelFetch(uSSR, coord, 0);
 
-    // SSR keeps every pixel its march was confident about. Confidence is a
-    // FADE, not a boolean: too high double-counts, too low leaves a seam where
-    // the screen-space march gives up. 5.3 tunes this against EdgeFade's ramp.
-    if (ssr.a > pc.confidenceThreshold) {
+    // SSR keeps every pixel its march was confident about, and this threshold is
+    // ONLY a "skip the ray" optimisation — the merge itself happens at the
+    // bottom, by blending. That distinction matters: ssr.a is a smooth coverage
+    // fade (how much of the resolve's low-res ray footprint found geometry), so
+    // using it as a BOOLEAN turns a gradient into a per-pixel coin flip. At a
+    // reflected silhouette, where coverage slides through the threshold as the
+    // camera moves, pixels then alternate between the screen-space image and the
+    // ray-traced one — two differently shaded pictures swapping every frame,
+    // which reads as flicker exactly where one mesh reflects onto another.
+    //
+    // So the threshold sits HIGH: skip the ray only where SSR is already almost
+    // wholly confident, and blend everywhere else. Any residual discontinuity is
+    // bounded by (1 - threshold) instead of being a full swap.
+    if (ssr.a >= pc.confidenceThreshold) {
         imageStore(uReflection, coord, ssr);
         return;
     }
 
+    // Every path from here PASSES SSR THROUGH rather than storing zero. With the
+    // threshold raised, a pixel can reach these tests holding a partial but real
+    // screen-space reflection, and zeroing it would delete that — a rough-but-
+    // reflective surface would lose the reflection it used to have.
     const vec3 P = texelFetch(gViewPos, coord, 0).xyz;
-    // Background — no geometry written. Confidence 0 passes the scene through
-    // the composite untouched, which is what keeps the sky from reflecting.
+    // Background — no geometry written, and the resolve already wrote 0 here, so
+    // this passes 0 along. Confidence 0 passes the scene through the composite
+    // untouched, which is what keeps the sky from reflecting.
     if (P.z == 0.0) {
-        imageStore(uReflection, coord, vec4(0.0));
+        imageStore(uReflection, coord, ssr);
         return;
     }
 
-    // Too rough for a sharp reflection. The composite fades to prefiltered IBL
-    // over the same range, so this hands the pixel back rather than dropping it.
+    // Too rough for a sharp ray to be right. The composite fades to prefiltered
+    // IBL over the same range, so this hands the pixel back with whatever SSR
+    // found rather than dropping it. Faded, not cut — see ROUGHNESS_FADE.
     const float roughness = texelFetch(gMaterial, coord, 0).g;
-    if (roughness > pc.roughnessCutoff) {
-        imageStore(uReflection, coord, vec4(0.0));
+    const float rtWeight  = 1.0 - smoothstep(pc.roughnessCutoff - ROUGHNESS_FADE,
+                                             pc.roughnessCutoff + ROUGHNESS_FADE,
+                                             roughness);
+    if (rtWeight <= 0.0) {
+        imageStore(uReflection, coord, ssr);
         return;
     }
 
     const vec3  n      = texelFetch(gViewNormal, coord, 0).xyz;
     const float nLenSq = dot(n, n);
     if (nLenSq <= 1e-6) {
-        imageStore(uReflection, coord, vec4(0.0));
+        imageStore(uReflection, coord, ssr);
         return;
     }
 
@@ -100,8 +127,23 @@ void main() {
                 worldPos + worldN * ORIGIN_BIAS, RAY_TMIN,
                 worldDir, pc.maxRayDistance, 0 /*payload*/);
 
-    // Full confidence for anything traced, hit or sky: a miss returns the
-    // environment, which is a legitimate reflection rather than a failure. The
-    // composite still weights this by fresnel and roughness.
-    imageStore(uReflection, coord, vec4(payload, 1.0));
+    // Blend the ray in UNDERNEATH whatever SSR found, weighted by SSR's own
+    // coverage. Where SSR found nothing its rgb is 0 and its alpha is 0, so this
+    // collapses to the pure ray; where it found half a footprint, the two mix
+    // continuously. Both terms are plain (non-premultiplied) radiance with
+    // coverage in alpha, which is exactly what this lerp wants.
+    //
+    // Full confidence where the ray fully applies, hit or sky: a miss returns
+    // the environment, which is a legitimate reflection rather than a failure.
+    // The composite still weights this by fresnel and roughness.
+    const vec3 traced = mix(payload, ssr.rgb, ssr.a);
+
+    // Then fade that whole result back to plain SSR across the roughness band.
+    // Interpolated PREMULTIPLIED, because the two ends carry different coverage
+    // and lerping raw colour between them would darken the transition.
+    const vec3  num  = mix(ssr.rgb * ssr.a, traced, rtWeight);
+    const float conf = mix(ssr.a, 1.0, rtWeight);
+
+    imageStore(uReflection, coord,
+               vec4(conf > 1e-5 ? num / conf : vec3(0.0), conf));
 }

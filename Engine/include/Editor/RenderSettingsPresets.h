@@ -48,6 +48,10 @@ struct RenderSettings {
     int   ssgiRays        = 4;
     float ssgiIntensity   = 1.0f;
     float ssgiMaxDistance = 8.0f;
+    // How far SSGI is allowed to move the image off the far-field baseline.
+    // Below 1 pulls back the over-darkening a single screen-space bounce
+    // produces in enclosed spaces, without touching exposure.
+    float ssgiStrength    = 1.0f;
 
     bool  ddgiEnabled = true;
     // RT reflections fill SSR's misses; off leaves SSR's result untouched.
@@ -74,6 +78,7 @@ inline nlohmann::json ToJson(const RenderSettings& s)
         { "ssgiRays",        s.ssgiRays },
         { "ssgiIntensity",   s.ssgiIntensity },
         { "ssgiMaxDistance", s.ssgiMaxDistance },
+        { "ssgiStrength",    s.ssgiStrength },
         { "ddgiEnabled",     s.ddgiEnabled },
         { "rtReflections",   s.rtReflections },
         { "bloomThreshold",  s.bloomThreshold },
@@ -105,6 +110,7 @@ inline RenderSettings RenderSettingsFromJson(const nlohmann::json& j)
     s.ssgiRays        = j.value("ssgiRays",        s.ssgiRays);
     s.ssgiIntensity   = j.value("ssgiIntensity",   s.ssgiIntensity);
     s.ssgiMaxDistance = j.value("ssgiMaxDistance", s.ssgiMaxDistance);
+    s.ssgiStrength    = j.value("ssgiStrength",    s.ssgiStrength);
     s.ddgiEnabled     = j.value("ddgiEnabled",     s.ddgiEnabled);
     s.rtReflections   = j.value("rtReflections",   s.rtReflections);
     s.bloomThreshold  = j.value("bloomThreshold",  s.bloomThreshold);
