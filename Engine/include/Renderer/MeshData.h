@@ -34,6 +34,9 @@ struct MeshData {
     static MeshData UnitCube();
     static MeshData FullscreenQuad();
     static MeshData UVSphere();
+    // Ring radius 0.75, tube radius 0.25 — outer radius 1, so it shares the
+    // unit-sphere convention and a scale of 1 gives a 2-unit-wide donut.
+    static MeshData Torus();
 
     AABB ComputeAABB() const;
 };

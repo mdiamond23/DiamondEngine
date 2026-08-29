@@ -30,6 +30,15 @@ struct PBRMaterial {
     // pbrMetallicRoughness.baseColorFactor — linear, not sRGB.
     glm::vec4 BaseColorFactor { 1.0f };
 
+    // Constant metallic/roughness, used when the corresponding MAP IS ABSENT.
+    // A material that has the map ignores these and takes the texture as-is —
+    // unlike glTF, where the factor always multiplies. The distinction is
+    // deliberate: it means these can default to the values an untextured
+    // material has always rendered with, so adding them changed nothing about
+    // any existing material while still giving an untextured one a real knob.
+    float MetallicFactor  = 0.0f;
+    float RoughnessFactor = 0.5f;
+
     // Cutoff only applies when Mode == Mask: fragments whose base-color alpha
     // (texture.a * BaseColorFactor.a) falls below it are discarded in the
     // G-buffer pass.

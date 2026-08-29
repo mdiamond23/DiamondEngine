@@ -13,11 +13,14 @@ namespace Diamond {
 // description: size query → storage allocation → vkCreateAccelerationStructureKHR
 // → scratch allocation → vkCmdBuildAccelerationStructuresKHR.
 //
-// Builds run through VulkanContext::ImmediateSubmit, so they BLOCK. That is fine
-// for slice 2: BLASes are built once at mesh registration and the TLAS only
-// rebuilds when the static set changes (the same hash that drives static
-// shadow-map invalidation). Moving the build into the frame command buffer is a
-// slice-5 concern.
+// Builds run through VulkanContext::ImmediateSubmit, so they BLOCK, and both
+// Rebuild and Refit additionally WaitIdle first because they rewrite a structure
+// that in-flight frames may still be tracing against. BLASes are built once at
+// mesh registration, so this only ever bites the TLAS. Refit makes the GPU side
+// of a moving-object frame cheap; what remains is that stall, and removing it
+// means recording the update into the frame command buffer behind an
+// acceleration-structure barrier, with the instance buffer multi-buffered per
+// frame in flight. That is still the slice-5 concern it always was.
 class VulkanRHIAccelStruct : public RHIAccelStruct {
 public:
     // Bottom level: one mesh's triangles in local space.
@@ -35,6 +38,19 @@ public:
     // exceeds what this structure was sized for — the caller must then recreate
     // the TLAS *and* every resource set binding it.
     bool Rebuild(const std::vector<RHITLASInstance>& instances);
+
+    // TLAS only: re-fit the existing structure to new instance TRANSFORMS,
+    // leaving its topology alone. Much cheaper than Rebuild — the BVH is
+    // refined in place rather than rebuilt from scratch — which is what makes a
+    // per-frame update affordable for moving objects.
+    //
+    // False when the update is not legal and the caller must Rebuild instead:
+    // the instance count changed (a Vulkan update must keep the primitive count
+    // it was built with), or this structure predates the ALLOW_UPDATE flag.
+    // Refitting also degrades traversal quality as instances drift from their
+    // build-time positions, so it stands in for continuous motion, not for a
+    // rebuild that is genuinely due.
+    bool Refit(const std::vector<RHITLASInstance>& instances);
 
     VkAccelerationStructureKHR Handle()  const { return m_Handle; }
     VkDeviceAddress            Address() const { return m_Address; }
@@ -55,6 +71,8 @@ private:
     VulkanBuffer m_Scratch;   // build workspace — freed after a BLAS build, kept
                               // for a TLAS so rebuilds don't re-allocate
     VulkanBuffer m_Instances; // TLAS only: host-visible VkAccelerationStructureInstanceKHR[]
+    // Whether this structure carries ALLOW_UPDATE, i.e. whether Refit is legal.
+    bool         m_Updatable         = false;
     void*        m_InstancesMapped   = nullptr;
     uint32_t     m_InstanceCapacity  = 0;
     uint32_t     m_InstanceCount     = 0;

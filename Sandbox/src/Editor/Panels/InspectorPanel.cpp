@@ -669,8 +669,9 @@ void InspectorPanel::OnImGuiRender() {
                     "Change Mesh"));
             }
 
-            // -- Primitive shapes -- assign a built-in cube/sphere (the "__cube"
-            // / "__sphere" meshes the serializer rebuilds on load). Material is
+            // -- Primitive shapes -- assign a built-in cube/sphere/torus (the
+            // "__cube" / "__sphere" / "__torus" meshes the serializer rebuilds
+            // on load). Material is
             // left untouched. One undo command captures the swap.
             auto assignPrimitive = [&](const std::string& primPath, MeshData md) {
                 auto om = mc.mesh;       auto ob = mc.localBounds;
@@ -695,6 +696,8 @@ void InspectorPanel::OnImGuiRender() {
             if (ImGui::SmallButton("Cube"))   assignPrimitive("__cube",   MeshData::UnitCube());
             ImGui::SameLine();
             if (ImGui::SmallButton("Sphere")) assignPrimitive("__sphere", MeshData::UVSphere());
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Torus"))  assignPrimitive("__torus",  MeshData::Torus());
 
             // -- Material --
             ImGui::Spacing();
@@ -770,6 +773,56 @@ void InspectorPanel::OnImGuiRender() {
                         "Change UV Scale"));
                     anyMaterialEdit = true;
                 }
+            }
+
+            // Only consulted when the matching map slot is empty (see
+            // PBRMaterial), so they are disabled rather than silently ignored
+            // once a texture is assigned.
+            {
+                const bool hasMap = mc.material->Metallic != nullptr;
+                ImGui::BeginDisabled(hasMap);
+                ImGui::SliderFloat("Metallic", &mc.material->MetallicFactor, 0.0f, 1.0f, "%.3f");
+                ImGui::EndDisabled();
+                if (!hasMap) {
+                    if (assetBacked) {
+                        if (ImGui::IsItemDeactivatedAfterEdit()) { matDirty = true; anyMaterialEdit = true; }
+                    } else {
+                        if (ImGui::IsItemActivated())   m_OldMetallicFactor = mc.material->MetallicFactor;
+                        if (ImGui::IsItemDeactivatedAfterEdit()) {
+                            float newVal = mc.material->MetallicFactor, oldVal = m_OldMetallicFactor;
+                            m_Context->Commands.ExecuteCommand(std::make_unique<FunctionCommand>(
+                                [scene, entity, newVal]() { scene->GetRegistry().get<MeshComponent>(entity).material->MetallicFactor = newVal; },
+                                [scene, entity, oldVal]() { scene->GetRegistry().get<MeshComponent>(entity).material->MetallicFactor = oldVal; },
+                                "Change Metallic"));
+                            anyMaterialEdit = true;
+                        }
+                    }
+                }
+                if (hasMap && ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Driven by the assigned metallic map");
+            }
+            {
+                const bool hasMap = mc.material->Roughness != nullptr;
+                ImGui::BeginDisabled(hasMap);
+                ImGui::SliderFloat("Roughness", &mc.material->RoughnessFactor, 0.0f, 1.0f, "%.3f");
+                ImGui::EndDisabled();
+                if (!hasMap) {
+                    if (assetBacked) {
+                        if (ImGui::IsItemDeactivatedAfterEdit()) { matDirty = true; anyMaterialEdit = true; }
+                    } else {
+                        if (ImGui::IsItemActivated())   m_OldRoughnessFactor = mc.material->RoughnessFactor;
+                        if (ImGui::IsItemDeactivatedAfterEdit()) {
+                            float newVal = mc.material->RoughnessFactor, oldVal = m_OldRoughnessFactor;
+                            m_Context->Commands.ExecuteCommand(std::make_unique<FunctionCommand>(
+                                [scene, entity, newVal]() { scene->GetRegistry().get<MeshComponent>(entity).material->RoughnessFactor = newVal; },
+                                [scene, entity, oldVal]() { scene->GetRegistry().get<MeshComponent>(entity).material->RoughnessFactor = oldVal; },
+                                "Change Roughness"));
+                            anyMaterialEdit = true;
+                        }
+                    }
+                }
+                if (hasMap && ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Driven by the assigned roughness map");
             }
 
             ImGui::DragFloat("Emissive Strength", &mc.material->EmissiveStrength, 0.01f, 0.0f, 100.0f);
@@ -1032,7 +1085,13 @@ void InspectorPanel::OnImGuiRender() {
             dv.probeCounts = glm::clamp(dv.probeCounts, glm::ivec3(1), glm::ivec3(16));
             ImGui::TextDisabled("%d probes", dv.probeCounts.x * dv.probeCounts.y * dv.probeCounts.z);
 
-            ImGui::SliderInt("Rays / Probe##ddgi", &dv.raysPerProbe, 8, 128);
+            ImGui::SliderInt("Rays / Probe##ddgi", &dv.raysPerProbe,
+                             DDGIVolumeComponent::kFixedRays * 2, 128);
+            // The fixed rays never reach the blend, so the remainder is the
+            // number that actually decides probe noise.
+            ImGui::TextDisabled("%d integrated (%d fixed for relocation)",
+                                dv.raysPerProbe - DDGIVolumeComponent::kFixedRays,
+                                DDGIVolumeComponent::kFixedRays);
 
             // High hysteresis = slow, clean convergence. This is the knob that
             // trades probe noise against how fast a light change propagates.

@@ -41,7 +41,7 @@ void main() {
         return;
     }
 
-    if (ddgi.v.params3.x > 0.5 && DDGIProbeData(uProbeData, probeIndex).w < 0.5)
+    if (ddgi.v.params3.x > 0.5 && DDGIProbeBuried(uProbeData, probeIndex))
         return;
 
     const vec2 oct = ((vec2(local) - 0.5) / float(res)) * 2.0 - 1.0;
@@ -51,10 +51,14 @@ void main() {
     const float sharpness = ddgi.v.params2.z;
     const float maxDist   = ddgi.v.params.w;
 
+    // Fixed rays are excluded here for the same reason as the irradiance blend,
+    // and the sharply peaked weight makes it worse: each texel is dominated by
+    // whichever ray is nearest its direction, so a never-moving subset would
+    // leave 32 permanently crisp directions and the rest comparatively noisy.
     vec2  sum  = vec2(0.0);
     float wSum = 0.0;
-    for (int r = 0; r < rayCount; ++r) {
-        const float w = pow(max(0.0, dot(dir, DDGIRayDirection(ddgi.v, r))), sharpness);
+    for (int r = DDGI_FIXED_RAYS; r < rayCount; ++r) {
+        const float w = pow(max(0.0, dot(dir, DDGIBlendRayDirection(ddgi.v, r))), sharpness);
         if (w <= 1e-6) continue;
 
         // abs(): a backface hit is still an occluder at that distance.

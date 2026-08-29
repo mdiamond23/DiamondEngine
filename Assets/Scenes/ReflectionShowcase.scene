@@ -1,0 +1,858 @@
+{
+  "entities": [
+    {
+      "name": "Sun",
+      "uuid": 8413152843039377099,
+      "transform": {
+        "position": [
+          0.0,
+          12.0,
+          0.0
+        ],
+        "rotation": [
+          0.8364029855964014,
+          -0.46362574557820524,
+          -0.2557140547604459,
+          -0.14174461513740422
+        ],
+        "eulerDegrees": [
+          -58.0,
+          -34.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "light": {
+        "type": 0,
+        "color": [
+          1.0,
+          0.96,
+          0.9
+        ],
+        "intensity": 2.2,
+        "radius": 10.0,
+        "innerConeAngle": 15.0,
+        "outerConeAngle": 30.0
+      },
+      "skylight": {
+        "environmentPath": "Assets/Skyboxes/ferndale_studio_04_4k.hdr",
+        "intensity": 0.55
+      }
+    },
+    {
+      "name": "Mirror Floor",
+      "uuid": 9123248340535011598,
+      "transform": {
+        "position": [
+          0.0,
+          -0.1,
+          0.0
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "eulerDegrees": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          26.0,
+          0.2,
+          26.0
+        ]
+      },
+      "mesh": {
+        "meshPath": "__cube",
+        "meshSubIndex": 0,
+        "visible": true,
+        "castsShadow": true,
+        "staticShadowCaster": true,
+        "receivesShadow": true,
+        "transparent": false,
+        "albedoPath": "",
+        "normalPath": "",
+        "metallicPath": "",
+        "roughnessPath": "",
+        "aoPath": "",
+        "emissivePath": "",
+        "materialPath": "",
+        "emissiveStrength": 0.0,
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.04,
+        "uvScale": 1.0,
+        "baseColorFactor": [
+          0.03,
+          0.03,
+          0.035,
+          1.0
+        ],
+        "alphaMode": "opaque",
+        "alphaCutoff": 0.5
+      }
+    },
+    {
+      "name": "Wall Back",
+      "uuid": 6057676862483968146,
+      "transform": {
+        "position": [
+          0.0,
+          5.0,
+          -9.5
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "eulerDegrees": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          26.0,
+          10.0,
+          0.4
+        ]
+      },
+      "mesh": {
+        "meshPath": "__cube",
+        "meshSubIndex": 0,
+        "visible": true,
+        "castsShadow": true,
+        "staticShadowCaster": true,
+        "receivesShadow": true,
+        "transparent": false,
+        "albedoPath": "",
+        "normalPath": "",
+        "metallicPath": "",
+        "roughnessPath": "",
+        "aoPath": "",
+        "emissivePath": "",
+        "materialPath": "",
+        "emissiveStrength": 0.0,
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.55,
+        "uvScale": 1.0,
+        "baseColorFactor": [
+          0.2,
+          0.2,
+          0.23,
+          1.0
+        ],
+        "alphaMode": "opaque",
+        "alphaCutoff": 0.5
+      }
+    },
+    {
+      "name": "Wall Left",
+      "uuid": 8836188537586634345,
+      "transform": {
+        "position": [
+          -11.5,
+          5.0,
+          0.0
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "eulerDegrees": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          0.4,
+          10.0,
+          26.0
+        ]
+      },
+      "mesh": {
+        "meshPath": "__cube",
+        "meshSubIndex": 0,
+        "visible": true,
+        "castsShadow": true,
+        "staticShadowCaster": true,
+        "receivesShadow": true,
+        "transparent": false,
+        "albedoPath": "",
+        "normalPath": "",
+        "metallicPath": "",
+        "roughnessPath": "",
+        "aoPath": "",
+        "emissivePath": "",
+        "materialPath": "",
+        "emissiveStrength": 0.0,
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.55,
+        "uvScale": 1.0,
+        "baseColorFactor": [
+          0.2,
+          0.2,
+          0.23,
+          1.0
+        ],
+        "alphaMode": "opaque",
+        "alphaCutoff": 0.5
+      }
+    },
+    {
+      "name": "Wall Right",
+      "uuid": 4997002464158272187,
+      "transform": {
+        "position": [
+          11.5,
+          5.0,
+          0.0
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "eulerDegrees": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          0.4,
+          10.0,
+          26.0
+        ]
+      },
+      "mesh": {
+        "meshPath": "__cube",
+        "meshSubIndex": 0,
+        "visible": true,
+        "castsShadow": true,
+        "staticShadowCaster": true,
+        "receivesShadow": true,
+        "transparent": false,
+        "albedoPath": "",
+        "normalPath": "",
+        "metallicPath": "",
+        "roughnessPath": "",
+        "aoPath": "",
+        "emissivePath": "",
+        "materialPath": "",
+        "emissiveStrength": 0.0,
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.55,
+        "uvScale": 1.0,
+        "baseColorFactor": [
+          0.2,
+          0.2,
+          0.23,
+          1.0
+        ],
+        "alphaMode": "opaque",
+        "alphaCutoff": 0.5
+      }
+    },
+    {
+      "name": "Torus Red",
+      "uuid": 5129721260973863671,
+      "transform": {
+        "position": [
+          -3.0,
+          1.35,
+          0.0
+        ],
+        "rotation": [
+          0.981627183447664,
+          0.0,
+          0.0,
+          0.1908089953765448
+        ],
+        "eulerDegrees": [
+          0.0,
+          0.0,
+          22.0
+        ],
+        "scale": [
+          1.2,
+          1.2,
+          1.2
+        ]
+      },
+      "mesh": {
+        "meshPath": "__torus",
+        "meshSubIndex": 0,
+        "visible": true,
+        "castsShadow": true,
+        "staticShadowCaster": false,
+        "receivesShadow": true,
+        "transparent": false,
+        "albedoPath": "",
+        "normalPath": "",
+        "metallicPath": "",
+        "roughnessPath": "",
+        "aoPath": "",
+        "emissivePath": "",
+        "materialPath": "",
+        "emissiveStrength": 0.0,
+        "metallicFactor": 1.0,
+        "roughnessFactor": 0.1,
+        "uvScale": 1.0,
+        "baseColorFactor": [
+          0.85,
+          0.06,
+          0.05,
+          1.0
+        ],
+        "alphaMode": "opaque",
+        "alphaCutoff": 0.5
+      },
+      "scriptComponents": {
+        "Spin": {
+          "axisX": 0.15,
+          "axisY": 1.0,
+          "axisZ": 0.1,
+          "degreesPerSecond": 34.0
+        }
+      }
+    },
+    {
+      "name": "Torus Blue",
+      "uuid": 7420309414738658071,
+      "transform": {
+        "position": [
+          0.0,
+          1.6,
+          -1.7
+        ],
+        "rotation": [
+          0.9852823814384903,
+          0.15605339854576158,
+          -0.010912316653255151,
+          -0.06889765579810342
+        ],
+        "eulerDegrees": [
+          18.0,
+          0.0,
+          -8.0
+        ],
+        "scale": [
+          1.35,
+          1.35,
+          1.35
+        ]
+      },
+      "mesh": {
+        "meshPath": "__torus",
+        "meshSubIndex": 0,
+        "visible": true,
+        "castsShadow": true,
+        "staticShadowCaster": false,
+        "receivesShadow": true,
+        "transparent": false,
+        "albedoPath": "",
+        "normalPath": "",
+        "metallicPath": "",
+        "roughnessPath": "",
+        "aoPath": "",
+        "emissivePath": "",
+        "materialPath": "",
+        "emissiveStrength": 0.0,
+        "metallicFactor": 1.0,
+        "roughnessFactor": 0.08,
+        "uvScale": 1.0,
+        "baseColorFactor": [
+          0.05,
+          0.14,
+          0.85,
+          1.0
+        ],
+        "alphaMode": "opaque",
+        "alphaCutoff": 0.5
+      },
+      "scriptComponents": {
+        "Spin": {
+          "axisX": 1.0,
+          "axisY": 0.35,
+          "axisZ": 0.0,
+          "degreesPerSecond": -46.0
+        }
+      }
+    },
+    {
+      "name": "Torus Yellow",
+      "uuid": 4864708124190427896,
+      "transform": {
+        "position": [
+          3.0,
+          1.35,
+          0.25
+        ],
+        "rotation": [
+          0.9743700647852352,
+          0.0,
+          0.0,
+          -0.224951054343865
+        ],
+        "eulerDegrees": [
+          0.0,
+          0.0,
+          -26.0
+        ],
+        "scale": [
+          1.2,
+          1.2,
+          1.2
+        ]
+      },
+      "mesh": {
+        "meshPath": "__torus",
+        "meshSubIndex": 0,
+        "visible": true,
+        "castsShadow": true,
+        "staticShadowCaster": false,
+        "receivesShadow": true,
+        "transparent": false,
+        "albedoPath": "",
+        "normalPath": "",
+        "metallicPath": "",
+        "roughnessPath": "",
+        "aoPath": "",
+        "emissivePath": "",
+        "materialPath": "",
+        "emissiveStrength": 0.0,
+        "metallicFactor": 1.0,
+        "roughnessFactor": 0.14,
+        "uvScale": 1.0,
+        "baseColorFactor": [
+          0.9,
+          0.66,
+          0.06,
+          1.0
+        ],
+        "alphaMode": "opaque",
+        "alphaCutoff": 0.5
+      },
+      "scriptComponents": {
+        "Spin": {
+          "axisX": 0.3,
+          "axisY": 1.0,
+          "axisZ": -0.4,
+          "degreesPerSecond": 56.0
+        }
+      }
+    },
+    {
+      "name": "Rough 0.02",
+      "uuid": 8137914143513112616,
+      "transform": {
+        "position": [
+          -3.2,
+          0.42,
+          3.0
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "eulerDegrees": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          0.42,
+          0.42,
+          0.42
+        ]
+      },
+      "mesh": {
+        "meshPath": "__sphere",
+        "meshSubIndex": 0,
+        "visible": true,
+        "castsShadow": true,
+        "staticShadowCaster": true,
+        "receivesShadow": true,
+        "transparent": false,
+        "albedoPath": "",
+        "normalPath": "",
+        "metallicPath": "",
+        "roughnessPath": "",
+        "aoPath": "",
+        "emissivePath": "",
+        "materialPath": "",
+        "emissiveStrength": 0.0,
+        "metallicFactor": 1.0,
+        "roughnessFactor": 0.02,
+        "uvScale": 1.0,
+        "baseColorFactor": [
+          0.9,
+          0.9,
+          0.92,
+          1.0
+        ],
+        "alphaMode": "opaque",
+        "alphaCutoff": 0.5
+      }
+    },
+    {
+      "name": "Rough 0.09",
+      "uuid": 5195618334340672857,
+      "transform": {
+        "position": [
+          -1.6,
+          0.42,
+          3.0
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "eulerDegrees": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          0.42,
+          0.42,
+          0.42
+        ]
+      },
+      "mesh": {
+        "meshPath": "__sphere",
+        "meshSubIndex": 0,
+        "visible": true,
+        "castsShadow": true,
+        "staticShadowCaster": true,
+        "receivesShadow": true,
+        "transparent": false,
+        "albedoPath": "",
+        "normalPath": "",
+        "metallicPath": "",
+        "roughnessPath": "",
+        "aoPath": "",
+        "emissivePath": "",
+        "materialPath": "",
+        "emissiveStrength": 0.0,
+        "metallicFactor": 1.0,
+        "roughnessFactor": 0.09,
+        "uvScale": 1.0,
+        "baseColorFactor": [
+          0.9,
+          0.9,
+          0.92,
+          1.0
+        ],
+        "alphaMode": "opaque",
+        "alphaCutoff": 0.5
+      }
+    },
+    {
+      "name": "Rough 0.16",
+      "uuid": 9024694394269967472,
+      "transform": {
+        "position": [
+          0.0,
+          0.42,
+          3.0
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "eulerDegrees": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          0.42,
+          0.42,
+          0.42
+        ]
+      },
+      "mesh": {
+        "meshPath": "__sphere",
+        "meshSubIndex": 0,
+        "visible": true,
+        "castsShadow": true,
+        "staticShadowCaster": true,
+        "receivesShadow": true,
+        "transparent": false,
+        "albedoPath": "",
+        "normalPath": "",
+        "metallicPath": "",
+        "roughnessPath": "",
+        "aoPath": "",
+        "emissivePath": "",
+        "materialPath": "",
+        "emissiveStrength": 0.0,
+        "metallicFactor": 1.0,
+        "roughnessFactor": 0.16,
+        "uvScale": 1.0,
+        "baseColorFactor": [
+          0.9,
+          0.9,
+          0.92,
+          1.0
+        ],
+        "alphaMode": "opaque",
+        "alphaCutoff": 0.5
+      }
+    },
+    {
+      "name": "Rough 0.23",
+      "uuid": 6485317810694051782,
+      "transform": {
+        "position": [
+          1.6000000000000005,
+          0.42,
+          3.0
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "eulerDegrees": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          0.42,
+          0.42,
+          0.42
+        ]
+      },
+      "mesh": {
+        "meshPath": "__sphere",
+        "meshSubIndex": 0,
+        "visible": true,
+        "castsShadow": true,
+        "staticShadowCaster": true,
+        "receivesShadow": true,
+        "transparent": false,
+        "albedoPath": "",
+        "normalPath": "",
+        "metallicPath": "",
+        "roughnessPath": "",
+        "aoPath": "",
+        "emissivePath": "",
+        "materialPath": "",
+        "emissiveStrength": 0.0,
+        "metallicFactor": 1.0,
+        "roughnessFactor": 0.23,
+        "uvScale": 1.0,
+        "baseColorFactor": [
+          0.9,
+          0.9,
+          0.92,
+          1.0
+        ],
+        "alphaMode": "opaque",
+        "alphaCutoff": 0.5
+      }
+    },
+    {
+      "name": "Rough 0.30",
+      "uuid": 5884620829705219650,
+      "transform": {
+        "position": [
+          3.2,
+          0.42,
+          3.0
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "eulerDegrees": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          0.42,
+          0.42,
+          0.42
+        ]
+      },
+      "mesh": {
+        "meshPath": "__sphere",
+        "meshSubIndex": 0,
+        "visible": true,
+        "castsShadow": true,
+        "staticShadowCaster": true,
+        "receivesShadow": true,
+        "transparent": false,
+        "albedoPath": "",
+        "normalPath": "",
+        "metallicPath": "",
+        "roughnessPath": "",
+        "aoPath": "",
+        "emissivePath": "",
+        "materialPath": "",
+        "emissiveStrength": 0.0,
+        "metallicFactor": 1.0,
+        "roughnessFactor": 0.3,
+        "uvScale": 1.0,
+        "baseColorFactor": [
+          0.9,
+          0.9,
+          0.92,
+          1.0
+        ],
+        "alphaMode": "opaque",
+        "alphaCutoff": 0.5
+      }
+    },
+    {
+      "name": "Offscreen Panel",
+      "uuid": 6956803108632497563,
+      "transform": {
+        "position": [
+          0.0,
+          5.0,
+          9.5
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "eulerDegrees": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          13.0,
+          5.0,
+          0.4
+        ]
+      },
+      "mesh": {
+        "meshPath": "__cube",
+        "meshSubIndex": 0,
+        "visible": true,
+        "castsShadow": true,
+        "staticShadowCaster": true,
+        "receivesShadow": true,
+        "transparent": false,
+        "albedoPath": "",
+        "normalPath": "",
+        "metallicPath": "",
+        "roughnessPath": "",
+        "aoPath": "",
+        "emissivePath": "",
+        "materialPath": "",
+        "emissiveStrength": 0.0,
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.85,
+        "uvScale": 1.0,
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "alphaMode": "opaque",
+        "alphaCutoff": 0.5
+      }
+    },
+    {
+      "name": "Offscreen Key",
+      "uuid": 4696376279478207231,
+      "transform": {
+        "position": [
+          0.0,
+          4.0,
+          8.0
+        ],
+        "rotation": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "eulerDegrees": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "light": {
+        "type": 1,
+        "color": [
+          0.1,
+          0.85,
+          1.0
+        ],
+        "intensity": 320.0,
+        "radius": 24.0,
+        "innerConeAngle": 15.0,
+        "outerConeAngle": 30.0
+      }
+    },
+    {
+      "name": "Camera",
+      "uuid": 4881495396520914082,
+      "transform": {
+        "position": [
+          0.0,
+          1.9,
+          7.5
+        ],
+        "rotation": [
+          0.9981347984218669,
+          -0.06104853953485687,
+          0.0,
+          0.0
+        ],
+        "eulerDegrees": [
+          -7.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "camera": {
+        "isPrimary": true,
+        "fov": 55.0,
+        "nearClip": 0.1,
+        "farClip": 300.0
+      }
+    }
+  ]
+}

@@ -165,6 +165,8 @@ static json SerializeEntity(Scene& scene, entt::entity entity)
             mj["aoPath"]           = mc.material->AOPath;
             mj["emissivePath"]     = mc.material->EmissivePath;
             mj["emissiveStrength"] = mc.material->EmissiveStrength;
+            mj["metallicFactor"]   = mc.material->MetallicFactor;
+            mj["roughnessFactor"]  = mc.material->RoughnessFactor;
             mj["uvScale"]          = mc.material->UVScale;
             mj["baseColorFactor"]  = std::array<float, 4>{ mc.material->BaseColorFactor.x, mc.material->BaseColorFactor.y,
                                                             mc.material->BaseColorFactor.z, mc.material->BaseColorFactor.w };
@@ -536,6 +538,10 @@ static void DeserializeEntityComponents(Scene& scene, entt::entity e, const json
             auto md = MeshData::UnitCube();
             bounds  = md.ComputeAABB();
             mesh    = Mesh::Create(md);
+        } else if (mpath == "__torus") {
+            auto md = MeshData::Torus();
+            bounds  = md.ComputeAABB();
+            mesh    = Mesh::Create(md);
         } else if (isGltf(mpath)) {
             // The full scene import instead of the geometry-only MeshAsset:
             // same primitive order (so subIdx is interchangeable), but it also
@@ -585,6 +591,10 @@ static void DeserializeEntityComponents(Scene& scene, entt::entity e, const json
             applyTex("aoPath",        mat->AO,        mat->AOPath);
             applyTex("emissivePath",  mat->Emissive,  mat->EmissivePath);
             mat->EmissiveStrength = mj.value("emissiveStrength", mat->EmissiveStrength);
+            // Absent in scenes written before these existed, and the PBRMaterial
+            // defaults are exactly what those scenes rendered with.
+            mat->MetallicFactor   = mj.value("metallicFactor",  mat->MetallicFactor);
+            mat->RoughnessFactor  = mj.value("roughnessFactor", mat->RoughnessFactor);
             mat->UVScale          = mj.value("uvScale",          mat->UVScale);
             {
                 std::array<float, 4> def{ mat->BaseColorFactor.x, mat->BaseColorFactor.y,

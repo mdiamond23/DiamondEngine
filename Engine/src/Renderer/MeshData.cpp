@@ -107,6 +107,62 @@ MeshData MeshData::UVSphere()
     return data;
 }
 
+MeshData MeshData::Torus()
+{
+    // Densely tessellated on purpose: a torus is only interesting here as a
+    // near-mirror surface, and faceting shows up far more readily in a
+    // reflection than in the shading of the surface itself.
+    const unsigned int RINGS = 96;   // segments around the main ring (u)
+    const unsigned int SIDES = 48;   // segments around the tube (v)
+    const float RING_RADIUS = 0.75f;
+    const float TUBE_RADIUS = 0.25f;
+    const float PI = 3.14159265358979323846f;
+
+    MeshData data;
+    data.Vertices.reserve((RINGS + 1) * (SIDES + 1));
+    data.Indices.reserve(RINGS * SIDES * 6);
+
+    for (unsigned int i = 0; i <= RINGS; ++i) {
+        float u    = 2.0f * PI * i / RINGS;
+        float cosU = std::cos(u);
+        float sinU = std::sin(u);
+
+        for (unsigned int j = 0; j <= SIDES; ++j) {
+            float v    = 2.0f * PI * j / SIDES;
+            float cosV = std::cos(v);
+            float sinV = std::sin(v);
+
+            // Distance from the Y axis out to this point on the tube.
+            float radial = RING_RADIUS + TUBE_RADIUS * cosV;
+
+            Vertex vert{};
+            vert.Position = { radial * cosU, TUBE_RADIUS * sinV, radial * sinU };
+            // Straight out from the tube's centre circle, which is the ring
+            // point at this u — the reason a torus needs its own normal rather
+            // than the sphere's "normal == position".
+            vert.Normal    = { cosV * cosU, sinV, cosV * sinU };
+            vert.TexCoords = { (float)i / RINGS, (float)j / SIDES };
+            // d/du and d/dv, matching the UV assignment above.
+            vert.Tangent   = glm::normalize(glm::vec3(-sinU, 0.0f, cosU));
+            vert.Bitangent = glm::normalize(glm::vec3(-sinV * cosU, cosV, -sinV * sinU));
+            data.Vertices.push_back(vert);
+        }
+    }
+
+    // Same winding as UVSphere: (b - a) x (a+1 - a) points inward for both, so
+    // the two primitives agree on which side is front.
+    for (unsigned int i = 0; i < RINGS; ++i) {
+        for (unsigned int j = 0; j < SIDES; ++j) {
+            uint32_t a = i * (SIDES + 1) + j;
+            uint32_t b = a + SIDES + 1;
+            data.Indices.push_back(a);     data.Indices.push_back(b);     data.Indices.push_back(a + 1);
+            data.Indices.push_back(b);     data.Indices.push_back(b + 1); data.Indices.push_back(a + 1);
+        }
+    }
+
+    return data;
+}
+
 namespace {
 // Vulkan-mode mesh: no GPU upload here — the SceneRenderer owns the vertex and
 // index buffers, keyed on this object's address, and uploads lazily from the

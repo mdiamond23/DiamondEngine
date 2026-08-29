@@ -50,8 +50,11 @@ void main() {
     }
 
     // A probe classified inside geometry keeps whatever it had; its rays are
-    // meaningless and re-blending them would drag neighbours down.
-    if (ddgi.v.params3.x > 0.5 && DDGIProbeData(uProbeData, probeIndex).w < 0.5)
+    // meaningless and re-blending them would drag neighbours down. This reads
+    // the classification STATE rather than row 0's activation ramp: a probe on
+    // its way back out of geometry has to start re-integrating immediately, so
+    // that by the time its weight has ramped up it has real irradiance to give.
+    if (ddgi.v.params3.x > 0.5 && DDGIProbeBuried(uProbeData, probeIndex))
         return;
 
     // Direction this texel represents on the probe's sphere.
@@ -60,13 +63,16 @@ void main() {
 
     const int rayCount = int(ddgi.v.params2.w);
 
+    // Starts past the fixed rays: those 32 directions never rotate, so folding
+    // them in would stamp a permanent lobe pattern into the map that temporal
+    // accumulation can never average out. They belong to relocation alone.
     vec3  sum   = vec3(0.0);
     float wSum  = 0.0;
-    for (int r = 0; r < rayCount; ++r) {
+    for (int r = DDGI_FIXED_RAYS; r < rayCount; ++r) {
         const vec4 ray = texelFetch(uRayData, ivec2(r, probeIndex), 0);
         if (ray.w < 0.0) continue;   // backface hit — the probe is buried, ignore
 
-        const float w = max(0.0, dot(dir, DDGIRayDirection(ddgi.v, r)));
+        const float w = max(0.0, dot(dir, DDGIBlendRayDirection(ddgi.v, r)));
         if (w <= 1e-6) continue;
         sum  += ray.rgb * w;
         wSum += w;

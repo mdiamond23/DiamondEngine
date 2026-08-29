@@ -430,7 +430,10 @@ void VulkanDDGIPass::SetFrameData(const DDGIVolumeComponent* volume,
 
     const GridLayout grid   = ComputeGrid(*volume, center);
     const glm::ivec3 counts = grid.counts;
-    const int rays = std::clamp(volume->raysPerProbe, 1, kMaxRays);
+    // Floor of 2x kFixedRays: the first kFixedRays are spent on relocation, so
+    // anything less would leave the blend passes with a smaller budget than the
+    // relocation set — and at exactly kFixedRays, none at all.
+    const int rays = std::clamp(volume->raysPerProbe, kFixedRays * 2, kMaxRays);
 
     // A different grid means the atlases describe probes that no longer exist —
     // blending the old contents in would drag stale irradiance across the scene.

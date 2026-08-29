@@ -110,6 +110,8 @@ public:
     std::unique_ptr<RHIAccelStruct> CreateBLAS(const RHIBLASDesc& desc) override;
     std::unique_ptr<RHIAccelStruct> CreateTLAS(
         const std::vector<RHITLASInstance>& instances) override;
+    bool RefitTLAS(RHIAccelStruct* tlas,
+                   const std::vector<RHITLASInstance>& instances) override;
     bool RebuildTLAS(RHIAccelStruct* tlas,
                      const std::vector<RHITLASInstance>& instances) override;
     std::unique_ptr<RHIPipeline> CreateRayTracingPipeline(

@@ -1,6 +1,7 @@
 #include "Platform/Vulkan/RHI/VulkanRHIAccelStruct.h"
 #include "Platform/Vulkan/RHI/VulkanRHIResources.h"
 
+#include <algorithm>
 #include <cstring>
 
 namespace Diamond {
@@ -107,13 +108,18 @@ VulkanRHIAccelStruct::VulkanRHIAccelStruct(VulkanRHIDevice* device,
     geom.geometry.instances.data.deviceAddress =
         BufferDeviceAddress(m_Device->Ctx().Device(), m_Instances.handle);
 
+    // ALLOW_UPDATE is what makes Refit legal later. It costs a little traversal
+    // performance and storage against a build-only structure, which is a good
+    // trade for not doing a full rebuild every frame something moves.
     VkAccelerationStructureBuildGeometryInfoKHR build{
         VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR };
     build.type          = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
-    build.flags         = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
+    build.flags         = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR
+                        | VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR;
     build.mode          = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
     build.geometryCount = 1;
     build.pGeometries   = &geom;
+    m_Updatable         = true;
 
     // Sized for the full capacity, not the current count, so a rebuild that adds
     // instances still fits the storage and scratch allocated here.
@@ -161,12 +167,15 @@ bool VulkanRHIAccelStruct::Rebuild(const std::vector<RHITLASInstance>& instances
     geom.geometry.instances.data.deviceAddress =
         BufferDeviceAddress(m_Device->Ctx().Device(), m_Instances.handle);
 
-    // A full rebuild rather than an UPDATE: update is only valid when the
-    // topology is unchanged, and the whole reason we're here is that it changed.
+    // A full rebuild rather than an UPDATE: an update cannot change topology,
+    // and callers only reach Rebuild when it did. ALLOW_UPDATE carries over so
+    // the refit path keeps working against the rebuilt structure, and because
+    // the flags must match the ones the storage was sized against.
     VkAccelerationStructureBuildGeometryInfoKHR build{
         VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR };
     build.type                     = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
-    build.flags                    = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
+    build.flags                    = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR
+                                   | VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR;
     build.mode                     = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
     build.geometryCount            = 1;
     build.pGeometries              = &geom;
@@ -178,6 +187,50 @@ bool VulkanRHIAccelStruct::Rebuild(const std::vector<RHITLASInstance>& instances
     const VkAccelerationStructureBuildRangeInfoKHR* pRange = &range;
 
     // Nothing may be reading the structure while it is rewritten in place.
+    m_Device->WaitIdle();
+    m_Device->Ctx().ImmediateSubmit([&](VkCommandBuffer cmd) {
+        vkCmdBuildAccelerationStructuresKHR(cmd, 1, &build, &pRange);
+    });
+    return true;
+}
+
+bool VulkanRHIAccelStruct::Refit(const std::vector<RHITLASInstance>& instances) {
+    if (!m_TopLevel || !Valid() || !m_Updatable) return false;
+    // An update must keep the primitive count its source was built with, so a
+    // changed instance count is a Rebuild, not a Refit.
+    if (instances.empty() || instances.size() != m_InstanceCount) return false;
+    if (!WriteInstances(instances)) return false;
+
+    VkAccelerationStructureGeometryKHR geom{
+        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR };
+    geom.geometryType = VK_GEOMETRY_TYPE_INSTANCES_KHR;
+    geom.flags        = VK_GEOMETRY_OPAQUE_BIT_KHR;
+    geom.geometry.instances.sType =
+        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR;
+    geom.geometry.instances.arrayOfPointers  = VK_FALSE;
+    geom.geometry.instances.data.deviceAddress =
+        BufferDeviceAddress(m_Device->Ctx().Device(), m_Instances.handle);
+
+    // src == dst is an in-place update, which is explicitly permitted and saves
+    // keeping a second structure to ping-pong between.
+    VkAccelerationStructureBuildGeometryInfoKHR build{
+        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR };
+    build.type                      = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
+    build.flags                     = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR
+                                    | VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR;
+    build.mode                      = VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR;
+    build.geometryCount             = 1;
+    build.pGeometries               = &geom;
+    build.srcAccelerationStructure  = m_Handle;
+    build.dstAccelerationStructure  = m_Handle;
+    build.scratchData.deviceAddress = m_ScratchAddress;
+
+    VkAccelerationStructureBuildRangeInfoKHR range{};
+    range.primitiveCount = m_InstanceCount;
+    const VkAccelerationStructureBuildRangeInfoKHR* pRange = &range;
+
+    // Same in-place hazard as Rebuild: nothing may be tracing the structure, and
+    // nothing may be mid-build off the instance buffer, while both are rewritten.
     m_Device->WaitIdle();
     m_Device->Ctx().ImmediateSubmit([&](VkCommandBuffer cmd) {
         vkCmdBuildAccelerationStructuresKHR(cmd, 1, &build, &pRange);
@@ -216,7 +269,12 @@ void VulkanRHIAccelStruct::Build(VkAccelerationStructureBuildGeometryInfoKHR& bu
     // allocation's own alignment — over-allocate and align the address by hand.
     const VkDeviceSize scratchAlign =
         ctx.AccelStructProps().minAccelerationStructureScratchOffsetAlignment;
-    m_Scratch = CreateBuffer(allocator, sizes.buildScratchSize + scratchAlign,
+    // Sized for whichever mode needs more. updateScratchSize is usually the
+    // smaller of the two, but the spec does not require it, and a refit reusing
+    // this buffer would then run off the end.
+    const VkDeviceSize scratchSize =
+        std::max(sizes.buildScratchSize, sizes.updateScratchSize);
+    m_Scratch = CreateBuffer(allocator, scratchSize + scratchAlign,
                              kScratchUsage, VMA_MEMORY_USAGE_AUTO);
     m_ScratchAddress = AlignUp(BufferDeviceAddress(dev, m_Scratch.handle), scratchAlign);
 

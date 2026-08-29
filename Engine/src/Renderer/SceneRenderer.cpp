@@ -162,13 +162,19 @@ glm::vec2 ComputeTAAJitter(uint64_t frameIndex, uint32_t width, uint32_t height)
 }
 
 // Per-material params, std140 layout matching gbuffer.frag's MaterialUBO
-// (vec4 at offset 0, scalars at 16/20/24, padded to 32).
+// (vec4 at offset 0, scalars from 16, padded to 48).
 struct MaterialParams {
     glm::vec4 baseColorFactor { 1.0f };
     float uvScale          = 1.0f;
     float emissiveStrength = 0.0f;
     float alphaCutoff      = 0.0f;   // 0 = alpha test off (Opaque/Blend materials)
-    float _pad0 = 0.0f;
+    // Multiplied into the sampled map. 1.0 whenever a real map is bound; the
+    // material's constant when the 1x1 white default is bound instead. The
+    // defaults here are the NULL-material case (the checkerboard), and they
+    // reproduce the black/gray map defaults that case used to get.
+    float metallicFactor   = 0.0f;
+    float roughnessFactor  = 0.5f;
+    float _pad0 = 0.0f, _pad1 = 0.0f, _pad2 = 0.0f;
 };
 
 // Fallback albedo for meshes with no material assigned: a checkerboard so
@@ -615,10 +621,24 @@ public:
         // shadow caches — a static mesh with staticShadowCaster on but casting
         // disabled still occludes and bounces probe rays — so riding the shadow
         // hash would leave the acceleration structure stale for exactly those.
-        const size_t rtHash = ComputeRTInstanceHash();
-        if (rtHash != m_LastRTInstanceHash) {
-            m_LastRTInstanceHash = rtHash;
+        //
+        // Topology and transforms are hashed apart because they want different
+        // responses. A changed instance SET has to be a full rebuild, and the
+        // probe atlases genuinely describe a scene that no longer exists. A set
+        // that only MOVED can be refit in place, and throwing away DDGI history
+        // for it is wrong twice over: probe irradiance is designed to chase a
+        // changing scene through its hysteresis, and anything in continuous
+        // motion would otherwise re-invalidate every single frame and pin DDGI
+        // in its unconverged first-frame state forever.
+        const size_t topologyHash = ComputeRTTopologyHash();
+        if (topologyHash != m_LastRTTopologyHash) {
+            m_LastRTTopologyHash = topologyHash;
             m_TLASDirty          = true;
+        }
+        const size_t transformHash = ComputeRTTransformHash();
+        if (transformHash != m_LastRTTransformHash) {
+            m_LastRTTransformHash = transformHash;
+            m_TLASRefitPending    = true;
         }
         UpdateTLAS();
         UpdateRTGeometryBuffer();
@@ -933,7 +953,8 @@ private:
         m_DDGIVisibility = make(VulkanDDGIPass::VisibilityWidth(),
                                 VulkanDDGIPass::VisibilityHeight(),
                                 RHIFormat::RG16F, "ddgiVisibility");
-        m_DDGIProbeData  = make(VulkanDDGIPass::kMaxProbes, 1,
+        m_DDGIProbeData  = make(VulkanDDGIPass::kMaxProbes,
+                                VulkanDDGIPass::kProbeDataRows,
                                 RHIFormat::RGBA16F, "ddgiProbeData");
     }
 
@@ -1296,7 +1317,7 @@ private:
                 { VulkanDDGIPass::VisibilityWidth(), VulkanDDGIPass::VisibilityHeight(),
                   RHIFormat::RG16F, /*storage*/ true, /*persistent*/ true });
             ddgiAtlases.probeData = g.ImportTexture("ddgiProbeData", m_DDGIProbeData.get(),
-                { VulkanDDGIPass::kMaxProbes, 1,
+                { VulkanDDGIPass::kMaxProbes, VulkanDDGIPass::kProbeDataRows,
                   RHIFormat::RGBA16F, /*storage*/ true, /*persistent*/ true });
         }
 
@@ -1803,13 +1824,32 @@ private:
         return it != m_PrevWorld.end() ? it->second : world;
     }
 
-    // Rebuilds the scene TLAS from m_RTInstances when the static set changed.
-    // Blocks on the GPU, which is why it is gated rather than run every frame.
-    // A rebuild that no longer fits reallocates, so the RT passes are re-pointed
-    // at whatever the TLAS is now.
+    // Brings the scene TLAS back in step with m_RTInstances. Two paths:
+    //
+    //   refit   — same instances, new transforms. Updates the BVH in place and
+    //             leaves the handle, the descriptor sets and the DDGI atlases
+    //             alone. Cheap enough to run every frame for moving objects.
+    //   rebuild — the instance set itself changed. Reallocates if it no longer
+    //             fits, so the RT passes are re-pointed at whatever the TLAS is
+    //             now, and the probe atlases are dropped.
+    //
+    // Both still block on the GPU (see VulkanRHIAccelStruct), so neither is
+    // free; the refit just makes the per-frame case affordable rather than
+    // catastrophic.
     void UpdateTLAS() {
-        if (!m_Device->SupportsRayTracing() || !m_TLASDirty) return;
-        m_TLASDirty = false;
+        if (!m_Device->SupportsRayTracing()) return;
+
+        // Transform-only: try the cheap path first. A refit that declines (the
+        // count moved under us, or the structure predates ALLOW_UPDATE) falls
+        // through to the rebuild below rather than leaving the TLAS stale.
+        if (!m_TLASDirty && m_TLASRefitPending) {
+            m_TLASRefitPending = false;
+            if (m_TLAS && m_Device->RefitTLAS(m_TLAS.get(), m_RTInstances)) return;
+            m_TLASDirty = true;
+        }
+        if (!m_TLASDirty) return;
+        m_TLASDirty        = false;
+        m_TLASRefitPending = false;
 
         if (m_RTInstances.empty()) {
             m_TLAS.reset();
@@ -1859,13 +1899,25 @@ private:
     }
 
     // Fingerprint of the TLAS instance set (BLAS identity + world transform).
-    size_t ComputeRTInstanceHash() const {
-        size_t h = 0;
+    // Which BLASes are in the set, in what order, under which geometry index —
+    // everything a Vulkan acceleration-structure UPDATE is forbidden to change.
+    // A difference here means a full rebuild.
+    size_t ComputeRTTopologyHash() const {
+        size_t h = m_RTInstances.size();
         auto mix = [&h](size_t v) { h ^= v + 0x9e3779b97f4a7c15ull + (h << 6) + (h >> 2); };
         for (const RHITLASInstance& inst : m_RTInstances) {
             mix(std::hash<const void*>{}(inst.blas));
-            for (int i = 0; i < 12; ++i) mix(std::hash<float>{}(inst.transform[i]));
+            mix(std::hash<uint32_t>{}(inst.customIndex));
         }
+        return h;
+    }
+
+    // Where those instances are. A difference here alone is refittable.
+    size_t ComputeRTTransformHash() const {
+        size_t h = 0;
+        auto mix = [&h](size_t v) { h ^= v + 0x9e3779b97f4a7c15ull + (h << 6) + (h >> 2); };
+        for (const RHITLASInstance& inst : m_RTInstances)
+            for (int i = 0; i < 12; ++i) mix(std::hash<float>{}(inst.transform[i]));
         return h;
     }
 
@@ -1970,16 +2022,19 @@ private:
             }
 
             // TLAS membership is decided independently of shadow casting: a mesh
-            // that doesn't cast still occludes and bounces probe rays. Static
-            // opaque only (gi-design.md) — skinned meshes are excluded entirely
-            // and dynamic ones would force a rebuild every frame.
+            // that doesn't cast still occludes and bounces probe rays.
+            //
+            // It no longer rides staticShadowCaster either. That gate existed
+            // because a moving instance forced a full TLAS rebuild every frame,
+            // which UpdateTLAS now answers with an in-place refit instead — and
+            // the gate's cost was that anything moving was simply absent from
+            // reflections and probe rays, a hole in the picture rather than a
+            // saving. Skinned meshes stay out: their geometry deforms, so a
+            // transform refit cannot describe them and their BLAS would need
+            // rebuilding outright. They are gathered by a separate loop and
+            // never reach here.
             if (it->second.blas) {
-                bool rtStatic = mc.staticShadowCaster;
-                if (rtStatic) {
-                    if (const auto* rb = scene.GetRegistry().try_get<RigidBodyComponent>(entity))
-                        rtStatic = (rb->bodyType == BodyType::Static);
-                }
-                if (rtStatic) {
+                {
                     RHITLASInstance inst;
                     // glm is column-major; Vulkan wants a row-major 3x4, so this
                     // is the transpose of the matrix's first three columns.
@@ -2103,15 +2158,18 @@ private:
         std::array<RHITexture*, VulkanGBufferPass::MapCount> maps;
         maps[VulkanGBufferPass::Albedo]    = m_Albedo.get();          // checkerboard
         maps[VulkanGBufferPass::Normal]    = m_DefaultNormal.get();
-        maps[VulkanGBufferPass::Metallic]  = m_DefaultBlack.get();
-        maps[VulkanGBufferPass::Roughness] = m_DefaultGray.get();
+        // White, not black/gray: the scalar factor in MaterialParams carries the
+        // value for an unmapped slot now, and it can only do that against a
+        // multiplicative identity.
+        maps[VulkanGBufferPass::Metallic]  = m_DefaultWhite.get();
+        maps[VulkanGBufferPass::Roughness] = m_DefaultWhite.get();
         maps[VulkanGBufferPass::AO]        = m_DefaultWhite.get();
         maps[VulkanGBufferPass::Emissive]  = m_DefaultBlack.get();
         if (mat) {
             maps[VulkanGBufferPass::Albedo]    = RhiOrDefault(mat->Albedo,    m_DefaultWhite.get());
             maps[VulkanGBufferPass::Normal]    = RhiOrDefault(mat->Normal,    m_DefaultNormal.get());
-            maps[VulkanGBufferPass::Metallic]  = RhiOrDefault(mat->Metallic,  m_DefaultBlack.get());
-            maps[VulkanGBufferPass::Roughness] = RhiOrDefault(mat->Roughness, m_DefaultGray.get());
+            maps[VulkanGBufferPass::Metallic]  = RhiOrDefault(mat->Metallic,  m_DefaultWhite.get());
+            maps[VulkanGBufferPass::Roughness] = RhiOrDefault(mat->Roughness, m_DefaultWhite.get());
             maps[VulkanGBufferPass::AO]        = RhiOrDefault(mat->AO,        m_DefaultWhite.get());
             maps[VulkanGBufferPass::Emissive]  = RhiOrDefault(mat->Emissive,  m_DefaultBlack.get());
         }
@@ -2132,6 +2190,10 @@ private:
                                  mat->Roughness, mat->AO, mat->Emissive };
                 params.baseColorFactor = mat->BaseColorFactor;
                 params.uvScale = mat->UVScale;
+                // A bound map wins outright, so the factor collapses to the
+                // identity; only an unmapped slot uses the material constant.
+                params.metallicFactor  = mat->Metallic  ? 1.0f : mat->MetallicFactor;
+                params.roughnessFactor = mat->Roughness ? 1.0f : mat->RoughnessFactor;
                 // Strength 0 disables the contribution when no map is bound (GL parity).
                 params.emissiveStrength = mat->Emissive ? mat->EmissiveStrength : 0.0f;
                 // Cutoff 0 turns the G-buffer alpha test into a no-op for
@@ -2502,10 +2564,16 @@ private:
     std::unique_ptr<RHIAccelStruct> m_TLAS;
     std::vector<RHITLASInstance>    m_RTInstances;
     bool                            m_TLASDirty = true;
-    // Fingerprint of m_RTInstances. TLAS membership is decided independently of
-    // shadow casting (a non-casting static mesh still occludes probe rays), so
-    // riding the static-shadow hash would miss exactly those meshes moving.
-    size_t                          m_LastRTInstanceHash = 0;
+    // Set when only the instance transforms moved: the TLAS can be updated in
+    // place and the probe atlases keep their history. Outranked by m_TLASDirty,
+    // which subsumes it.
+    bool                            m_TLASRefitPending = false;
+    // Fingerprints of m_RTInstances, split so a moved instance does not read as
+    // a changed instance set. TLAS membership is decided independently of shadow
+    // casting (a non-casting static mesh still occludes probe rays), so riding
+    // the static-shadow hash would miss exactly those meshes moving.
+    size_t                          m_LastRTTopologyHash  = 0;
+    size_t                          m_LastRTTransformHash = 0;
     // Per-instance geometry table for DDGI's closest-hit shader, uploaded into
     // m_RTGeometryBuffer whenever the TLAS is rebuilt.
     std::vector<RTGeometry>         m_RTGeometry;

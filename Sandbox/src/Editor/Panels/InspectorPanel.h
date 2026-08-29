@@ -53,6 +53,8 @@ private:
     // Mesh material drag snapshots
     float m_OldUVScale          = 1.0f;
     float m_OldEmissiveStrength = 0.0f;
+    float m_OldMetallicFactor   = 0.0f;
+    float m_OldRoughnessFactor  = 0.5f;
     float m_OldAlphaCutoff      = 0.5f;
 
     // Camera field drag snapshots

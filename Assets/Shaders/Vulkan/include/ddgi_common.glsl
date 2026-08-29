@@ -26,6 +26,25 @@ const int DDGI_MAX_PROBES_PER_AXIS = 16;
 const int DDGI_MAX_PROBES          = 4096;
 const int DDGI_MAX_RAYS            = 128;
 
+// Rays [0, DDGI_FIXED_RAYS) of every probe are traced along a FIXED, unrotated
+// Fibonacci set and are read only by relocation and classification. The rest
+// carry the per-frame random rotation and are the only ones the two blend
+// passes integrate.
+//
+// The split exists because relocation is a feedback loop: it reads this frame's
+// rays and writes an offset the next frame traces from. Feeding it the rotated
+// set gave that loop a different input every frame, so a probe in a perfectly
+// good position still computed a non-zero correction and kept moving — there
+// was no position at which it could come to rest. Every probe therefore jittered
+// forever, and because the shading-time Chebyshev term is cubed, sub-percent
+// jitter in probe position showed up as visible flicker across whole surfaces.
+//
+// With a fixed set the input is identical frame to frame for static geometry,
+// so a settled probe computes a correction of exactly zero and stops dead.
+// Mirrored by VulkanDDGIPass::kFixedRays, which is also what forces the live
+// ray count to at least 2x this so the blend set never runs empty.
+const int DDGI_FIXED_RAYS          = 32;
+
 // std140. Mirrored by VulkanDDGIPass::DDGIUBO — keep the two in step.
 struct DDGIVolume {
     mat4  view;         // world -> view; direct lighting reuses the view-space LightingUBO
@@ -65,9 +84,26 @@ vec3 DDGIProbeGridPos(DDGIVolume v, ivec3 coord) {
     return v.origin.xyz + vec3(coord) * v.spacing.xyz;
 }
 
-// Relocation offset + activation state, packed one texel per probe.
+// Row 0, one texel per probe: rgb = relocation offset, a = ACTIVATION WEIGHT in
+// [0,1]. The weight is a ramp, not a flag — see DDGISampleIrradianceBent.
 vec4 DDGIProbeData(sampler2D probeData, int index) {
     return texelFetch(probeData, ivec2(index, 0), 0);
+}
+
+// Row 1, x = classification state: >0.5 means the probe is inside geometry.
+//
+// This is kept separate from the activation ramp in row 0 precisely so the ramp
+// can never feed back into the decision that drives it. Deriving "was this probe
+// buried last frame?" from the ramp instead would let a probe whose backface
+// ratio sits between the classifier's two thresholds flip state every time the
+// ramp crossed 0.5 — reintroducing, at ramp frequency, exactly the oscillation
+// the Schmitt trigger in ddgi_relocate.comp exists to prevent.
+//
+// Consumers that must act on the STATE (the two blend passes, which skip a
+// buried probe's rays entirely) read this. Consumers that want the smooth weight
+// (the irradiance lookup) read row 0's alpha.
+bool DDGIProbeBuried(sampler2D probeData, int index) {
+    return texelFetch(probeData, ivec2(index, 1), 0).x > 0.5;
 }
 
 // ── Octahedral mapping ───────────────────────────────────────────────────────
@@ -132,9 +168,9 @@ ivec2 DDGIBorderSource(ivec2 local, int res) {
 }
 
 // ── Ray directions ───────────────────────────────────────────────────────────
-// Spherical Fibonacci: a near-uniform sphere cover for any ray count, rotated
-// per frame so the sampling pattern decorrelates instead of baking in. The
-// trace and the blend MUST agree exactly, which is the reason this lives here.
+// Spherical Fibonacci: a near-uniform sphere cover for any ray count. The trace
+// and its consumers MUST agree exactly on every direction, which is the reason
+// this lives here.
 
 vec3 DDGISphericalFibonacci(float i, float n) {
     const float phi = 2.0 * DDGI_PI * fract(i * 0.618033988749895);
@@ -143,9 +179,32 @@ vec3 DDGISphericalFibonacci(float i, float n) {
     return vec3(cos(phi) * sinTheta, sin(phi) * sinTheta, cosTheta);
 }
 
-vec3 DDGIRayDirection(DDGIVolume v, int rayIndex) {
-    vec3 d = DDGISphericalFibonacci(float(rayIndex), v.params2.w);
+// The relocation set: rays [0, DDGI_FIXED_RAYS), deliberately NOT rotated, and
+// spread over their own count so they cover the sphere on their own. Depends on
+// nothing per-frame, which is the entire point — see DDGI_FIXED_RAYS above.
+vec3 DDGIFixedRayDirection(int rayIndex) {
+    return DDGISphericalFibonacci(float(rayIndex), float(DDGI_FIXED_RAYS));
+}
+
+// The integration set: rays [DDGI_FIXED_RAYS, rayCount), re-indexed from zero so
+// they too cover the sphere on their own, then rotated per frame so the pattern
+// decorrelates across frames instead of baking into the atlas.
+//
+// The blend passes must skip the fixed rays rather than fold them in: those 32
+// directions never move, so including them would stamp a permanent 32-lobe
+// pattern into every probe's octahedral map that no amount of temporal
+// accumulation can average away.
+vec3 DDGIBlendRayDirection(DDGIVolume v, int rayIndex) {
+    const float n = max(v.params2.w - float(DDGI_FIXED_RAYS), 1.0);
+    vec3 d = DDGISphericalFibonacci(float(rayIndex - DDGI_FIXED_RAYS), n);
     return normalize(mat3(v.rayRotation) * d);
+}
+
+// What the trace uses: one call site that owns the whole [0, rayCount) range and
+// hands each half to the right generator.
+vec3 DDGIRayDirection(DDGIVolume v, int rayIndex) {
+    return rayIndex < DDGI_FIXED_RAYS ? DDGIFixedRayDirection(rayIndex)
+                                      : DDGIBlendRayDirection(v, rayIndex);
 }
 
 // ── Irradiance lookup ────────────────────────────────────────────────────────
@@ -192,7 +251,11 @@ vec3 DDGISampleIrradianceBent(DDGIVolume v,
         int   idx = DDGIProbeIndex(c, v.counts.xyz);
 
         vec4 pd = DDGIProbeData(probeData, idx);
-        if (pd.w < 0.5) continue;   // classified inside geometry — contributes nothing
+        // Clamped, not trusted: on the opening frames the lighting pass can read
+        // this texture before relocation has ever written it, and an unbounded
+        // value here would let one garbage probe dominate the normalized sum.
+        const float activation = clamp(pd.w, 0.0, 1.0);
+        if (activation <= 0.0) continue;   // fully faded out — inside geometry
 
         vec3  probePos = DDGIProbeGridPos(v, c) + pd.xyz;
         vec3  toProbe  = probePos - biased;
@@ -202,6 +265,13 @@ vec3 DDGISampleIrradianceBent(DDGIVolume v,
         // Trilinear weight of this corner.
         vec3  tri    = mix(1.0 - alpha, alpha, vec3(off));
         float weight = tri.x * tri.y * tri.z;
+
+        // Activation ramp. Classification is binary, but dropping a probe out of
+        // the interpolation the instant it flips is a step change in wSum, and
+        // it applies at once to every surface the probe trilinearly reaches — a
+        // whole wall visibly jumping brightness on one frame. Relocation ramps
+        // this over ~16 frames instead, turning that step into a fade.
+        weight *= activation;
 
         // Smooth backface term: a probe behind the shading surface is wrong, but
         // hard-rejecting it makes the interpolation pop. Squared+shifted cosine.

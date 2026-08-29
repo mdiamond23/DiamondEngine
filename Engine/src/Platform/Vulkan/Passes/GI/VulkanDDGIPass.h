@@ -62,6 +62,16 @@ public:
     static constexpr int kMaxProbes        = kMaxProbesPerAxis * kMaxProbesPerAxis
                                            * kMaxProbesPerAxis;
     static constexpr int kMaxRays          = 128;
+    // Rays [0, kFixedRays) of every probe use an unrotated direction set and are
+    // read only by relocation/classification; the rest are the ones the blend
+    // passes integrate. Defined by the component so the editor and the pass
+    // agree; DDGI_FIXED_RAYS mirrors it on the GLSL side. The live ray count is
+    // clamped to at least 2x this so the blend set keeps a usable budget.
+    static constexpr int kFixedRays        = DDGIVolumeComponent::kFixedRays;
+    // Rows of the probe-data texture: 0 = offset + activation, 1 = classification
+    // state. The two are kept apart so the activation ramp can never feed back
+    // into the classifier that drives it.
+    static constexpr int kProbeDataRows    = 2;
     // Size of the bindless albedo array the closest-hit shader indexes. Fixed at
     // pipeline creation and matched by ddgi_probe_trace.rchit; every slot is
     // written at set creation (padded with 1×1 white), so no partially-bound
@@ -106,8 +116,9 @@ public:
 
     // 'rayData' is (kMaxRays x kMaxProbes) RGBA16F storage. The three atlases are
     // persistent AND storage: written by compute, sampled by the trace through
-    // ReadHistory. 'probeData' is (kMaxProbes x 1) RGBA16F — rgb = relocation
-    // offset, a = active flag. 'depth' is the G-buffer depth the probe viz tests
+    // ReadHistory. 'probeData' is (kMaxProbes x kProbeDataRows) RGBA16F — row 0
+    // rgb = relocation offset, row 0 a = activation weight in [0,1], row 1 x =
+    // classification state. 'depth' is the G-buffer depth the probe viz tests
     // against; 'debugTarget' the tonemapped LDR image it draws over.
     void AddToGraph(RHIRenderGraph& graph,
                     RGTextureHandle rayData,

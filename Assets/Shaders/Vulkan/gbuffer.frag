@@ -38,6 +38,12 @@ layout(set = 0, binding = 7) uniform MaterialUBO {
     float uvScale;
     float emissiveStrength;
     float alphaCutoff;       // 0 for Opaque/Blend materials — test never fires
+    // Scalar metallic/roughness. The CPU sends 1.0 for a slot that has a real
+    // map (so the multiply is a no-op and the texture passes through), and the
+    // material's constant for a slot that does not — where the map sampled here
+    // is a 1x1 white default, making the multiply the value itself.
+    float metallicFactor;
+    float roughnessFactor;
 } mtl;
 
 void main() {
@@ -51,8 +57,8 @@ void main() {
     // sRGB → linear (matches GL), then modulated by the constant factor — glTF's
     // baseColorFactor is already linear, not sRGB, so it multiplies in after.
     vec3  albedo    = pow(baseSample.rgb, vec3(2.2)) * mtl.baseColorFactor.rgb;
-    float metallic  = texture(metallicMap,  uv).r;
-    float roughness = texture(roughnessMap, uv).r;
+    float metallic  = texture(metallicMap,  uv).r * mtl.metallicFactor;
+    float roughness = texture(roughnessMap, uv).r * mtl.roughnessFactor;
     float ao        = texture(aoMap,        uv).r;
 
     // Normal map (tangent space) → view space. Only RG is read and Z is

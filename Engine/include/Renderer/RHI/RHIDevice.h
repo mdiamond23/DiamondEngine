@@ -64,6 +64,15 @@ public:
                              const std::vector<RHITLASInstance>& /*instances*/) {
         return false;
     }
+    // Update an existing TLAS in place for new instance TRANSFORMS only. The
+    // topology must be unchanged — same BLASes, same count, same order — which
+    // is what makes it cheap enough to run every frame for moving objects.
+    // False means the update was not legal and the caller must fall back to
+    // RebuildTLAS. The handle is unaffected either way.
+    virtual bool RefitTLAS(RHIAccelStruct* /*tlas*/,
+                           const std::vector<RHITLASInstance>& /*instances*/) {
+        return false;
+    }
 
     virtual std::unique_ptr<RHIPipeline> CreateRayTracingPipeline(
         const RHIRayTracingPipelineDesc& /*desc*/) { return nullptr; }

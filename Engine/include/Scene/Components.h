@@ -98,7 +98,16 @@ struct DDGIVolumeComponent
     glm::vec3  extent      { 24.0f, 10.0f, 24.0f };   // full size, world units
     glm::ivec3 probeCounts { 8, 4, 8 };               // clamped to 16 per axis
 
-    int   raysPerProbe = 64;      // per probe per frame, capped at 128
+    // Rays reserved for probe relocation: a fixed, unrotated direction set that
+    // the blend passes skip entirely. Relocation is a feedback loop, and giving
+    // it a per-frame-random input left probes with no position they could settle
+    // at; see DDGI_FIXED_RAYS in ddgi_common.glsl, which mirrors this value.
+    static constexpr int kFixedRays = 32;
+
+    // Per probe per frame, clamped to [2 * kFixedRays, 128]. Only the rays past
+    // kFixedRays are integrated into the irradiance/visibility atlases, so this
+    // minus kFixedRays is the number that actually decides probe noise.
+    int   raysPerProbe = 64;
 
     // Per-frame blend toward the new estimate. High values converge slowly and
     // cleanly; this is the knob that trades noise against light-change latency.
@@ -108,8 +117,9 @@ struct DDGIVolumeComponent
     float energy         = 1.0f;    // artistic multiplier on the final irradiance
     float maxRayDistance = 40.0f;   // probe ray length; also the "sees sky" distance
 
-    // Fraction of a probe's rays that must hit backfaces before it counts as
-    // buried and gets deactivated by the relocation pass.
+    // Fraction of a probe's fixed rays that must hit backfaces before it counts
+    // as buried and gets faded out by the relocation pass. Sticky: a buried
+    // probe is only trusted again once the ratio falls to half this.
     float backfaceThreshold = 0.25f;
 
     bool  showProbes  = false;   // debug spheres shaded by their own irradiance

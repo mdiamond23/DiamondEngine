@@ -557,6 +557,12 @@ bool VulkanRHIDevice::RebuildTLAS(RHIAccelStruct* tlas,
     return static_cast<VulkanRHIAccelStruct*>(tlas)->Rebuild(instances);
 }
 
+bool VulkanRHIDevice::RefitTLAS(RHIAccelStruct* tlas,
+                                const std::vector<RHITLASInstance>& instances) {
+    if (!tlas) return false;
+    return static_cast<VulkanRHIAccelStruct*>(tlas)->Refit(instances);
+}
+
 std::unique_ptr<RHIPipeline> VulkanRHIDevice::CreateRayTracingPipeline(
     const RHIRayTracingPipelineDesc& desc) {
     if (!m_Ctx.RayTracingSupported()) return nullptr;
