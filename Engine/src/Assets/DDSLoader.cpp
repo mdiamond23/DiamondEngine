@@ -165,6 +165,18 @@ std::string DDSLoader::CookedPathFor(const std::string& sourcePath)
     return cooked.string();
 }
 
+std::string DDSLoader::CookedChannelPathFor(const std::string& sourcePath, uint32_t channel)
+{
+    if (channel > 3) return {};
+    std::filesystem::path cooked(CookedPathFor(sourcePath));
+    if (cooked.empty()) return {};
+
+    static constexpr char kNames[] = { 'r', 'g', 'b', 'a' };
+    const std::string stem = cooked.stem().string() + "." + kNames[channel];
+    cooked.replace_filename(stem + ".dds");
+    return cooked.string();
+}
+
 DDSData DDSLoader::LoadCookedFor(const std::string& sourcePath)
 {
     const std::string cooked = CookedPathFor(sourcePath);
@@ -173,6 +185,18 @@ DDSData DDSLoader::LoadCookedFor(const std::string& sourcePath)
     std::error_code ec;
     if (!std::filesystem::exists(cooked, ec) || ec) return {};
     if (FileTime(cooked) < FileTime(sourcePath)) return {};   // stale — source wins until re-cooked
+
+    return Load(cooked);
+}
+
+DDSData DDSLoader::LoadCookedChannelFor(const std::string& sourcePath, uint32_t channel)
+{
+    const std::string cooked = CookedChannelPathFor(sourcePath, channel);
+    if (cooked.empty()) return {};
+
+    std::error_code ec;
+    if (!std::filesystem::exists(cooked, ec) || ec) return {};
+    if (FileTime(cooked) < FileTime(sourcePath)) return {};
 
     return Load(cooked);
 }

@@ -1,12 +1,14 @@
 #include "Renderer/TextureData.h"
 #include "Renderer/RendererAPI.h"
 #include "Platform/OpenGL/Resources/OpenGLTexture.h"
-
-#ifdef DIAMOND_ENABLE_VULKAN
-#include "Platform/Vulkan/Resources/VulkanTexture2D.h"
 #include "Assets/ImageLoader.h"
 #include "Assets/DDSLoader.h"
 #include <spdlog/spdlog.h>
+
+#include <vector>
+
+#ifdef DIAMOND_ENABLE_VULKAN
+#include "Platform/Vulkan/Resources/VulkanTexture2D.h"
 #endif
 
 namespace Diamond {
@@ -75,6 +77,33 @@ std::shared_ptr<Texture> Texture::CreateFromPixels(const uint8_t* pixels,
         case RendererAPI::API::OpenGL: return std::make_shared<OpenGLTexture>(pixels, width, height, channels);
         default:                       return nullptr;
     }
+}
+
+std::shared_ptr<Texture> Texture::CreateChannel(const std::string& path, uint32_t channel)
+{
+    if (channel > 3) return nullptr;
+
+    DDSData dds = DDSLoader::LoadCookedChannelFor(path, channel);
+    if (dds.IsValid()) {
+        spdlog::info("[Texture] cooked channel load '{}' channel {} ({}, {} mips)",
+                     path, channel, RHIFormatName(dds.Format), dds.MipCount);
+#ifdef DIAMOND_ENABLE_VULKAN
+        if (s_ResourceDevice)
+            return std::make_shared<VulkanTexture2D>(s_ResourceDevice, dds);
+#endif
+        if (RendererAPI::GetAPI() == RendererAPI::API::OpenGL)
+            return std::make_shared<OpenGLTexture>(dds);
+        return nullptr;
+    }
+
+    ImageData img = ImageLoader::Load(path, /*flipVertically=*/false);
+    if (img.Pixels.empty() || img.Channels <= static_cast<int>(channel)) return nullptr;
+
+    const size_t count = static_cast<size_t>(img.Width) * static_cast<size_t>(img.Height);
+    std::vector<uint8_t> pixels(count);
+    for (size_t i = 0; i < count; ++i)
+        pixels[i] = img.Pixels[i * static_cast<size_t>(img.Channels) + channel];
+    return CreateFromPixels(pixels.data(), img.Width, img.Height, 1);
 }
 
 } // namespace Diamond

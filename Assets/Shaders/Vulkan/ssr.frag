@@ -56,14 +56,34 @@ layout(set = 0, binding = 3) uniform SSRUBO {
     vec2 traceSize;   // this target's resolution
 } ubo;
 
-// 24 rather than the 16 the full-res version ran: the trace now covers a
-// quarter of the pixels, so steps are the cheap axis again. Steps buy REACH
-// (each one is MAX_DISTANCE/steps of view-space travel), which is exactly what
-// the earlier 32 -> 16 cut spent to pay for full-res tracing.
-const int   MAX_STEPS    = 24;
+// Projected-length-adaptive budget. Short rays keep the old low cost; rays that
+// span much of the viewport receive enough taps to avoid visible step terraces.
+const int   MIN_STEPS       = 24;
+const int   MAX_STEPS       = 128;
+const float PIXELS_PER_STEP = 8.0;
 const float MAX_DISTANCE = 20.0;   // view-space units the ray may travel
 const float THICKNESS    = 0.6;    // entry slack on the crossing bracket
 const float BIAS         = 0.05;   // self-intersection guard at the ray origin
+
+// Lifts the ray origin off its own surface before the march, exactly as
+// ssgi.comp has always done — SSR was the one screen trace starting from a
+// point lying ON the surface it is reflecting.
+//
+// That is invisible head-on and ruinous at a grazing angle. Head-on, a mirror
+// ray leaves roughly along the view direction and its depth separates from the
+// surface immediately. Edge-on, the ray leaves nearly PARALLEL to the surface
+// and skims it for many steps, so ray depth and surface depth stay within noise
+// of each other the whole way — and the march reads that as an instant
+// self-intersection, returning the surface's own colour instead of the
+// reflection. Hence slices that appear only where the surface turns away from
+// the camera.
+//
+// Scaled with depth because the error it outruns is: one texel covers more
+// world space further away, so a fixed push shrinks to nothing in texel terms
+// exactly where the depth buffer is coarsest. Constant below z = 25, linear
+// past it, matching DepthEpsilon's crossover.
+const float NORMAL_PUSH = 0.05;
+
 const int   REFINE_STEPS = 6;      // SSR needs the hit pinned — it picks a pixel
 
 // Above this no traced hit can survive ssr_composite's roughness fade, so the
@@ -103,12 +123,17 @@ void main() {
     if (reflected.z >= 0.0) { FragColor = vec4(0.0); return; }
 
     vec2 hitUV;
-    if (!TraceScreenRay(linearDepth, coarseDepth, ubo.projection, fragPos, reflected,
-                        MAX_DISTANCE, MAX_STEPS, REFINE_STEPS,
-                        THICKNESS, BIAS, hitUV)) {
+    const vec3 origin = fragPos + N * (NORMAL_PUSH * max(1.0, abs(fragPos.z) / 25.0));
+
+    if (!TraceScreenRayAdaptive(linearDepth, coarseDepth, ubo.projection,
+                                origin, reflected, MAX_DISTANCE,
+                                MIN_STEPS, MAX_STEPS, PIXELS_PER_STEP,
+                                REFINE_STEPS, THICKNESS, BIAS, hitUV)) {
         FragColor = vec4(0.0);
         return;
     }
 
-    FragColor = vec4(hitUV - vUV, EdgeFade(hitUV), 0.0);
+    const float confidence = EdgeFade(hitUV)
+                           * ScreenHitConfidence(linearDepth, hitUV);
+    FragColor = vec4(hitUV - vUV, confidence, 0.0);
 }

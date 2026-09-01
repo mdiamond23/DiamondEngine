@@ -13,6 +13,7 @@
 #include <filesystem>
 #include <cstring>
 #include <array>
+#include <chrono>
 
 namespace Diamond {
 
@@ -449,15 +450,20 @@ static std::shared_ptr<Texture> CachedTex(const cgltf_image* img, const std::str
     return it->second;
 }
 
-// Single-channel use (packed metallic/roughness, occlusion): always needs the
-// pixels, so this path can't ride the cooked cache.
+// Single-channel use (packed metallic/roughness, occlusion). External images
+// resolve a semantic cook's derived BC4 DDS first; embedded images retain the
+// decode-and-split fallback.
 static std::shared_ptr<Texture> CachedChannel(const cgltf_image* img, int channel,
                                               const std::string& baseDir, ImportCache& c)
 {
     if (!img) return nullptr;
     auto& slots = c.channelTex[img];
-    if (!slots[channel])
-        slots[channel] = SingleChannel(CachedImage(img, baseDir, c), channel);
+    if (!slots[channel]) {
+        const std::string filePath = ImageFilePath(img, baseDir);
+        slots[channel] = !filePath.empty()
+            ? Texture::CreateChannel(filePath, static_cast<uint32_t>(channel))
+            : SingleChannel(CachedImage(img, baseDir, c), channel);
+    }
     return slots[channel];
 }
 
@@ -600,9 +606,12 @@ static void WalkSceneNode(const cgltf_node* node, const glm::mat4& parentWorld,
 
 ImportedScene GltfImporter::LoadScene(const std::string& path)
 {
+    using Clock = std::chrono::steady_clock;
+    const auto loadStart = Clock::now();
     ImportedScene out;
     cgltf_data* data = ParseFile(path);
     if (!data) return out;
+    const auto parseEnd = Clock::now();
 
     // Flat primitive enumeration in file order. The skip rules (non-triangles,
     // empty geometry) MUST match Load() exactly — meshSubIndex refers to the
@@ -621,6 +630,7 @@ ImportedScene GltfImporter::LoadScene(const std::string& path)
                 prim.material ? (int)(prim.material - data->materials) : -1);
         }
     }
+    const auto geometryEnd = Clock::now();
 
     // Load only materials a surviving primitive references; unreferenced slots
     // stay null so primitiveMaterial can index by file material order.
@@ -639,6 +649,7 @@ ImportedScene GltfImporter::LoadScene(const std::string& path)
         // them through sorted blending is what caused decal sorting artifacts.
         out.materialTransparent[mi] = (mat.alpha_mode == cgltf_alpha_mode_blend) ? 1 : 0;
     }
+    const auto materialsEnd = Clock::now();
 
     // Node instances from the default scene (or the first one, or loose root
     // nodes — exporters vary).
@@ -662,6 +673,16 @@ ImportedScene GltfImporter::LoadScene(const std::string& path)
         for (int i = 0; i < (int)out.meshes.size(); ++i) inst.primitives[i] = i;
         out.nodes.push_back(std::move(inst));
     }
+
+    const auto sceneEnd = Clock::now();
+    auto millis = [](auto from, auto to) {
+        return std::chrono::duration<double, std::milli>(to - from).count();
+    };
+    spdlog::info("[GltfImporter] loaded '{}' — parse {:.1f} ms, geometry {:.1f} ms, "
+                 "materials/textures {:.1f} ms, nodes {:.1f} ms, total {:.1f} ms",
+                 path, millis(loadStart, parseEnd), millis(parseEnd, geometryEnd),
+                 millis(geometryEnd, materialsEnd), millis(materialsEnd, sceneEnd),
+                 millis(loadStart, sceneEnd));
 
     cgltf_free(data);
     return out;

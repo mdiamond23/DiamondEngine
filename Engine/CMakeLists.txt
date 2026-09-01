@@ -362,6 +362,7 @@ if(DIAMOND_ENABLE_VULKAN)
         src/Platform/Vulkan/Passes/Deferred/VulkanSSAOPass.cpp
         src/Platform/Vulkan/RHI/VulkanRHIAccelStruct.cpp
         src/Platform/Vulkan/Passes/Debug/VulkanRTDebugPass.cpp
+        src/Platform/Vulkan/Passes/Debug/VulkanSSRDebugPass.cpp
         src/Platform/Vulkan/Passes/GI/VulkanDDGIPass.cpp
         src/Platform/Vulkan/Passes/Deferred/VulkanSSGIPass.cpp
         src/Platform/Vulkan/Passes/Deferred/VulkanSSRPass.cpp
@@ -421,7 +422,7 @@ if(DIAMOND_ENABLE_VULKAN)
                     gtao.comp gtao_denoise.comp gtao_upsample.comp depth_pyramid.comp
                     rt_reflection_passthrough.comp
                     ssao.frag ssao_blur.frag   # retained, unused (see VulkanSSAOPass.h)
-                    ssr.frag ssr_resolve.frag ssr_composite.frag
+                    ssr.frag ssr_resolve.frag ssr_composite.frag ssr_debug.frag
                     ssgi.comp ssgi_temporal.comp ssgi_composite.frag
                     ddgi_blend_irradiance.comp ddgi_blend_visibility.comp
                     ddgi_relocate.comp

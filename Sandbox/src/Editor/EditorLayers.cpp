@@ -713,7 +713,7 @@ void EditorLayer::DrawMenuBar()
     if (ImGui::BeginMenu("Assets")) {
         if (ImGui::MenuItem("Cook Textures")) {
             const int n = Diamond::TextureCooker::CookAll();
-            spdlog::info("[Assets] Cook Textures: {} cooked — press F5 to reload them now", n);
+            spdlog::info("[Assets] Cook Textures: {} cooked - press F5 to reload them now", n);
         }
         ImGui::EndMenu();
     }

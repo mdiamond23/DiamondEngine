@@ -74,11 +74,33 @@ const float ROUGHNESS_CUTOFF = 0.9;
 
 // Identical march parameters to ssr.frag, so a pixel inside the handoff band
 // gets the same geometry from both paths.
-const int   MAX_STEPS    = 24;
+const int   MIN_STEPS       = 24;
+const int   MAX_STEPS       = 128;
+const float PIXELS_PER_STEP = 8.0;
 const float MAX_DISTANCE = 20.0;
 const float THICKNESS    = 0.6;
 const float BIAS         = 0.05;
 const int   REFINE_STEPS = 6;
+
+// Lifts the ray origin off its own surface before the march, exactly as
+// ssgi.comp has always done — SSR was the one screen trace starting from a
+// point lying ON the surface it is reflecting.
+//
+// That is invisible head-on and ruinous at a grazing angle. Head-on, a mirror
+// ray leaves roughly along the view direction and its depth separates from the
+// surface immediately. Edge-on, the ray leaves nearly PARALLEL to the surface
+// and skims it for many steps, so ray depth and surface depth stay within noise
+// of each other the whole way — and the march reads that as an instant
+// self-intersection, returning the surface's own colour instead of the
+// reflection. Hence slices that appear only where the surface turns away from
+// the camera.
+//
+// Scaled with depth because the error it outruns is: one texel covers more
+// world space further away, so a fixed push shrinks to nothing in texel terms
+// exactly where the depth buffer is coarsest. Constant below z = 25, linear
+// past it, matching DepthEpsilon's crossover.
+const float NORMAL_PUSH = 0.05;
+
 
 // A neighbour's ray is only reusable if it left a surface facing roughly the
 // way this one does. Without this the reuse silently mixes rays fired off
@@ -249,10 +271,15 @@ void main() {
     vec4 mirror = vec4(0.0);
     if (traceW > 0.0) {
         vec2 hitUV;
-        if (TraceScreenRay(linearDepth, coarseDepth, ubo.projection, P, R,
-                           MAX_DISTANCE, MAX_STEPS, REFINE_STEPS,
-                           THICKNESS, BIAS, hitUV))
-            mirror = vec4(textureLod(sceneColor, hitUV, 0.0).rgb, EdgeFade(hitUV));
+        const vec3 origin = P + N * (NORMAL_PUSH * max(1.0, abs(P.z) / 25.0));
+        if (TraceScreenRayAdaptive(linearDepth, coarseDepth, ubo.projection,
+                                   origin, R, MAX_DISTANCE,
+                                   MIN_STEPS, MAX_STEPS, PIXELS_PER_STEP,
+                                   REFINE_STEPS, THICKNESS, BIAS, hitUV)) {
+            const float confidence = EdgeFade(hitUV)
+                                   * ScreenHitConfidence(linearDepth, hitUV);
+            mirror = vec4(textureLod(sceneColor, hitUV, 0.0).rgb, confidence);
+        }
     }
 
     // Cross-fade in PREMULTIPLIED space. Mixing the colours directly would let a

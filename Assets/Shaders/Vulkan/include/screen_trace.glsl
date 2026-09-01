@@ -112,12 +112,28 @@ float DepthEpsilon(float d, float bias) {
 // 'thickness' is NOT a depth tolerance on the hit — the bracket test in the
 // loop bounds overshoot by itself. It is slack on the bracket's ENTRY half; see
 // there.
-bool TraceScreenRay(sampler2D linearDepth, sampler2D coarseDepth,
-                    mat4 proj, vec3 origin, vec3 dir,
-                    float maxDistance, int steps, int refineSteps,
-                    float thickness, float bias, out vec2 hitUV)
+// What the march DID, for ssr_debug.frag. Filled on every path, hit or miss.
+// There is one implementation of the walk below and the plain TraceScreenRay is
+// a wrapper over it — a debug trace that ran different code from the shipping
+// one would be worse than no debug trace at all.
+struct ScreenTraceDebug {
+    int   step;        // 1-based step that hit; 0 = no hit
+    int   stepCount;   // projected-length-adaptive budget used by this ray
+    float overshoot;   // rayD - sceneD where the crossing was accepted
+    float eps;         // tolerance actually in force there
+    float slope;       // the measured per-step surface depth span at the hit
+    float tExit;       // fraction of the segment that was on screen
+};
+
+bool TraceScreenRayDbg(sampler2D linearDepth, sampler2D coarseDepth,
+                       mat4 proj, vec3 origin, vec3 dir,
+                       float maxDistance, int minSteps, int maxSteps,
+                       float pixelsPerStep, int refineSteps,
+                       float thickness, float bias, out vec2 hitUV,
+                       out ScreenTraceDebug dbg)
 {
     hitUV = vec2(0.0);
+    dbg = ScreenTraceDebug(0, 0, 0.0, 0.0, 0.0, 0.0);
 
     // Clip the segment to stay in front of the camera BEFORE projecting. With a
     // per-step projection a ray crossing the near plane produced garbage UVs
@@ -147,10 +163,10 @@ bool TraceScreenRay(sampler2D linearDepth, sampler2D coarseDepth,
     // segment that leaves after a third of its length was spending two thirds
     // of its steps on taps that are guaranteed misses — and, worse, sizing
     // EVERY step to the full length. A floor reflecting upward is the usual
-    // case: its ray exits the top of the frame almost immediately, so at 4K a
-    // 24-step march was landing one tap every ~80 pixels of the span it
-    // actually cares about. Clipping first spends all 24 in frame at the same
-    // cost. Exact, not an approximation: uv is affine in t, so this is a
+    // case: its ray exits the top of the frame almost immediately, so the old
+    // fixed march landed taps tens of pixels apart over the span it actually
+    // cared about. Clipping first spends the adaptive budget only in frame.
+    // Exact, not an approximation: uv is affine in t, so this is a
     // Liang-Barsky exit parameter, and 1/w is affine in the SAME t, so
     // rescaling t leaves the depth interpolation below untouched.
     float tExit = 1.0;
@@ -162,11 +178,26 @@ bool TraceScreenRay(sampler2D linearDepth, sampler2D coarseDepth,
         if (abs(d.y) > 1e-8) tExit = min(tExit, max(-uv0.y / d.y, (1.0 - uv0.y) / d.y));
         tExit = clamp(tExit, 0.0, 1.0);
     }
+    dbg.tExit = tExit;
     if (tExit <= 1e-4) return false;   // origin on the border, ray leaves at once
 
-    float prevT    = 0.0;
-    float prevRayD = 1.0 / iw0;        // depth at the origin
-    float hitT     = -1.0;
+    // Spend samples according to projected work, not view-space distance. A
+    // short reflection should not pay the same 64/128 taps as a ray spanning
+    // half the viewport, while a long 4K ray cannot be represented faithfully
+    // by one tap every few dozen pixels. Callers opt out by passing identical
+    // min/max counts (SSGI keeps its existing fixed budget).
+    const vec2 depthSize = vec2(textureSize(linearDepth, 0));
+    const float spanPixels = length((uv1 - uv0) * tExit * depthSize);
+    int steps = maxSteps;
+    if (minSteps < maxSteps && pixelsPerStep > 0.0) {
+        steps = clamp(int(ceil(spanPixels / pixelsPerStep)), minSteps, maxSteps);
+    }
+    dbg.stepCount = steps;
+
+    float prevT     = 0.0;
+    float prevRayD  = 1.0 / iw0;       // depth at the origin
+    float prevSceneD = -1.0;           // surface depth at the last FINE tap, <0 = none
+    float hitT      = -1.0;
 
     for (int i = 1; i <= steps; ++i) {
         float t  = tExit * float(i) / float(steps);
@@ -181,10 +212,22 @@ bool TraceScreenRay(sampler2D linearDepth, sampler2D coarseDepth,
         float eps = DepthEpsilon(rayD, bias);
 
         float coarseD = SampleLinearDepth(coarseDepth, uv);
-        if (coarseD <= 0.0 || coarseD > rayD - eps) { prevT = t; prevRayD = rayD; continue; }
+        if (coarseD <= 0.0 || coarseD > rayD - eps) {
+            prevT = t; prevRayD = rayD; prevSceneD = -1.0; continue;
+        }
 
         float sceneD = SampleLinearDepth(linearDepth, uv);
-        if (sceneD <= 0.0) { prevT = t; prevRayD = rayD; continue; }   // over a sky pixel
+        if (sceneD <= 0.0) {                                  // over a sky pixel
+            prevT = t; prevRayD = rayD; prevSceneD = -1.0; continue;
+        }
+
+        // NO slope term here. A previous version widened eps by the measured
+        // per-step change in surface depth, to chase a grazing-angle
+        // self-intersection theory. The Hit Distance view killed that theory —
+        // there were no near-zero-distance hits anywhere — and the term did
+        // real harm: consecutive taps straddling a SILHOUETTE differ hugely, so
+        // eps pinned to its cap at exactly the edges where a reflected object
+        // begins, and the object's reflection went missing.
 
         // A crossing is a BRACKET, not a proximity test: the ray must have been
         // in FRONT of this surface where the step began and BEHIND it where the
@@ -213,9 +256,39 @@ bool TraceScreenRay(sampler2D linearDepth, sampler2D coarseDepth,
         // slanted away from the ray the previous step can read slightly behind
         // a surface it was really still in front of; thickness absorbs that
         // without ever licensing an unbounded overshoot.
-        if (rayD > sceneD + eps && prevRayD <= sceneD + thickness) { hitT = t; break; }
-        prevT    = t;
-        prevRayD = rayD;
+        // Two ways to accept, and the ray only has to satisfy ONE.
+        //
+        //   shallow  — the ray is behind the surface by less than 'thickness'.
+        //              The original test, and it carries the common case.
+        //   bracketed— the ray was in front where the step began. This catches
+        //              a coarse step that jumps the ray CLEAN PAST a thin or
+        //              distant surface, where the overshoot exceeds thickness
+        //              and 'shallow' alone would reject it — the chop this
+        //              whole line of work started from.
+        //
+        // Making the bracket a REPLACEMENT for shallow, rather than an
+        // alternative to it, is what put holes in the reflections it was
+        // supposed to repair. sceneD at this step is frequently a DIFFERENT
+        // surface than at the last one — floor, then torus — so 'was the ray in
+        // front of it last step' compares the ray's old depth against a surface
+        // it had not reached yet, and rejects a crossing that genuinely
+        // happened. Either condition alone is evidence of a real hit; requiring
+        // both is evidence of neither.
+        bool shallow   = rayD - sceneD < thickness;
+        bool bracketed = prevRayD <= sceneD + thickness;
+        if (rayD > sceneD + eps && (shallow || bracketed)) {
+            hitT = t;
+            dbg.step      = i;
+            dbg.overshoot = rayD - sceneD;
+            dbg.eps       = eps;
+            // Still reported: it is the per-step surface depth change, which is
+            // worth SEEING even though it no longer feeds the tolerance.
+            dbg.slope     = (prevSceneD > 0.0) ? abs(sceneD - prevSceneD) : 0.0;
+            break;
+        }
+        prevT      = t;
+        prevRayD   = rayD;
+        prevSceneD = sceneD;
     }
 
     if (hitT < 0.0) return false;
@@ -236,6 +309,62 @@ bool TraceScreenRay(sampler2D linearDepth, sampler2D coarseDepth,
 
     hitUV = mix(uv0, uv1, hi);
     return true;
+}
+
+// The shipping entry point. Identical walk — it just drops the diagnostics.
+bool TraceScreenRay(sampler2D linearDepth, sampler2D coarseDepth,
+                    mat4 proj, vec3 origin, vec3 dir,
+                    float maxDistance, int steps, int refineSteps,
+                    float thickness, float bias, out vec2 hitUV)
+{
+    ScreenTraceDebug dbg;
+    return TraceScreenRayDbg(linearDepth, coarseDepth, proj, origin, dir,
+                             maxDistance, steps, steps, 0.0, refineSteps,
+                             thickness, bias,
+                             hitUV, dbg);
+}
+
+// SSR variant: target a screen-space stride while retaining hard cost bounds.
+bool TraceScreenRayAdaptive(sampler2D linearDepth, sampler2D coarseDepth,
+                            mat4 proj, vec3 origin, vec3 dir,
+                            float maxDistance, int minSteps, int maxSteps,
+                            float pixelsPerStep, int refineSteps,
+                            float thickness, float bias, out vec2 hitUV)
+{
+    ScreenTraceDebug dbg;
+    return TraceScreenRayDbg(linearDepth, coarseDepth, proj, origin, dir,
+                             maxDistance, minSteps, maxSteps, pixelsPerStep,
+                             refineSteps, thickness, bias, hitUV, dbg);
+}
+
+// Confidence in the hit surface itself, independent of reflected colour. A
+// hit next to a depth discontinuity is where a one-pixel change in the march
+// swaps SSR for RT. Sampling only depth continuity produces a soft ownership
+// handoff without filtering the reflected image.
+float ScreenHitConfidence(sampler2D linearDepth, vec2 hitUV) {
+    const ivec2 size = textureSize(linearDepth, 0);
+    const ivec2 c = clamp(ivec2(hitUV * vec2(size)), ivec2(0), size - 1);
+    const float center = texelFetch(linearDepth, c, 0).r;
+    if (center <= 0.0) return 0.0;
+
+    const ivec2 offsets[8] = ivec2[8](
+        ivec2(-1,  0), ivec2( 1,  0), ivec2( 0, -1), ivec2( 0,  1),
+        ivec2(-2,  0), ivec2( 2,  0), ivec2( 0, -2), ivec2( 0,  2));
+
+    float continuity = 0.0;
+    const float tolerance = max(DepthEpsilon(center, 0.05) * 4.0,
+                                center * 0.01);
+    for (int i = 0; i < 8; ++i) {
+        const float d = texelFetch(linearDepth,
+                                   clamp(c + offsets[i], ivec2(0), size - 1), 0).r;
+        if (d > 0.0)
+            continuity += 1.0 - smoothstep(tolerance, tolerance * 4.0,
+                                            abs(d - center));
+    }
+
+    // Eight discrete agreements become a useful 0..1 feather: thin geometry
+    // and silhouettes hand ownership to RT; coherent interiors remain SSR.
+    return smoothstep(0.25, 1.0, continuity * 0.125);
 }
 
 #endif // SCREEN_TRACE_GLSL

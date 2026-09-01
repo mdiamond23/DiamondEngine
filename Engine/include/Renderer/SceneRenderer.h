@@ -214,6 +214,10 @@ public:
     // hardware without ray tracing — check SupportsRayTracing() before offering
     // it in UI. 'maxDistance' is both the ray length and the ramp's far end.
     virtual void SetRTDebugEnabled(bool enabled) = 0;
+    // SSR march diagnostic, 0 = off. Values are VulkanSSRDebugPass::Mode; the
+    // interface takes a plain int so a public header need not pull in a Vulkan
+    // backend type. Replaces the whole image when non-zero.
+    virtual void SetSSRDebugMode(int mode) = 0;
     virtual void SetRTDebugMaxDistance(float distance) = 0;
 
     // DDGI probes (Docs/gi-design.md slice 4), default on but inert until the

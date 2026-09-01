@@ -201,6 +201,16 @@ OpenGLTexture::OpenGLTexture(const uint8_t* pixels, int width, int height, int c
     GLStats::RecordTextureAlloc(m_ByteSize);
 }
 
+OpenGLTexture::OpenGLTexture(const DDSData& dds)
+{
+    GLUpload up = UploadDDS(dds);
+    m_RendererID = up.id;
+    m_Width      = up.width;
+    m_Height     = up.height;
+    m_ByteSize   = up.byteSize;
+    if (m_RendererID) GLStats::RecordTextureAlloc(m_ByteSize);
+}
+
 OpenGLTexture::OpenGLTexture(const std::string& path, bool flipVertically, bool isHDR)
     : m_Path(path), m_FlipVertically(flipVertically), m_IsHDR(isHDR)
 {

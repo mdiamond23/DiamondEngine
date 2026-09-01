@@ -35,8 +35,9 @@ public:
     //
     // Halving the longest edge quarters the cost (89.5 MB -> 22.4 MB at 2048²),
     // the same saving BC7 gives — and unlike BC7 it needs no external cooker.
-    // Cooked DDS files, when present, are loaded ahead of this path entirely
-    // (see Texture::Create), so this only ever applies to raw PNG/JPG/TGA.
+    // Cooked DDS files are resized to the same cap offline and loaded ahead of
+    // this path entirely (see Texture::Create), so runtime resizing only ever
+    // applies to raw PNG/JPG/TGA.
     // 0 disables the cap.
     static void     SetMaxDimension(uint32_t maxDim);
     static uint32_t MaxDimension();

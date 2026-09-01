@@ -32,6 +32,12 @@ public:
     static std::shared_ptr<Texture> CreateFromPixels(const uint8_t* pixels,
                                                      int width, int height, int channels);
 
+    // Load one channel from a packed source texture. A semantic cook produces
+    // a BC4 derived DDS for this path/channel; when absent or stale, this falls
+    // back to decoding and extracting the source pixels. Used by glTF's packed
+    // occlusion/roughness/metallic textures.
+    static std::shared_ptr<Texture> CreateChannel(const std::string& path, uint32_t channel);
+
     // Register the RHI device the Vulkan backend uploads through. When set, the
     // factory above produces Vulkan-backed textures instead of dispatching on the
     // GL RendererAPI — this is how Font (which bakes its atlas through

@@ -468,6 +468,38 @@ public:
         }
 
         ImGui::Separator();
+        // SSR march diagnostic. Not gated on RT support — it is pure screen
+        // space — and, like the RT view, deliberately not part of RenderSettings:
+        // it replaces the whole image and nobody wants to restore into it.
+        const char* kSSRDebug[] = { "Off", "Hit / Miss", "Hit Distance",
+                                    "Step Index", "Overshoot", "Surface Slope" };
+        if (ImGui::Combo("SSR March", &m_SSRDebugMode, kSSRDebug, IM_ARRAYSIZE(kSSRDebug)))
+            m_Renderer->SetSSRDebugMode(m_SSRDebugMode);
+        if (m_SSRDebugMode != 0) {
+            ImGui::SameLine();
+            ImGui::TextDisabled("(?)");
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip(
+                    "Re-runs the resolve's own mirror ray and colours what the march DID.\n"
+                    "Dark grey = pixel never traced (background, or too rough).\n"
+                    "MAGENTA   = miss, ray stayed on screen the whole way. Geometry\n"
+                    "            was there to find and the march did not find it.\n"
+                    "ORANGE    = miss, ray ran out of screen. Expected, not a bug.\n\n"
+                    "Hit / Miss     green = crossing found; magenta/orange as above.\n"
+                    "Hit Distance   screen distance from the pixel to its hit. A\n"
+                    "               self-intersection lands on its own origin, so it\n"
+                    "               reads near-black: dark lines here mean the ray is\n"
+                    "               hitting the surface it started on.\n"
+                    "Step Index     which step accepted the crossing. Slices that line\n"
+                    "               up with step bands are step quantisation, and the\n"
+                    "               fix is stride, not tolerance.\n"
+                    "Overshoot      how far past the surface the hit was, over the\n"
+                    "               tolerance in force. Near 1 = accepted at the very\n"
+                    "               edge, which is where flicker comes from.\n"
+                    "Surface Slope  the slope-scaled part of the tolerance, white where\n"
+                    "               it saturates at THICKNESS.");
+        }
+
         // Ray-tracing bring-up (gi-design.md slice 2). Replaces the whole image
         // with primary-ray hit distance — the check that the acceleration
         // structures and RT pipeline are actually correct before DDGI uses them.
@@ -480,6 +512,7 @@ public:
             if (m_RTDebugEnabled &&
                 ImGui::SliderFloat("Ray Length##rt", &m_RTDebugMaxDistance, 1.0f, 500.0f, "%.0f"))
                 m_Renderer->SetRTDebugMaxDistance(m_RTDebugMaxDistance);
+
 
             // DDGI (gi-design.md slice 4). The master switch traces the probes
             // AND selects them as the far-field indirect term, so unticking it
@@ -752,6 +785,7 @@ private:
 
     bool  m_RTDebugEnabled     = false;
     float m_RTDebugMaxDistance = 100.0f;
+    int   m_SSRDebugMode       = 0;   // VulkanSSRDebugPass::Mode
 };
 
 } // namespace

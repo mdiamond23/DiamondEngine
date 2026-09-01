@@ -47,14 +47,15 @@ target_compile_definitions(Sandbox PRIVATE
 # same offline-tool pattern as glslangValidator in Engine/CMakeLists.txt. Unlike
 # glslangValidator this is optional, not FATAL_ERROR: cooking is a dev-time
 # convenience (Assets/Cache is gitignored, per-machine), not required to build or
-# run the engine — TextureCooker just logs and no-ops if DIAMOND_TEXCONV is unset.
+# run the engine. TextureCooker also checks Tools/ at runtime, so dropping the
+# executable there after configuration enables the editor action immediately.
 find_program(DIAMOND_TEXCONV_PATH NAMES texconv
     HINTS ${CMAKE_SOURCE_DIR}/Tools)
 if(DIAMOND_TEXCONV_PATH)
     target_compile_definitions(Sandbox PRIVATE DIAMOND_TEXCONV="${DIAMOND_TEXCONV_PATH}")
 else()
-    message(WARNING "texconv not found (looked in Tools/) — texture cooking disabled; "
-                     "download DirectXTex's texconv.exe into Tools/ to enable it.")
+    message(STATUS "texconv not found at configure time; Assets > Cook Textures will "
+                   "check Tools/ again at runtime.")
 endif()
 
 # Headless serializer tests (no window/GPU). Excluded from ALL so normal

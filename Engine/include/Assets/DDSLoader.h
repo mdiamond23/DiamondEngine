@@ -36,11 +36,21 @@ public:
     // assets are cooked.
     static std::string CookedPathFor(const std::string& sourcePath);
 
+    // Derived single-channel texture produced from a packed source image.
+    // channel is 0/1/2/3 for R/G/B/A; e.g. Foo.png + 1 maps to
+    // Assets/Cache/.../Foo.g.dds. These files let glTF metallic/roughness/AO
+    // avoid decoding and splitting the source image at runtime.
+    static std::string CookedChannelPathFor(const std::string& sourcePath, uint32_t channel);
+
     // One-call cooked lookup for a source image: resolves the cooked path,
     // requires it to be at least as new as the source (mtime -- a stale cooked
     // file is ignored until re-cooked, so hot reload composes: an edited PNG
     // loads uncooked immediately), then parses it. Invalid DDSData on any miss.
     static DDSData LoadCookedFor(const std::string& sourcePath);
+
+    // Cooked-channel equivalent of LoadCookedFor. Freshness is checked against
+    // the original packed source image.
+    static DDSData LoadCookedChannelFor(const std::string& sourcePath, uint32_t channel);
 };
 
 } // namespace Diamond

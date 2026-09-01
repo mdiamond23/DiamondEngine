@@ -9,9 +9,9 @@
 // See Docs/asset-pipeline-design.md §4, slice 2.
 namespace Diamond::TextureCooker {
 
-// Filename-convention usage classification (design doc "Format mapping"
-// table): drives which BCn format CookOne cooks to — Color -> BC7, Normal ->
-// BC5 (Z reconstructed in gbuffer.frag), Mask -> BC4.
+// Filename-convention fallback classification for standalone images. CookAll
+// uses exact glTF material-slot semantics when an image is referenced by a
+// glTF — Color -> BC7, Normal -> BC5, scalar channels -> derived BC4.
 enum class Usage { Color, Normal, Mask };
 
 Usage ClassifyUsage(const std::string& sourcePath);
@@ -26,8 +26,10 @@ Usage ClassifyUsage(const std::string& sourcePath);
 // Returns true only if a cook actually ran and texconv reported success.
 bool CookOne(const std::string& sourcePath);
 
-// Walks 'root' (Assets/ if empty) for source images (.png/.tga/.jpg/.jpeg) and
-// cooks each one that needs it. Returns how many were (re)cooked.
+// Walks 'root' (Assets/ if empty), scans .gltf material slots, then cooks source
+// images (.png/.tga/.jpg/.jpeg). Packed glTF roughness(G), metallic(B), and
+// occlusion(R) become separately named BC4 DDS files. Returns the number of
+// output files that were (re)cooked.
 int CookAll(const std::string& root = {});
 
 } // namespace Diamond::TextureCooker

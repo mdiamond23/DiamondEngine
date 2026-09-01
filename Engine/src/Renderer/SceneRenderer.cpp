@@ -25,6 +25,7 @@
 #include "Platform/Vulkan/Passes/GI/VulkanRTReflectionPass.h"
 #include "Platform/Vulkan/Passes/Deferred/VulkanSSGIPass.h"
 #include "Platform/Vulkan/Passes/Debug/VulkanRTDebugPass.h"
+#include "Platform/Vulkan/Passes/Debug/VulkanSSRDebugPass.h"
 #include "Platform/Vulkan/Passes/GI/VulkanDDGIPass.h"
 #include "Platform/Vulkan/Passes/Deferred/VulkanSSRPass.h"
 #include "Platform/Vulkan/Passes/Deferred/VulkanDeferredLightingPass.h"
@@ -355,6 +356,7 @@ public:
 
     // Both re-applied per frame in RenderView, so they survive a resize.
     void SetRTDebugEnabled(bool enabled) override { m_RTDebugEnabled = enabled; }
+    void SetSSRDebugMode(int mode) override { m_SSRDebugMode = mode; }
     void SetRTDebugMaxDistance(float distance) override { m_RTDebugMaxDistance = distance; }
     void SetDDGIEnabled(bool enabled) override { m_DDGIEnabled = enabled; }
     void SetRTReflectionsEnabled(bool enabled) override { m_RTReflectionsEnabled = enabled; }
@@ -844,6 +846,7 @@ private:
         std::unique_ptr<VulkanParticleRenderer>     particles;
         std::unique_ptr<VulkanDebugDrawPass>        debugDraw;   // main view only
         std::unique_ptr<VulkanRTDebugPass>          rtDebug;     // null without RT support
+        std::unique_ptr<VulkanSSRDebugPass>         ssrDebug;    // main view only, off by default
         std::unique_ptr<VulkanDDGIPass>             ddgi;        // null without RT support
         // RT reflections fill SSR's misses. Per-view (unlike DDGI): the input
         // is this view's screen-space trace. Inert without RT support.
@@ -1084,6 +1087,13 @@ private:
                 offscreen ? RHIFormat::RGBA8 : m_Device->SwapchainFormat());
             v->rtDebug->SetEnabled(m_RTDebugEnabled);
             v->rtDebug->SetTLAS(m_TLAS.get());
+
+            // SSR march diagnostic. Same main-view-only reasoning: it replaces
+            // the whole image. Needs no RT device — it is pure screen space.
+            v->ssrDebug = std::make_unique<VulkanSSRDebugPass>(
+                m_Device, shaderDir, width, height,
+                offscreen ? RHIFormat::RGBA8 : m_Device->SwapchainFormat());
+            v->ssrDebug->SetMode(static_cast<VulkanSSRDebugPass::Mode>(m_SSRDebugMode));
         }
 
         // DDGI probes, main view only. Probes are view-INDEPENDENT, so running
@@ -1158,6 +1168,17 @@ private:
                 v.offscreen ? RHIFormat::RGBA8 : m_Device->SwapchainFormat());
             v.rtDebug->SetEnabled(m_RTDebugEnabled);
             v.rtDebug->SetTLAS(m_TLAS.get());
+        }
+        // Its descriptor set samples five graph textures, all of which are
+        // about to be recreated at the new size — so it belongs in this list
+        // like every other pass here. The set is built once and cached, so a
+        // pass that survives a resize keeps sampling image views that no longer
+        // exist: null views, then VK_ERROR_DEVICE_LOST.
+        if (v.ssrDebug) {
+            v.ssrDebug = std::make_unique<VulkanSSRDebugPass>(
+                m_Device, shaderDir, width, height,
+                v.offscreen ? RHIFormat::RGBA8 : m_Device->SwapchainFormat());
+            v.ssrDebug->SetMode(static_cast<VulkanSSRDebugPass::Mode>(m_SSRDebugMode));
         }
         // DDGI itself is size-independent (probe atlases, not screen targets) and
         // survives the resize, but the lighting pass it shares a UBO with was
@@ -1441,6 +1462,15 @@ private:
             v.rtDebug->AddToGraph(g, rtDebugImage, v.outputColor, /*toSwapchain*/ !v.offscreen);
         }
 
+        // SSR march diagnostic, over the tonemapped image for the same reason
+        // the RT view is: routing it through the composite/TAA/tonemap chain
+        // would blend and curve-remap the very numbers it exists to show. Reads
+        // exactly the handles v.ssr reads, so the march sees identical inputs.
+        if (v.ssrDebug)
+            v.ssrDebug->AddToGraph(g, gViewPos, gViewNormal, gMaterial, depthLevels[0],
+                                   depthLevels[VulkanDepthPyramidPass::kScreenTraceCoarseLevel],
+                                   v.outputColor, /*toSwapchain*/ !v.offscreen);
+
         // DDGI probe update. The atlases were imported further up, ahead of the
         // lighting pass that now samples them; only the five update passes are
         // registered here, after tonemap, so the probe viz lands in the right
@@ -1546,6 +1576,14 @@ private:
         v.gtao->SetParams(m_GTAORadius, m_GTAOSlices, m_GTAOSteps, m_GTAOBentNormals);
         v.ssgi->SetProjection(jitteredProj);
         v.ssr->SetProjection(jitteredProj);
+        // The jittered projection, NOT the clean one the other debug views take:
+        // this has to reproduce the resolve's ray exactly, and the resolve marches
+        // with the jitter. A clean projection here would show a slightly different
+        // ray than the one that produced the artifact.
+        if (v.ssrDebug) {
+            v.ssrDebug->SetMode(static_cast<VulkanSSRDebugPass::Mode>(m_SSRDebugMode));
+            v.ssrDebug->SetProjection(jitteredProj);
+        }
         v.skybox->SetFrameData(view, jitteredProj);
         v.transparency->SetCamera(view, jitteredProj);
         m_CSM->ComputeCascades(m_SunDir, view, proj, kNear, kShadowFar, kShadowRes);
@@ -2667,6 +2705,7 @@ private:
     uint64_t m_FrameIndex = 0;
     bool     m_TAAEnabled = true;
     bool     m_RTDebugEnabled     = false;    // bring-up tool, not a feature
+    int      m_SSRDebugMode      = 0;        // VulkanSSRDebugPass::Mode::Off
     float    m_RTDebugMaxDistance = 100.0f;
 
     // DDGI: the scene's single probe volume, resolved per frame by
