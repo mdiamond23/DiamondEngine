@@ -49,8 +49,13 @@ struct DDGIGeometry {
     Verts   vb;
     Indices ib;
     vec4    albedo;     // rgb = base-color factor, a = UV scale
-    vec4    emissive;   // rgb = emissive radiance
-    uvec4   indices;    // x = albedo array slot, y = vertex stride in FLOATS
+    // .a here and .z below are METALLIC (factor and map slot). A probe gathers
+    // irradiance and this trace is diffuse-only by design, so both are ignored
+    // here - they are declared only to keep the record in step with
+    // SceneRenderer's RTGeometry and rt_reflection.rchit, which does use them.
+    vec4    emissive;   // rgb = emissive radiance, a = metallic factor
+    uvec4   indices;    // x = albedo array slot, y = vertex stride in FLOATS,
+                        // z = metallic array slot
 };
 
 layout(set = 0, binding = 0) uniform accelerationStructureEXT uTLAS;   // shadow queries

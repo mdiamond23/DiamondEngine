@@ -4,6 +4,7 @@
 #include "Assets/DDSLoader.h"
 #include "Assets/ImageLoader.h"
 #include "AssetPipeline/TextureCooker.h"
+#include "Editor/RenderSettingsPresets.h"
 
 #include <imgui.h>
 #include <nlohmann/json.hpp>
@@ -425,6 +426,9 @@ void PackagePanel::LoadSettings()
         m_IconPath      = j.value("icon",   m_IconPath);
         m_DebugBuild    = j.value("debugBuild",    m_DebugBuild);
         m_FullAssetCopy = j.value("fullAssetCopy", m_FullAssetCopy);
+        m_RenderPreset  = j.value("renderPreset",  m_RenderPreset);
+        m_CursorMode    = std::clamp(j.value("cursorMode", m_CursorMode),
+                                     (int)CursorMode::Visible, (int)CursorMode::Locked);
     } catch (const std::exception& e) {
         spdlog::warn("[Packager] failed to parse '{}': {}", SettingsPath().string(), e.what());
     }
@@ -444,6 +448,8 @@ void PackagePanel::SaveSettings()
     j["icon"]          = m_IconPath;
     j["debugBuild"]    = m_DebugBuild;
     j["fullAssetCopy"] = m_FullAssetCopy;
+    j["renderPreset"]  = m_RenderPreset;
+    j["cursorMode"]    = m_CursorMode;
 
     std::error_code ec;
     fs::create_directories(SettingsPath().parent_path(), ec);
@@ -518,6 +524,24 @@ void PackagePanel::StartJob()
     cfg.height        = std::max(64, m_Height);
     cfg.debugBuild    = m_DebugBuild;
     cfg.fullAssetCopy = m_FullAssetCopy;
+    cfg.cursorMode    = m_CursorMode;
+
+    // Resolve the preset to VALUES here, on the UI thread, rather than handing
+    // the worker a name to look up later: the store is editor state, and a build
+    // should ship the look that was selected when it was started even if the
+    // preset is edited or deleted while cmake runs. A name that no longer
+    // resolves is a warning, not a failure — the game boots on renderer
+    // defaults, which is exactly what shipping no override does.
+    cfg.renderPreset = m_RenderPreset;
+    if (!m_RenderPreset.empty()) {
+        Diamond::RenderSettingsStore store;
+        store.Load();
+        if (const Diamond::RenderSettings* rs = store.Find(m_RenderPreset))
+            cfg.renderSettingsJson = Diamond::ToJson(*rs).dump();
+        else
+            Log("[warn] render preset '" + m_RenderPreset + "' is no longer in "
+                "RenderSettings.json — shipping renderer defaults");
+    }
 
     if (cfg.scenes.empty())    { Log("[error] add at least one scene — entry 0 boots the game"); return; }
     if (cfg.outputDir.empty()) { Log("[error] choose an output folder"); return; }
@@ -788,6 +812,27 @@ void PackagePanel::RunJob(Config cfg)
     boot["width"]  = cfg.width;
     boot["height"] = cfg.height;
     if (!iconRef.empty()) boot["icon"] = iconRef;
+
+    // Cursor mode as a WORD, not the enum's integer: boot.json is hand-editable
+    // and a bare "2" tells a reader nothing.
+    switch ((CursorMode)cfg.cursorMode) {
+        case CursorMode::Hidden: boot["cursor"] = "hidden"; break;
+        case CursorMode::Locked: boot["cursor"] = "locked"; break;
+        default:                 boot["cursor"] = "visible"; break;
+    }
+
+    // The baked look. Absent when no preset was chosen, and the Runtime then
+    // touches nothing — a missing key and a preset that happens to hold the
+    // defaults are deliberately the same thing to the game.
+    if (!cfg.renderSettingsJson.empty()) {
+        try {
+            boot["renderSettings"] = nlohmann::json::parse(cfg.renderSettingsJson);
+            Log("[info] baked render preset '" + cfg.renderPreset + "'");
+        } catch (const std::exception& e) {
+            Log(std::string("[warn] could not serialise the render preset (") + e.what()
+                + ") — shipping renderer defaults");
+        }
+    }
     std::ofstream bootFile(outRoot / "boot.json");
     if (!bootFile.is_open()) {
         Log("[error] failed to write boot.json");
@@ -901,6 +946,62 @@ void PackagePanel::DrawStatusRow()
     }
 }
 
+// Render preset + cursor mode: the two things the packaged Runtime needs told
+// that the editor otherwise only knows in its own process.
+void PackagePanel::DrawRuntimeSection()
+{
+    ImGui::Spacing();
+    ImGui::TextDisabled("RUNTIME");
+    ImGui::Separator();
+
+    // Reloaded every frame rather than cached: presets are saved from another
+    // panel in the same process, so a cache here would go stale the moment
+    // someone adds one. It is a small JSON file and this panel is rarely open.
+    Diamond::RenderSettingsStore store;
+    store.Load();
+    const std::vector<Diamond::RenderSettingsStore::Entry>& entries = store.Entries();
+
+    const bool  missing = !m_RenderPreset.empty() && !store.Find(m_RenderPreset);
+    const char* preview = m_RenderPreset.empty() ? "(renderer defaults)"
+                                                 : m_RenderPreset.c_str();
+    ImGui::SetNextItemWidth(300.0f);
+    if (ImGui::BeginCombo("Render preset", preview)) {
+        if (ImGui::Selectable("(renderer defaults)", m_RenderPreset.empty()))
+            m_RenderPreset.clear();
+        for (const Diamond::RenderSettingsStore::Entry& e : entries) {
+            const bool selected = (e.name == m_RenderPreset);
+            if (ImGui::Selectable(e.name.c_str(), selected)) m_RenderPreset = e.name;
+            if (selected) ImGui::SetItemDefaultFocus();
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("(?)");
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Bakes a saved look from the Renderer Settings panel into the\n"
+                          "build's boot.json. The packaged game applies it at startup.\n"
+                          "Defaults means the build ships no override at all.");
+
+    if (missing)
+        ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.0f, 1.0f),
+                           "'%s' is not in RenderSettings.json — the build would ship defaults",
+                           m_RenderPreset.c_str());
+    else if (entries.empty())
+        ImGui::TextDisabled("No presets saved yet — save one from the Renderer Settings panel.");
+
+    const char* kCursors[] = { "Visible", "Hidden", "Locked to window" };
+    ImGui::SetNextItemWidth(300.0f);
+    ImGui::Combo("Mouse cursor", &m_CursorMode, kCursors, IM_ARRAYSIZE(kCursors));
+    ImGui::SameLine();
+    ImGui::TextDisabled("(?)");
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Hidden: pointer invisible but still moving normally — screen-space\n"
+                          "UI still hit-tests against it.\n"
+                          "Locked: pointer captured and centred, delivering unbounded deltas.\n"
+                          "That is what a mouse-look camera wants, and it stops cursor-driven\n"
+                          "UI from working.");
+}
+
 void PackagePanel::OnImGuiRender()
 {
     // Reap a finished worker and drain its log even while the window is
@@ -966,6 +1067,8 @@ void PackagePanel::OnImGuiRender()
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("Default: only the listed scenes' dependency closure is copied.\n"
                           "This copies all of Assets/ instead — multiple GB.");
+
+    DrawRuntimeSection();
 
     ImGui::Spacing();
     ImGui::TextDisabled("OUTPUT");

@@ -1,12 +1,13 @@
 {
+  "cursorMode": 0,
   "debugBuild": false,
   "fullAssetCopy": false,
   "height": 900,
   "icon": "Assets/Materials/Lava004_2K-PNG/Lava004_2K-PNG_Color.png",
-  "outputDir": "C:\\Dev\\Builds\\Test",
+  "outputDir": "C:\\Users\\Matt\\Desktop\\Builds",
+  "renderPreset": "Base Settings",
   "scenes": [
-    "Assets/Scenes/CharacterTest.scene",
-    "Assets/Scenes/CamTest.scene"
+    "Assets/Scenes/Sponza.scene"
   ],
   "title": "DiamondEngine",
   "width": 1600

@@ -68,8 +68,12 @@ VulkanRTReflectionPass::VulkanRTReflectionPass(RHIDevice* device, const std::str
             { 9,  RHIResourceType::CombinedImageSampler,  RHIShaderStage::ClosestHit },
             { 10, RHIResourceType::CombinedImageSampler,  RHIShaderStage::ClosestHit },
             { 11, RHIResourceType::CombinedImageSampler,  RHIShaderStage::ClosestHit },
-            { 12, RHIResourceType::CombinedImageSampler,  RHIShaderStage::Miss },
-            // Bindless albedo maps, indexed per hit by the material's slot.
+            // Env cubemap. ClosestHit too: a metal hit has no diffuse lobe, so
+            // its specular comes off this same map the miss shader returns.
+            { 12, RHIResourceType::CombinedImageSampler,  RHIShaderStage::Miss
+                                                        | RHIShaderStage::ClosestHit },
+            // Bindless material maps (base color, metallic), indexed per hit by
+            // the material's slots.
             { 13, RHIResourceType::CombinedImageSampler,  RHIShaderStage::ClosestHit,
                   kMaxTextures },
         };

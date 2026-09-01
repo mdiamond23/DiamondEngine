@@ -9,7 +9,21 @@
 
 // Reflection hit shading. Returns the outgoing radiance of the hit surface:
 //
-//   L = albedo/pi * E_direct  +  albedo * E_probe  +  emissive
+//   L = kD * albedo/pi * (E_direct + E_probe)  +  F * env(reflect)  +  emissive
+//
+// where kD = (1 - F) * (1 - metallic) and F is Schlick around
+// F0 = mix(0.04, albedo, metallic).
+//
+// THE METALLIC SPLIT IS NOT COSMETIC. This shader used to run the diffuse term
+// alone, on every hit, metal included — and a metal has no diffuse lobe at all.
+// A chrome surface's base color is dark, so albedo * E came back very near
+// black, and a mirror sphere reflected in a mirror floor turned into a dark
+// blob wearing only its emissive dots. That is fine right up until the pixel
+// next to it is one SSR kept, where the same sphere is the real, bright,
+// specular thing sampled out of the lit scene. The two shading models meet at
+// the SSR confidence boundary and the difference reads as a hard CUT through
+// the reflection. Splitting the lobes puts a metal's energy where it belongs
+// and the seam becomes a change in sharpness rather than a change in colour.
 //
 // Ported from ddgi_probe_trace.rchit, which this is ~90% identical to. Three
 // differences, all deliberate:
@@ -21,13 +35,15 @@
 //  2. A backface hit FLIPS the normal instead of reporting a negative
 //     distance. A probe treats backfaces as evidence it is buried; a reflection
 //     just needs the surface it can see shaded sensibly.
-//  3. Diffuse only, same as the probe trace — a specular lobe at the hit would
-//     need a second bounce to have anything to reflect.
+//  3. A SPECULAR lobe, which the probe trace has no use for. A probe gathers
+//     irradiance, so diffuse-only is right there; a reflection is looked at
+//     directly, so a metal shading as Lambertian is visible immediately. The
+//     lobe is one bounce off the environment — see the specular term below.
 //
 // Geometry is reached by DEVICE ADDRESS, not descriptors: gl_InstanceCustomIndexEXT
-// indexes the same {vertexBuffer, indexBuffer, albedo, emissive, slot} table
-// SceneRenderer builds for DDGI, and the base-color map comes from the shared
-// bindless array. A ray hits whatever it hits, so no per-draw set could serve
+// indexes the same {vertexBuffer, indexBuffer, albedo, emissive, slots} table
+// SceneRenderer builds for DDGI, and the base-color and metallic maps come from
+// the shared bindless array. A ray hits whatever it hits, so no per-draw set could serve
 // it, and the index is non-uniform across a subgroup by nature.
 
 layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer Verts {
@@ -43,8 +59,9 @@ struct RTGeometry {
     Verts   vb;
     Indices ib;
     vec4    albedo;     // rgb = base-color factor, a = UV scale
-    vec4    emissive;   // rgb = emissive radiance
-    uvec4   indices;    // x = albedo array slot, y = vertex stride in FLOATS
+    vec4    emissive;   // rgb = emissive radiance, a = metallic factor
+    uvec4   indices;    // x = albedo array slot, y = vertex stride in FLOATS,
+                        // z = metallic array slot
 };
 
 layout(set = 0, binding = 1) uniform accelerationStructureEXT uTLAS;   // shadow queries
@@ -87,8 +104,15 @@ layout(set = 0, binding = 9)  uniform sampler2D uIrradianceAtlas;
 layout(set = 0, binding = 10) uniform sampler2D uVisibilityAtlas;
 layout(set = 0, binding = 11) uniform sampler2D uProbeData;
 
-// Bindless base-color maps. Slot 0 is 1x1 white, so an untextured material
-// resolves to its base-color factor alone — matching the G-buffer pass.
+// The same baked radiance cubemap the miss shader returns. A reflected METAL
+// has no diffuse term to speak of, so this is where its outgoing radiance comes
+// from — and sampling the identical texture the miss path samples is what keeps
+// a mirror ball's reflection of the sky agreeing with the sky beside it.
+layout(set = 0, binding = 12) uniform samplerCube uEnvMap;
+
+// Bindless material maps, indexed by the record's slots. Slot 0 is 1x1 white, so
+// an untextured material resolves to its factor alone — matching the G-buffer
+// pass. Base color and metallic both come from this one array.
 layout(set = 0, binding = 13) uniform sampler2D uAlbedoMaps[];
 
 layout(location = 0) rayPayloadInEXT vec3 payload;
@@ -214,13 +238,34 @@ void main() {
     const vec3 viewPos  = (r.view * vec4(worldPos, 1.0)).xyz;
     const vec3 viewN    = normalize(mat3(r.view) * worldN);
 
-    // Ray tracing has no derivatives, so the base-color map is sampled at LOD 0.
+    // Ray tracing has no derivatives, so the maps are sampled at LOD 0.
     const vec3 albedo = g.albedo.rgb
         * textureLod(uAlbedoMaps[nonuniformEXT(g.indices.x)], uv, 0.0).rgb;
 
+    // Metallic, reconstructed exactly as gbuffer.frag reconstructs it: the CPU
+    // sends 1.0 for a material that owns a metallic MAP and the factor for one
+    // that does not, and slot 0 is 1x1 white — so this one multiply covers both
+    // without a branch. Red channel, matching the G-buffer's convention.
+    const float metallic = clamp(
+        g.emissive.a * textureLod(uAlbedoMaps[nonuniformEXT(g.indices.z)], uv, 0.0).r,
+        0.0, 1.0);
+
+    // Schlick, against the direction the ray CAME from. A dielectric keeps its
+    // 0.04 specular and nearly all its diffuse; a metal puts everything into F
+    // and tints it with its own base color, which is what makes a reflected
+    // gold surface gold instead of a dark brown Lambertian patch.
+    const vec3  F0    = mix(vec3(0.04), albedo, metallic);
+    const vec3  Vdir  = -gl_WorldRayDirectionEXT;
+    const float NoV   = max(dot(worldN, Vdir), 0.0);
+    const float fSch  = pow(1.0 - NoV, 5.0);
+    const vec3  F     = F0 + (1.0 - F0) * fSch;
+
+    // Energy left for the diffuse lobe. Metals have none.
+    const vec3 kD = (1.0 - F) * (1.0 - metallic);
+
     // Direct, Lambert (probes and this both store/return irradiance, so the
     // albedo/pi * E form is the right one).
-    vec3 L = albedo * (DirectIrradiance(viewPos, viewN, worldPos) / DDGI_PI);
+    vec3 L = kD * albedo * (DirectIrradiance(viewPos, viewN, worldPos) / DDGI_PI);
 
     // Indirect at the hit, from the probe field. WITHOUT THIS a reflection of
     // anything the sun cannot see is black — direct light has nothing to give
@@ -236,11 +281,23 @@ void main() {
         vol.params2 = vec4(0.0, r.ddgiParams.z, 0.0, 0.0);
         // The atlas stores E/pi, so albedo/pi * E collapses to a plain multiply.
         // Energy is applied HERE, outside the lookup — see ddgi_common.glsl.
-        L += albedo * DDGISampleIrradiance(vol, uIrradianceAtlas, uVisibilityAtlas,
-                                           uProbeData, worldPos, worldN,
-                                           -gl_WorldRayDirectionEXT)
-                    * r.ddgiParams.y;
+        L += kD * albedo * DDGISampleIrradiance(vol, uIrradianceAtlas, uVisibilityAtlas,
+                                                uProbeData, worldPos, worldN,
+                                                -gl_WorldRayDirectionEXT)
+                         * r.ddgiParams.y;
     }
+
+    // Specular: ONE bounce, off the environment. maxRecursionDepth is 1 and ray
+    // queries can't launch a hit shader, so there is nothing here that could
+    // shade a second surface — a reflected mirror shows the env and its own
+    // emissive, not the room behind the camera. That is a real limitation, but
+    // it is bounded and plausible, where the old diffuse-only version was
+    // simply the wrong lobe.
+    //
+    // No roughness fade: the env cubemap has no prefiltered chain to fade INTO,
+    // and the reflection pass only runs under its own roughness cutoff anyway.
+    L += F * textureLod(uEnvMap, reflect(gl_WorldRayDirectionEXT, worldN), 0.0).rgb
+           * r.params.y;
 
     L += g.emissive.rgb;
 

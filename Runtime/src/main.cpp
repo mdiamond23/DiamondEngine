@@ -37,6 +37,7 @@
 #include "Audio/AudioEngine.h"
 #include "Audio/AudioAPI.h"
 #include "Renderer/SceneRenderer.h"
+#include "Editor/RenderSettingsPresets.h"   // RenderSettings + ApplyRenderSettings
 #include "Renderer/RendererAPI.h"
 #include "Renderer/RHI/RHIDevice.h"
 #include "Renderer/RHI/RHIEnums.h"
@@ -93,6 +94,17 @@ struct BootConfig {
     int         width  = 1600;
     int         height = 900;
     std::string icon;   // portable path to a PNG for the window/taskbar icon
+
+    // "visible" | "hidden" | "locked" — what the game does with the OS pointer.
+    std::string cursor = "visible";
+
+    // The look the packager baked in. hasRenderSettings distinguishes "no
+    // override was shipped" from "an override that happens to equal the
+    // defaults": the first must leave the renderer untouched, because a future
+    // renderer default should reach an old build that never expressed an
+    // opinion.
+    bool           hasRenderSettings = false;
+    RenderSettings renderSettings{};
 };
 
 bool LoadBootConfig(const fs::path& path, BootConfig& out)
@@ -109,6 +121,11 @@ bool LoadBootConfig(const fs::path& path, BootConfig& out)
         out.width  = j.value("width",  out.width);
         out.height = j.value("height", out.height);
         out.icon   = j.value("icon",   out.icon);
+        out.cursor = j.value("cursor", out.cursor);
+        if (j.contains("renderSettings") && j["renderSettings"].is_object()) {
+            out.renderSettings    = RenderSettingsFromJson(j["renderSettings"]);
+            out.hasRenderSettings = true;
+        }
         return true;
     } catch (const std::exception& e) {
         spdlog::error("[Runtime] boot.json is malformed ({}) — falling back to dev mode", e.what());
@@ -256,12 +273,35 @@ int main(int argc, char** argv)
         return 1;
     }
 
+    // The look the packager baked in, applied before the first frame so nothing
+    // is ever presented with the wrong exposure or GI settings. Skipped
+    // entirely when boot.json carried no renderSettings block — see BootConfig.
+    if (boot.hasRenderSettings) {
+        ApplyRenderSettings(*renderer, boot.renderSettings);
+        spdlog::info("[Runtime] applied the packaged render settings");
+    }
+
     // In-game UI batcher, recorded into the swapchain overlay scope (so it
     // targets the swapchain's format, not the editor's RGBA8 offscreen one).
     auto r2d = std::make_unique<VulkanRenderer2D>(
         device.get(), shaderDir, device->SwapchainFormat());
 
     Input::Init(window);
+
+    // Pointer mode. Locked also asks for RAW motion where the platform has it:
+    // with the cursor captured there is no desktop pointer to accelerate toward,
+    // and OS pointer acceleration applied to a mouse-look delta is exactly the
+    // input curve players complain about.
+    if (boot.cursor == "hidden") {
+        glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_HIDDEN);
+    } else if (boot.cursor == "locked") {
+        glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+        if (glfwRawMouseMotionSupported())
+            glfwSetInputMode(window, GLFW_RAW_MOUSE_MOTION, GLFW_TRUE);
+    } else if (boot.cursor != "visible") {
+        spdlog::warn("[Runtime] boot.json cursor '{}' is not visible/hidden/locked "
+                     "— leaving the cursor visible", boot.cursor);
+    }
 
     AudioEngine audioEngine;
     audioEngine.Init();

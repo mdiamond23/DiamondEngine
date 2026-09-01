@@ -42,7 +42,20 @@ private:
         int  height = 900;
         bool debugBuild    = false;
         bool fullAssetCopy = false;        // whole Assets/ tree instead of the dep walk
+        // The render preset baked into boot.json, already serialised on the UI
+        // thread. Held as JSON text rather than a RenderSettings so this header
+        // stays free of SceneRenderer.h. Empty = ship no override and let the
+        // Runtime boot on the renderer's own defaults.
+        std::string renderSettingsJson;
+        std::string renderPreset;          // name, for the build log only
+        int  cursorMode = 0;               // CursorMode
     };
+
+    // What the packaged game does with the OS pointer. Hidden still tracks the
+    // desktop cursor's position (so screen-space UI hit-testing keeps working);
+    // Locked also captures it and feeds unbounded deltas, which is what a
+    // mouse-look camera needs and what breaks cursor-driven UI.
+    enum class CursorMode : int { Visible = 0, Hidden = 1, Locked = 2 };
 
     enum class Stage : int { Idle, Building, Collecting, Cooking, Copying,
                              Finalizing, Done, Failed, Cancelled };
@@ -56,6 +69,7 @@ private:
     void AddScene(const std::string& path);
     void DrawSceneList();
     void DrawStatusRow();
+    void DrawRuntimeSection();   // render preset + cursor mode
 
     // --- settings (UI thread only) ---
     std::vector<std::string> m_Scenes;     // portable "Assets/..." paths; [0] = boot scene
@@ -66,6 +80,11 @@ private:
     std::string m_IconPath;
     bool        m_DebugBuild     = false;
     bool        m_FullAssetCopy  = false;
+    // "" = ship no render override. Otherwise the name of an entry in the
+    // project's RenderSettings.json, resolved to values at job launch so a
+    // preset edited mid-build can't change what ships.
+    std::string m_RenderPreset;
+    int         m_CursorMode     = (int)CursorMode::Visible;
 
     // --- job state (worker writes, UI reads) ---
     std::thread           m_Worker;

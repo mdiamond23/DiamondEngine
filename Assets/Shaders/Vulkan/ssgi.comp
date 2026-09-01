@@ -55,7 +55,7 @@ const int   TRACE_STEPS   = 8;
 // on a scene where most rays hit, those four extra taps would be a quarter of
 // the entire trace loop.
 const int   REFINE_STEPS  = 2;
-const float THICKNESS     = 0.6;
+const float THICKNESS     = 0.6;   // entry slack on the crossing bracket
 const float BIAS          = 0.05;
 const float NORMAL_PUSH   = 0.05;   // lifts the origin off its own surface
 const float FIREFLY_CLAMP = 8.0;    // one blown sample would persist forever

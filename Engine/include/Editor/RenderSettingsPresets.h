@@ -22,7 +22,13 @@
 //
 // Header-only for the same reason MaterialAsset.h is: it is a struct plus its
 // JSON mapping, and a new .cpp would have to be hand-added to the CMake source
-// list. Editor-only — nothing in a packaged runtime reads this file.
+// list.
+//
+// The PRESET STORE below is editor-only — a packaged game has no
+// RenderSettings.json to read. The RenderSettings struct, its JSON mapping and
+// ApplyRenderSettings are not: the packager bakes the chosen preset into
+// boot.json and the Runtime applies it at startup, so both ends of that trip
+// go through this one file.
 namespace Diamond {
 
 // One saved look. Defaults MUST match the renderer's own, so a preset file that
@@ -127,8 +133,30 @@ inline RenderSettings RenderSettingsFromJson(const nlohmann::json& j)
     return s;
 }
 
+// Push a whole settings block at a renderer. The ONE place that knows which
+// setter each field maps to — the editor calls it when a preset loads and at
+// startup, and the Runtime calls it for the look baked into boot.json. Keeping
+// it here is what stops a packaged build from quietly rendering with a
+// different set of fields than the editor previewed: a field added to
+// RenderSettings and wired up here reaches both.
+inline void ApplyRenderSettings(SceneRenderer& r, const RenderSettings& s)
+{
+    r.SetExposure(s.exposure);
+    r.SetTonemapper(static_cast<Tonemapper>(s.tonemapper));
+    r.SetTAAEnabled(s.taa);
+    r.SetSSAOStrength(s.ssaoStrength);
+    r.SetGTAOParams(s.gtaoRadius, s.gtaoSlices, s.gtaoSteps, s.gtaoBentNormals);
+    r.SetSSGIEnabled(s.ssgiEnabled);
+    r.SetSSGIParams(s.ssgiRays, s.ssgiIntensity, s.ssgiMaxDistance, s.ssgiStrength);
+    r.SetDDGIEnabled(s.ddgiEnabled);
+    r.SetRTReflectionsEnabled(s.rtReflections);
+    r.SetAutoExposure(s.autoExposure);
+    r.SetBloomParams(s.bloomThreshold, s.bloomIntensity);
+}
+
 // The whole preset file: named entries plus which one was last applied, so the
-// editor reopens on the look you left it in.
+// editor reopens on the look you left it in. Editor-only — the packager reads
+// it to bake a preset into a build, but a packaged game never sees this class.
 class RenderSettingsStore {
 public:
     struct Entry {

@@ -5,6 +5,7 @@
 #include "TestHealth.h"
 #include "Move.h"
 #include "Spin.h"
+#include "FlyCamera.h"
 #include "TriggerTest.h"
 #include "ArmControl.h"
 #include "PlayerInput.h"

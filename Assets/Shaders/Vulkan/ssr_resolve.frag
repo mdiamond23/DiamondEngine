@@ -140,7 +140,18 @@ vec4 ResolveReusedRays(vec3 P, vec3 N, vec3 V, float roughness, out bool valid) 
 
         vec3 sp = texelFetch(gViewPos, src, 0).xyz;
         if (sp.z == 0.0) continue;
-        if (abs(sp.z - P.z) > 0.05 * abs(P.z)) continue;
+        // Same-surface test by distance from THIS pixel's tangent PLANE, not by
+        // raw view-Z difference. A floor seen at a grazing angle recedes fast,
+        // so two texels a couple of pixels apart differ hugely in z while lying
+        // exactly on one flat surface — the z test threw those out, and since
+        // the rejection depends on where the depth gradient happens to cross the
+        // 5% line, it threw them out in HORIZONTAL BANDS. Each band then fell
+        // through to the mirror trace while its neighbours reused low-res rays,
+        // so the floor was striped with alternating sharp and reused
+        // reflections. Projecting onto the normal measures what the gate
+        // actually means to ask — is this neighbour on my surface — and a
+        // receding floor passes it everywhere.
+        if (abs(dot(sp - P, N)) > 0.05 * abs(P.z)) continue;
 
         vec3  sn     = texelFetch(gViewNormal, src, 0).xyz;
         float snLen2 = dot(sn, sn);

@@ -47,6 +47,33 @@ float SampleLinearDepth(sampler2D linearDepth, vec2 uv) {
                       clamp(ivec2(uv * vec2(size)), ivec2(0), size - 1), 0).r;
 }
 
+// Smallest depth difference that MEANS anything at this depth.
+//
+// The pyramid is R16F (VulkanDepthPyramidPass). A half float carries a 10-bit
+// mantissa, so consecutive representable depths near d sit about d * 2^-11
+// apart — the stored depth is not a smooth function of distance, it is a
+// STAIRCASE, and on a floor receding from the camera the treads of that
+// staircase are wide horizontal strips of exactly-equal depth.
+//
+// A fixed tolerance is therefore wrong at both ends of the range. At d = 100 it
+// takes about 0.05 just to reach one quantisation step, so a fixed 0.05 is
+// comparing two numbers inside their own representation error: 'rayD' varies
+// smoothly along the ray while 'sceneD' snaps between treads, and the
+// comparison flips sign at every tread boundary. Each flip is a false
+// self-intersection right at the ray's origin, which returns the surface's own
+// colour instead of what it should reflect — one bright horizontal line per
+// tread, slicing across the reflection. That is a screen-space artifact with no
+// RT component at all, which is why turning RT reflections off leaves it
+// untouched.
+//
+// 4x the quantum clears the staircase with margin for the interpolated ray
+// depth's own error. Below about d = 25 this stays under the caller's fixed
+// bias and nothing changes, so near-field behaviour is exactly as tuned.
+float DepthEpsilon(float d, float bias) {
+    const float kR16FQuantum = 4.0 / 2048.0;   // 4 * 2^-11
+    return max(bias, d * kR16FQuantum);
+}
+
 // Screen-space march to the first depth crossing, then a short binary
 // refinement. Returns true on hit and writes the hit's screen UV.
 //
@@ -82,6 +109,9 @@ float SampleLinearDepth(sampler2D linearDepth, vec2 uv) {
 // a cell-stepping DDA would take far MORE iterations than the fixed step budget
 // above, not fewer. The reject filter is the part of the idea that pays off at
 // four levels.)
+// 'thickness' is NOT a depth tolerance on the hit — the bracket test in the
+// loop bounds overshoot by itself. It is slack on the bracket's ENTRY half; see
+// there.
 bool TraceScreenRay(sampler2D linearDepth, sampler2D coarseDepth,
                     mat4 proj, vec3 origin, vec3 dir,
                     float maxDistance, int steps, int refineSteps,
@@ -112,13 +142,35 @@ bool TraceScreenRay(sampler2D linearDepth, sampler2D coarseDepth,
     const float iw0 = 1.0 / c0.w;
     const float iw1 = 1.0 / c1.w;
 
-    float prevT = 0.0;
-    float hitT  = -1.0;
+    // Shorten the segment to the part that is ON SCREEN before the step budget
+    // is spread over it. The march can only ever hit inside the frame, so a
+    // segment that leaves after a third of its length was spending two thirds
+    // of its steps on taps that are guaranteed misses — and, worse, sizing
+    // EVERY step to the full length. A floor reflecting upward is the usual
+    // case: its ray exits the top of the frame almost immediately, so at 4K a
+    // 24-step march was landing one tap every ~80 pixels of the span it
+    // actually cares about. Clipping first spends all 24 in frame at the same
+    // cost. Exact, not an approximation: uv is affine in t, so this is a
+    // Liang-Barsky exit parameter, and 1/w is affine in the SAME t, so
+    // rescaling t leaves the depth interpolation below untouched.
+    float tExit = 1.0;
+    if (all(greaterThanEqual(uv0, vec2(0.0))) && all(lessThanEqual(uv0, vec2(1.0)))) {
+        // uv0 is this pixel, hence inside the box: on each axis one root is
+        // behind the origin and the other ahead, so max() picks the exit.
+        vec2 d = uv1 - uv0;
+        if (abs(d.x) > 1e-8) tExit = min(tExit, max(-uv0.x / d.x, (1.0 - uv0.x) / d.x));
+        if (abs(d.y) > 1e-8) tExit = min(tExit, max(-uv0.y / d.y, (1.0 - uv0.y) / d.y));
+        tExit = clamp(tExit, 0.0, 1.0);
+    }
+    if (tExit <= 1e-4) return false;   // origin on the border, ray leaves at once
+
+    float prevT    = 0.0;
+    float prevRayD = 1.0 / iw0;        // depth at the origin
+    float hitT     = -1.0;
 
     for (int i = 1; i <= steps; ++i) {
-        float t  = float(i) / float(steps);
-        vec2  uv = mix(uv0, uv1, t);
-        if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) return false;
+        float t  = tExit * float(i) / float(steps);
+        vec2  uv = clamp(mix(uv0, uv1, t), vec2(0.0), vec2(1.0));
 
         float rayD = 1.0 / mix(iw0, iw1, t);
 
@@ -126,16 +178,44 @@ bool TraceScreenRay(sampler2D linearDepth, sampler2D coarseDepth,
         // downsample only writes 0 when every child was sky), and a nearest
         // surface still in front of the ray means no crossing anywhere in the
         // footprint. Either way the fine tap is provably unnecessary.
+        float eps = DepthEpsilon(rayD, bias);
+
         float coarseD = SampleLinearDepth(coarseDepth, uv);
-        if (coarseD <= 0.0 || coarseD > rayD - bias) { prevT = t; continue; }
+        if (coarseD <= 0.0 || coarseD > rayD - eps) { prevT = t; prevRayD = rayD; continue; }
 
         float sceneD = SampleLinearDepth(linearDepth, uv);
-        if (sceneD <= 0.0) { prevT = t; continue; }   // ray is over a sky pixel
+        if (sceneD <= 0.0) { prevT = t; prevRayD = rayD; continue; }   // over a sky pixel
 
-        // The ray is behind stored geometry once its depth passes the surface's.
-        // thickness rejects crossings far behind thin geometry.
-        if (sceneD <= rayD - bias && rayD - sceneD < thickness) { hitT = t; break; }
-        prevT = t;
+        // A crossing is a BRACKET, not a proximity test: the ray must have been
+        // in FRONT of this surface where the step began and BEHIND it where the
+        // step ended. Both halves carry their weight.
+        //
+        //  - Testing only "ended up behind, within some tolerance of the
+        //    surface" is what a fixed 'thickness' did, and it fails in BOTH
+        //    directions once steps get long. Too small and a step that jumps
+        //    the ray clean past a surface reports no hit — and since the ray is
+        //    behind the geometry from then on, every later step fails
+        //    identically and the WHOLE ray misses, which put hard edges through
+        //    reflections of thin and distant geometry. Too large (a tolerance
+        //    scaled to the step) and a ray legitimately travelling behind an
+        //    object gets claimed by it, which smears reflections into bands.
+        //
+        //  - The bracket has neither failure because it is self-bounding. If
+        //    the ray was in front at the start and behind at the end, then
+        //    rayD - sceneD is at most the depth the step covered, BY
+        //    CONSTRUCTION. A long step therefore admits a proportionally larger
+        //    overshoot automatically — which is exactly the slack the coarse
+        //    grid needs — while a ray already behind at the step's start is
+        //    rejected outright no matter how long the step was.
+        //
+        // 'thickness' survives as slack on the ENTRY half only. sceneD is
+        // sampled at this step's uv, not the previous one, so on a surface
+        // slanted away from the ray the previous step can read slightly behind
+        // a surface it was really still in front of; thickness absorbs that
+        // without ever licensing an unbounded overshoot.
+        if (rayD > sceneD + eps && prevRayD <= sceneD + thickness) { hitT = t; break; }
+        prevT    = t;
+        prevRayD = rayD;
     }
 
     if (hitT < 0.0) return false;
@@ -147,8 +227,11 @@ bool TraceScreenRay(sampler2D linearDepth, sampler2D coarseDepth,
         float mid    = 0.5 * (lo + hi);
         float rayD   = 1.0 / mix(iw0, iw1, mid);
         float sceneD = SampleLinearDepth(linearDepth, mix(uv0, uv1, mid));
-        if (sceneD > 0.0 && sceneD <= rayD - bias) hi = mid;
-        else                                       lo = mid;
+        // Same depth-relative epsilon as the march — a bisection run against a
+        // tighter tolerance than the loop that found the bracket would converge
+        // to a boundary the loop never agreed existed.
+        if (sceneD > 0.0 && sceneD <= rayD - DepthEpsilon(rayD, bias)) hi = mid;
+        else                                                           lo = mid;
     }
 
     hitUV = mix(uv0, uv1, hi);

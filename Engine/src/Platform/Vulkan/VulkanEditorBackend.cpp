@@ -316,21 +316,7 @@ public:
     // Push the whole settings block at the renderer. Used when a preset loads
     // and at startup — the per-widget calls below stay as they are so dragging a
     // slider still costs exactly one setter.
-    void ApplyAllSettings() {
-        m_Renderer->SetExposure(m_Settings.exposure);
-        m_Renderer->SetTonemapper(static_cast<Tonemapper>(m_Settings.tonemapper));
-        m_Renderer->SetTAAEnabled(m_Settings.taa);
-        m_Renderer->SetSSAOStrength(m_Settings.ssaoStrength);
-        m_Renderer->SetGTAOParams(m_Settings.gtaoRadius, m_Settings.gtaoSlices,
-                                  m_Settings.gtaoSteps, m_Settings.gtaoBentNormals);
-        m_Renderer->SetSSGIEnabled(m_Settings.ssgiEnabled);
-        m_Renderer->SetSSGIParams(m_Settings.ssgiRays, m_Settings.ssgiIntensity,
-                                  m_Settings.ssgiMaxDistance, m_Settings.ssgiStrength);
-        m_Renderer->SetDDGIEnabled(m_Settings.ddgiEnabled);
-        m_Renderer->SetRTReflectionsEnabled(m_Settings.rtReflections);
-        m_Renderer->SetAutoExposure(m_Settings.autoExposure);
-        m_Renderer->SetBloomParams(m_Settings.bloomThreshold, m_Settings.bloomIntensity);
-    }
+    void ApplyAllSettings() { ApplyRenderSettings(*m_Renderer, m_Settings); }
 
     // Preset row: pick a saved look, overwrite it, or delete it. Selecting from
     // the combo APPLIES immediately — the point of the feature is a two-click

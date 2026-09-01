@@ -85,9 +85,16 @@ struct RTGeometry {
     uint64_t   vertexAddress = 0;
     uint64_t   indexAddress  = 0;
     glm::vec4  albedo   { 1.0f, 1.0f, 1.0f, 1.0f };   // .a = material UV scale
+    // rgb = emissive radiance. a = METALLIC, resolved the same way the G-buffer
+    // resolves it (see RebuildDrawList): 1.0 when the material carries a
+    // metallic MAP — whose sample then stands alone — and MetallicFactor when it
+    // does not. rt_reflection.rchit needs it to avoid shading a mirror as a
+    // Lambertian diffuse surface; the probe trace ignores it.
     glm::vec4  emissive { 0.0f, 0.0f, 0.0f, 0.0f };
     // x = slot in the bindless albedo array, y = vertex stride in floats (so the
-    // hit shader never hardcodes a vertex layout), zw unused.
+    // hit shader never hardcodes a vertex layout), z = slot of the metallic map
+    // (0 = the 1x1 white default, which makes the factor above stand alone),
+    // w unused.
     glm::uvec4 indices  { 0u, 0u, 0u, 0u };
 };
 static_assert(sizeof(RTGeometry) == 64,
@@ -2054,8 +2061,18 @@ private:
                         g.albedo   = glm::vec4(glm::vec3(mat->BaseColorFactor), mat->UVScale);
                         // No emissive COLOR without a texture fetch, so the
                         // strength drives a white emitter — enough for a probe.
-                        g.emissive = glm::vec4(glm::vec3(mat->EmissiveStrength), 0.0f);
+                        // .a carries metallic; see RTGeometry.
+                        //
+                        // The map-wins rule is PBRMaterial's, not glTF's: a
+                        // material with a metallic map ignores MetallicFactor.
+                        // Sending 1.0 in that case makes factor * sample collapse
+                        // to the sample, so the hit shader needs no branch and
+                        // reaches the same value gbuffer.frag does. Slot 0 is 1x1
+                        // white, so the untextured case collapses to the factor.
+                        g.emissive = glm::vec4(glm::vec3(mat->EmissiveStrength),
+                                               mat->Metallic ? 1.0f : mat->MetallicFactor);
                         g.indices.x = RTTextureSlot(mat->Albedo);
+                        g.indices.z = RTTextureSlot(mat->Metallic);
                     }
                     g.indices.y = sizeof(MeshVertex) / sizeof(float);
                     m_RTGeometry.push_back(g);

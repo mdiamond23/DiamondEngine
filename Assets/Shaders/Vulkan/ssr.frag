@@ -62,7 +62,7 @@ layout(set = 0, binding = 3) uniform SSRUBO {
 // the earlier 32 -> 16 cut spent to pay for full-res tracing.
 const int   MAX_STEPS    = 24;
 const float MAX_DISTANCE = 20.0;   // view-space units the ray may travel
-const float THICKNESS    = 0.6;    // how "deep" a surface counts as solid
+const float THICKNESS    = 0.6;    // entry slack on the crossing bracket
 const float BIAS         = 0.05;   // self-intersection guard at the ray origin
 const int   REFINE_STEPS = 6;      // SSR needs the hit pinned — it picks a pixel
 
